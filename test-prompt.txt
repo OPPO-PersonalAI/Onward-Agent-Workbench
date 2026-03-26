@@ -1,0 +1,18 @@
+本项目要开源，因此我们的开源合规检查工程师向我反馈了以下问题。请你理解一下，并按以下步骤进行规划：
+1. 确认需要进行哪些修改
+2. 向我确认方案
+  
+确认完之后，我们再一次性进行修改，以满足合规检查的要求。
+
+反馈内容如下：
+
+
+关于notice
+1、代码库。如果代码库本身没有包含其他三方版权代码，不用写NOTICE，写的话最简单的：
+Onward2
+Copyright 2026 OPPO。
+2、二进制软件包，集成了开源软件，一定要有NOTICE，但是这个一般是通过自动化工具自动生成的，可以让AI补齐下相关功能。参考：npx license-checker-rseidelsohn --production --txt --out ThirdPartyNotices.txt
+
+ffmpeg如果是chromium引入的，LICENSES.chromium.html中应该已经带了相关声明，可以不用再单独声明。
+3、让claude自己检查下代码，是否有风险提示，留个记录。开发的时候最好用claude-safe。同时在claude.md中添加相关限制，比如生成代码如涉及开源许可证，需要跟Apache-2.0兼容
+4、NOTICE.txt 这个不能多语言

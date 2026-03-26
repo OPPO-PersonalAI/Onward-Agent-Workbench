@@ -1,0 +1,141 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.terminal-tabs-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: var(--bg-0);
+}
+
+.tabs-header {
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  height: 35px;
+  min-height: 35px;
+  padding-left: 80px; /* Space for macOS traffic lights */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.tabs-list {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-app-region: no-drag;
+}
+
+.tabs-list::-webkit-scrollbar {
+  height: 3px;
+}
+
+.tabs-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabs-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  height: 100%;
+  min-width: 120px;
+  max-width: 200px;
+  background-color: var(--bg-2);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: background-color 0.15s;
+  -webkit-app-region: no-drag;
+}
+
+.tab:hover {
+  background-color: var(--bg-1);
+}
+
+.tab.active {
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-bottom: 2px solid var(--accent);
+}
+
+.tab-icon {
+  font-family: monospace;
+  font-size: var(--font-sm);
+  color: var(--text-3);
+  margin-right: 8px;
+}
+
+.tab-title {
+  flex: 1;
+  font-size: var(--font-md);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab.active .tab-title {
+  color: var(--text-1);
+}
+
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: 16px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+
+.tab:hover .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+}
+
+.add-tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: 20px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  -webkit-app-region: no-drag;
+}
+
+.add-tab-btn:hover {
+  background-color: var(--bg-1);
+  color: var(--text-1);
+}
+
+.terminals-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}

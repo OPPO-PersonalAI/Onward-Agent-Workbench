@@ -1,0 +1,59 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.sidebar {
+  width: 48px;
+  height: 100%;
+  background-color: var(--bg-2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.sidebar-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.sidebar-btn:hover {
+  background-color: var(--bg-1);
+  color: var(--text-2);
+}
+
+.sidebar-btn.active {
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-1);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.sidebar-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.sidebar-divider {
+  width: 24px;
+  height: 1px;
+  background-color: var(--border);
+  margin: 8px 0;
+}
+
+.sidebar-spacer {
+  flex: 1;
+}

@@ -1,0 +1,507 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+export interface TerminalOptions {
+  cols?: number
+  rows?: number
+  cwd?: string
+}
+
+export type TerminalReadMode = 'tail-lines' | 'tail-chars'
+export type TerminalBufferTarget = 'active' | 'normal' | 'alternate'
+
+export interface TerminalBufferOptions {
+  mode?: TerminalReadMode
+  lastLines?: number
+  lastChars?: number
+  /** Offset in number of lines to skip from tail (tail-lines mode only), for incremental reading of earlier content */
+  offset?: number
+  trimTrailingEmpty?: boolean
+  /** Specify which buffer to read: active (default, currently active), normal (main buffer), alternate (alternate screen buffer) */
+  buffer?: TerminalBufferTarget
+}
+
+export interface TerminalBufferResult {
+  success: boolean
+  terminalId: string
+  content?: string
+  totalLines?: number
+  returnedLines?: number
+  returnedChars?: number
+  truncated?: boolean
+  capturedAt?: number
+  /** The buffer type currently activated by the terminal: normal or alternate */
+  bufferType?: 'normal' | 'alternate'
+  error?: string
+}
+
+export type PromptBridgeAction = 'send' | 'execute' | 'send-and-execute'
+
+export interface PromptBridgeSendRequest {
+  requestId: string
+  terminalId: string
+  content: string
+  action: PromptBridgeAction
+}
+
+export interface PromptBridgeSendResult {
+  success: boolean
+  successIds: string[]
+  failedIds: string[]
+  error?: string
+}
+
+export interface TerminalAPI {
+  create: (id: string, options?: TerminalOptions) => Promise<{ success: boolean; id?: string; error?: string }>
+  write: (id: string, data: string) => Promise<boolean>
+  resize: (id: string, cols: number, rows: number) => Promise<boolean>
+  dispose: (id: string) => Promise<boolean>
+  onData: (callback: (id: string, data: string) => void) => () => void
+  onExit: (callback: (id: string, exitCode: number, signal?: number) => void) => () => void
+  onGetBufferRequest: (callback: (requestId: string, terminalId: string, options?: TerminalBufferOptions) => void) => () => void
+  sendBufferResponse: (requestId: string, result: TerminalBufferResult) => void
+  onPromptBridgeSend: (callback: (request: PromptBridgeSendRequest) => void) => () => void
+  sendPromptBridgeResponse: (requestId: string, result: PromptBridgeSendResult) => void
+}
+
+export interface PromptSendRecord {
+  taskId: string
+  taskName: string
+  sentAt: number
+  action: 'send' | 'execute' | 'sendAndExecute'
+}
+
+export interface Prompt {
+  id: string
+  title: string
+  content: string
+  pinned: boolean
+  color?: 'red' | 'yellow' | 'green' | null
+  createdAt: number
+  updatedAt: number
+  lastUsedAt: number
+  sendHistory?: PromptSendRecord[]
+}
+
+export interface PromptAPI {
+  load: () => Promise<Prompt[]>
+  save: (prompt: Prompt) => Promise<boolean>
+  delete: (id: string) => Promise<boolean>
+}
+
+export interface TerminalWindowConfig {
+  version: number
+  layoutMode: 1 | 2 | 4 | 6
+  activeTerminalId: string | null
+  activePanel: 'prompt' | null
+  terminals: { id: string; title: string }[]
+  promptPanelWidth: number
+  updatedAt: number
+}
+
+export interface TerminalConfigAPI {
+  load: () => Promise<TerminalWindowConfig>
+  save: (config: TerminalWindowConfig) => Promise<boolean>
+  update: (partial: Partial<TerminalWindowConfig>) => Promise<boolean>
+}
+
+export interface DialogAPI {
+  openDirectory: () => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
+  saveTextFile: (payload: {
+    title?: string
+    defaultFileName?: string
+    content: string
+  }) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
+}
+
+export interface ShellAPI {
+  openPath: (path: string) => Promise<{ success: boolean; error?: string }>
+  openExternal: (url: string) => Promise<{
+    success: boolean
+    canceled?: boolean
+    blocked?: boolean
+    error?: string
+  }>
+}
+
+export interface CommandPreset {
+  id: string
+  command: string
+  isBuiltin: boolean
+  createdAt: number
+}
+
+export interface CommandPresetAPI {
+  load: () => Promise<CommandPreset[]>
+  save: (preset: CommandPreset) => Promise<boolean>
+  delete: (id: string) => Promise<boolean>
+}
+
+import type { AppState } from './tab.d.ts'
+
+export interface AppStateAPI {
+  load: () => Promise<AppState>
+  save: (state: AppState) => Promise<boolean>
+}
+
+export type GitChangeType = 'unstaged' | 'staged' | 'untracked'
+export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'C' | '?'
+
+// Git file status
+export interface GitFileStatus {
+  filename: string
+  originalFilename?: string
+  status: GitStatusCode
+  additions: number
+  deletions: number
+  changeType: GitChangeType
+}
+
+// Git Diff results
+export interface GitDiffResult {
+  success: boolean
+  cwd: string
+  isGitRepo: boolean
+  gitInstalled: boolean
+  files: GitFileStatus[]
+  error?: string
+}
+
+export interface GitCommitInfo {
+  sha: string
+  shortSha: string
+  parents: string[]
+  summary: string
+  body: string
+  authorName: string
+  authorEmail: string
+  authorDate: string
+  refs?: string
+}
+
+export interface GitHistoryResult {
+  success: boolean
+  cwd: string
+  isGitRepo: boolean
+  gitInstalled: boolean
+  commits: GitCommitInfo[]
+  totalCount?: number
+  error?: string
+}
+
+export interface GitHistoryFile {
+  filename: string
+  originalFilename?: string
+  status: GitStatusCode
+  additions: number
+  deletions: number
+}
+
+export interface GitHistoryDiffOptions {
+  base: string
+  head: string
+  filePath?: string
+  hideWhitespace?: boolean
+  includeFiles?: boolean
+}
+
+export interface GitHistoryDiffResult {
+  success: boolean
+  cwd: string
+  isGitRepo: boolean
+  gitInstalled: boolean
+  base: string
+  head: string
+  patch: string
+  files: GitHistoryFile[]
+  error?: string
+}
+
+export type TerminalGitStatus = 'clean' | 'modified' | 'added' | 'unknown'
+
+export interface TerminalGitInfo {
+  cwd: string | null
+  branch: string | null
+  repoName: string | null
+  status: TerminalGitStatus | null
+}
+
+export interface GitFileContentResult {
+  success: boolean
+  cwd: string
+  filename: string
+  originalContent: string
+  modifiedContent: string
+  isBinary: boolean
+  error?: string
+}
+
+export interface GitFileSaveResult {
+  success: boolean
+  filename: string
+  error?: string
+}
+
+export interface GitFileActionResult {
+  success: boolean
+  filename: string
+  error?: string
+}
+
+export type ProjectEntryType = 'file' | 'dir'
+
+export interface ProjectEntry {
+  name: string
+  path: string
+  type: ProjectEntryType
+}
+
+export interface ProjectListResult {
+  success: boolean
+  root: string
+  path: string
+  entries: ProjectEntry[]
+  error?: string
+}
+
+export interface ProjectReadResult {
+  success: boolean
+  root: string
+  path: string
+  content: string
+  isBinary: boolean
+  isImage: boolean
+  isSqlite: boolean
+  previewUrl?: string
+  error?: string
+}
+
+export interface ProjectSaveResult {
+  success: boolean
+  root: string
+  path: string
+  error?: string
+}
+
+export interface ProjectActionResult {
+  success: boolean
+  root: string
+  path: string
+  error?: string
+}
+
+export interface ProjectRenameResult {
+  success: boolean
+  root: string
+  oldPath: string
+  newPath: string
+  error?: string
+}
+
+export type SqliteBlobValue = {
+  type: 'blob'
+  base64: string
+  bytes: number
+}
+
+export type SqliteValue = string | number | null | SqliteBlobValue
+
+export interface SqliteColumnInfo {
+  name: string
+  type: string
+  notNull: boolean
+  primaryKeyOrder: number
+  hasDefault: boolean
+}
+
+export interface SqliteTableInfo {
+  name: string
+  rowCount: number
+  columns: SqliteColumnInfo[]
+  hasRowid: boolean
+  editable: boolean
+}
+
+export type SqliteRowKey =
+  | { kind: 'rowid'; rowid: number }
+  | { kind: 'primary-key'; values: Record<string, SqliteValue> }
+
+export interface SqliteRow {
+  key: SqliteRowKey
+  values: Record<string, SqliteValue>
+}
+
+export interface ProjectSqliteSchemaResult {
+  success: boolean
+  root: string
+  path: string
+  tables: SqliteTableInfo[]
+  error?: string
+}
+
+export interface ProjectSqliteRowsResult {
+  success: boolean
+  root: string
+  path: string
+  table: string
+  columns: SqliteColumnInfo[]
+  rows: SqliteRow[]
+  totalRows: number
+  limit: number
+  offset: number
+  hasRowid: boolean
+  editable: boolean
+  error?: string
+}
+
+export interface ProjectSqliteMutationResult {
+  success: boolean
+  root: string
+  path: string
+  table: string
+  changes: number
+  lastInsertRowid?: number | null
+  error?: string
+}
+
+export interface ProjectSqliteExecuteResult {
+  success: boolean
+  root: string
+  path: string
+  mode: 'rows' | 'run' | 'exec'
+  columns: string[]
+  rows: Array<Record<string, SqliteValue>>
+  changes: number
+  lastInsertRowid: number | null
+  truncated: boolean
+  error?: string
+}
+
+// Git API
+export interface GitAPI {
+  resolveRepoRoot: (cwd: string) => Promise<string>
+  getDiff: (cwd: string) => Promise<GitDiffResult>
+  getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
+  getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
+  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>) => Promise<GitFileContentResult>
+  saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
+  stageFile: (cwd: string, filename: string) => Promise<GitFileActionResult>
+  unstageFile: (cwd: string, filename: string) => Promise<GitFileActionResult>
+  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>) => Promise<GitFileActionResult>
+  updateIndexContent: (cwd: string, filename: string, content: string) => Promise<GitFileActionResult>
+  checkInstalled: () => Promise<boolean>
+  getTerminalCwd: (terminalId: string) => Promise<string | null>
+  getTerminalInfo: (terminalId: string) => Promise<TerminalGitInfo>
+  subscribeTerminalInfo: (terminalId: string) => Promise<{ success: true }>
+  unsubscribeTerminalInfo: (terminalId: string) => Promise<{ success: true }>
+  notifyTerminalActivity: (terminalId: string) => Promise<{ success: true }>
+  notifyTerminalFocus: (terminalId: string) => Promise<{ success: true }>
+  notifyTerminalGitUpdate: (terminalId: string) => Promise<{ success: true }>
+  onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => () => void
+}
+
+// Project Editor API
+export interface ProjectAPI {
+  listDirectory: (root: string, path: string) => Promise<ProjectListResult>
+  readFile: (root: string, path: string) => Promise<ProjectReadResult>
+  saveFile: (root: string, path: string, content: string) => Promise<ProjectSaveResult>
+  createFile: (root: string, path: string, content?: string) => Promise<ProjectActionResult>
+  createFolder: (root: string, path: string) => Promise<ProjectActionResult>
+  renamePath: (root: string, oldPath: string, newPath: string) => Promise<ProjectRenameResult>
+  deletePath: (root: string, path: string) => Promise<ProjectActionResult>
+  sqliteGetSchema: (root: string, path: string) => Promise<ProjectSqliteSchemaResult>
+  sqliteReadTableRows: (root: string, path: string, table: string, limit?: number, offset?: number) => Promise<ProjectSqliteRowsResult>
+  sqliteInsertRow: (root: string, path: string, table: string, values: Record<string, unknown>) => Promise<ProjectSqliteMutationResult>
+  sqliteUpdateRow: (root: string, path: string, table: string, key: SqliteRowKey, values: Record<string, unknown>) => Promise<ProjectSqliteMutationResult>
+  sqliteDeleteRow: (root: string, path: string, table: string, key: SqliteRowKey) => Promise<ProjectSqliteMutationResult>
+  sqliteExecute: (root: string, path: string, sql: string) => Promise<ProjectSqliteExecuteResult>
+}
+
+// Introducing the Settings type
+import type { SettingsState, ShortcutAction, SettingsAPI } from './settings.d.ts'
+
+export type { SettingsState, ShortcutAction }
+
+export interface AppInfo {
+  buildChannel: 'dev' | 'prod'
+  branch: string | null
+  productName: string
+  displayName: string
+  isPackaged: boolean
+}
+
+export interface AppInfoAPI {
+  get: () => Promise<AppInfo>
+  readNotice: (locale?: string) => Promise<string | null>
+}
+
+export interface GitRuntimeLatencySummary {
+  count: number
+  avgMs: number
+  p50Ms: number
+  p95Ms: number
+  maxMs: number
+}
+
+export interface GitRuntimeMetrics {
+  scheduler: {
+    inflightCurrent: number
+    inflightPeak: number
+    queueDepthCurrent: number
+    queueDepthPeak: number
+    dedupHits: number
+    totalScheduled: number
+    totalCompleted: number
+    totalFailed: number
+    maxInflight: number
+    maxPerRepoInflight: number
+  }
+  kinds: {
+    git: { scheduled: number; completed: number; failed: number; latency: GitRuntimeLatencySummary }
+    cwd: { scheduled: number; completed: number; failed: number; latency: GitRuntimeLatencySummary }
+    misc: { scheduled: number; completed: number; failed: number; latency: GitRuntimeLatencySummary }
+  }
+  latencies: {
+    titleRefresh: GitRuntimeLatencySummary
+    cwdProbe: GitRuntimeLatencySummary
+  }
+  updatedAt: number
+}
+
+export interface DebugAPI {
+  enabled: boolean
+  profile: boolean
+  profileCwd: string | null
+  autotest: boolean
+  autotestCwd: string | null
+  autotestSuite: string | null
+  autotestExit: boolean
+  log: (message: string, data?: unknown) => void
+  getAppMetrics: () => Promise<Record<string, unknown>[]>
+  getGitRuntimeMetrics: () => Promise<GitRuntimeMetrics>
+  quit: () => Promise<void>
+}
+
+export interface ElectronAPI {
+  terminal: TerminalAPI
+  prompt: PromptAPI
+  terminalConfig: TerminalConfigAPI
+  dialog: DialogAPI
+  shell: ShellAPI
+  commandPreset: CommandPresetAPI
+  appState: AppStateAPI
+  git: GitAPI
+  project: ProjectAPI
+  settings: SettingsAPI
+  appInfo: AppInfoAPI
+  debug: DebugAPI
+  platform: 'darwin' | 'win32' | 'linux'
+}
+
+declare global {
+  interface Window {
+    electronAPI: ElectronAPI
+  }
+}

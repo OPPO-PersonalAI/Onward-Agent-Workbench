@@ -1,0 +1,208 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Schedule configuration modal */
+.schedule-modal {
+  max-width: 480px;
+  min-width: 380px;
+}
+
+.schedule-modal-prompt-preview {
+  padding: 8px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: var(--font-sm);
+  margin-bottom: 16px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+
+.schedule-modal-section {
+  margin-bottom: 16px;
+}
+
+.schedule-modal-section-title {
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+/* Target terminal selection */
+.schedule-modal-terminals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-modal-terminal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.schedule-modal-terminal:hover {
+  border-color: var(--accent);
+}
+
+.schedule-modal-terminal.selected {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--text-1);
+}
+
+.schedule-modal-terminal:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+}
+
+/* Timing method selection */
+.schedule-modal-type-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schedule-modal-type-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.schedule-modal-type-option:hover {
+  border-color: var(--accent);
+}
+
+.schedule-modal-type-option.selected {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--text-1);
+}
+
+/* Configuration area */
+.schedule-modal-config {
+  margin-top: 12px;
+}
+
+.schedule-modal-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: var(--font-sm);
+  color: var(--text-2);
+}
+
+.schedule-modal-input {
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-1);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  outline: none;
+}
+
+.schedule-modal-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.schedule-modal-input-time {
+  width: 100px;
+}
+
+.schedule-modal-input-number {
+  width: 80px;
+}
+
+.schedule-modal-input-datetime {
+  width: 200px;
+}
+
+.schedule-modal-input-select {
+  width: auto;
+  min-width: 70px;
+}
+
+/* Execution record */
+.schedule-modal-log {
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+}
+
+.schedule-modal-log-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: var(--font-xs);
+  border-bottom: 1px solid var(--border);
+}
+
+.schedule-modal-log-entry:last-child {
+  border-bottom: none;
+}
+
+.schedule-modal-log-status {
+  flex-shrink: 0;
+  font-weight: 600;
+  width: 14px;
+  text-align: center;
+}
+
+.schedule-modal-log-entry.success .schedule-modal-log-status {
+  color: #27ae60;
+}
+
+.schedule-modal-log-entry.failed .schedule-modal-log-status {
+  color: var(--danger);
+}
+
+.schedule-modal-log-time {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-family: monospace;
+}
+
+.schedule-modal-log-error {
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Validation error */
+.schedule-modal-error {
+  font-size: var(--font-xs);
+  color: var(--danger);
+  margin-top: 4px;
+}

@@ -1,0 +1,419 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.terminal-grid-wrapper {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.terminal-grid {
+  display: grid;
+  gap: 1px;
+  height: 100%;
+  width: 100%;
+  background-color: var(--border);
+  position: relative;
+}
+
+/* Hidden terminal grid (used to keep alive when tab switching) */
+.terminal-grid-hidden {
+  position: absolute;
+  left: -9999px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.terminal-grid-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 18, 20, 0.35);
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  letter-spacing: 0.3px;
+  backdrop-filter: blur(2px);
+  user-select: none;
+}
+
+/* single window layout */
+.terminal-grid[data-layout="1"] {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+/* Dual window layout (split horizontally) */
+.terminal-grid[data-layout="2"] {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+/* Four-square grid layout */
+.terminal-grid[data-layout="4"] {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+/* Six-square grid layout (3x2) */
+.terminal-grid[data-layout="6"] {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+/* terminal cell */
+.terminal-grid-cell {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-1);
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-grid-cell.active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.terminal-grid-cell.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: var(--accent);
+}
+
+.terminal-grid-cell.active .terminal-grid-header {
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Terminal title bar */
+.terminal-grid-header {
+  height: 24px;
+  padding: 0 8px;
+  background-color: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.terminal-grid-header-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.terminal-grid-title {
+  font-size: var(--font-sm);
+  color: var(--text-3);
+  user-select: none;
+  cursor: text;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+
+.terminal-grid-title:hover {
+  background-color: var(--bg-1);
+}
+
+.terminal-grid-cell.active .terminal-grid-title {
+  color: var(--text-1);
+}
+
+.terminal-grid-repo {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  user-select: none;
+}
+
+.terminal-grid-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.16);
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  user-select: none;
+}
+
+.terminal-grid-copyable {
+  cursor: pointer;
+}
+
+.terminal-grid-copyable:hover {
+  filter: brightness(1.05);
+}
+
+.terminal-grid-branch::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.9);
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35);
+}
+
+.terminal-grid-branch--modified {
+  border-color: rgba(234, 179, 8, 0.45);
+  background: rgba(234, 179, 8, 0.2);
+}
+
+.terminal-grid-branch--modified::before {
+  background: rgba(234, 179, 8, 0.95);
+  box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.4);
+}
+
+.terminal-grid-branch--added {
+  border-color: rgba(168, 85, 247, 0.45);
+  background: rgba(168, 85, 247, 0.2);
+}
+
+.terminal-grid-branch--added::before {
+  background: rgba(168, 85, 247, 0.95);
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.45);
+}
+
+.terminal-grid-branch--unknown {
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.terminal-grid-branch--unknown::before {
+  background: rgba(148, 163, 184, 0.9);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.4);
+}
+
+.terminal-grid-cwd {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  /* Outer RTL makes clipping happen from the left, preserving the trailing path */
+  direction: rtl;
+  text-align: left;
+}
+
+.terminal-grid-cwd-text {
+  /* The inner LTR keeps the text reading direction normal */
+  direction: ltr;
+  unicode-bidi: bidi-override;
+}
+
+.terminal-grid-copy-notice {
+  position: absolute;
+  top: 28px;
+  right: 8px;
+  max-width: 70%;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.88);
+  color: var(--text-1);
+  font-size: var(--font-xs);
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.25);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 2;
+}
+
+/* Title editing input box */
+.terminal-grid-title-input {
+  font-size: var(--font-sm);
+  color: var(--text-2);
+  background-color: var(--bg-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  outline: none;
+  width: 120px;
+  max-width: 100%;
+}
+
+/* terminal container */
+.terminal-grid-container {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Terminal startup/error overlay */
+.terminal-grid-cell-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  text-align: center;
+  background: rgba(15, 17, 21, 0.65);
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  z-index: 3;
+  backdrop-filter: blur(2px);
+}
+
+.terminal-grid-cell-overlay.is-error {
+  background: rgba(45, 18, 18, 0.7);
+  color: #f5c2c2;
+}
+
+.terminal-grid-cell-overlay-title {
+  font-size: var(--font-md);
+  color: var(--text-1);
+}
+
+.terminal-grid-cell-overlay.is-error .terminal-grid-cell-overlay-title {
+  color: #f7b2b2;
+}
+
+.terminal-grid-cell-overlay-desc {
+  color: var(--text-3);
+}
+
+.terminal-grid-cell-overlay.is-error .terminal-grid-cell-overlay-desc {
+  color: #f0b6b6;
+}
+
+.terminal-grid-cell-overlay-btn {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.16);
+  color: #f5c2c2;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.terminal-grid-cell-overlay-btn:hover {
+  filter: brightness(1.08);
+}
+
+/* xterm.js style overrides */
+.terminal-grid-container .xterm {
+  height: 100%;
+  padding: 6px;
+}
+
+.terminal-grid-container .xterm-viewport {
+  overflow-y: auto;
+}
+
+/* Scroll bar style */
+.terminal-grid-container .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal-grid-container .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-grid-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 6px;
+}
+
+.terminal-grid-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+
+/* Terminal right-click context menu */
+.terminal-context-menu {
+  min-width: 160px;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
+  padding: 6px;
+  z-index: 1100;
+  animation: terminal-context-fade-in 0.15s ease;
+}
+
+.terminal-context-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.terminal-context-item:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.terminal-context-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.terminal-context-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.terminal-context-item:hover:not(:disabled) svg {
+  color: var(--text-2);
+}
+
+.terminal-context-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+
+@keyframes terminal-context-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

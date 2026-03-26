@@ -1,0 +1,112 @@
+{
+  "name": "onward2",
+  "version": "2.0.1",
+  "productName": "Onward 2",
+  "author": "OPPO",
+  "description": "VS Code style terminal application built with Electron + React",
+  "license": "Apache-2.0",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3",
+    "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3",
+    "lint:comments": "node scripts/check-chinese-comments.js",
+    "generate:icons": "node scripts/generate-icons.js",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder",
+    "dist:dev": "node scripts/dist-dev.js",
+    "generate-notices": "license-checker-rseidelsohn --production --plainVertical --out ThirdPartyNotices.txt"
+  },
+  "build": {
+    "appId": "com.onward2.app",
+    "productName": "Onward 2",
+    "copyright": "Copyright © 2026 OPPO",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources"
+      },
+      {
+        "from": "NOTICE.txt",
+        "to": "."
+      },
+      {
+        "from": "ThirdPartyNotices.txt",
+        "to": "."
+      },
+      {
+        "from": "LICENSE",
+        "to": "."
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "resources/icons",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.6.0",
+    "@pierre/diffs": "^1.0.10",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0",
+    "better-sqlite3": "^11.10.0",
+    "dompurify": "^3.3.1",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.33",
+    "marked": "^17.0.1",
+    "marked-katex-extension": "^5.1.7",
+    "monaco-editor": "^0.52.0",
+    "node-pty": "^1.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "tar": ">=7.5.8",
+      "https-proxy-agent": ">=7.0.6"
+    }
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "electron": "35.7.5",
+    "electron-builder": "^26.8.0",
+    "electron-vite": "^5.0.0",
+    "license-checker-rseidelsohn": "^4.4.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.3.0",
+    "vite": "^6.4.1"
+  }
+}

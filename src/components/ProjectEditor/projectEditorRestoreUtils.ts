@@ -1,0 +1,88 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import type { ProjectEditorState } from '../../types/tab.d.ts'
+import { DEFAULT_LOCALE, translate, type AppLocale } from '../../i18n/core'
+
+export function normalizeProjectEditorRootPath(value: string): string {
+  return value.replace(/\\/g, '/')
+}
+
+export function resolveStoredProjectEditorState(
+  rootPath: string,
+  terminalStored: ProjectEditorState | null,
+  rootScopedStored: ProjectEditorState | null
+): ProjectEditorState | null {
+  const normalizedRootPath = normalizeProjectEditorRootPath(rootPath)
+  if (rootScopedStored) {
+    return rootScopedStored
+  }
+  if (!terminalStored) return null
+  if (!terminalStored.rootPath) return terminalStored
+  return normalizeProjectEditorRootPath(terminalStored.rootPath) === normalizedRootPath
+    ? terminalStored
+    : null
+}
+
+export function buildPendingCursor(
+  cursorLine: number | undefined,
+  cursorColumn: number | undefined
+): { lineNumber: number; column: number } | null {
+  if (typeof cursorLine !== 'number') return null
+  return {
+    lineNumber: cursorLine,
+    column: typeof cursorColumn === 'number' ? cursorColumn : 1
+  }
+}
+
+export function shouldKeepPendingRestoreState(options: {
+  source: 'user' | 'restore' | 'debug'
+  path: string
+  pendingPath: string | null
+  hasPendingViewState: boolean
+  hasPendingCursor: boolean
+}): boolean {
+  if (options.source !== 'restore') return false
+  if (options.pendingPath !== options.path) return false
+  return options.hasPendingViewState || options.hasPendingCursor
+}
+
+export function buildMissingFileNotice(
+  path: string,
+  source: 'user' | 'restore' | 'debug',
+  locale: AppLocale = DEFAULT_LOCALE
+): {
+  notice: string
+  status: string
+} {
+  if (source === 'restore') {
+    return {
+      notice: translate(locale, 'projectEditor.restore.previousFileDeletedNotice', { path }),
+      status: translate(locale, 'projectEditor.restore.previousFileDeletedStatus')
+    }
+  }
+  return {
+    notice: translate(locale, 'projectEditor.restore.fileMissingNotice', { path }),
+    status: translate(locale, 'projectEditor.restore.fileMissingStatus')
+  }
+}
+
+export function clampCursorPosition(input: {
+  lineNumber: number
+  column: number
+  lineCount: number
+  getLineMaxColumn: (lineNumber: number) => number
+}): { lineNumber: number; column: number } {
+  const safeLineCount = Math.max(1, Math.floor(input.lineCount))
+  const requestedLine = Number.isFinite(input.lineNumber) ? Math.floor(input.lineNumber) : 1
+  const safeLine = Math.max(1, Math.min(safeLineCount, requestedLine))
+  const maxColumn = Math.max(1, Math.floor(input.getLineMaxColumn(safeLine)))
+  const requestedColumn = Number.isFinite(input.column) ? Math.floor(input.column) : 1
+  const safeColumn = Math.max(1, Math.min(maxColumn, requestedColumn))
+  return {
+    lineNumber: safeLine,
+    column: safeColumn
+  }
+}

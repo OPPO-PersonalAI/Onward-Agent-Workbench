@@ -1,0 +1,740 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import { SearchAddon } from '@xterm/addon-search'
+import { WebglAddon } from '@xterm/addon-webgl'
+import { getTheme, ThemeName } from '../themes/terminal-themes'
+import type { TerminalStyleConfig } from '../types/settings.d.ts'
+import type { TerminalBufferOptions, TerminalBufferResult } from '../types/electron.d.ts'
+import { requestOpenExternalHttpLink } from '../utils/externalLink'
+import { perfMonitor } from '../utils/perf-monitor'
+
+export type TerminalSessionStatus = 'idle' | 'initializing' | 'ready' | 'error' | 'disposed'
+
+export interface TerminalSessionOptions {
+  theme: ThemeName
+  fontSize: number
+  fontFamily: string
+  terminalStyle?: TerminalStyleConfig | null
+}
+
+interface TerminalSession {
+  id: string
+  terminal: XTerm
+  fitAddon: FitAddon
+  searchAddon: SearchAddon
+  status: TerminalSessionStatus
+  readyPromise: Promise<void> | null
+  open: boolean
+  container: HTMLDivElement | null
+  lastCols: number
+  lastRows: number
+  lastFitWidth: number
+  lastFitHeight: number
+  webglAddon?: WebglAddon
+  lastOptions: TerminalSessionOptions | null
+  // Visibility-based rendering optimization
+  visible: boolean
+  pendingData: string[]
+  pendingDataBytes: number
+}
+
+// Maximum bytes to buffer per hidden terminal before discarding old data.
+// 512 KB is enough to hold several screens of output while preventing
+// unbounded memory growth for long-running hidden sessions.
+const PENDING_DATA_MAX_BYTES = 512 * 1024
+
+// Throttle interval for visible terminal writes.  Instead of calling
+// terminal.write() on every IPC message (which can reach 18,000/s across
+// 6 terminals and starve the main thread), we accumulate data per-session
+// and flush once per interval via requestAnimationFrame.  50 ms ≈ 20 fps
+// for terminal updates — visually smooth while leaving ~70% of each frame
+// budget free for user input, React renders, and other UI work.
+const VISIBLE_WRITE_THROTTLE_MS = 50
+
+const DEFAULT_COLS = 80
+const DEFAULT_ROWS = 24
+
+function handleTerminalLinkClick(_event: MouseEvent, uri: string) {
+  void requestOpenExternalHttpLink(uri).then((result) => {
+    if (!result.success && result.error && !result.canceled && !result.blocked) {
+      console.warn('[TerminalSessionManager] Failed to open external link:', result.error)
+    }
+  })
+}
+
+function buildTheme(options: TerminalSessionOptions) {
+  const baseTheme = getTheme(options.theme)
+  const terminalStyle = options.terminalStyle
+
+  return {
+    ...baseTheme,
+    ...(terminalStyle?.foregroundColor && { foreground: terminalStyle.foregroundColor }),
+    ...(terminalStyle?.backgroundColor && { background: terminalStyle.backgroundColor })
+  }
+}
+
+export class TerminalSessionManager {
+  private sessions: Map<string, TerminalSession> = new Map()
+  private bufferRequestUnsubscribe: (() => void) | null = null
+  // Centralized IPC listeners: single global listener dispatches by terminal ID via Map lookup
+  private globalDataUnsubscribe: (() => void) | null = null
+  private globalExitUnsubscribe: (() => void) | null = null
+  // Visible-write throttle: sessions that have pending visible data to flush
+  private dirtyVisibleSessions: Set<string> = new Set()
+  private visibleFlushScheduled = false
+  private lastVisibleFlushTime = 0
+
+  constructor() {
+    this.registerBufferRequestListener()
+    this.registerGlobalDataListener()
+    this.registerGlobalExitListener()
+  }
+
+  /**
+   * Single global listener for terminal:data IPC.
+   * Dispatches to the correct session via Map.get() — O(1) per message
+   * instead of O(N) when each session had its own listener filtering by ID.
+   */
+  private registerGlobalDataListener(): void {
+    this.globalDataUnsubscribe = window.electronAPI.terminal.onData((termId, data) => {
+      const session = this.sessions.get(termId)
+      if (!session) return
+
+      perfMonitor.recordIpcData(data.length)
+
+      // All terminals (visible or hidden) buffer data first.
+      // Visible terminals are flushed on a throttled schedule (every 50ms);
+      // hidden terminals keep buffering until they become visible.
+      session.pendingData.push(data)
+      session.pendingDataBytes += data.length
+
+      if (!session.visible) {
+        // Hidden: cap buffer to prevent unbounded memory growth
+        while (session.pendingDataBytes > PENDING_DATA_MAX_BYTES && session.pendingData.length > 1) {
+          const dropped = session.pendingData.shift()!
+          session.pendingDataBytes -= dropped.length
+        }
+        perfMonitor.recordHiddenTermWrite(data.length)
+        return
+      }
+
+      // Visible: mark dirty and schedule a throttled flush
+      this.dirtyVisibleSessions.add(termId)
+      this.scheduleVisibleFlush()
+
+      // Input latency: time from keystroke to echo arrival
+      const ksTs = (session as any)._lastKeystrokeTs as number | undefined
+      if (ksTs && data.length <= 16) {
+        perfMonitor.recordInputLatency(performance.now() - ksTs)
+        ;(session as any)._lastKeystrokeTs = undefined
+      }
+    })
+  }
+
+  /**
+   * Schedule a batched flush of all dirty visible sessions.
+   * Uses requestAnimationFrame gated by a minimum interval so that:
+   *  - Writes are aligned with the browser's paint cycle
+   *  - The main thread is free between flushes for input events & React
+   *  - At most ~20 flush cycles per second (50 ms apart)
+   */
+  private scheduleVisibleFlush(): void {
+    if (this.visibleFlushScheduled) return
+    this.visibleFlushScheduled = true
+
+    const elapsed = performance.now() - this.lastVisibleFlushTime
+    const delay = Math.max(0, VISIBLE_WRITE_THROTTLE_MS - elapsed)
+
+    if (delay <= 0) {
+      // Enough time has passed — flush on the next animation frame
+      requestAnimationFrame(() => this.flushVisibleSessions())
+    } else {
+      // Wait for the remaining throttle window, then use rAF
+      setTimeout(() => {
+        requestAnimationFrame(() => this.flushVisibleSessions())
+      }, delay)
+    }
+  }
+
+  private flushVisibleSessions(): void {
+    this.visibleFlushScheduled = false
+    this.lastVisibleFlushTime = performance.now()
+
+    for (const termId of this.dirtyVisibleSessions) {
+      const session = this.sessions.get(termId)
+      if (!session || session.pendingData.length === 0) continue
+
+      const merged = session.pendingData.length === 1
+        ? session.pendingData[0]
+        : session.pendingData.join('')
+      session.pendingData = []
+      session.pendingDataBytes = 0
+
+      const t0 = performance.now()
+      session.terminal.write(merged)
+      perfMonitor.recordXtermWrite(performance.now() - t0)
+    }
+    this.dirtyVisibleSessions.clear()
+  }
+
+  /**
+   * Single global listener for terminal:exit IPC.
+   */
+  private registerGlobalExitListener(): void {
+    this.globalExitUnsubscribe = window.electronAPI.terminal.onExit((termId, exitCode) => {
+      const session = this.sessions.get(termId)
+      if (!session) return
+
+      session.terminal.writeln(`\r\n[Process exited with code ${exitCode}]`)
+      session.terminal.writeln('\r\n[Press any key to restart...]')
+
+      // Clean up dead PTY in main process
+      window.electronAPI.terminal.dispose(termId)
+
+      // Reset session state so ensureReady can re-create
+      session.status = 'idle'
+      session.readyPromise = null
+
+      // Wait for any key press to restart
+      const disposable = session.terminal.onData(() => {
+        disposable.dispose()
+        this.restartShell(termId)
+      })
+    })
+  }
+
+  private registerBufferRequestListener(): void {
+    this.bufferRequestUnsubscribe = window.electronAPI.terminal.onGetBufferRequest(
+      (requestId: string, terminalId: string, options?: TerminalBufferOptions) => {
+        const result = this.getBufferContent(terminalId, options)
+        window.electronAPI.terminal.sendBufferResponse(requestId, result)
+      }
+    )
+  }
+
+  getBufferContent(id: string, options?: TerminalBufferOptions): TerminalBufferResult {
+    const session = this.sessions.get(id)
+    if (!session) {
+      return { success: false, terminalId: id, error: `Terminal ${id} does not exist` }
+    }
+
+    const mode = options?.mode ?? 'tail-lines'
+    const trimTrailingEmpty = options?.trimTrailingEmpty !== false
+    const bufferTarget = options?.buffer ?? 'active'
+
+    try {
+      // Detect the currently activated buffer type
+      const activeBufferType = session.terminal.buffer.active.type as 'normal' | 'alternate'
+
+      // Select the buffer to read based on bufferTarget
+      let buffer
+      if (bufferTarget === 'normal') {
+        buffer = session.terminal.buffer.normal
+      } else if (bufferTarget === 'alternate') {
+        buffer = session.terminal.buffer.alternate
+      } else {
+        buffer = session.terminal.buffer.active
+      }
+
+      const totalLines = buffer.length
+
+      // Read buffer contents line by line
+      const lines: string[] = []
+      for (let i = 0; i < totalLines; i++) {
+        const line = buffer.getLine(i)
+        if (line) {
+          lines.push(line.translateToString(true))
+        }
+      }
+
+      // Remove trailing blank lines
+      if (trimTrailingEmpty) {
+        while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+          lines.pop()
+        }
+      }
+
+      let content: string
+      let returnedLines: number
+      let returnedChars: number
+      let truncated = false
+
+      if (mode === 'tail-chars') {
+        const lastChars = options?.lastChars ?? 500
+        const fullContent = lines.join('\n')
+        if (fullContent.length > lastChars) {
+          content = fullContent.slice(-lastChars)
+          truncated = true
+        } else {
+          content = fullContent
+        }
+        returnedChars = content.length
+        returnedLines = content.split('\n').length
+      } else {
+        // tail-lines (default)
+        const lastLines = options?.lastLines ?? 100
+        const offset = options?.offset ?? 0
+
+        // offset represents the number of lines skipped from the end, used to incrementally read earlier content
+        // For example offset=0, lines=100 → last 100 lines
+        //      offset=100, lines=100 → lines 101-200 from the last
+        const endIndex = offset > 0 ? lines.length - offset : lines.length
+        const startIndex = Math.max(0, endIndex - lastLines)
+
+        if (endIndex <= 0) {
+          // offset is out of range, no more content
+          content = ''
+          returnedLines = 0
+        } else {
+          const sliced = lines.slice(startIndex, endIndex)
+          content = sliced.join('\n')
+          returnedLines = sliced.length
+          truncated = startIndex > 0
+        }
+        returnedChars = content.length
+      }
+
+      return {
+        success: true,
+        terminalId: id,
+        content,
+        totalLines: lines.length,
+        returnedLines,
+        returnedChars,
+        truncated,
+        capturedAt: Date.now(),
+        bufferType: activeBufferType
+      }
+    } catch (error) {
+      return { success: false, terminalId: id, error: String(error) }
+    }
+  }
+
+  private applyOptions(session: TerminalSession, options: TerminalSessionOptions) {
+    const terminalStyle = options.terminalStyle
+
+    session.terminal.options.theme = buildTheme(options)
+    session.terminal.options.fontFamily = terminalStyle?.fontFamily || options.fontFamily
+    session.terminal.options.fontSize = terminalStyle?.fontSize || options.fontSize
+    session.lastOptions = options
+  }
+
+  private createSession(id: string, options: TerminalSessionOptions): TerminalSession {
+    const terminal = new XTerm({
+      theme: buildTheme(options),
+      fontSize: options.terminalStyle?.fontSize || options.fontSize,
+      fontFamily: options.terminalStyle?.fontFamily || options.fontFamily,
+      cursorBlink: true,
+      cursorStyle: 'block',
+      allowProposedApi: true,
+      scrollback: 10000,
+      tabStopWidth: 4,
+      rightClickSelectsWord: true
+    })
+
+    const fitAddon = new FitAddon()
+    const webLinksAddon = new WebLinksAddon(handleTerminalLinkClick)
+    const searchAddon = new SearchAddon()
+
+    terminal.loadAddon(fitAddon)
+    terminal.loadAddon(webLinksAddon)
+    terminal.loadAddon(searchAddon)
+
+    // Windows / Linux: Ctrl+C copies selected text, otherwise sends interrupt;
+    // Ctrl+V pastes from clipboard. On macOS these shortcuts are handled by
+    // Cmd+C / Cmd+V natively, so we leave Ctrl+C as pure SIGINT.
+    const isMac = /Mac OS X|Macintosh/.test(navigator.userAgent)
+    if (!isMac) {
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyC') {
+          if (terminal.hasSelection()) {
+            if (event.type === 'keydown') {
+              void navigator.clipboard.writeText(terminal.getSelection())
+              terminal.clearSelection()
+            }
+            return false
+          }
+        }
+
+        if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyV') {
+          if (event.type === 'keydown') {
+            event.preventDefault()
+            void navigator.clipboard.readText().then((text) => {
+              if (text) {
+                // Use xterm.js paste() so bracketed paste mode is applied
+                terminal.paste(text)
+              }
+            })
+          }
+          return false
+        }
+
+        return true
+      })
+    }
+
+    terminal.onData((data) => {
+      // Record keystroke timestamp for input latency measurement.
+      // The matching echo arrives in registerGlobalDataListener.
+      if (data.length <= 4) {
+        // Only track short inputs (keystrokes) — not pasted blocks
+        ;(session as any)._lastKeystrokeTs = performance.now()
+      }
+      window.electronAPI.terminal.write(id, data)
+    })
+
+    // Note: onData and onExit IPC listeners are handled by a single global
+    // listener in the manager (registerGlobalDataListener / registerGlobalExitListener)
+    // to avoid O(N) per-message overhead.
+
+    const session: TerminalSession = {
+      id,
+      terminal,
+      fitAddon,
+      searchAddon,
+      status: 'idle',
+      readyPromise: null,
+      open: false,
+      container: null,
+      lastCols: DEFAULT_COLS,
+      lastRows: DEFAULT_ROWS,
+      lastFitWidth: 0,
+      lastFitHeight: 0,
+      lastOptions: null,
+      visible: true,
+      pendingData: [],
+      pendingDataBytes: 0
+    }
+
+    this.sessions.set(id, session)
+    return session
+  }
+
+  private getCreateSize(session: TerminalSession) {
+    if (session.open) {
+      try {
+        session.fitAddon.fit()
+        const { cols, rows } = session.terminal
+        if (cols > 0 && rows > 0) {
+          session.lastCols = cols
+          session.lastRows = rows
+        }
+      } catch (e) {
+        // Ignore fit errors during transitions
+      }
+    }
+
+    return { cols: session.lastCols || DEFAULT_COLS, rows: session.lastRows || DEFAULT_ROWS }
+  }
+
+  getSession(id: string): TerminalSession | undefined {
+    return this.sessions.get(id)
+  }
+
+  /**
+   * Paste text into a terminal through xterm.js's paste() mechanism.
+   *
+   * This is the correct way to send multi-line content because xterm.js
+   * applies bracketed paste mode when the child program has enabled it
+   * (e.g. Claude Code sends \x1b[?2004h). Within bracketed paste markers,
+   * \r\n is safe — the child treats the block as pasted text rather than
+   * interpreting each \r as Enter.
+   */
+  paste(id: string, data: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session) return false
+    session.terminal.paste(data)
+    return true
+  }
+
+  /**
+   * Send content to a terminal and execute (send Enter).
+   *
+   * Strategy depends on whether the content is single-line or multi-line:
+   *
+   * **Single-line**: `terminal.input(content + '\r', true)` — sends raw data
+   * through the same path as keyboard input (triggerDataEvent → onData → PTY).
+   * No bracketed paste wrapping.  Equivalent to the user typing the content
+   * and pressing Enter.  Works for all programs (shells, TUIs, Ink-based apps).
+   *
+   * **Multi-line**: `terminal.paste(content)` for bracketed paste protection
+   * (prevents ConPTY from splitting multi-line content at each \r), then
+   * after a 300 ms delay, `terminal.input('\r', true)` to send Enter.
+   * The delay allows Ink-based TUIs (Claude Code, Codex) to complete the
+   * async React state update triggered by the paste event before the Enter
+   * arrives.
+   *
+   * Returns true if the operation was initiated via the xterm session,
+   * false if no session was found (caller should fall back to direct PTY write).
+   */
+  pasteAndExecute(id: string, data: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session) return false
+
+    const isMultiLine = /\r?\n/.test(data)
+
+    if (!isMultiLine) {
+      // Single-line: send content + Enter as raw input (no bracket wrapping).
+      // This is the same behaviour as before commit 09aa7e9 and is known to
+      // work for all programs including Ink-based TUIs.
+      session.terminal.input(data + '\r', true)
+    } else {
+      // Multi-line: use bracketed paste to protect \r in the content from
+      // being interpreted as Enter by the child program, then send Enter
+      // after a delay so the async paste handler has time to complete.
+      session.terminal.paste(data)
+      setTimeout(() => {
+        // Guard: session may have been disposed during the delay
+        const s = this.sessions.get(id)
+        if (s) {
+          s.terminal.input('\r', true)
+        }
+      }, 300)
+    }
+
+    return true
+  }
+
+  ensureSession(id: string, options: TerminalSessionOptions): TerminalSession {
+    const existing = this.sessions.get(id)
+    if (existing) {
+      this.applyOptions(existing, options)
+      return existing
+    }
+
+    return this.createSession(id, options)
+  }
+
+  updateOptions(id: string, options: TerminalSessionOptions): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+    this.applyOptions(session, options)
+  }
+
+  /**
+   * Toggle visibility for a terminal session.
+   *
+   * When a terminal becomes hidden (e.g., user switches to another tab),
+   * incoming PTY data is buffered instead of written to xterm.js, and the
+   * WebGL context is released to free GPU resources.
+   *
+   * When it becomes visible again, buffered data is flushed to xterm.js
+   * and the WebGL context is re-created.
+   */
+  setVisibility(id: string, visible: boolean): void {
+    const session = this.sessions.get(id)
+    if (!session || session.visible === visible) return
+
+    session.visible = visible
+
+    if (visible) {
+      // Flush buffered data that accumulated while hidden
+      this.flushPendingData(session)
+      // Only touch WebGL/fit for fully initialized terminals
+      if (session.open && session.status === 'ready') {
+        this.ensureWebglAddon(session)
+        this.fit(id)
+      }
+    } else {
+      // Release WebGL context to free GPU resources for visible terminals.
+      // Only release if the terminal is fully open — avoid interfering with
+      // terminals that are still initializing.
+      if (session.open) {
+        this.releaseWebglAddon(session)
+      }
+    }
+  }
+
+  private flushPendingData(session: TerminalSession): void {
+    if (session.pendingData.length === 0) return
+
+    const merged = session.pendingData.length === 1
+      ? session.pendingData[0]
+      : session.pendingData.join('')
+    session.pendingData = []
+    session.pendingDataBytes = 0
+
+    const t0 = performance.now()
+    session.terminal.write(merged)
+    perfMonitor.recordXtermWrite(performance.now() - t0)
+  }
+
+  private ensureWebglAddon(session: TerminalSession): void {
+    if (session.webglAddon || !session.open) return
+    try {
+      const webglAddon = new WebglAddon()
+      webglAddon.onContextLoss(() => {
+        webglAddon.dispose()
+        session.webglAddon = undefined
+        perfMonitor.decrementWebglContextCount()
+      })
+      session.terminal.loadAddon(webglAddon)
+      session.webglAddon = webglAddon
+      perfMonitor.incrementWebglContextCount()
+    } catch {
+      // Canvas fallback is fine
+    }
+  }
+
+  private releaseWebglAddon(session: TerminalSession): void {
+    if (!session.webglAddon) return
+    session.webglAddon.dispose()
+    session.webglAddon = undefined
+    perfMonitor.decrementWebglContextCount()
+  }
+
+  attach(id: string, container: HTMLDivElement, options: TerminalSessionOptions): void {
+    const session = this.ensureSession(id, options)
+    session.container = container
+
+    if (!session.open) {
+      session.terminal.open(container)
+      session.open = true
+
+      try {
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose()
+          perfMonitor.decrementWebglContextCount()
+        })
+        session.terminal.loadAddon(webglAddon)
+        session.webglAddon = webglAddon
+        perfMonitor.incrementWebglContextCount()
+      } catch (e) {
+        console.warn('WebGL addon failed to load, using canvas renderer')
+      }
+    } else if (session.terminal.element && session.terminal.element.parentElement !== container) {
+      while (container.firstChild) {
+        container.removeChild(container.firstChild)
+      }
+      container.appendChild(session.terminal.element)
+    }
+
+    this.fit(id)
+  }
+
+  detach(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session?.container || !session.terminal.element) return
+
+    if (session.terminal.element.parentElement === session.container) {
+      session.container.removeChild(session.terminal.element)
+    }
+    session.container = null
+  }
+
+  fit(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session || !session.open) return
+    const container = session.container
+    if (!container) return
+
+    const width = container.clientWidth
+    const height = container.clientHeight
+    if (width <= 0 || height <= 0) return
+    if (width === session.lastFitWidth && height === session.lastFitHeight) return
+    session.lastFitWidth = width
+    session.lastFitHeight = height
+
+    try {
+      session.fitAddon.fit()
+      const { cols, rows } = session.terminal
+      if (cols > 0 && rows > 0) {
+        const prevCols = session.lastCols
+        const prevRows = session.lastRows
+        session.lastCols = cols
+        session.lastRows = rows
+        if (session.status === 'ready' && (cols !== prevCols || rows !== prevRows)) {
+          window.electronAPI.terminal.resize(id, cols, rows)
+        }
+      }
+    } catch (e) {
+      // Ignore fit errors during transitions
+    }
+  }
+
+  focus(id: string): void {
+    const session = this.sessions.get(id)
+    if (session?.open) {
+      session.terminal.focus()
+    }
+  }
+
+  async ensureReady(id: string, options: TerminalSessionOptions): Promise<void> {
+    const session = this.ensureSession(id, options)
+
+    if (session.status === 'ready') return
+    if (session.status === 'disposed') return
+    if (session.readyPromise) return session.readyPromise
+
+    session.status = 'initializing'
+
+    session.readyPromise = (async () => {
+      const { cols, rows } = this.getCreateSize(session)
+      const result = await window.electronAPI.terminal.create(id, { cols, rows })
+
+      if (session.status === 'disposed') {
+        window.electronAPI.terminal.dispose(id)
+        return
+      }
+
+      if (!result?.success) {
+        session.status = 'error'
+        throw new Error(result?.error || 'Failed to create terminal')
+      }
+
+      session.status = 'ready'
+    })()
+
+    session.readyPromise.catch(() => {
+      if (session.status !== 'disposed') {
+        session.readyPromise = null
+      }
+    })
+
+    return session.readyPromise
+  }
+
+  private restartShell(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session || !session.lastOptions) return
+
+    session.terminal.clear()
+    session.terminal.reset()
+
+    void this.ensureReady(id, session.lastOptions)
+  }
+
+  dispose(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+
+    session.status = 'disposed'
+    session.readyPromise = null
+    session.pendingData = []
+    session.pendingDataBytes = 0
+    this.dirtyVisibleSessions.delete(id)
+
+    // Data/exit IPC listeners are global; no per-session cleanup needed
+    window.electronAPI.terminal.dispose(id)
+    if (session.webglAddon) {
+      session.webglAddon.dispose()
+      session.webglAddon = undefined
+      perfMonitor.decrementWebglContextCount()
+    }
+    session.terminal.dispose()
+
+    this.sessions.delete(id)
+  }
+}
+
+export const terminalSessionManager = new TerminalSessionManager()
+
+// Expose for E2E testing via CDP (Chrome DevTools Protocol)
+;(window as any).__terminalSessionManager = terminalSessionManager

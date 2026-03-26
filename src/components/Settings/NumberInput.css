@@ -1,0 +1,76 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* NumberInput component styles */
+.number-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.number-btn {
+  width: 28px;
+  height: 32px;
+  border: 1px solid var(--border);
+  background-color: var(--bg-1);
+  color: var(--text-2);
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.number-btn:first-child {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  border-right: none;
+}
+
+.number-btn:last-child {
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-left: none;
+}
+
+.number-btn:hover {
+  background-color: var(--bg-2);
+  border-color: var(--border-strong);
+}
+
+.number-btn:active {
+  background-color: var(--panel);
+}
+
+.number-input-field {
+  width: 50px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background-color: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-md);
+  text-align: center;
+  outline: none;
+  transition: all 0.15s ease;
+  -moz-appearance: textfield;
+}
+
+.number-input-field::-webkit-outer-spin-button,
+.number-input-field::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.number-input-field:hover {
+  border-color: var(--border-strong);
+}
+
+.number-input-field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}

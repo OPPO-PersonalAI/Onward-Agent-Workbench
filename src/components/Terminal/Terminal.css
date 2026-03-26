@@ -1,0 +1,114 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.terminal-container {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-1);
+}
+
+.terminal-container.hidden {
+  display: none;
+}
+
+.terminal-container.active {
+  display: block;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+  padding: 6px;
+}
+
+.terminal-container .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.terminal-container .xterm-screen {
+  height: 100%;
+}
+
+/* Scrollbar styling */
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+/* Context menu */
+.terminal-context-menu {
+  min-width: 160px;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
+  padding: 6px;
+  z-index: 1100;
+  animation: terminal-context-fade-in 0.15s ease;
+}
+
+.terminal-context-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.terminal-context-item:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.terminal-context-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.terminal-context-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.terminal-context-item:hover:not(:disabled) svg {
+  color: var(--text-2);
+}
+
+.terminal-context-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+
+@keyframes terminal-context-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

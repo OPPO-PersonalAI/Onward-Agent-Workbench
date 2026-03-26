@@ -1,0 +1,296 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Tab bar container: three-column layout for visual centering */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  background-color: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+/* left area */
+.tab-bar-left {
+  flex: 1;
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+/* right area */
+.tab-bar-right {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  height: 100%;
+}
+
+/* Middle area: LOGO + Tab list */
+.tab-bar-center {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* macOS window button placeholder */
+.tab-bar-traffic-lights {
+  width: 68px;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+/* No space required for Windows/Linux */
+.tab-bar.platform-win32 .tab-bar-traffic-lights,
+.tab-bar.platform-linux .tab-bar-traffic-lights {
+  width: 0;
+}
+
+/* Tab list */
+.tab-list {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Hide scroll bar */
+.tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tab Item */
+.tab-item {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 10px;
+  min-width: 80px;
+  max-width: 200px;
+  background-color: transparent;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.1s ease;
+  -webkit-app-region: no-drag;
+}
+
+.tab-item:hover {
+  background-color: var(--bg-1);
+}
+
+.tab-item.active {
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background-color: var(--accent);
+}
+
+/* Tab in drag */
+.tab-item.dragging {
+  opacity: 0.5;
+}
+
+/* Drag target Tab */
+.tab-item.drag-over {
+  border-left: 2px solid var(--accent);
+}
+
+/* Tab Name */
+.tab-name {
+  flex: 1;
+  font-size: var(--font-md);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 4px;
+}
+
+.tab-item.active .tab-name {
+  color: var(--text-1);
+}
+
+/* Tab Name Input */
+.tab-name-input {
+  flex: 1;
+  font-size: var(--font-md);
+  color: var(--text-1);
+  background: var(--bg-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  outline: none;
+  min-width: 50px;
+}
+
+/* Tab Close Button */
+.tab-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: 4px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, background-color 0.1s ease;
+}
+
+.tab-item:hover .tab-close-btn,
+.tab-item.active .tab-close-btn {
+  opacity: 1;
+}
+
+.tab-close-btn:hover {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+}
+
+/* New Tab Button */
+.tab-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 4px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.1s ease, color 0.1s ease;
+  -webkit-app-region: no-drag;
+}
+
+.tab-add-btn:hover:not(.disabled) {
+  background-color: var(--bg-1);
+  color: var(--text-1);
+}
+
+/* Disabled New Tab button */
+.tab-add-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Drag Region - maintain the right region structure */
+.tab-bar-drag-region {
+  width: 100%;
+  height: 100%;
+}
+
+/* Application title */
+.tab-bar-title {
+  display: flex;
+  align-items: center;
+  padding: 0 12px 0 0;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.tab-bar-title .app-name {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.tab-bar-title .app-name-highlight {
+  color: var(--accent);
+}
+
+/* Confirm Dialog Overlay */
+.confirm-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+/* Confirm Dialog */
+.confirm-dialog {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  min-width: 320px;
+  max-width: 400px;
+  box-shadow: var(--shadow-1);
+}
+
+.confirm-dialog-title {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  color: var(--text-1);
+  margin-bottom: 12px;
+}
+
+.confirm-dialog-message {
+  font-size: var(--font-md);
+  color: var(--text-2);
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirm-dialog-btn {
+  padding: 6px 14px;
+  font-size: var(--font-md);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.1s ease;
+}
+
+.confirm-dialog-btn.cancel {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.confirm-dialog-btn.cancel:hover {
+  background: var(--border-strong);
+}
+
+.confirm-dialog-btn.confirm {
+  background: var(--accent);
+  color: var(--text-1);
+}
+
+.confirm-dialog-btn.confirm:hover {
+  background: var(--accent-strong);
+}

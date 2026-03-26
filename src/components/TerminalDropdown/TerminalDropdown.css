@@ -1,0 +1,93 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Terminal dropdown menu */
+.terminal-dropdown {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* trigger button */
+.terminal-dropdown-trigger {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+}
+
+.terminal-dropdown-trigger:hover {
+  background-color: var(--bg-1);
+  color: var(--text-2);
+}
+
+.terminal-dropdown-trigger.open {
+  background-color: var(--bg-1);
+  color: var(--text-2);
+}
+
+/* drop down menu */
+.terminal-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 160px;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  z-index: 100;
+  padding: 4px 0;
+  animation: dropdown-fade-in 0.15s ease;
+}
+
+@keyframes dropdown-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* menu item */
+.terminal-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.terminal-dropdown-item:hover {
+  background-color: var(--bg-1);
+}
+
+.terminal-dropdown-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.terminal-dropdown-item:hover svg {
+  color: var(--text-2);
+}
+
+/* Active terminal dropdown button */
+.terminal-grid-cell.active .terminal-dropdown-trigger {
+  color: var(--text-2);
+}

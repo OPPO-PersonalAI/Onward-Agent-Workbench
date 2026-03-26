@@ -1,0 +1,178 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Preset theme grid: 3 columns by 2 rows */
+.theme-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* theme card */
+.theme-preset-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-0);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.theme-preset-card:hover {
+  border-color: var(--border-strong);
+  background-color: var(--bg-1);
+}
+
+.theme-preset-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Top 4 color bar preview */
+.theme-preview-bar {
+  display: flex;
+  width: 100%;
+  height: 16px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.theme-preview-swatch {
+  flex: 1;
+}
+
+/* Topic name */
+.theme-preset-name {
+  font-size: var(--font-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.theme-preset-card.selected .theme-preset-name {
+  color: var(--text-1);
+}
+
+/* Select the corner mark */
+.theme-preset-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+/* Custom color area */
+.theme-custom-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.theme-custom-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.theme-custom-label {
+  font-size: var(--font-sm);
+  color: var(--text-2);
+}
+
+/* switch assembly */
+.theme-custom-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.theme-toggle-track {
+  display: block;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background-color: var(--border-strong);
+  transition: background-color 0.2s ease;
+  position: relative;
+}
+
+.theme-custom-toggle.active .theme-toggle-track {
+  background-color: var(--accent);
+}
+
+.theme-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--text-1);
+  transition: transform 0.2s ease;
+}
+
+.theme-custom-toggle.active .theme-toggle-thumb {
+  transform: translateX(16px);
+}
+
+/* Color Picker Premium */
+.color-picker-advanced {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.color-picker-advanced-preview {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.color-picker-advanced-preview:hover {
+  border-color: var(--border-strong);
+}
+
+.color-picker-advanced-input {
+  width: 90px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-md);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.color-picker-advanced-input:hover {
+  border-color: var(--border-strong);
+}
+
+.color-picker-advanced-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.color-picker-advanced-input.invalid {
+  border-color: var(--danger);
+  color: var(--danger);
+}

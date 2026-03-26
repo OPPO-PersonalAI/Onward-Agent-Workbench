@@ -1,0 +1,108 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* Default fallback: graphite gray theme (anti-flicker before JS is loaded) */
+  --bg-0: #101012;
+  --bg-1: #161618;
+  --bg-2: #1c1c1f;
+  --panel: #212124;
+  --border: #2c2c30;
+  --border-strong: #38383d;
+  --text-1: #e8e8ec;
+  --text-2: #b4b4bc;
+  --text-3: #8a8a94;
+  --accent: #8b8f98;
+  --accent-strong: #7a7e86;
+  /* Functional color: semantics are fixed and do not change with the theme */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  /* Rainbow fixed color: button + terminal selection, does not change with the theme */
+  --rainbow-1: #5DADE2;   /* light blue */
+  --rainbow-2: #2E56A5;   /* dark blue */
+  --rainbow-3: #E42328;   /* red */
+  --rainbow-4: #F68C23;   /* orange */
+  --rainbow-5: #FFD100;   /* yellow */
+  --rainbow-6: #1B9E4B;   /* green */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --shadow-1: 0 6px 18px rgba(0, 0, 0, 0.4);
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 13px;
+  --font-lg: 14px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'IBM Plex Sans', 'Source Sans 3', 'SF Pro Text', 'Segoe UI',
+    'Helvetica Neue', sans-serif;
+  background-color: var(--bg-0);
+  color: var(--text-2);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Loading state */
+.app-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-md);
+  color: var(--text-3);
+}
+
+/* application body */
+.app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  height: 100%;
+}
+
+.terminal-area {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Selection color */
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text-1);
+}
