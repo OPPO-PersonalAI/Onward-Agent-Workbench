@@ -181,6 +181,25 @@
   justify-content: flex-end;
 }
 
+.settings-apply-global-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--font-xs);
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.settings-apply-global-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
 .settings-row-value {
   font-size: var(--font-sm);
   color: var(--text-2);

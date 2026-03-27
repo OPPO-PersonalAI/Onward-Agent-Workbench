@@ -1340,6 +1340,11 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   overflow: hidden;
 }
 
+.project-editor-global-search {
+  width: min(840px, 92%);
+  height: min(72vh, 640px);
+}
+
 .project-editor-search-input {
   width: 100%;
   border: none;

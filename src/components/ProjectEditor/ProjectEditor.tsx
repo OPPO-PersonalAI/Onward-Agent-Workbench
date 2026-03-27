@@ -26,6 +26,7 @@ import {
 import { OutlinePanel, type OutlineTarget } from './Outline/OutlinePanel'
 import { countSymbols } from './Outline/outlineParser'
 import { useOutlineSymbols } from './Outline/useOutlineSymbols'
+import { SearchPanel } from './GlobalSearch/SearchPanel'
 import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import { SqliteViewer } from './SqliteViewer'
 import './ProjectEditor.css'
@@ -490,7 +491,7 @@ export function ProjectEditor({
   displayMode = 'modal'
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
-  const { settings } = useSettings()
+  const { getTerminalStyle } = useSettings()
   const { locale, t } = useI18n()
   const { getProjectEditorState, setProjectEditorState } = useAppState()
   const perfCountersRef = useRef({
@@ -544,6 +545,8 @@ export function ProjectEditor({
   const [isLoadingFile, setIsLoadingFile] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const [globalSearchInitialType, setGlobalSearchInitialType] = useState<'content' | 'filename'>('content')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<string[]>([])
   const [searchActiveIndex, setSearchActiveIndex] = useState(0)
@@ -735,8 +738,8 @@ export function ProjectEditor({
 
   const editorFontSize = useMemo(() => {
     if (!_terminalId) return DEFAULT_GIT_DIFF_FONT_SIZE
-    return settings?.terminalStyles[_terminalId]?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
-  }, [settings?.terminalStyles, _terminalId])
+    return getTerminalStyle(_terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
+  }, [getTerminalStyle, _terminalId])
 
   const isMarkdownFile = useMemo(() => isMarkdownPath(activeFilePath), [activeFilePath])
   const editorLanguage = useMemo(() => resolveMonacoLanguage(activeFilePath), [activeFilePath])
@@ -1214,10 +1217,10 @@ export function ProjectEditor({
   }, [dialog])
 
   useEffect(() => {
-    if (dialog || searchOpen) {
+    if (dialog || searchOpen || globalSearchOpen) {
       setContextMenu(null)
     }
-  }, [dialog, searchOpen])
+  }, [dialog, globalSearchOpen, searchOpen])
 
   useEffect(() => {
     if (!isDraggingRef.current) {
@@ -1942,7 +1945,7 @@ export function ProjectEditor({
   const openFile = useCallback(async (
     path: string,
     source: 'user' | 'restore' | 'debug' = 'user',
-    options?: { trackRecent?: boolean }
+    options?: { trackRecent?: boolean; cursorPosition?: { lineNumber: number; column?: number } | null }
   ) => {
     const currentActiveFilePath = activeFilePathRef.current
     if (source === 'user') {
@@ -1954,10 +1957,27 @@ export function ProjectEditor({
       pendingViewStatePathRef.current = null
       pendingViewStateFallbackRef.current = null
       pendingCursorRef.current = null
+      if (options?.cursorPosition) {
+        pendingViewStatePathRef.current = path
+        pendingCursorRef.current = {
+          lineNumber: options.cursorPosition.lineNumber,
+          column: options.cursorPosition.column ?? 1
+        }
+      }
     }
 
     if (currentActiveFilePath === path) {
       setSelectedPath(path)
+      if (options?.cursorPosition) {
+        pendingViewStateRef.current = null
+        pendingViewStatePathRef.current = path
+        pendingCursorRef.current = {
+          lineNumber: options.cursorPosition.lineNumber,
+          column: options.cursorPosition.column ?? 1
+        }
+        applyPendingCursorPosition()
+        scheduleProjectStateSave()
+      }
       return
     }
 
@@ -2149,11 +2169,13 @@ export function ProjectEditor({
       void applyPendingAfterModelReady()
     }
   }, [
+    applyPendingCursorPosition,
     applyPendingViewState,
     confirmDiscardChanges,
     getViewStateKey,
     isMarkdownPreviewOpen,
     removeQuickFileEntries,
+    scheduleProjectStateSave,
     showStatus,
     syncOriginalVersion,
     touchRecentFile,
@@ -2168,6 +2190,10 @@ export function ProjectEditor({
 
   const invalidateFileIndex = useCallback(() => {
     fileIndexRef.current = []
+  }, [])
+
+  const getFileIndex = useCallback(() => {
+    return fileIndexRef.current
   }, [])
 
   const buildFileIndex = useCallback(async () => {
@@ -2245,6 +2271,15 @@ export function ProjectEditor({
     setSearchQuery('')
     setSearchResults([])
     setSearchActiveIndex(0)
+  }, [])
+
+  const handleOpenGlobalSearch = useCallback((initialType: 'content' | 'filename' = 'content') => {
+    setGlobalSearchInitialType(initialType)
+    setGlobalSearchOpen(true)
+  }, [])
+
+  const handleCloseGlobalSearch = useCallback(() => {
+    setGlobalSearchOpen(false)
   }, [])
 
 
@@ -2345,6 +2380,7 @@ export function ProjectEditor({
       setTree([])
       setContextMenu(null)
       setSearchOpen(false)
+      setGlobalSearchOpen(false)
       setSearchQuery('')
       setSearchResults([])
       setSearchActiveIndex(0)
@@ -2629,6 +2665,22 @@ export function ProjectEditor({
     await openFile(path, 'user')
   }, [handleCloseSearch, openFile])
 
+  const handleGlobalSearchOpenFile = useCallback((path: string) => {
+    handleCloseGlobalSearch()
+    void openFile(path, 'user', { trackRecent: true })
+  }, [handleCloseGlobalSearch, openFile])
+
+  const handleGlobalSearchNavigate = useCallback((path: string, line: number, column: number) => {
+    handleCloseGlobalSearch()
+    void openFile(path, 'user', {
+      trackRecent: true,
+      cursorPosition: {
+        lineNumber: line,
+        column
+      }
+    })
+  }, [handleCloseGlobalSearch, openFile])
+
   const handleSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
@@ -2841,6 +2893,10 @@ export function ProjectEditor({
       handleDialogCancel()
       return
     }
+    if (globalSearchOpen) {
+      handleCloseGlobalSearch()
+      return
+    }
     if (searchOpen) {
       handleCloseSearch()
       return
@@ -2850,7 +2906,7 @@ export function ProjectEditor({
       return
     }
     void handleRequestClose()
-  }, [dialog, handleDialogCancel, handleCloseSearch, handleRequestClose, previewSearchOpen, searchOpen])
+  }, [dialog, globalSearchOpen, handleCloseGlobalSearch, handleDialogCancel, handleCloseSearch, handleRequestClose, previewSearchOpen, searchOpen])
 
   const handleOpenGitDiff = useCallback(async (source: 'user' | 'debug' = 'user') => {
     if (!_terminalId) return
@@ -3469,12 +3525,19 @@ export function ProjectEditor({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (dialog) return
-      if (searchOpen) return
+      if (searchOpen || globalSearchOpen) return
 
       const isSearch = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'p'
       if (isSearch) {
         event.preventDefault()
         void handleOpenSearch()
+        return
+      }
+
+      const isGlobalSearch = (event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f'
+      if (isGlobalSearch) {
+        event.preventDefault()
+        handleOpenGlobalSearch('content')
         return
       }
 
@@ -3503,7 +3566,7 @@ export function ProjectEditor({
 
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [dialog, handleOpenSearch, isMarkdownPreviewVisible, isOpen, searchOpen])
+  }, [dialog, globalSearchOpen, handleOpenGlobalSearch, handleOpenSearch, isMarkdownPreviewVisible, isOpen, searchOpen])
 
   useSubpageEscape({ isOpen, onEscape: handleEscape })
 
@@ -4005,8 +4068,19 @@ export function ProjectEditor({
                   className="project-editor-action-btn"
                   onClick={() => void handleOpenSearch()}
                   title={t('projectEditor.searchPlaceholder')}
+                  type="button"
                 >
                   {t('projectEditor.search')}
+                </button>
+                <button
+                  className="project-editor-action-btn"
+                  onClick={() => handleOpenGlobalSearch('content')}
+                  title={t('projectEditor.globalSearchContentTitle', {
+                    key: `${window.electronAPI.platform === 'darwin' ? 'Command' : 'Ctrl'}+Shift+F`
+                  })}
+                  type="button"
+                >
+                  {t('projectEditor.globalSearch')}
                 </button>
               </div>
             </div>
@@ -4483,6 +4557,25 @@ export function ProjectEditor({
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+
+        {globalSearchOpen && (
+          <div className="project-editor-search-overlay" onClick={handleCloseGlobalSearch}>
+            <div className="project-editor-search project-editor-global-search" onClick={(event) => event.stopPropagation()}>
+              <SearchPanel
+                rootPath={rootPath}
+                isActive={globalSearchOpen}
+                initialSearchType={globalSearchInitialType}
+                onNavigate={(file, line, column) => {
+                  handleGlobalSearchNavigate(file, line, column)
+                }}
+                onOpenFile={handleGlobalSearchOpenFile}
+                onClose={handleCloseGlobalSearch}
+                buildFileIndex={buildFileIndex}
+                getFileIndex={getFileIndex}
+              />
             </div>
           </div>
         )}

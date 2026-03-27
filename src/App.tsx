@@ -21,20 +21,18 @@ import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, Execut
 import type { ShortcutAction } from './types/settings.d.ts'
 import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { computeNextExecution } from './utils/schedule'
+import {
+  buildImportPlan,
+  buildPromptExportPayload,
+  formatExportFileName,
+  parsePromptExportPayload,
+  type PromptImportResult
+} from './utils/prompt-io'
 import { useI18n } from './i18n/useI18n'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
 import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/focus-coordinator'
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
 import './App.css'
-
-interface ExportedPromptRecord extends Omit<Prompt, 'createdAt' | 'updatedAt' | 'lastUsedAt'> {
-  createdAt: number
-  createdAtIso: string
-  updatedAt: number
-  updatedAtIso: string
-  lastUsedAt: number
-  lastUsedAtIso: string
-}
 
 const SCHEDULE_RETRY_ENTER_DELAY_MS = 50
 const MAX_SCHEDULE_LOG_ENTRIES = 50
@@ -55,25 +53,6 @@ function appendScheduleLogEntry(schedule: PromptSchedule, entry: ExecutionLogEnt
   return log.slice(-MAX_SCHEDULE_LOG_ENTRIES)
 }
 
-function resolveTimestamp(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function toIsoString(timestamp: number): string {
-  return new Date(timestamp).toISOString()
-}
-
-function formatExportFileName(timestamp: number): string {
-  const date = new Date(timestamp)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  const seconds = String(date.getSeconds()).padStart(2, '0')
-  return `onward-prompt-history-${year}${month}${day}-${hours}${minutes}${seconds}.json`
-}
-
 async function resolveProjectEditorDebugCwd(
   terminalId: string,
   preferredCwd: string | null | undefined
@@ -86,27 +65,6 @@ async function resolveProjectEditorDebugCwd(
   } catch {
     return null
   }
-}
-
-function normalizePromptForExport(prompt: Prompt, exportNow: number): ExportedPromptRecord {
-  const createdAt = resolveTimestamp(prompt.createdAt, exportNow)
-  const updatedAt = resolveTimestamp(prompt.updatedAt, exportNow)
-  const lastUsedAt = resolveTimestamp(prompt.lastUsedAt, exportNow)
-  return {
-    ...prompt,
-    createdAt,
-    createdAtIso: toIsoString(createdAt),
-    updatedAt,
-    updatedAtIso: toIsoString(updatedAt),
-    lastUsedAt,
-    lastUsedAtIso: toIsoString(lastUsedAt)
-  }
-}
-
-function sortLocalPromptsByUiOrder(prompts: Prompt[], exportNow: number): Prompt[] {
-  return [...prompts].sort((a, b) => {
-    return resolveTimestamp(b.updatedAt, exportNow) - resolveTimestamp(a.updatedAt, exportNow)
-  })
 }
 
 // Terminal grid component for a single Tab
@@ -227,7 +185,14 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   onRetrySchedule: (promptId: string) => void
 }) {
   const { t } = useI18n()
-  const { state, getTabDisplayName, getTerminalDisplayName, updateTabById, updateEditorDraftForTab } = useAppState()
+  const {
+    state,
+    getTabDisplayName,
+    getTerminalDisplayName,
+    updateTabById,
+    updateEditorDraftForTab,
+    importPrompts
+  } = useAppState()
 
   const terminals: TerminalInfo[] = useMemo(() => {
     return tab.terminals.slice(0, tab.layoutMode).map((t, index) => ({
@@ -267,53 +232,12 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
 
   const handleExportAllPrompts = useCallback(async () => {
     const exportNow = Date.now()
-    const globalPrompts = state.globalPrompts.map(prompt => normalizePromptForExport(prompt, exportNow))
-    const tabs = state.tabs.map((item, index) => {
-      const tabCreatedAt = resolveTimestamp(item.createdAt, exportNow)
-      const localPrompts = sortLocalPromptsByUiOrder(item.localPrompts, exportNow)
-        .map(prompt => normalizePromptForExport(prompt, exportNow))
-      return {
-        id: item.id,
-        index,
-        displayName: getTabDisplayName(item, index),
-        customName: item.customName,
-        layoutMode: item.layoutMode,
-        activePanel: item.activePanel,
-        promptPanelWidth: item.promptPanelWidth,
-        activeTerminalId: item.activeTerminalId,
-        terminals: item.terminals.map(terminal => ({
-          id: terminal.id,
-          customName: terminal.customName
-        })),
-        createdAt: tabCreatedAt,
-        createdAtIso: toIsoString(tabCreatedAt),
-        localPromptCount: localPrompts.length,
-        localPrompts
-      }
-    })
-    const localCount = tabs.reduce((sum, item) => sum + item.localPrompts.length, 0)
-
     const appInfo = await window.electronAPI.appInfo.get().catch((error) => {
       console.warn('Failed to load app info for export:', error)
       return null
     })
 
-    const payload = {
-      schemaVersion: 1,
-      exportedAt: exportNow,
-      exportedAtIso: toIsoString(exportNow),
-      appInfo,
-      promptCleanup: state.promptCleanup,
-      summary: {
-        totalCount: globalPrompts.length + localCount,
-        globalCount: globalPrompts.length,
-        localCount,
-        tabCount: tabs.length,
-        activeTabId: state.activeTabId
-      },
-      globalPrompts,
-      tabs
-    }
+    const payload = buildPromptExportPayload(state, getTabDisplayName, appInfo, exportNow)
 
     const result = await window.electronAPI.dialog.saveTextFile({
       title: t('app.exportPrompts'),
@@ -325,6 +249,49 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       console.error('Failed to export Prompts:', result.error || 'unknown error')
     }
   }, [getTabDisplayName, state, t])
+
+  const handleImportAllPrompts = useCallback(async (): Promise<PromptImportResult> => {
+    const fileResult = await window.electronAPI.dialog.openTextFile({
+      title: t('app.importPrompts'),
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+
+    if (!fileResult.success) {
+      return {
+        success: false,
+        canceled: fileResult.canceled,
+        globalImported: 0,
+        localImported: 0,
+        skippedDuplicate: 0,
+        error: fileResult.error
+      }
+    }
+
+    const parsed = parsePromptExportPayload(fileResult.content ?? '')
+    if (!parsed.success) {
+      console.error('Failed to parse prompt import payload:', parsed.error)
+      return {
+        success: false,
+        globalImported: 0,
+        localImported: 0,
+        skippedDuplicate: 0,
+        error: parsed.error
+      }
+    }
+
+    const existingPrompts = [
+      ...state.globalPrompts,
+      ...state.tabs.flatMap(item => item.localPrompts)
+    ]
+    const plan = buildImportPlan(parsed.payload, existingPrompts)
+    importPrompts(plan.globals, plan.locals)
+    return {
+      success: true,
+      globalImported: plan.globals.length,
+      localImported: plan.locals.length,
+      skippedDuplicate: plan.duplicateCount
+    }
+  }, [importPrompts, state.globalPrompts, state.tabs, t])
 
   return (
     <PromptNotebook
@@ -346,6 +313,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       globalPromptIds={globalPromptIds}
       promptCleanup={state.promptCleanup}
       onExportAllPrompts={handleExportAllPrompts}
+      onImportAllPrompts={handleImportAllPrompts}
       onTouchPromptLastUsed={onTouchPromptLastUsed}
       onCleanupPrompts={onCleanupPrompts}
       onUpdatePromptCleanup={onUpdatePromptCleanup}

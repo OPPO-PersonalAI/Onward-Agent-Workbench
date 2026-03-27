@@ -51,8 +51,10 @@ import { getShortcutManager } from './shortcut-manager'
 import { getAppInfo } from './app-info'
 import { gitRuntimeManager } from './git-runtime-manager'
 import { openExternalUrlWithConfirm } from './external-link-guard'
+import { RipgrepSearchManager } from './ripgrep-search'
 
 let gitWatchManager: GitWatchManager | null = null
+let ripgrepSearchManager: RipgrepSearchManager | null = null
 
 /**
  * Batches PTY output data into periodic flushes to reduce IPC message rate.
@@ -456,6 +458,30 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     }
   })
 
+  ipcMain.handle('dialog:openTextFile', async (_, payload?: {
+    title?: string
+    filters?: Array<{ name: string; extensions: string[] }>
+  }) => {
+    try {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: payload?.title || 'Open file',
+        properties: ['openFile'],
+        filters: payload?.filters?.length
+          ? payload.filters
+          : [{ name: 'JSON', extensions: ['json'] }, { name: 'Text', extensions: ['txt', 'md'] }]
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, canceled: true }
+      }
+      const path = result.filePaths[0]
+      const content = readFileSync(path, 'utf-8')
+      return { success: true, path, content }
+    } catch (error) {
+      console.error('Failed to open text file:', error)
+      return { success: false, error: String(error) }
+    }
+  })
+
   ipcMain.handle('dialog:saveTextFile', async (_, payload: { title?: string; defaultFileName?: string; content: string }) => {
     try {
       if (!payload || typeof payload.content !== 'string') {
@@ -684,6 +710,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await executeProjectSqlite(root, path, sql)
   })
 
+  ripgrepSearchManager = new RipgrepSearchManager()
+
+  ipcMain.handle('project:search-start', async (_, options: {
+    rootPath: string
+    query: string
+    isRegex: boolean
+    isCaseSensitive: boolean
+    isWholeWord: boolean
+    includeGlob?: string
+    excludeGlob?: string
+    maxResults?: number
+  }) => {
+    const searchId = ripgrepSearchManager!.start(mainWindow, options)
+    return { searchId }
+  })
+
+  ipcMain.handle('project:search-cancel', async () => {
+    ripgrepSearchManager?.cancel()
+    return { success: true }
+  })
+
   // Settings storage handlers
   const settingsStorage = getSettingsStorage()
   const shortcutManager = getShortcutManager()
@@ -849,6 +896,8 @@ export function cleanupIpcHandlers(): void {
 
   gitWatchManager?.dispose()
   gitWatchManager = null
+  ripgrepSearchManager?.dispose()
+  ripgrepSearchManager = null
   ipcMain.removeHandler('app:get-info')
   ipcMain.removeHandler('app:read-notice')
   ipcMain.removeHandler('terminal:create')
@@ -862,6 +911,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('terminal-config:save')
   ipcMain.removeHandler('terminal-config:update')
   ipcMain.removeHandler('dialog:openDirectory')
+  ipcMain.removeHandler('dialog:openTextFile')
   ipcMain.removeHandler('dialog:saveTextFile')
   ipcMain.removeHandler('shell:open-path')
   ipcMain.removeHandler('shell:open-external')
@@ -895,6 +945,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('project:create-folder')
   ipcMain.removeHandler('project:rename-path')
   ipcMain.removeHandler('project:delete-path')
+  ipcMain.removeHandler('project:search-start')
+  ipcMain.removeHandler('project:search-cancel')
   ipcMain.removeHandler('settings:load')
   ipcMain.removeHandler('settings:save')
   ipcMain.removeHandler('settings:update')

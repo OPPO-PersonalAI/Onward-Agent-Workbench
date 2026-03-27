@@ -23,6 +23,7 @@ interface PromptListProps {
   globalPromptIds?: string[]
   autoCleanupEnabled: boolean
   onExportAllPrompts: () => void
+  onImportAllPrompts: () => void
   onRetentionKeepDays: (days: number) => void
   onRetentionKeepCustom: () => void
   onToggleAutoCleanup: (nextEnabled: boolean) => void
@@ -49,6 +50,7 @@ const DRAG_MOVE_TOLERANCE = 6
 interface PromptRetentionDropdownProps {
   autoCleanupEnabled: boolean
   onExportAllPrompts: () => void
+  onImportAllPrompts: () => void
   onRetentionKeepDays: (days: number) => void
   onRetentionKeepCustom: () => void
   onToggleAutoCleanup: (nextEnabled: boolean) => void
@@ -57,6 +59,7 @@ interface PromptRetentionDropdownProps {
 function PromptRetentionDropdown({
   autoCleanupEnabled,
   onExportAllPrompts,
+  onImportAllPrompts,
   onRetentionKeepDays,
   onRetentionKeepCustom,
   onToggleAutoCleanup
@@ -124,6 +127,16 @@ function PromptRetentionDropdown({
             role="menuitem"
           >
             {t('promptList.retention.exportAll')}
+          </button>
+          <button
+            className="prompt-retention-item"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleMenuAction(onImportAllPrompts)
+            }}
+            role="menuitem"
+          >
+            {t('promptList.retention.importAll')}
           </button>
           <div className="prompt-retention-separator" role="separator" />
           <button
@@ -214,6 +227,7 @@ export const PromptList = memo(function PromptList({
   globalPromptIds = [],
   autoCleanupEnabled,
   onExportAllPrompts,
+  onImportAllPrompts,
   onRetentionKeepDays,
   onRetentionKeepCustom,
   onToggleAutoCleanup,
@@ -530,10 +544,11 @@ export const PromptList = memo(function PromptList({
     <div className="prompt-list">
       <div className="prompt-list-header">
         <div className="prompt-list-header-left">
-          <PromptRetentionDropdown
-            autoCleanupEnabled={autoCleanupEnabled}
-            onExportAllPrompts={onExportAllPrompts}
-            onRetentionKeepDays={onRetentionKeepDays}
+        <PromptRetentionDropdown
+          autoCleanupEnabled={autoCleanupEnabled}
+          onExportAllPrompts={onExportAllPrompts}
+          onImportAllPrompts={onImportAllPrompts}
+          onRetentionKeepDays={onRetentionKeepDays}
             onRetentionKeepCustom={onRetentionKeepCustom}
             onToggleAutoCleanup={onToggleAutoCleanup}
           />

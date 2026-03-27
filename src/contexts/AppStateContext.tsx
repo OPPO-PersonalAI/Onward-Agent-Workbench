@@ -227,6 +227,7 @@ interface AppStateContextValue {
   touchPromptLastUsed: (promptId: string) => void
   cleanupPrompts: (options: { keepDays: number; deleteColored: boolean }) => void
   updatePromptCleanup: (partial: Partial<PromptCleanupConfig>) => void
+  importPrompts: (globalPrompts: Prompt[], localPrompts: Prompt[]) => void
 
   // Merge all prompts (for display)
   getAllPrompts: () => Prompt[]
@@ -758,6 +759,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }))
   }, [updateState])
 
+  const importPrompts = useCallback((globalPrompts: Prompt[], localPrompts: Prompt[]) => {
+    if (globalPrompts.length === 0 && localPrompts.length === 0) return
+    updateState(prev => ({
+      ...prev,
+      globalPrompts: [
+        ...globalPrompts.map(prompt => normalizePromptTimestamp({ ...prompt, pinned: true } as Prompt) as GlobalPrompt),
+        ...prev.globalPrompts
+      ],
+      tabs: prev.tabs.map((tab) => {
+        if (tab.id !== prev.activeTabId) return tab
+        return {
+          ...tab,
+          localPrompts: [
+            ...localPrompts.map(prompt => normalizePromptTimestamp({ ...prompt, pinned: false } as Prompt) as LocalPrompt),
+            ...tab.localPrompts
+          ]
+        }
+      })
+    }))
+  }, [updateState])
+
   // Get all Prompts (global + local to current Tab)
   const getAllPrompts = useCallback((): Prompt[] => {
     const currentTab = state.tabs.find(t => t.id === state.activeTabId)
@@ -987,6 +1009,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     touchPromptLastUsed,
     cleanupPrompts,
     updatePromptCleanup,
+    importPrompts,
     getAllPrompts,
     hasRunningTerminals,
     updateEditorDraft,
@@ -1007,7 +1030,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     reorderTabs, canCreateTab,
     addPrompt, updatePrompt, deletePrompt,
     pinPrompt, unpinPrompt, reorderPinnedPrompts,
-    touchPromptLastUsed, cleanupPrompts, updatePromptCleanup,
+    touchPromptLastUsed, cleanupPrompts, updatePromptCleanup, importPrompts,
     getAllPrompts, hasRunningTerminals,
     updateEditorDraft, getEditorDraft,
     setLastFocusedTerminalId, getLastFocusedTerminalId,

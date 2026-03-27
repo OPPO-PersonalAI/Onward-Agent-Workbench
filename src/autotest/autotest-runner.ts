@@ -29,6 +29,7 @@ import { testTerminalFocusActivation } from './test-terminal-focus-activation'
 import { testTerminalStress } from './test-terminal-stress'
 import { testImageDiff } from './test-image-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
+import { testGlobalSearch } from './test-global-search'
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
@@ -111,6 +112,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.85:begin')
       const results = await testProjectEditorMarkdownNavigation(ctx)
       collectSuiteResults('ProjectEditorMarkdownNavigation', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('global-search')) {
+      log('phase0.875:begin')
+      const results = await testGlobalSearch(ctx)
+      collectSuiteResults('GlobalSearch', results)
       await sleep(500)
     }
 

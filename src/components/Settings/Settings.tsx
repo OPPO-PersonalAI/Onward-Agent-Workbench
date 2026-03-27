@@ -12,7 +12,7 @@ import { NumberInput } from './NumberInput'
 import { ThemeSelector } from './ThemeSelector'
 import { DEFAULT_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE } from '../../constants/terminal'
 import { DEFAULT_GIT_DIFF_FONT_SIZE, MIN_GIT_DIFF_FONT_SIZE, MAX_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
-import type { ShortcutConfig, TerminalStyleConfig } from '../../types/settings'
+import type { ShortcutConfig, TerminalStyleConfig, GlobalTerminalStyle } from '../../types/settings'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
 import './Settings.css'
@@ -88,7 +88,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     settings,
     updateShortcut,
     updateTerminalStyle,
-    getTerminalStyle
+    getTerminalStyle,
+    applyStyleGlobally
   } = useSettings()
   const { t, locale, locales, updateLanguage } = useI18n()
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(
@@ -129,6 +130,11 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const handleGitDiffFontSizeChange = useCallback((value: number | null) => {
     handleStyleChange('gitDiffFontSize', value)
   }, [handleStyleChange])
+
+  const handleApplyGlobally = useCallback((field: keyof GlobalTerminalStyle) => {
+    if (!currentTerminalStyle) return
+    applyStyleGlobally(field, currentTerminalStyle[field])
+  }, [applyStyleGlobally, currentTerminalStyle])
 
   const handleLanguageChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     updateLanguage(e.target.value as typeof locale)
@@ -296,6 +302,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onChange={(value) => handleStyleChange('foregroundColor', value)}
                         defaultValue="#cccccc"
                       />
+                      <button
+                        className="settings-apply-global-btn"
+                        type="button"
+                        onClick={() => handleApplyGlobally('foregroundColor')}
+                        title={t('settings.terminal.applyGlobally')}
+                      >
+                        {t('settings.terminal.applyGloballyShort')}
+                      </button>
                     </div>
                   </div>
 
@@ -308,6 +322,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onChange={(value) => handleStyleChange('backgroundColor', value)}
                         defaultValue="#1e1e1e"
                       />
+                      <button
+                        className="settings-apply-global-btn"
+                        type="button"
+                        onClick={() => handleApplyGlobally('backgroundColor')}
+                        title={t('settings.terminal.applyGlobally')}
+                      >
+                        {t('settings.terminal.applyGloballyShort')}
+                      </button>
                     </div>
                   </div>
 
@@ -319,6 +341,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         value={currentTerminalStyle?.fontFamily || null}
                         onChange={(value) => handleStyleChange('fontFamily', value)}
                       />
+                      <button
+                        className="settings-apply-global-btn"
+                        type="button"
+                        onClick={() => handleApplyGlobally('fontFamily')}
+                        title={t('settings.terminal.applyGlobally')}
+                      >
+                        {t('settings.terminal.applyGloballyShort')}
+                      </button>
                     </div>
                   </div>
 
@@ -334,6 +364,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         defaultValue={DEFAULT_TERMINAL_FONT_SIZE}
                         placeholder={String(DEFAULT_TERMINAL_FONT_SIZE)}
                       />
+                      <button
+                        className="settings-apply-global-btn"
+                        type="button"
+                        onClick={() => handleApplyGlobally('fontSize')}
+                        title={t('settings.terminal.applyGlobally')}
+                      >
+                        {t('settings.terminal.applyGloballyShort')}
+                      </button>
                     </div>
                   </div>
 
@@ -349,6 +387,21 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         defaultValue={DEFAULT_GIT_DIFF_FONT_SIZE}
                         placeholder={String(DEFAULT_GIT_DIFF_FONT_SIZE)}
                       />
+                      <button
+                        className="settings-apply-global-btn"
+                        type="button"
+                        onClick={() => handleApplyGlobally('gitDiffFontSize')}
+                        title={t('settings.terminal.applyGlobally')}
+                      >
+                        {t('settings.terminal.applyGloballyShort')}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="settings-row">
+                    <span className="settings-row-label">{t('settings.terminal.globalHintLabel')}</span>
+                    <div className="settings-row-input settings-row-input-column">
+                      <span className="settings-row-hint">{t('settings.terminal.globalHint')}</span>
                     </div>
                   </div>
 

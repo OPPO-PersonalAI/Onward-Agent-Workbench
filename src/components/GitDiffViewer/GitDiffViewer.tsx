@@ -251,7 +251,7 @@ export function GitDiffViewer({
   displayMode = 'modal'
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
-  const { settings } = useSettings()
+  const { getTerminalStyle } = useSettings()
   const { t } = useI18n()
   const perfCountersRef = useRef({
     renders: 0,
@@ -1134,7 +1134,7 @@ export function GitDiffViewer({
         })
         return true
       },
-      getDiffFontSize: () => settings?.terminalStyles[terminalId]?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE,
+      getDiffFontSize: () => getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE,
       getCwd: () => cwd,
       getRepoRoot: () => diffResult?.cwd || null,
       getImagePreviewState: () => {
@@ -1171,7 +1171,6 @@ export function GitDiffViewer({
     selectedFileKey,
     imageCompareMode,
     imageDisplayMode,
-    settings,
     terminalId
   ])
 
@@ -1751,7 +1750,7 @@ export function GitDiffViewer({
     !isDraftDirty &&
     selectedFile.changeType !== 'untracked' &&
     selectedFile.status !== 'D'
-  const diffFontSize = settings?.terminalStyles[terminalId]?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
+  const diffFontSize = getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
   const diffEditorOptions = useMemo(() => ({
     renderSideBySide: true,
     readOnly: !canEditFile,

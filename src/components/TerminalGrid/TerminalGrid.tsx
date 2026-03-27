@@ -90,7 +90,7 @@ export const TerminalGrid = memo(function TerminalGrid({
     terminalStyle: null
   }))
 
-  const { settings } = useSettings()
+  const { getTerminalStyle } = useSettings()
 
   const [displayLayoutMode, setDisplayLayoutMode] = useState<LayoutMode>(layoutMode)
   const [isTransitioning, setIsTransitioning] = useState(false)
@@ -173,9 +173,9 @@ export const TerminalGrid = memo(function TerminalGrid({
       theme,
       fontSize,
       fontFamily,
-      terminalStyle: settings?.terminalStyles[terminalId] ?? null
+      terminalStyle: getTerminalStyle(terminalId)
     }
-  }, [theme, fontSize, fontFamily, settings?.terminalStyles])
+  }, [theme, fontSize, fontFamily, getTerminalStyle])
 
   const formatCompactPath = useCallback((cwd: string): string => {
     const trimmed = cwd.trim()
@@ -362,9 +362,9 @@ export const TerminalGrid = memo(function TerminalGrid({
       theme,
       fontSize,
       fontFamily,
-      terminalStyle: settings?.terminalStyles[terminalId] ?? null
+      terminalStyle: getTerminalStyle(terminalId)
     })
-  }, [theme, fontSize, fontFamily, settings?.terminalStyles])
+  }, [theme, fontSize, fontFamily, getTerminalStyle])
 
   const fitTerminal = useCallback((id: string) => {
     terminalSessionManager.fit(id)

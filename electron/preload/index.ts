@@ -93,6 +93,10 @@ export interface TerminalConfigAPI {
 
 export interface DialogAPI {
   openDirectory: () => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
+  openTextFile: (payload?: {
+    title?: string
+    filters?: Array<{ name: string; extensions: string[] }>
+  }) => Promise<{ success: boolean; path?: string; content?: string; canceled?: boolean; error?: string }>
   saveTextFile: (payload: {
     title?: string
     defaultFileName?: string
@@ -439,6 +443,33 @@ export interface ProjectSqliteExecuteResult {
   error?: string
 }
 
+export interface ProjectSearchOptions {
+  rootPath: string
+  query: string
+  isRegex: boolean
+  isCaseSensitive: boolean
+  isWholeWord: boolean
+  includeGlob?: string
+  excludeGlob?: string
+  maxResults?: number
+}
+
+export interface ProjectSearchMatch {
+  file: string
+  line: number
+  column: number
+  matchLength: number
+  lineContent: string
+}
+
+export interface ProjectSearchStats {
+  searchId: string
+  matchCount: number
+  fileCount: number
+  durationMs: number
+  cancelled: boolean
+}
+
 // Git API
 export interface GitAPI {
   resolveRepoRoot: (cwd: string) => Promise<string>
@@ -478,6 +509,10 @@ export interface ProjectAPI {
   sqliteUpdateRow: (root: string, path: string, table: string, key: SqliteRowKey, values: Record<string, unknown>) => Promise<ProjectSqliteMutationResult>
   sqliteDeleteRow: (root: string, path: string, table: string, key: SqliteRowKey) => Promise<ProjectSqliteMutationResult>
   sqliteExecute: (root: string, path: string, sql: string) => Promise<ProjectSqliteExecuteResult>
+  searchStart: (options: ProjectSearchOptions) => Promise<{ searchId: string }>
+  searchCancel: () => Promise<{ success: boolean }>
+  onSearchResult: (callback: (searchId: string, matches: ProjectSearchMatch[]) => void) => () => void
+  onSearchDone: (callback: (stats: ProjectSearchStats) => void) => () => void
 }
 
 // Shortcut configuration
@@ -512,6 +547,15 @@ export interface TerminalStyleConfig {
   backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
+  gitDiffFontSize: number | null
+}
+
+export interface GlobalTerminalStyle {
+  foregroundColor: string | null
+  backgroundColor: string | null
+  fontFamily: string | null
+  fontSize: number | null
+  gitDiffFontSize: number | null
 }
 
 // Complete settings state
@@ -519,6 +563,7 @@ export interface SettingsState {
   version: number
   shortcuts: ShortcutConfig
   terminalStyles: Record<string, TerminalStyleConfig>
+  globalTerminalStyle: GlobalTerminalStyle
   gitDiffFontSize: number | null
   settingsPanelWidth: number
   language: 'en' | 'zh-CN'
@@ -711,6 +756,9 @@ const dialogAPI: DialogAPI = {
   openDirectory: () => {
     return ipcRenderer.invoke('dialog:openDirectory')
   },
+  openTextFile: (payload?: { title?: string; filters?: Array<{ name: string; extensions: string[] }> }) => {
+    return ipcRenderer.invoke('dialog:openTextFile', payload)
+  },
   saveTextFile: (payload: { title?: string; defaultFileName?: string; content: string }) => {
     return ipcRenderer.invoke('dialog:saveTextFile', payload)
   }
@@ -888,6 +936,34 @@ const projectAPI: ProjectAPI = {
 
   sqliteExecute: (root: string, path: string, sql: string) => {
     return ipcRenderer.invoke('project:sqlite-execute', root, path, sql)
+  },
+
+  searchStart: (options: ProjectSearchOptions) => {
+    return ipcRenderer.invoke('project:search-start', options)
+  },
+
+  searchCancel: () => {
+    return ipcRenderer.invoke('project:search-cancel')
+  },
+
+  onSearchResult: (callback: (searchId: string, matches: ProjectSearchMatch[]) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, searchId: string, matches: ProjectSearchMatch[]) => {
+      callback(searchId, matches)
+    }
+    ipcRenderer.on('project:search-result', listener)
+    return () => {
+      ipcRenderer.removeListener('project:search-result', listener)
+    }
+  },
+
+  onSearchDone: (callback: (stats: ProjectSearchStats) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, stats: ProjectSearchStats) => {
+      callback(stats)
+    }
+    ipcRenderer.on('project:search-done', listener)
+    return () => {
+      ipcRenderer.removeListener('project:search-done', listener)
+    }
   }
 }
 

@@ -10,7 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3",
+    "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3 && node scripts/ensure-ripgrep-binary.js",
     "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3",
     "lint:comments": "node scripts/check-chinese-comments.js",
     "generate:icons": "node scripts/generate-icons.js",
@@ -28,6 +28,9 @@
     },
     "files": [
       "out/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/@vscode/ripgrep/**"
     ],
     "extraResources": [
       {
@@ -73,6 +76,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
     "@pierre/diffs": "^1.0.10",
+    "@vscode/ripgrep": "^1.15.11",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.15.0",
     "@xterm/addon-web-links": "^0.11.0",

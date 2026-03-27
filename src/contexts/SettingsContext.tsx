@@ -4,7 +4,13 @@
  */
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
-import type { SettingsState, ShortcutConfig, TerminalStyleConfig, ShortcutAction } from '../types/settings.d.ts'
+import type {
+  SettingsState,
+  ShortcutConfig,
+  TerminalStyleConfig,
+  GlobalTerminalStyle,
+  ShortcutAction
+} from '../types/settings.d.ts'
 import type { ThemeSettings } from '../types/theme'
 import { DEFAULT_THEME_SETTINGS } from '../constants/themes'
 import { applyTheme, resolveThemeColors } from '../utils/theme-applier'
@@ -17,6 +23,31 @@ const SAVE_DEBOUNCE_MS = 300
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
+
+function createDefaultGlobalTerminalStyle(): GlobalTerminalStyle {
+  return {
+    foregroundColor: null,
+    backgroundColor: null,
+    fontFamily: null,
+    fontSize: null,
+    gitDiffFontSize: null
+  }
+}
+
+function applyTerminalStylePatch(
+  terminalId: string,
+  previous: TerminalStyleConfig | null | undefined,
+  patch: Partial<TerminalStyleConfig>
+): TerminalStyleConfig {
+  return {
+    terminalId,
+    foregroundColor: 'foregroundColor' in patch ? (patch.foregroundColor ?? null) : (previous?.foregroundColor ?? null),
+    backgroundColor: 'backgroundColor' in patch ? (patch.backgroundColor ?? null) : (previous?.backgroundColor ?? null),
+    fontFamily: 'fontFamily' in patch ? (patch.fontFamily ?? null) : (previous?.fontFamily ?? null),
+    fontSize: 'fontSize' in patch ? (patch.fontSize ?? null) : (previous?.fontSize ?? null),
+    gitDiffFontSize: 'gitDiffFontSize' in patch ? (patch.gitDiffFontSize ?? null) : (previous?.gitDiffFontSize ?? null)
+  }
+}
 
 /**
  * Create the default shortcut configuration
@@ -52,9 +83,10 @@ function createDefaultShortcuts(): ShortcutConfig {
  */
 function createDefaultSettings(): SettingsState {
   return {
-    version: 3,
+    version: 4,
     shortcuts: createDefaultShortcuts(),
     terminalStyles: {},
+    globalTerminalStyle: createDefaultGlobalTerminalStyle(),
     gitDiffFontSize: null,
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
@@ -76,6 +108,7 @@ interface SettingsContextValue {
   updateTerminalStyle: (terminalId: string, style: Partial<TerminalStyleConfig>) => void
   getTerminalStyle: (terminalId: string) => TerminalStyleConfig | null
   deleteTerminalStyle: (terminalId: string) => void
+  applyStyleGlobally: (field: keyof GlobalTerminalStyle, value: string | number | null) => void
 
   // Shortcut events
   onShortcutAction: (callback: (action: ShortcutAction) => void) => () => void
@@ -220,21 +253,24 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       ...prev,
       terminalStyles: {
         ...prev.terminalStyles,
-        [terminalId]: {
-          terminalId,
-          foregroundColor: style.foregroundColor ?? prev.terminalStyles[terminalId]?.foregroundColor ?? null,
-          backgroundColor: style.backgroundColor ?? prev.terminalStyles[terminalId]?.backgroundColor ?? null,
-          fontFamily: style.fontFamily ?? prev.terminalStyles[terminalId]?.fontFamily ?? null,
-          fontSize: style.fontSize ?? prev.terminalStyles[terminalId]?.fontSize ?? null,
-          gitDiffFontSize: style.gitDiffFontSize ?? prev.terminalStyles[terminalId]?.gitDiffFontSize ?? null
-        }
+        [terminalId]: applyTerminalStylePatch(terminalId, prev.terminalStyles[terminalId], style)
       }
     }))
   }, [updateSettings])
 
   // Get terminal style
   const getTerminalStyle = useCallback((terminalId: string): TerminalStyleConfig | null => {
-    return settings?.terminalStyles[terminalId] ?? null
+    const perTerminal = settings?.terminalStyles[terminalId]
+    if (perTerminal) return perTerminal
+    const globalStyle = settings?.globalTerminalStyle ?? createDefaultGlobalTerminalStyle()
+    return {
+      terminalId,
+      foregroundColor: globalStyle.foregroundColor,
+      backgroundColor: globalStyle.backgroundColor,
+      fontFamily: globalStyle.fontFamily,
+      fontSize: globalStyle.fontSize,
+      gitDiffFontSize: globalStyle.gitDiffFontSize
+    }
   }, [settings])
 
   // Remove terminal style
@@ -245,6 +281,26 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       return {
         ...prev,
         terminalStyles: newStyles
+      }
+    })
+  }, [updateSettings])
+
+  const applyStyleGlobally = useCallback((field: keyof GlobalTerminalStyle, value: string | number | null) => {
+    updateSettings(prev => {
+      const globalTerminalStyle = {
+        ...(prev.globalTerminalStyle ?? createDefaultGlobalTerminalStyle()),
+        [field]: value
+      }
+      const terminalStyles = Object.fromEntries(
+        Object.entries(prev.terminalStyles).map(([terminalId, style]) => [
+          terminalId,
+          applyTerminalStylePatch(terminalId, style, { [field]: value } as Partial<TerminalStyleConfig>)
+        ])
+      )
+      return {
+        ...prev,
+        globalTerminalStyle,
+        terminalStyles
       }
     })
   }, [updateSettings])
@@ -286,6 +342,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateTerminalStyle,
     getTerminalStyle,
     deleteTerminalStyle,
+    applyStyleGlobally,
     onShortcutAction: onShortcutActionCallback,
     getSettingsPanelWidth,
     setSettingsPanelWidth,

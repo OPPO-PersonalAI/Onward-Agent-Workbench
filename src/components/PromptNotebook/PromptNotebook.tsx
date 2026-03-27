@@ -16,6 +16,7 @@ import { PromptSender } from './PromptSender'
 import { ScheduleConfigModal } from './ScheduleConfigModal'
 import { ScheduleNotificationBar } from './ScheduleNotification'
 import { useI18n } from '../../i18n/useI18n'
+import type { PromptImportResult } from '../../utils/prompt-io'
 import './PromptNotebook.css'
 
 interface PromptNotebookProps {
@@ -38,6 +39,7 @@ interface PromptNotebookProps {
   globalPromptIds: string[]
   promptCleanup: PromptCleanupConfig
   onExportAllPrompts: () => Promise<void> | void
+  onImportAllPrompts: () => Promise<PromptImportResult>
   onTouchPromptLastUsed: (promptId: string) => void
   onCleanupPrompts: (options: { keepDays: number; deleteColored: boolean }) => void
   onUpdatePromptCleanup: (partial: Partial<PromptCleanupConfig>) => void
@@ -93,6 +95,7 @@ export const PromptNotebook = memo(function PromptNotebook({
   globalPromptIds,
   promptCleanup,
   onExportAllPrompts,
+  onImportAllPrompts,
   onTouchPromptLastUsed,
   onCleanupPrompts,
   onUpdatePromptCleanup,
@@ -410,6 +413,40 @@ export const PromptNotebook = memo(function PromptNotebook({
   const handleExportAllPrompts = useCallback(() => {
     void onExportAllPrompts()
   }, [onExportAllPrompts])
+
+  const handleImportAllPrompts = useCallback(() => {
+    void onImportAllPrompts().then((result) => {
+      if (result.canceled) return
+      if (!result.success) {
+        showSaveMessage({
+          type: 'error',
+          text: t('promptNotebook.import.failed')
+        })
+        return
+      }
+
+      const importedCount = result.globalImported + result.localImported
+      if (importedCount === 0) {
+        showSaveMessage({
+          type: 'success',
+          text: t('promptNotebook.import.noNewItems', { skipped: result.skippedDuplicate })
+        })
+        return
+      }
+
+      const translationKey = result.skippedDuplicate > 0
+        ? 'promptNotebook.import.successWithSkipped'
+        : 'promptNotebook.import.success'
+      showSaveMessage({
+        type: 'success',
+        text: t(translationKey, {
+          global: result.globalImported,
+          local: result.localImported,
+          skipped: result.skippedDuplicate
+        })
+      })
+    })
+  }, [onImportAllPrompts, showSaveMessage, t])
 
   const handleConfirmRetention = useCallback(() => {
     const resolvedKeepDays = retentionConfirm.isCustomDays
@@ -748,6 +785,7 @@ export const PromptNotebook = memo(function PromptNotebook({
           onReorderPinned={onReorderPinnedPrompts}
           autoCleanupEnabled={promptCleanup.autoEnabled}
           onExportAllPrompts={handleExportAllPrompts}
+          onImportAllPrompts={handleImportAllPrompts}
           onRetentionKeepDays={handleRetentionKeepDays}
           onRetentionKeepCustom={handleRetentionKeepCustom}
           onToggleAutoCleanup={handleToggleAutoCleanup}

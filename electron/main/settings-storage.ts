@@ -54,6 +54,14 @@ interface TerminalStyleConfig {
   gitDiffFontSize: number | null
 }
 
+interface GlobalTerminalStyle {
+  foregroundColor: string | null
+  backgroundColor: string | null
+  fontFamily: string | null
+  fontSize: number | null
+  gitDiffFontSize: number | null
+}
+
 /**
  * Complete settings state
  */
@@ -61,6 +69,7 @@ interface SettingsState {
   version: number
   shortcuts: ShortcutConfig
   terminalStyles: Record<string, TerminalStyleConfig>
+  globalTerminalStyle: GlobalTerminalStyle
   gitDiffFontSize: number | null
   /** Settings panel width (300-600px) */
   settingsPanelWidth: number
@@ -93,13 +102,23 @@ const MIGRATION_THEME: ThemeSettings = {
 }
 
 // Current version number
-const CURRENT_VERSION = 2
+const CURRENT_VERSION = 4
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
 const DEFAULT_GIT_DIFF_FONT_SIZE = 19
 const MIN_GIT_DIFF_FONT_SIZE = 10
 const MAX_GIT_DIFF_FONT_SIZE = 28
+
+function createDefaultGlobalTerminalStyle(): GlobalTerminalStyle {
+  return {
+    foregroundColor: null,
+    backgroundColor: null,
+    fontFamily: null,
+    fontSize: null,
+    gitDiffFontSize: null
+  }
+}
 
 /**
  * Create the default shortcut configuration (all shortcuts default to null)
@@ -138,6 +157,7 @@ function createDefaultSettingsState(): SettingsState {
     version: CURRENT_VERSION,
     shortcuts: createDefaultShortcuts(),
     terminalStyles: {},
+    globalTerminalStyle: createDefaultGlobalTerminalStyle(),
     gitDiffFontSize: null,
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
@@ -215,6 +235,7 @@ class SettingsStorage {
         }
       }
     }
+    const globalTerminalStyle = this.validateGlobalTerminalStyle(state.globalTerminalStyle)
 
     let gitDiffFontSize: number | null = DEFAULT_GIT_DIFF_FONT_SIZE
     if (state.gitDiffFontSize === null) {
@@ -240,6 +261,7 @@ class SettingsStorage {
       version: CURRENT_VERSION,
       shortcuts,
       terminalStyles,
+      globalTerminalStyle,
       gitDiffFontSize,
       settingsPanelWidth,
       language,
@@ -280,6 +302,28 @@ class SettingsStorage {
         style.gitDiffFontSize >= MIN_GIT_DIFF_FONT_SIZE &&
         style.gitDiffFontSize <= MAX_GIT_DIFF_FONT_SIZE
         ? style.gitDiffFontSize
+        : null
+    }
+  }
+
+  private validateGlobalTerminalStyle(style: unknown): GlobalTerminalStyle {
+    if (!style || typeof style !== 'object') {
+      return createDefaultGlobalTerminalStyle()
+    }
+    const candidate = style as Partial<GlobalTerminalStyle>
+    return {
+      foregroundColor: this.validateColor(candidate.foregroundColor),
+      backgroundColor: this.validateColor(candidate.backgroundColor),
+      fontFamily: typeof candidate.fontFamily === 'string' && candidate.fontFamily.trim()
+        ? candidate.fontFamily.trim()
+        : null,
+      fontSize: typeof candidate.fontSize === 'number' && candidate.fontSize >= 8 && candidate.fontSize <= 72
+        ? candidate.fontSize
+        : null,
+      gitDiffFontSize: typeof candidate.gitDiffFontSize === 'number' &&
+        candidate.gitDiffFontSize >= MIN_GIT_DIFF_FONT_SIZE &&
+        candidate.gitDiffFontSize <= MAX_GIT_DIFF_FONT_SIZE
+        ? candidate.gitDiffFontSize
         : null
     }
   }
@@ -394,6 +438,9 @@ class SettingsStorage {
           }
         }
       }
+      if (partial.globalTerminalStyle) {
+        this.state.globalTerminalStyle = this.validateGlobalTerminalStyle(partial.globalTerminalStyle)
+      }
       if (partial.theme) {
         this.state.theme = this.validateTheme(partial.theme, false)
       }
@@ -460,7 +507,8 @@ export function getSettingsStorage(): SettingsStorage {
 export type {
   SettingsState,
   ShortcutConfig,
-  TerminalStyleConfig
+  TerminalStyleConfig,
+  GlobalTerminalStyle
 }
 
 export {

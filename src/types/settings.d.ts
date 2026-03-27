@@ -50,11 +50,20 @@ export interface TerminalStyleConfig {
   gitDiffFontSize: number | null
 }
 
+export interface GlobalTerminalStyle {
+  foregroundColor: string | null
+  backgroundColor: string | null
+  fontFamily: string | null
+  fontSize: number | null
+  gitDiffFontSize: number | null
+}
+
 // Complete settings state
 export interface SettingsState {
   version: number
   shortcuts: ShortcutConfig
   terminalStyles: Record<string, TerminalStyleConfig>
+  globalTerminalStyle: GlobalTerminalStyle
   /** Git Diff font size (px), if empty, use the default value */
   gitDiffFontSize: number | null
   /** Settings panel width (300-600px) */

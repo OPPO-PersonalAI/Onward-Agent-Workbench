@@ -109,6 +109,10 @@ export interface TerminalConfigAPI {
 
 export interface DialogAPI {
   openDirectory: () => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
+  openTextFile: (payload?: {
+    title?: string
+    filters?: Array<{ name: string; extensions: string[] }>
+  }) => Promise<{ success: boolean; path?: string; content?: string; canceled?: boolean; error?: string }>
   saveTextFile: (payload: {
     title?: string
     defaultFileName?: string
@@ -407,6 +411,33 @@ export interface ProjectSqliteExecuteResult {
   error?: string
 }
 
+export interface ProjectSearchOptions {
+  rootPath: string
+  query: string
+  isRegex: boolean
+  isCaseSensitive: boolean
+  isWholeWord: boolean
+  includeGlob?: string
+  excludeGlob?: string
+  maxResults?: number
+}
+
+export interface ProjectSearchMatch {
+  file: string
+  line: number
+  column: number
+  matchLength: number
+  lineContent: string
+}
+
+export interface ProjectSearchStats {
+  searchId: string
+  matchCount: number
+  fileCount: number
+  durationMs: number
+  cancelled: boolean
+}
+
 // Git API
 export interface GitAPI {
   resolveRepoRoot: (cwd: string) => Promise<string>
@@ -446,6 +477,10 @@ export interface ProjectAPI {
   sqliteUpdateRow: (root: string, path: string, table: string, key: SqliteRowKey, values: Record<string, unknown>) => Promise<ProjectSqliteMutationResult>
   sqliteDeleteRow: (root: string, path: string, table: string, key: SqliteRowKey) => Promise<ProjectSqliteMutationResult>
   sqliteExecute: (root: string, path: string, sql: string) => Promise<ProjectSqliteExecuteResult>
+  searchStart: (options: ProjectSearchOptions) => Promise<{ searchId: string }>
+  searchCancel: () => Promise<{ success: boolean }>
+  onSearchResult: (callback: (searchId: string, matches: ProjectSearchMatch[]) => void) => () => void
+  onSearchDone: (callback: (stats: ProjectSearchStats) => void) => () => void
 }
 
 // Introducing the Settings type
