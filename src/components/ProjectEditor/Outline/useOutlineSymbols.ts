@@ -33,6 +33,21 @@ function findDeepestContaining(items: OutlineItem[], line: number): OutlineItem 
   return null
 }
 
+function findNearestSymbolForLine(items: OutlineItem[], line: number): OutlineItem | null {
+  let best: OutlineItem | null = null
+  for (const item of items) {
+    if (item.startLine <= line) {
+      best = item
+    }
+  }
+  if (!best) return null
+  if (best.children.length > 0) {
+    const childMatch = findNearestSymbolForLine(best.children, line)
+    if (childMatch) return childMatch
+  }
+  return best
+}
+
 export function useOutlineSymbols({
   editor,
   filePath,
@@ -101,7 +116,13 @@ export function useOutlineSymbols({
     setActiveItem(null)
   }, [filePath])
 
-  // Cursor tracking
+  useEffect(() => {
+    if (!isVisible) {
+      setActiveItem(null)
+    }
+  }, [isVisible])
+
+  // Cursor tracking follows explicit editor interaction.
   useEffect(() => {
     if (!editor || !isVisible) return
 
@@ -117,6 +138,31 @@ export function useOutlineSymbols({
       const match = findDeepestContaining(symbolsRef.current, pos.lineNumber)
       setActiveItem(match)
     }
+
+    return () => disposable.dispose()
+  }, [editor, isVisible, symbols])
+
+  // Refresh the active item after reparsing to avoid stale references.
+  useEffect(() => {
+    if (!editor || !isVisible || symbolsRef.current.length === 0) return
+    const ranges = editor.getVisibleRanges()
+    if (ranges.length === 0) return
+    const topLine = ranges[0].startLineNumber
+    const match = findNearestSymbolForLine(symbolsRef.current, topLine)
+    setActiveItem(match)
+  }, [editor, isVisible, symbols])
+
+  // Scroll tracking keeps the outline aligned with the visible code region.
+  useEffect(() => {
+    if (!editor || !isVisible) return
+
+    const disposable = editor.onDidScrollChange(() => {
+      const ranges = editor.getVisibleRanges()
+      if (ranges.length === 0) return
+      const topLine = ranges[0].startLineNumber
+      const match = findNearestSymbolForLine(symbolsRef.current, topLine)
+      setActiveItem(match)
+    })
 
     return () => disposable.dispose()
   }, [editor, isVisible, symbols])

@@ -292,6 +292,25 @@ function isExternalUrl(value: string): boolean {
   )
 }
 
+function headingSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/<[^>]*>/g, '')
+    .replace(/&[^;]+;/g, '')
+    .trim()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function buildHeadingId(text: string, slugCounts: Map<string, number>): string {
+  const baseSlug = headingSlug(text) || 'section'
+  const count = slugCounts.get(baseSlug) ?? 0
+  slugCounts.set(baseSlug, count + 1)
+  return count > 0 ? `${baseSlug}-${count}` : baseSlug
+}
+
 const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope
 
 ctx.addEventListener('message', (event: MessageEvent<MarkdownRenderRequest>) => {
@@ -301,6 +320,7 @@ ctx.addEventListener('message', (event: MessageEvent<MarkdownRenderRequest>) => 
   const imageMap = payload.imageMap ?? {}
 
   try {
+    const slugCounts = new Map<string, number>()
     const resolveMarkdownUrl = (rawUrl: string, isImage: boolean): string => {
       if (isExternalUrl(rawUrl)) return rawUrl
       const { path: rawPath, suffix } = splitUrlParts(rawUrl)
@@ -318,12 +338,20 @@ ctx.addEventListener('message', (event: MessageEvent<MarkdownRenderRequest>) => 
       return `${fileUrl}${suffix}`
     }
 
+    const renderer = new marked.Renderer()
+    renderer.heading = function heading(this: { parser: { parseInline: (tokens: Tokens.Generic[]) => string } }, token: Tokens.Heading): string {
+      const id = buildHeadingId(token.text, slugCounts)
+      const text = this.parser.parseInline(token.tokens)
+      return `<h${token.depth} id="${id}">${text}</h${token.depth}>\n`
+    }
+
     const shouldProfile = Boolean(payload.profile)
     const start = shouldProfile ? performance.now() : 0
     const html = marked.parse(payload.content ?? '', {
       gfm: true,
       breaks: true,
       async: false,
+      renderer,
       walkTokens: (token: Tokens.Generic) => {
         if (token.type === 'image') {
           const imageToken = token as Tokens.Image

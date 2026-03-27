@@ -23,8 +23,10 @@ import {
   resolveStoredProjectEditorState,
   shouldKeepPendingRestoreState
 } from './projectEditorRestoreUtils'
-import { OutlinePanel } from './Outline/OutlinePanel'
+import { OutlinePanel, type OutlineTarget } from './Outline/OutlinePanel'
+import { countSymbols } from './Outline/outlineParser'
 import { useOutlineSymbols } from './Outline/useOutlineSymbols'
+import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import { SqliteViewer } from './SqliteViewer'
 import './ProjectEditor.css'
 
@@ -94,8 +96,10 @@ const STORAGE_KEY_FILE_TREE_WIDTH = 'project-editor-file-tree-width'
 const STORAGE_KEY_MODAL_SIZE = 'project-editor-modal-size'
 const STORAGE_KEY_MARKDOWN_PREVIEW_RATIO = 'project-editor-markdown-preview-ratio'
 const STORAGE_KEY_MARKDOWN_PREVIEW_WIDTH = 'project-editor-markdown-preview-width'
+const STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE = 'project-editor-markdown-editor-visible'
 const STORAGE_KEY_OUTLINE_VISIBLE = 'project-editor-outline-visible'
 const STORAGE_KEY_OUTLINE_WIDTH = 'project-editor-outline-width'
+const STORAGE_KEY_OUTLINE_TARGET = 'project-editor-outline-target'
 
 const DEFAULT_FILE_TREE_WIDTH = 260
 const MIN_FILE_TREE_WIDTH = 180
@@ -117,7 +121,6 @@ const MAX_MARKDOWN_PREVIEW_WIDTH = 800
 
 const DEFAULT_OUTLINE_WIDTH = 220
 const MIN_OUTLINE_WIDTH = 160
-const MAX_OUTLINE_WIDTH = 400
 const MARKDOWN_RENDER_DEBOUNCE_MS = 300
 const MARKDOWN_RENDER_MAX_DEBOUNCE_MS = 1200
 const PROJECT_STATE_SAVE_DEBOUNCE_MS = 1200
@@ -530,6 +533,12 @@ export function ProjectEditor({
   const [isSqlite, setIsSqlite] = useState(false)
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
   const [isMarkdownPreviewOpen, setIsMarkdownPreviewOpen] = useState(true)
+  const isMarkdownPreviewOpenRef = useRef(true)
+  const [isMarkdownEditorVisible, setIsMarkdownEditorVisible] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE)
+    return saved === null ? true : saved === 'true'
+  })
+  const isMarkdownEditorVisibleRef = useRef(isMarkdownEditorVisible)
   const [isMarkdownRenderEnabled, setIsMarkdownRenderEnabled] = useState(false)
   const [isDirty, setIsDirty] = useState(false)
   const [isLoadingFile, setIsLoadingFile] = useState(false)
@@ -541,6 +550,8 @@ export function ProjectEditor({
   const [isIndexing, setIsIndexing] = useState(false)
   const isIndexingRef = useRef(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [previewSearchOpen, setPreviewSearchOpen] = useState(false)
+  const previewSearchOpenRef = useRef(false)
   const [markdownImageMap, setMarkdownImageMap] = useState<Record<string, string>>({})
   const [markdownRenderSource, setMarkdownRenderSource] = useState('')
   const [markdownRenderPending, setMarkdownRenderPending] = useState(false)
@@ -615,6 +626,8 @@ export function ProjectEditor({
   const lastEditorScopeRef = useRef<ProjectEditorScope | null>(null)
   const wasOpenRef = useRef(false)
   const skipClosePersistRef = useRef(false)
+  const previewActiveSlugRef = useRef<string | null>(null)
+  const [previewActiveSlug, setPreviewActiveSlug] = useState<string | null>(null)
 
   const [fileTreeWidth, setFileTreeWidth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY_FILE_TREE_WIDTH)
@@ -667,14 +680,20 @@ export function ProjectEditor({
     const saved = localStorage.getItem(STORAGE_KEY_OUTLINE_VISIBLE)
     return saved === null ? true : saved === 'true'
   })
+  const isOutlineVisibleRef = useRef(isOutlineVisible)
   const [outlineWidth, setOutlineWidth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY_OUTLINE_WIDTH)
     const w = saved ? parseInt(saved, 10) : DEFAULT_OUTLINE_WIDTH
     if (!Number.isFinite(w)) return DEFAULT_OUTLINE_WIDTH
-    return Math.min(MAX_OUTLINE_WIDTH, Math.max(MIN_OUTLINE_WIDTH, w))
+    return Math.max(MIN_OUTLINE_WIDTH, w)
   })
   const outlineWidthRef = useRef(outlineWidth)
   const isOutlineDraggingRef = useRef(false)
+  const [outlineTarget, setOutlineTarget] = useState<OutlineTarget>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_OUTLINE_TARGET)
+    return saved === 'preview' ? 'preview' : 'editor'
+  })
+  const outlineTargetRef = useRef<OutlineTarget>(outlineTarget)
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null)
 
   const restoreTokenRef = useRef(0)
@@ -694,6 +713,26 @@ export function ProjectEditor({
     isOpenRef.current = isOpen
   }, [isOpen])
 
+  useEffect(() => {
+    isMarkdownPreviewOpenRef.current = isMarkdownPreviewOpen
+  }, [isMarkdownPreviewOpen])
+
+  useEffect(() => {
+    isMarkdownEditorVisibleRef.current = isMarkdownEditorVisible
+  }, [isMarkdownEditorVisible])
+
+  useEffect(() => {
+    previewSearchOpenRef.current = previewSearchOpen
+  }, [previewSearchOpen])
+
+  useEffect(() => {
+    isOutlineVisibleRef.current = isOutlineVisible
+  }, [isOutlineVisible])
+
+  useEffect(() => {
+    outlineTargetRef.current = outlineTarget
+  }, [outlineTarget])
+
   const editorFontSize = useMemo(() => {
     if (!_terminalId) return DEFAULT_GIT_DIFF_FONT_SIZE
     return settings?.terminalStyles[_terminalId]?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
@@ -711,17 +750,58 @@ export function ProjectEditor({
     return lastSlash >= 0 ? normalized.slice(0, lastSlash) : ''
   }, [activeFilePath])
 
+  const handlePreviewCopy = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    const selectedText = window.getSelection()?.toString()
+    if (!selectedText) return
+    event.clipboardData.setData('text/plain', selectedText)
+    event.preventDefault()
+  }, [])
+
+  const scanPreviewNearestSlug = useCallback((): string | null => {
+    const preview = previewRef.current
+    if (!preview) return null
+    let nearestSlug: string | null = null
+    const headings = preview.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]')
+    const containerRect = preview.getBoundingClientRect()
+    for (const heading of headings) {
+      const rect = (heading as HTMLElement).getBoundingClientRect()
+      if (rect.top - containerRect.top <= 10) {
+        nearestSlug = (heading as HTMLElement).id
+      }
+    }
+    return nearestSlug
+  }, [])
+
+  const updatePreviewActiveSlug = useCallback((slug: string | null) => {
+    if (slug === previewActiveSlugRef.current) return
+    previewActiveSlugRef.current = slug
+    setPreviewActiveSlug(slug)
+  }, [])
+
   const editorPaneStyle = useMemo(() => ({ flex: '1 1 0%' }), [])
 
   const previewPaneStyle = useMemo(() => {
-    return { flex: `0 0 ${markdownPreviewWidth}px` }
-  }, [markdownPreviewWidth])
+    if (!isMarkdownEditorVisible) {
+      return { flex: '1 1 0%' }
+    }
+    return {
+      flex: `0 1 ${markdownPreviewWidth}px`,
+      minWidth: MIN_MARKDOWN_PREVIEW_WIDTH
+    }
+  }, [isMarkdownEditorVisible, markdownPreviewWidth])
 
   const outlinePaneStyle = useMemo(() => {
-    return { flex: `0 0 ${outlineWidth}px` }
+    return {
+      flex: `0 1 ${outlineWidth}px`,
+      minWidth: MIN_OUTLINE_WIDTH
+    }
   }, [outlineWidth])
 
   const outlineShowInSplit = isOutlineVisible && !isBinary && !isImage && !isSqlite && !!activeFilePath
+  const outlineShowInSplitRef = useRef(outlineShowInSplit)
+  useEffect(() => {
+    outlineShowInSplitRef.current = outlineShowInSplit
+  }, [outlineShowInSplit])
 
   const { symbols: outlineSymbols, activeItem: outlineActiveItem, isLoading: outlineLoading } =
     useOutlineSymbols({
@@ -730,6 +810,14 @@ export function ProjectEditor({
       content: fileContent,
       isVisible: outlineShowInSplit,
     })
+  const outlineSymbolsRef = useRef(outlineSymbols)
+  useEffect(() => {
+    outlineSymbolsRef.current = outlineSymbols
+  }, [outlineSymbols])
+  const outlineActiveItemRef = useRef(outlineActiveItem)
+  useEffect(() => {
+    outlineActiveItemRef.current = outlineActiveItem
+  }, [outlineActiveItem])
 
   const expandedDirs = useMemo(() => collectExpandedPaths(tree), [tree])
   const quickFileLabels = useMemo(() => {
@@ -1166,6 +1254,13 @@ export function ProjectEditor({
   useEffect(() => {
     markdownRenderedHtmlRef.current = markdownRenderedHtml
   }, [markdownRenderedHtml])
+
+  useEffect(() => {
+    if (!isMarkdownPreviewVisible) {
+      setPreviewSearchOpen(false)
+      updatePreviewActiveSlug(null)
+    }
+  }, [isMarkdownPreviewVisible, updatePreviewActiveSlug])
 
   useEffect(() => {
     fileContentRef.current = fileContent
@@ -2572,7 +2667,8 @@ export function ProjectEditor({
     const previewMaxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
     suppressNextPreviewScrollRef.current = true
     preview.scrollTop = ratio * previewMaxScroll
-  }, [])
+    updatePreviewActiveSlug(scanPreviewNearestSlug())
+  }, [scanPreviewNearestSlug, updatePreviewActiveSlug])
 
   const schedulePreviewSync = useCallback(() => {
     if (DEBUG_PROJECT_EDITOR) {
@@ -2591,6 +2687,7 @@ export function ProjectEditor({
     if (!previewVisibleRef.current) return
     if (suppressNextPreviewScrollRef.current) {
       suppressNextPreviewScrollRef.current = false
+      updatePreviewActiveSlug(scanPreviewNearestSlug())
       return
     }
     if (DEBUG_PROJECT_EDITOR) {
@@ -2606,7 +2703,8 @@ export function ProjectEditor({
     const maxEditorScroll = Math.max(1, editorScrollHeight - editorHeight)
     suppressNextEditorScrollRef.current = true
     editor.setScrollTop(ratio * maxEditorScroll)
-  }, [])
+    updatePreviewActiveSlug(scanPreviewNearestSlug())
+  }, [scanPreviewNearestSlug, updatePreviewActiveSlug])
 
   const handleEditorChange = useCallback((value?: string) => {
     if (value === undefined) return
@@ -2632,6 +2730,14 @@ export function ProjectEditor({
     if (!isMarkdownRenderAllowed) return
     schedulePreviewSync()
   }, [isMarkdownRenderAllowed, markdownRenderedHtml, schedulePreviewSync])
+
+  useEffect(() => {
+    if (!isMarkdownRenderAllowed) return
+    const frame = window.requestAnimationFrame(() => {
+      updatePreviewActiveSlug(scanPreviewNearestSlug())
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [isMarkdownRenderAllowed, markdownRenderedHtml, scanPreviewNearestSlug, updatePreviewActiveSlug])
 
   useEffect(() => {
     if (!isMarkdownRenderAllowed) return
@@ -2739,8 +2845,12 @@ export function ProjectEditor({
       handleCloseSearch()
       return
     }
+    if (previewSearchOpen) {
+      setPreviewSearchOpen(false)
+      return
+    }
     void handleRequestClose()
-  }, [dialog, handleDialogCancel, searchOpen, handleCloseSearch, handleRequestClose])
+  }, [dialog, handleDialogCancel, handleCloseSearch, handleRequestClose, previewSearchOpen, searchOpen])
 
   const handleOpenGitDiff = useCallback(async (source: 'user' | 'debug' = 'user') => {
     if (!_terminalId) return
@@ -2817,9 +2927,43 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
+      setMarkdownEditorVisible: (visible: boolean) => {
+        setIsMarkdownEditorVisible(visible)
+        isMarkdownEditorVisibleRef.current = visible
+        localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
+        if (!visible && !isMarkdownPreviewOpenRef.current) {
+          setIsMarkdownPreviewOpen(true)
+          isMarkdownPreviewOpenRef.current = true
+          setIsMarkdownRenderEnabled(true)
+        }
+      },
       isMarkdownPreviewVisible: () => previewVisibleRef.current,
+      setPreviewSearchOpen: (open: boolean) => {
+        setPreviewSearchOpen(open)
+        previewSearchOpenRef.current = open
+      },
+      isPreviewSearchOpen: () => previewSearchOpenRef.current,
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
       getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
+      getOutlineTarget: () => outlineTargetRef.current,
+      setOutlineTarget: (target: 'editor' | 'preview') => {
+        setOutlineTarget(target)
+        outlineTargetRef.current = target
+        localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+      },
+      isOutlineVisible: () => outlineShowInSplitRef.current,
+      getOutlineSymbolCount: () => countSymbols(outlineSymbolsRef.current),
+      getOutlineActiveItemName: () => outlineActiveItemRef.current?.name ?? null,
+      getPreviewActiveSlug: () => previewActiveSlugRef.current,
+      scrollPreviewToFraction: (fraction: number) => {
+        const preview = previewRef.current
+        if (!preview) return false
+        const maxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
+        preview.scrollTop = fraction * maxScroll
+        updatePreviewActiveSlug(scanPreviewNearestSlug())
+        return true
+      },
       openFileByPath: async (filePath: string) => {
         await openFileRef.current(filePath, 'debug')
       },
@@ -2897,7 +3041,7 @@ export function ProjectEditor({
         delete debugWindow.__onwardProjectEditorDebug
       }
     }
-  }, [scheduleProjectStateSave])
+  }, [scanPreviewNearestSlug, scheduleProjectStateSave, updatePreviewActiveSlug])
 
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
@@ -2982,9 +3126,43 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
+      setMarkdownEditorVisible: (visible: boolean) => {
+        setIsMarkdownEditorVisible(visible)
+        isMarkdownEditorVisibleRef.current = visible
+        localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
+        if (!visible && !isMarkdownPreviewOpenRef.current) {
+          setIsMarkdownPreviewOpen(true)
+          isMarkdownPreviewOpenRef.current = true
+          setIsMarkdownRenderEnabled(true)
+        }
+      },
       isMarkdownPreviewVisible: () => previewVisibleRef.current,
+      setPreviewSearchOpen: (open: boolean) => {
+        setPreviewSearchOpen(open)
+        previewSearchOpenRef.current = open
+      },
+      isPreviewSearchOpen: () => previewSearchOpenRef.current,
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
-      getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current
+      getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
+      getOutlineTarget: () => outlineTargetRef.current,
+      setOutlineTarget: (target: 'editor' | 'preview') => {
+        setOutlineTarget(target)
+        outlineTargetRef.current = target
+        localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+      },
+      isOutlineVisible: () => outlineShowInSplitRef.current,
+      getOutlineSymbolCount: () => countSymbols(outlineSymbolsRef.current),
+      getOutlineActiveItemName: () => outlineActiveItemRef.current?.name ?? null,
+      getPreviewActiveSlug: () => previewActiveSlugRef.current,
+      scrollPreviewToFraction: (fraction: number) => {
+        const preview = previewRef.current
+        if (!preview) return false
+        const maxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
+        preview.scrollTop = fraction * maxScroll
+        updatePreviewActiveSlug(scanPreviewNearestSlug())
+        return true
+      }
     }
     debugWindow.__onwardProjectEditorDebug = api
     return () => {
@@ -2992,7 +3170,7 @@ export function ProjectEditor({
         delete debugWindow.__onwardProjectEditorDebug
       }
     }
-  }, [scheduleProjectStateSave])
+  }, [scanPreviewNearestSlug, scheduleProjectStateSave, updatePreviewActiveSlug])
 
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
@@ -3300,6 +3478,17 @@ export function ProjectEditor({
         return
       }
 
+      const isPreviewSearch = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f'
+      if (isPreviewSearch) {
+        const target = event.target as HTMLElement | null
+        const inEditor = Boolean(target?.closest('.monaco-editor'))
+        if (!inEditor && isMarkdownPreviewVisible) {
+          event.preventDefault()
+          setPreviewSearchOpen(true)
+        }
+        return
+      }
+
       const isSave = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's'
       if (isSave) {
         const target = event.target as HTMLElement | null
@@ -3314,7 +3503,7 @@ export function ProjectEditor({
 
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [dialog, handleOpenSearch, isOpen, searchOpen])
+  }, [dialog, handleOpenSearch, isMarkdownPreviewVisible, isOpen, searchOpen])
 
   useSubpageEscape({ isOpen, onEscape: handleEscape })
 
@@ -3568,14 +3757,20 @@ export function ProjectEditor({
 
     const startX = event.clientX
     const startWidth = outlineWidthRef.current
+    const containerWidth = previewLayoutRef.current?.clientWidth ?? 0
     // Non-Markdown: resizer to the right of outline, drag right → widen (direction = 1)
     // Markdown: resizer to the left of outline, drag left → widen (direction = -1)
     const direction = isMarkdownFile ? -1 : 1
+    const previewOccupied = isMarkdownPreviewVisible && isMarkdownEditorVisibleRef.current
+      ? (markdownPreviewWidthRef.current + 6)
+      : 0
+    const editorReservation = isMarkdownFile && !isMarkdownEditorVisibleRef.current ? 0 : 120
+    const maxOutlineWidth = Math.max(MIN_OUTLINE_WIDTH, containerWidth - editorReservation - previewOccupied - 6)
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!isOutlineDraggingRef.current) return
       const delta = (e.clientX - startX) * direction
-      const nextWidth = Math.min(MAX_OUTLINE_WIDTH, Math.max(MIN_OUTLINE_WIDTH, startWidth + delta))
+      const nextWidth = Math.min(maxOutlineWidth, Math.max(MIN_OUTLINE_WIDTH, startWidth + delta))
       setOutlineWidth(nextWidth)
     }
 
@@ -3592,7 +3787,7 @@ export function ProjectEditor({
     document.body.classList.add('project-editor-outline-resizing')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [outlineShowInSplit, isMarkdownFile])
+  }, [isMarkdownFile, isMarkdownPreviewVisible, outlineShowInSplit])
 
   const handleModalResizeMouseDown = useCallback((event: React.MouseEvent, direction: string) => {
     if (isPanel) return
@@ -3995,12 +4190,38 @@ export function ProjectEditor({
                         }
                         if (!next) {
                           setIsMarkdownRenderEnabled(false)
+                          if (!isMarkdownEditorVisibleRef.current) {
+                            setIsMarkdownEditorVisible(true)
+                            isMarkdownEditorVisibleRef.current = true
+                            localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, 'true')
+                          }
                         }
+                        isMarkdownPreviewOpenRef.current = next
                         return next
                       })
                     }}
                   >
                     {isMarkdownPreviewOpen ? t('projectEditor.closePreview') : t('projectEditor.openPreview')}
+                  </button>
+                )}
+                {activeFilePath && isMarkdownFile && !isBinary && !isImage && !isSqlite && (
+                  <button
+                    className="project-editor-action-btn project-editor-preview-toggle"
+                    onClick={() => {
+                      setIsMarkdownEditorVisible((prev) => {
+                        const next = !prev
+                        isMarkdownEditorVisibleRef.current = next
+                        localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(next))
+                        if (!next && !isMarkdownPreviewOpenRef.current) {
+                          setIsMarkdownPreviewOpen(true)
+                          isMarkdownPreviewOpenRef.current = true
+                          setIsMarkdownRenderEnabled(true)
+                        }
+                        return next
+                      })
+                    }}
+                  >
+                    {isMarkdownEditorVisible ? t('projectEditor.closeEdit') : t('projectEditor.openEdit')}
                   </button>
                 )}
                 {activeFilePath && !isBinary && !isImage && !isSqlite && (
@@ -4009,6 +4230,7 @@ export function ProjectEditor({
                     onClick={() => {
                       setIsOutlineVisible((prev) => {
                         const next = !prev
+                        isOutlineVisibleRef.current = next
                         localStorage.setItem(STORAGE_KEY_OUTLINE_VISIBLE, String(next))
                         return next
                       })
@@ -4077,13 +4299,20 @@ export function ProjectEditor({
                           isLoading={outlineLoading}
                           filePath={activeFilePath}
                           editor={editorRef.current}
+                          initialScrollTop={0}
                         />
                       </div>
                       <div className="project-editor-outline-resizer" onMouseDown={handleOutlineResizeMouseDown} />
                     </>
                   )}
 
-                  <div className="project-editor-editor-pane" style={editorPaneStyle}>
+                  <div
+                    className="project-editor-editor-pane"
+                    style={{
+                      ...editorPaneStyle,
+                      ...(isMarkdownFile && !isMarkdownEditorVisible ? { display: 'none' } : {})
+                    }}
+                  >
                     <Editor
                       height="100%"
                       width="100%"
@@ -4153,7 +4382,9 @@ export function ProjectEditor({
 
                   {isMarkdownPreviewVisible && (
                     <>
-                      <div className="project-editor-preview-resizer" onMouseDown={handlePreviewResizeMouseDown} />
+                      {isMarkdownEditorVisible && (
+                        <div className="project-editor-preview-resizer" onMouseDown={handlePreviewResizeMouseDown} />
+                      )}
                       <div className="project-editor-preview-pane" style={previewPaneStyle}>
                         <div className="project-editor-preview-header">
                           {t('projectEditor.livePreview')}
@@ -4161,9 +4392,16 @@ export function ProjectEditor({
                             <span className="project-editor-preview-pending">{t('projectEditor.rendering')}</span>
                           )}
                         </div>
+                        <PreviewSearchBar
+                          previewRef={previewRef}
+                          isOpen={previewSearchOpen}
+                          onClose={() => setPreviewSearchOpen(false)}
+                          renderedHtml={markdownRenderedHtml}
+                        />
                         <div
                           className="project-editor-preview-body"
                           ref={previewRef}
+                          onCopy={handlePreviewCopy}
                         >
                           {isMarkdownRenderAllowed ? (
                             <div
@@ -4191,6 +4429,15 @@ export function ProjectEditor({
                           isLoading={outlineLoading}
                           filePath={activeFilePath}
                           editor={editorRef.current}
+                          isMarkdown
+                          previewRef={previewRef}
+                          outlineTarget={outlineTarget}
+                          previewActiveSlug={previewActiveSlug}
+                          onOutlineTargetChange={(target) => {
+                            setOutlineTarget(target)
+                            outlineTargetRef.current = target
+                            localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+                          }}
                         />
                       </div>
                     </>

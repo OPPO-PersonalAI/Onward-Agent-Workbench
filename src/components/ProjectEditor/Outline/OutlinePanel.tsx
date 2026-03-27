@@ -10,15 +10,36 @@ import { OutlineSymbolKind } from './types'
 import { countSymbols } from './outlineParser'
 import './OutlinePanel.css'
 
+export type OutlineTarget = 'editor' | 'preview'
+
 interface OutlinePanelProps {
   symbols: OutlineItem[]
   activeItem: OutlineItem | null
   isLoading: boolean
   filePath: string | null
   editor: import('monaco-editor').editor.IStandaloneCodeEditor | null
+  isMarkdown?: boolean
+  previewRef?: React.RefObject<HTMLDivElement | null>
+  outlineTarget?: OutlineTarget
+  onOutlineTargetChange?: (target: OutlineTarget) => void
+  previewActiveSlug?: string | null
+  onScrollCapture?: (scrollTop: number) => void
+  initialScrollTop?: number
 }
 
 const FILTER_THRESHOLD = 8
+
+function headingSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/<[^>]*>/g, '')
+    .replace(/&[^;]+;/g, '')
+    .trim()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
 
 function getIconInfo(kind: OutlineSymbolKind): { label: string; className: string } {
   switch (kind) {
@@ -83,12 +104,50 @@ function filterItems(items: OutlineItem[], query: string): OutlineItem[] {
     }))
 }
 
+function collectHeadings(items: OutlineItem[]): OutlineItem[] {
+  const result: OutlineItem[] = []
+  const walk = (list: OutlineItem[]) => {
+    for (const item of list) {
+      if (item.kind >= OutlineSymbolKind.Heading1 && item.kind <= OutlineSymbolKind.Heading6) {
+        result.push(item)
+      }
+      if (item.children.length > 0) {
+        walk(item.children)
+      }
+    }
+  }
+  walk(items)
+  return result
+}
+
+function buildSlugMap(allHeadings: OutlineItem[]): Map<OutlineItem, string> {
+  const slugCounts = new Map<string, number>()
+  const map = new Map<OutlineItem, string>()
+  for (const heading of allHeadings) {
+    let slug = headingSlug(heading.name)
+    const count = slugCounts.get(slug) ?? 0
+    slugCounts.set(slug, count + 1)
+    if (count > 0) {
+      slug = `${slug}-${count}`
+    }
+    map.set(heading, slug)
+  }
+  return map
+}
+
 export function OutlinePanel({
   symbols,
   activeItem,
   isLoading,
   filePath,
   editor,
+  isMarkdown = false,
+  previewRef,
+  outlineTarget = 'editor',
+  onOutlineTargetChange,
+  previewActiveSlug,
+  onScrollCapture,
+  initialScrollTop,
 }: OutlinePanelProps) {
   const { t } = useI18n()
   const [filter, setFilter] = useState('')
@@ -96,6 +155,7 @@ export function OutlinePanel({
   const filterInputRef = useRef<HTMLInputElement>(null)
   const activeRef = useRef<HTMLDivElement>(null)
   const treeRef = useRef<HTMLDivElement>(null)
+  const initialScrollAppliedRef = useRef(false)
 
   const totalCount = useMemo(() => countSymbols(symbols), [symbols])
   const showFilter = totalCount > FILTER_THRESHOLD
@@ -105,6 +165,26 @@ export function OutlinePanel({
     () => filterItems(symbols, normalizedFilter),
     [symbols, normalizedFilter]
   )
+
+  const slugMap = useMemo(() => {
+    if (!isMarkdown) return new Map<OutlineItem, string>()
+    return buildSlugMap(collectHeadings(symbols))
+  }, [isMarkdown, symbols])
+
+  const reverseSlugMap = useMemo(() => {
+    const map = new Map<string, OutlineItem>()
+    for (const [item, slug] of slugMap.entries()) {
+      map.set(slug, item)
+    }
+    return map
+  }, [slugMap])
+
+  const effectiveActiveItem = useMemo(() => {
+    if (isMarkdown && outlineTarget === 'preview' && previewActiveSlug) {
+      return reverseSlugMap.get(previewActiveSlug) ?? null
+    }
+    return activeItem
+  }, [activeItem, isMarkdown, outlineTarget, previewActiveSlug, reverseSlugMap])
 
   // Reset filter on file switch
   useEffect(() => {
@@ -117,16 +197,60 @@ export function OutlinePanel({
     if (activeRef.current) {
       activeRef.current.scrollIntoView({ block: 'nearest' })
     }
-  }, [activeItem])
+  }, [effectiveActiveItem])
+
+  useEffect(() => {
+    const tree = treeRef.current
+    if (!tree || !onScrollCapture) return
+    const handleScroll = () => {
+      onScrollCapture(tree.scrollTop)
+    }
+    tree.addEventListener('scroll', handleScroll, { passive: true })
+    return () => tree.removeEventListener('scroll', handleScroll)
+  }, [onScrollCapture])
+
+  useEffect(() => {
+    initialScrollAppliedRef.current = false
+  }, [filePath])
+
+  useEffect(() => {
+    if (initialScrollAppliedRef.current) return
+    if (typeof initialScrollTop !== 'number' || initialScrollTop <= 0) return
+    if (!treeRef.current || symbols.length === 0) return
+    initialScrollAppliedRef.current = true
+    requestAnimationFrame(() => {
+      if (treeRef.current) {
+        treeRef.current.scrollTop = initialScrollTop
+      }
+    })
+  }, [initialScrollTop, symbols.length])
+
+  const scrollPreviewToHeading = useCallback((item: OutlineItem) => {
+    const container = previewRef?.current
+    if (!container) return false
+    const slug = slugMap.get(item)
+    if (!slug) return false
+    const target = container.querySelector(`#${CSS.escape(slug)}`) as HTMLElement | null
+    if (!target) return false
+    const containerRect = container.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const offsetTop = targetRect.top - containerRect.top + container.scrollTop
+    container.scrollTo({ top: offsetTop, behavior: 'smooth' })
+    return true
+  }, [previewRef, slugMap])
 
   const handleItemClick = useCallback(
     (item: OutlineItem) => {
+      const isHeading = item.kind >= OutlineSymbolKind.Heading1 && item.kind <= OutlineSymbolKind.Heading6
+      if (isMarkdown && outlineTarget === 'preview' && isHeading && scrollPreviewToHeading(item)) {
+        return
+      }
       if (!editor) return
       editor.setPosition({ lineNumber: item.startLine, column: item.startColumn })
       editor.revealLineInCenter(item.startLine)
       editor.focus()
     },
-    [editor]
+    [editor, isMarkdown, outlineTarget, scrollPreviewToHeading]
   )
 
   const toggleCollapse = useCallback((key: string, e: React.MouseEvent) => {
@@ -162,9 +286,9 @@ export function OutlinePanel({
       const hasChildren = item.children.length > 0
       const isCollapsed = collapsed.has(key)
       const isActive =
-        activeItem !== null &&
-        activeItem.startLine === item.startLine &&
-        activeItem.name === item.name
+        effectiveActiveItem !== null &&
+        effectiveActiveItem.startLine === item.startLine &&
+        effectiveActiveItem.name === item.name
       const icon = getIconInfo(item.kind)
       const indent = item.depth * 16
 
@@ -200,7 +324,7 @@ export function OutlinePanel({
         </div>
       )
     },
-    [collapsed, activeItem, handleItemClick, toggleCollapse]
+    [collapsed, effectiveActiveItem, handleItemClick, toggleCollapse]
   )
 
   if (!filePath) {
@@ -218,7 +342,27 @@ export function OutlinePanel({
     <div className="outline-panel">
       <div className="outline-panel-header">
         <span className="outline-panel-title">{t('outlinePanel.title')}</span>
-        {isLoading && <span className="outline-panel-loading">{t('outlinePanel.loading')}</span>}
+        <div className="outline-panel-header-actions">
+          {isMarkdown && onOutlineTargetChange && (
+            <div className="outline-panel-target-toggle" role="tablist" aria-label={t('outlinePanel.title')}>
+              <button
+                type="button"
+                className={`outline-panel-target-btn ${outlineTarget === 'editor' ? 'active' : ''}`}
+                onClick={() => onOutlineTargetChange('editor')}
+              >
+                {t('outlinePanel.target.editor')}
+              </button>
+              <button
+                type="button"
+                className={`outline-panel-target-btn ${outlineTarget === 'preview' ? 'active' : ''}`}
+                onClick={() => onOutlineTargetChange('preview')}
+              >
+                {t('outlinePanel.target.preview')}
+              </button>
+            </div>
+          )}
+          {isLoading && <span className="outline-panel-loading">{t('outlinePanel.loading')}</span>}
+        </div>
       </div>
       {showFilter && (
         <div className="outline-panel-filter">

@@ -28,6 +28,7 @@ import { testTerminalPerf } from './test-terminal-perf'
 import { testTerminalFocusActivation } from './test-terminal-focus-activation'
 import { testTerminalStress } from './test-terminal-stress'
 import { testImageDiff } from './test-image-diff'
+import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
@@ -103,6 +104,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.8:begin')
       const results = await testMarkdownLatexPreview(ctx)
       collectSuiteResults('MarkdownLatexPreview', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('project-editor-markdown-navigation')) {
+      log('phase0.85:begin')
+      const results = await testProjectEditorMarkdownNavigation(ctx)
+      collectSuiteResults('ProjectEditorMarkdownNavigation', results)
       await sleep(500)
     }
 
