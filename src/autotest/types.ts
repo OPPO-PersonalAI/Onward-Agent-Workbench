@@ -26,6 +26,16 @@ export interface GitDiffDebugApi {
   getDiffFontSize: () => number
   getCwd: () => string | null
   getRepoRoot: () => string | null
+  getImagePreviewState?: () => {
+    isImage: boolean
+    isSvg: boolean
+    isBinary: boolean
+    hasOriginalUrl: boolean
+    hasModifiedUrl: boolean
+    compareMode: '2up' | 'swipe' | 'onion'
+    displayMode: 'original' | 'fit'
+    loading: boolean
+  } | null
 }
 
 export interface PromptSenderDebugApi {

@@ -181,6 +181,22 @@ export interface AppStateAPI {
 export type GitChangeType = 'unstaged' | 'staged' | 'untracked'
 export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'C' | '?'
 
+export interface GitSubmoduleInfo {
+  name: string
+  path: string
+  repoRoot: string
+  depth: number
+  parentRoot: string
+}
+
+export interface GitRepoContext {
+  root: string
+  label: string
+  isSubmodule: boolean
+  depth: number
+  changeCount: number
+}
+
 // Git file status
 export interface GitFileStatus {
   filename: string
@@ -189,6 +205,8 @@ export interface GitFileStatus {
   additions: number
   deletions: number
   changeType: GitChangeType
+  repoRoot?: string
+  repoLabel?: string
 }
 
 // Git Diff results
@@ -198,6 +216,8 @@ export interface GitDiffResult {
   isGitRepo: boolean
   gitInstalled: boolean
   files: GitFileStatus[]
+  repos?: GitRepoContext[]
+  superprojectRoot?: string
   error?: string
 }
 
@@ -220,6 +240,8 @@ export interface GitHistoryResult {
   gitInstalled: boolean
   commits: GitCommitInfo[]
   totalCount?: number
+  repos?: GitRepoContext[]
+  superprojectRoot?: string
   error?: string
 }
 
@@ -267,6 +289,12 @@ export interface GitFileContentResult {
   originalContent: string
   modifiedContent: string
   isBinary: boolean
+  isImage?: boolean
+  isSvg?: boolean
+  originalImageUrl?: string
+  modifiedImageUrl?: string
+  originalImageSize?: number
+  modifiedImageSize?: number
   error?: string
 }
 
@@ -413,14 +441,17 @@ export interface ProjectSqliteExecuteResult {
 
 // Git API
 export interface GitAPI {
+  resolveRepoRoot: (cwd: string) => Promise<string>
   getDiff: (cwd: string) => Promise<GitDiffResult>
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
-  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>) => Promise<GitFileContentResult>
+  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
   saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
-  stageFile: (cwd: string, filename: string) => Promise<GitFileActionResult>
-  unstageFile: (cwd: string, filename: string) => Promise<GitFileActionResult>
-  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>) => Promise<GitFileActionResult>
+  stageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
+  unstageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
+  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => Promise<GitFileActionResult>
+  getSubmodules: (cwd: string) => Promise<GitSubmoduleInfo[]>
+  updateIndexContent: (cwd: string, filename: string, content: string) => Promise<GitFileActionResult>
   checkInstalled: () => Promise<boolean>
   getTerminalCwd: (terminalId: string) => Promise<string | null>
   getTerminalInfo: (terminalId: string) => Promise<TerminalGitInfo>
@@ -735,24 +766,28 @@ const gitAPI: GitAPI = {
     return ipcRenderer.invoke('git:get-history-diff', cwd, options)
   },
 
-  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>) => {
-    return ipcRenderer.invoke('git:get-file-content', cwd, file)
+  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {
+    return ipcRenderer.invoke('git:get-file-content', cwd, file, repoRoot)
   },
 
   saveFileContent: (cwd: string, filename: string, content: string) => {
     return ipcRenderer.invoke('git:save-file-content', cwd, filename, content)
   },
 
-  stageFile: (cwd: string, filename: string) => {
-    return ipcRenderer.invoke('git:stage-file', cwd, filename)
+  stageFile: (cwd: string, filename: string, repoRoot?: string) => {
+    return ipcRenderer.invoke('git:stage-file', cwd, filename, repoRoot)
   },
 
-  unstageFile: (cwd: string, filename: string) => {
-    return ipcRenderer.invoke('git:unstage-file', cwd, filename)
+  unstageFile: (cwd: string, filename: string, repoRoot?: string) => {
+    return ipcRenderer.invoke('git:unstage-file', cwd, filename, repoRoot)
   },
 
-  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>) => {
-    return ipcRenderer.invoke('git:discard-file', cwd, file)
+  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => {
+    return ipcRenderer.invoke('git:discard-file', cwd, file, repoRoot)
+  },
+
+  getSubmodules: (cwd: string) => {
+    return ipcRenderer.invoke('git:get-submodules', cwd)
   },
 
   updateIndexContent: (cwd: string, filename: string, content: string) => {

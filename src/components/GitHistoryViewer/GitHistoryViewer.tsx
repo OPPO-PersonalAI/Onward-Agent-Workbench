@@ -189,10 +189,18 @@ export function GitHistoryViewer({
     selectedFile: null
   })
   const persistTimerRef = useRef<number | null>(null)
-
-  const activeCwd = historyResult?.cwd || cwd
+  const [selectedRepoRoot, setSelectedRepoRoot] = useState<string | null>(null)
+  const [repoSearch, setRepoSearch] = useState('')
+  const [cachedRepos, setCachedRepos] = useState<GitHistoryResult['repos']>(undefined)
+  const [cachedParentCwd, setCachedParentCwd] = useState<string | null>(null)
+  const activeCwd = selectedRepoRoot || historyResult?.cwd || cachedParentCwd || cwd
+  const activeCwdRef = useRef(activeCwd)
+  useEffect(() => {
+    activeCwdRef.current = activeCwd
+  }, [activeCwd])
   const terminalId = _terminalId
   const historyStateKey = activeCwd ? `${STORAGE_KEY_STATE_PREFIX}:${activeCwd}` : null
+  const isSwitchingRepoRef = useRef(false)
 
   const commitIndexMap = useMemo(() => {
     const map = new Map<string, number>()
@@ -294,23 +302,28 @@ export function GitHistoryViewer({
   }, [])
 
   const loadHistory = useCallback(async (reset = false) => {
-    if (!cwd) return
+    const targetCwd = selectedRepoRoot || cachedParentCwd || cwd
+    if (!targetCwd) return
     if (loadingRef.current) return
     loadingRef.current = true
+    const isSwitching = isSwitchingRepoRef.current
     setLoading(true)
     const token = ++loadTokenRef.current
     const skip = reset ? 0 : commitsRef.current.length
     try {
-      const result = await window.electronAPI.git.getHistory(cwd, {
+      const result = await window.electronAPI.git.getHistory(targetCwd, {
         limit: HISTORY_PAGE_SIZE,
         skip
       })
       if (token !== loadTokenRef.current) return
       setHistoryResult(result)
+      if (result.repos && result.repos.length > 1) {
+        setCachedRepos(result.repos)
+        setCachedParentCwd(result.cwd)
+      }
       if (!result.success) {
         setCommits([])
         setHasMore(false)
-        setLoading(false)
         return
       }
       const nextCommits = reset ? result.commits : [...commitsRef.current, ...result.commits]
@@ -322,16 +335,26 @@ export function GitHistoryViewer({
         ? result.commits.length >= HISTORY_PAGE_SIZE
         : nextCount < total
       setHasMore(hasMoreNext)
+      if (isSwitching) {
+        setSelectedShas([])
+        setSelectionAnchor(null)
+        setFiles([])
+        setSelectedFile(null)
+        setDiffPatch('')
+        setDiffError(null)
+      }
     } finally {
+      isSwitchingRepoRef.current = false
       if (token === loadTokenRef.current) {
         setLoading(false)
       }
       loadingRef.current = false
     }
-  }, [cwd])
+  }, [cachedParentCwd, cwd, selectedRepoRoot])
 
   const loadFilesForRange = useCallback(async (base: string, head: string) => {
-    if (!activeCwd) return
+    const cwdToUse = activeCwdRef.current
+    if (!cwdToUse) return
     const cacheKey = buildRangeKey(base, head, hideWhitespace)
     if (fileCacheRef.current.has(cacheKey)) {
       const cached = fileCacheRef.current.get(cacheKey) || []
@@ -342,7 +365,7 @@ export function GitHistoryViewer({
     setFilesLoading(true)
     setDiffError(null)
     try {
-      const result = await window.electronAPI.git.getHistoryDiff(activeCwd, {
+      const result = await window.electronAPI.git.getHistoryDiff(cwdToUse, {
         base,
         head,
         includeFiles: true,
@@ -361,10 +384,11 @@ export function GitHistoryViewer({
         setFilesLoading(false)
       }
     }
-  }, [activeCwd, hideWhitespace, t])
+  }, [hideWhitespace, t])
 
   const loadPatchForFile = useCallback(async (base: string, head: string, file: GitHistoryFile) => {
-    if (!activeCwd) return
+    const cwdToUse = activeCwdRef.current
+    if (!cwdToUse) return
     const cacheKey = buildPatchKey(base, head, file.filename, hideWhitespace)
     if (patchCacheRef.current.has(cacheKey)) {
       setDiffPatch(patchCacheRef.current.get(cacheKey) || '')
@@ -374,7 +398,7 @@ export function GitHistoryViewer({
     setDiffLoading(true)
     setDiffError(null)
     try {
-      const result: GitHistoryDiffResult = await window.electronAPI.git.getHistoryDiff(activeCwd, {
+      const result: GitHistoryDiffResult = await window.electronAPI.git.getHistoryDiff(cwdToUse, {
         base,
         head,
         filePath: file.filename,
@@ -394,7 +418,15 @@ export function GitHistoryViewer({
         setDiffLoading(false)
       }
     }
-  }, [activeCwd, hideWhitespace, t])
+  }, [hideWhitespace, t])
+
+  const switchRepo = useCallback((repoRoot: string | null) => {
+    isSwitchingRepoRef.current = true
+    fileCacheRef.current.clear()
+    patchCacheRef.current.clear()
+    didRestoreRef.current = false
+    setSelectedRepoRoot(repoRoot)
+  }, [])
 
   const persistState = useCallback(() => {
     if (!historyStateKey) return
@@ -426,8 +458,16 @@ export function GitHistoryViewer({
     } else {
       persistState()
       resetState()
+      setSelectedRepoRoot(null)
+      setRepoSearch('')
     }
   }, [isOpen, loadHistory, resetState, persistState])
+
+  useEffect(() => {
+    if (!isOpen) return
+    if (!isSwitchingRepoRef.current) return
+    void loadHistory(true)
+  }, [cachedParentCwd, isOpen, loadHistory, selectedRepoRoot])
 
   useEffect(() => {
     return () => {
@@ -1119,10 +1159,79 @@ export function GitHistoryViewer({
         {historyResult?.cwd && historyResult.isGitRepo && (
           <div className="git-history-cwd-bar">
             <span className="git-history-cwd-label">{t('gitHistory.cwd')}</span>
-            <span className="git-history-cwd-path">{historyResult.cwd}</span>
+            <span className="git-history-cwd-path">{cachedParentCwd || historyResult.cwd}</span>
+          </div>
+        )}
+        {historyResult?.superprojectRoot && !selectedRepoRoot && (
+          <div
+            className="git-history-superproject-hint"
+            onClick={() => switchRepo(historyResult.superprojectRoot!)}
+          >
+            <span>{t('gitHistory.repo.inSubmodule')}</span>
+            <span style={{ color: 'var(--accent)', cursor: 'pointer' }}>{t('gitHistory.repo.viewParent')}</span>
           </div>
         )}
         <div className="git-history-body">
+          {cachedRepos && cachedRepos.length > 1 && (() => {
+            const parentCwd = cachedParentCwd || historyResult?.cwd || ''
+            const sorted = [...cachedRepos].sort((a, b) => a.label.localeCompare(b.label))
+            const query = repoSearch.toLowerCase()
+            const filtered = query
+              ? sorted.filter((repo) => repo.label.toLowerCase().includes(query))
+              : sorted
+            return (
+              <div className="git-history-repo-sidebar">
+                <div className="git-history-repo-sidebar-header">{t('gitHistory.repo.title')}</div>
+                {sorted.length > 6 && (
+                  <div className="git-history-repo-search-wrap">
+                    <input
+                      className="git-history-repo-search"
+                      type="text"
+                      placeholder={t('gitHistory.repo.search')}
+                      value={repoSearch}
+                      onChange={(event) => setRepoSearch(event.target.value)}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    />
+                    {repoSearch && (
+                      <span
+                        className="git-history-repo-search-clear"
+                        onClick={() => setRepoSearch('')}
+                      >×</span>
+                    )}
+                  </div>
+                )}
+                <div className="git-history-repo-list">
+                  <div
+                    className={`git-history-repo-item${!selectedRepoRoot ? ' active' : ''}`}
+                    onClick={() => switchRepo(null)}
+                    title={parentCwd}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
+                      <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H7.71L6.85 2.57A1.5 1.5 0 0 0 5.57 2H1.5z" />
+                    </svg>
+                    <span className="git-history-repo-item-label">{t('gitHistory.repo.all')}</span>
+                  </div>
+                  <div className="git-history-repo-divider" />
+                  {filtered.map((repo) => {
+                    if (repo.root === parentCwd) return null
+                    return (
+                      <div
+                        key={repo.root}
+                        className={`git-history-repo-item${selectedRepoRoot === repo.root ? ' active' : ''}`}
+                        onClick={() => switchRepo(repo.root)}
+                        title={repo.root}
+                      >
+                        <span className="git-history-repo-item-label">{repo.label}</span>
+                      </div>
+                    )
+                  })}
+                  {filtered.length === 0 && (
+                    <div className="git-history-repo-empty">{t('gitHistory.repo.noMatch')}</div>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
           <div className="git-history-main">
             <div className="git-history-commit-list">
               <div className="git-history-commit-list-header">

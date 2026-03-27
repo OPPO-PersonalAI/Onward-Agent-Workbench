@@ -27,6 +27,7 @@ import { testProjectEditorSqlite } from './test-project-editor-sqlite'
 import { testTerminalPerf } from './test-terminal-perf'
 import { testTerminalFocusActivation } from './test-terminal-focus-activation'
 import { testTerminalStress } from './test-terminal-stress'
+import { testImageDiff } from './test-image-diff'
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
@@ -189,6 +190,16 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testGitDiffSubdir(ctx)
       collectSuiteResults('GitDiffSubdir', results)
       await ctx.reopenProjectEditor('phase5.5-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('image-diff')) {
+      log('phase5.55:begin')
+      await ctx.reopenProjectEditor('phase5.55-setup')
+      await sleep(300)
+      const results = await testImageDiff(ctx)
+      collectSuiteResults('ImageDiff', results)
+      await ctx.reopenProjectEditor('phase5.55-cleanup')
       await sleep(500)
     }
 

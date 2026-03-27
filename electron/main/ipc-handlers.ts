@@ -18,6 +18,7 @@ import {
   getGitHistory,
   getGitHistoryDiff,
   getGitFileContent,
+  getGitRepoMeta,
   getTerminalCwd,
   getTerminalGitInfo,
   resolveRepoRoot,
@@ -25,6 +26,7 @@ import {
   stageGitFile,
   unstageGitFile,
   discardGitFile,
+  detectSubmodulesRecursive,
   updateGitIndexContent,
   GitFileStatus,
   GitHistoryDiffOptions
@@ -559,8 +561,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
 
   // Get Git file content for diff view
-  ipcMain.handle('git:get-file-content', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>) => {
-    return await getGitFileContent(cwd, file)
+  ipcMain.handle('git:get-file-content', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {
+    return await getGitFileContent(cwd, file, repoRoot)
   })
 
   // Save file content to workspace
@@ -568,16 +570,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await saveGitFileContent(cwd, filename, content)
   })
 
-  ipcMain.handle('git:stage-file', async (_, cwd: string, filename: string) => {
-    return await stageGitFile(cwd, filename)
+  ipcMain.handle('git:stage-file', async (_, cwd: string, filename: string, repoRoot?: string) => {
+    return await stageGitFile(cwd, filename, repoRoot)
   })
 
-  ipcMain.handle('git:unstage-file', async (_, cwd: string, filename: string) => {
-    return await unstageGitFile(cwd, filename)
+  ipcMain.handle('git:unstage-file', async (_, cwd: string, filename: string, repoRoot?: string) => {
+    return await unstageGitFile(cwd, filename, repoRoot)
   })
 
-  ipcMain.handle('git:discard-file', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>) => {
-    return await discardGitFile(cwd, file)
+  ipcMain.handle('git:discard-file', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => {
+    return await discardGitFile(cwd, file, repoRoot)
+  })
+
+  ipcMain.handle('git:get-submodules', async (_, cwd: string) => {
+    const meta = await getGitRepoMeta(cwd)
+    if (!meta.isRepo || !meta.repoRoot || !meta.gitExecutable) return []
+    return await detectSubmodulesRecursive(meta.repoRoot, meta.gitExecutable)
   })
 
   ipcMain.handle('git:update-index-content', async (_, cwd: string, filename: string, content: string) => {

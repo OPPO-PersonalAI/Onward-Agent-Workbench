@@ -149,6 +149,22 @@ export interface AppStateAPI {
 export type GitChangeType = 'unstaged' | 'staged' | 'untracked'
 export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'C' | '?'
 
+export interface GitSubmoduleInfo {
+  name: string
+  path: string
+  repoRoot: string
+  depth: number
+  parentRoot: string
+}
+
+export interface GitRepoContext {
+  root: string
+  label: string
+  isSubmodule: boolean
+  depth: number
+  changeCount: number
+}
+
 // Git file status
 export interface GitFileStatus {
   filename: string
@@ -157,6 +173,8 @@ export interface GitFileStatus {
   additions: number
   deletions: number
   changeType: GitChangeType
+  repoRoot?: string
+  repoLabel?: string
 }
 
 // Git Diff results
@@ -166,6 +184,8 @@ export interface GitDiffResult {
   isGitRepo: boolean
   gitInstalled: boolean
   files: GitFileStatus[]
+  repos?: GitRepoContext[]
+  superprojectRoot?: string
   error?: string
 }
 
@@ -188,6 +208,8 @@ export interface GitHistoryResult {
   gitInstalled: boolean
   commits: GitCommitInfo[]
   totalCount?: number
+  repos?: GitRepoContext[]
+  superprojectRoot?: string
   error?: string
 }
 
@@ -235,6 +257,12 @@ export interface GitFileContentResult {
   originalContent: string
   modifiedContent: string
   isBinary: boolean
+  isImage?: boolean
+  isSvg?: boolean
+  originalImageUrl?: string
+  modifiedImageUrl?: string
+  originalImageSize?: number
+  modifiedImageSize?: number
   error?: string
 }
 
@@ -385,11 +413,12 @@ export interface GitAPI {
   getDiff: (cwd: string) => Promise<GitDiffResult>
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
-  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>) => Promise<GitFileContentResult>
+  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
   saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
-  stageFile: (cwd: string, filename: string) => Promise<GitFileActionResult>
-  unstageFile: (cwd: string, filename: string) => Promise<GitFileActionResult>
-  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>) => Promise<GitFileActionResult>
+  stageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
+  unstageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
+  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => Promise<GitFileActionResult>
+  getSubmodules: (cwd: string) => Promise<GitSubmoduleInfo[]>
   updateIndexContent: (cwd: string, filename: string, content: string) => Promise<GitFileActionResult>
   checkInstalled: () => Promise<boolean>
   getTerminalCwd: (terminalId: string) => Promise<string | null>
