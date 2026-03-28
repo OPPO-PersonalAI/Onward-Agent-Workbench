@@ -78,6 +78,14 @@
   background-color: var(--bg-1);
 }
 
+.terminal-dropdown-item.is-active {
+  color: var(--text-1);
+}
+
+.terminal-dropdown-item.is-active svg {
+  color: var(--accent);
+}
+
 .terminal-dropdown-item svg {
   flex-shrink: 0;
   color: var(--text-3);

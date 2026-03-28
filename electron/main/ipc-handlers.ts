@@ -52,6 +52,7 @@ import { getAppInfo } from './app-info'
 import { gitRuntimeManager } from './git-runtime-manager'
 import { openExternalUrlWithConfirm } from './external-link-guard'
 import { RipgrepSearchManager } from './ripgrep-search'
+import { browserViewManager } from './browser-view-manager'
 
 let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
@@ -528,6 +529,56 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return result
   })
 
+  browserViewManager.init(mainWindow)
+
+  ipcMain.handle('browser:create', (_, id: string, url?: string) => {
+    return browserViewManager.create(id, url)
+  })
+
+  ipcMain.handle('browser:destroy', (_, id: string) => {
+    return browserViewManager.destroy(id)
+  })
+
+  ipcMain.handle('browser:navigate', (_, id: string, url: string) => {
+    return browserViewManager.navigate(id, url)
+  })
+
+  ipcMain.handle('browser:go-back', (_, id: string) => {
+    return browserViewManager.goBack(id)
+  })
+
+  ipcMain.handle('browser:go-forward', (_, id: string) => {
+    return browserViewManager.goForward(id)
+  })
+
+  ipcMain.handle('browser:reload', (_, id: string) => {
+    return browserViewManager.reload(id)
+  })
+
+  ipcMain.handle('browser:stop', (_, id: string) => {
+    return browserViewManager.stop(id)
+  })
+
+  ipcMain.handle('browser:set-bounds', (_, id: string, rect: { x: number; y: number; width: number; height: number }) => {
+    return browserViewManager.setBounds(id, rect)
+  })
+
+  ipcMain.handle('browser:show', (_, id: string) => {
+    return browserViewManager.show(id)
+  })
+
+  ipcMain.handle('browser:hide', (_, id: string) => {
+    return browserViewManager.hide(id)
+  })
+
+  ipcMain.handle('browser:get-nav-state', (_, id: string) => {
+    return browserViewManager.getNavState(id)
+  })
+
+  ipcMain.handle('browser:clear-cookies', (_, maxAge?: number) => {
+    return browserViewManager.clearCookies(maxAge)
+  })
+
   // Command preset storage handlers
   const commandPresetStorage = getCommandPresetStorage()
 
@@ -915,6 +966,19 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('dialog:saveTextFile')
   ipcMain.removeHandler('shell:open-path')
   ipcMain.removeHandler('shell:open-external')
+  browserViewManager.destroyAll()
+  ipcMain.removeHandler('browser:create')
+  ipcMain.removeHandler('browser:destroy')
+  ipcMain.removeHandler('browser:navigate')
+  ipcMain.removeHandler('browser:go-back')
+  ipcMain.removeHandler('browser:go-forward')
+  ipcMain.removeHandler('browser:reload')
+  ipcMain.removeHandler('browser:stop')
+  ipcMain.removeHandler('browser:set-bounds')
+  ipcMain.removeHandler('browser:show')
+  ipcMain.removeHandler('browser:hide')
+  ipcMain.removeHandler('browser:get-nav-state')
+  ipcMain.removeHandler('browser:clear-cookies')
   ipcMain.removeHandler('command-preset:load')
   ipcMain.removeHandler('command-preset:save')
   ipcMain.removeHandler('command-preset:delete')

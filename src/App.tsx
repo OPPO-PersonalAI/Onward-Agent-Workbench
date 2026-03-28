@@ -75,7 +75,8 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onTerminalRename,
   onOpenProjectEditor,
   focusRequest,
-  shortcutAction
+  shortcutAction,
+  projectEditorOpen
 }: {
   tab: TabState
   isActive: boolean
@@ -84,6 +85,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onOpenProjectEditor: (terminalId: string) => void
   focusRequest: TerminalFocusRequest | null
   shortcutAction: TerminalShortcutAction | null
+  projectEditorOpen: boolean
 }) {
   const { getTerminalDisplayName } = useAppState()
   const terminals: TerminalInfo[] = useMemo(() => {
@@ -128,6 +130,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       hidden={!isActive}
       shortcutAction={actionForTab}
       focusRequest={focusRequestForTab}
+      projectEditorOpen={projectEditorOpen}
     />
   )
 })
@@ -987,6 +990,7 @@ function AppContent({
                 onOpenProjectEditor={handleOpenProjectEditor}
                 focusRequest={terminalFocusRequest}
                 shortcutAction={terminalShortcutAction}
+                projectEditorOpen={projectEditorOpen}
               />
             ))}
             <ProjectEditor

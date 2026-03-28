@@ -9,6 +9,7 @@ import { LayoutMode, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest 
 import { TerminalDropdown } from '../TerminalDropdown'
 import { GitDiffViewer } from '../GitDiffViewer'
 import { GitHistoryViewer } from '../GitHistoryViewer'
+import { BrowserPanel } from '../BrowserPanel/BrowserPanel'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_FAMILY } from '../../constants/terminal'
 import { terminalSessionManager, TerminalSessionOptions, TerminalSessionStatus } from '../../terminal/terminal-session-manager'
@@ -46,6 +47,7 @@ interface TerminalGridProps {
   hidden?: boolean
   shortcutAction?: TerminalShortcutAction | null
   focusRequest?: TerminalFocusRequest | null
+  projectEditorOpen?: boolean
 }
 
 interface TerminalGitInfo {
@@ -72,7 +74,8 @@ export const TerminalGrid = memo(function TerminalGrid({
   tabId: _tabId,
   hidden = false,
   shortcutAction = null,
-  focusRequest = null
+  focusRequest = null,
+  projectEditorOpen = false
 }: TerminalGridProps) {
   // Performance instrumentation: track render count
   perfMonitor.recordReactRender()
@@ -118,6 +121,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   const copyNoticeTimerRef = useRef<number | null>(null)
   const lastShortcutTokenRef = useRef<number | null>(null)
   const [terminalStatuses, setTerminalStatuses] = useState<Record<string, TerminalSessionStatus>>({})
+  const globalOverlayActive = gitDiffOpen || gitHistoryOpen || projectEditorOpen
+  const [browserOpenTerminals, setBrowserOpenTerminals] = useState<Set<string>>(new Set())
+  const [lastBrowserUrls, setLastBrowserUrls] = useState<Record<string, string>>({})
 
   // Terminal context menu state
   const [termCtxMenu, setTermCtxMenu] = useState<{ x: number; y: number; terminalId: string; hasSelection: boolean } | null>(null)
@@ -153,6 +159,27 @@ export const TerminalGrid = memo(function TerminalGrid({
           next[term.id] = prev[term.id]
         }
       })
+      return next
+    })
+  }, [terminals])
+
+  useEffect(() => {
+    const validTerminalIds = new Set(terminals.map(term => term.id))
+
+    setBrowserOpenTerminals(prev => {
+      const next = new Set<string>()
+      prev.forEach(id => {
+        if (validTerminalIds.has(id)) {
+          next.add(id)
+        }
+      })
+      return next
+    })
+
+    setLastBrowserUrls(prev => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([terminalId]) => validTerminalIds.has(terminalId))
+      )
       return next
     })
   }, [terminals])
@@ -645,6 +672,40 @@ export const TerminalGrid = memo(function TerminalGrid({
       .catch(() => setTerminalStatus(terminalId, 'error'))
   }, [setTerminalStatus])
 
+  const handleOpenBrowser = useCallback((terminalId: string, initialUrl?: string | null) => {
+    if (typeof initialUrl === 'string' && initialUrl.trim()) {
+      setLastBrowserUrls(prev => ({ ...prev, [terminalId]: initialUrl.trim() }))
+    }
+    setBrowserOpenTerminals(prev => {
+      if (prev.has(terminalId)) return prev
+      const next = new Set(prev)
+      next.add(terminalId)
+      return next
+    })
+  }, [])
+
+  const handleCloseBrowser = useCallback((terminalId: string) => {
+    setBrowserOpenTerminals(prev => {
+      if (!prev.has(terminalId)) return prev
+      const next = new Set(prev)
+      next.delete(terminalId)
+      return next
+    })
+    terminalSessionManager.focus(terminalId)
+  }, [])
+
+  const handleToggleBrowser = useCallback((terminalId: string) => {
+    setBrowserOpenTerminals(prev => {
+      const next = new Set(prev)
+      if (next.has(terminalId)) {
+        next.delete(terminalId)
+      } else {
+        next.add(terminalId)
+      }
+      return next
+    })
+  }, [])
+
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
 
@@ -814,6 +875,22 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [handleViewGitHistory, hidden, terminals])
 
+  useEffect(() => {
+    const handleOpenBrowserEvent = (event: Event) => {
+      if (hidden) return
+      const customEvent = event as CustomEvent<{ terminalId?: string; url?: string }>
+      const terminalId = customEvent.detail?.terminalId
+      if (!terminalId) return
+      if (!terminals.some(term => term.id === terminalId)) return
+      handleOpenBrowser(terminalId, customEvent.detail?.url ?? null)
+    }
+
+    window.addEventListener('browser:open', handleOpenBrowserEvent as EventListener)
+    return () => {
+      window.removeEventListener('browser:open', handleOpenBrowserEvent as EventListener)
+    }
+  }, [handleOpenBrowser, hidden, terminals])
+
   const handleCloseGitHistory = useCallback(() => {
     setGitHistoryOpen(false)
     setGitHistoryTerminalId(null)
@@ -916,6 +993,8 @@ export const TerminalGrid = memo(function TerminalGrid({
                     onChangeWorkDir={() => handleChangeWorkDir(termInfo.id)}
                     onOpenWorkDir={() => handleOpenWorkDir(termInfo.id)}
                     onOpenProjectEditor={() => onOpenProjectEditor(termInfo.id)}
+                    onToggleBrowser={() => handleToggleBrowser(termInfo.id)}
+                    isBrowserOpen={browserOpenTerminals.has(termInfo.id)}
                   />
                   <div className="terminal-grid-header-left">
                     {editingId === termInfo.id ? (
@@ -1002,6 +1081,16 @@ export const TerminalGrid = memo(function TerminalGrid({
                 <div
                   ref={getContainerRef(termInfo.id)}
                   className="terminal-grid-container"
+                />
+                <BrowserPanel
+                  isOpen={browserOpenTerminals.has(termInfo.id)}
+                  onClose={() => handleCloseBrowser(termInfo.id)}
+                  terminalId={termInfo.id}
+                  initialUrl={lastBrowserUrls[termInfo.id] || null}
+                  onUrlChange={(nextUrl) => {
+                    setLastBrowserUrls(prev => ({ ...prev, [termInfo.id]: nextUrl }))
+                  }}
+                  forceHidden={hidden || globalOverlayActive}
                 />
                 {showTerminalOverlay && (
                   <div

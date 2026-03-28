@@ -14,6 +14,8 @@ interface TerminalDropdownProps {
   onChangeWorkDir: () => void
   onOpenWorkDir: () => void
   onOpenProjectEditor: () => void
+  onToggleBrowser: () => void
+  isBrowserOpen: boolean
 }
 
 export function TerminalDropdown({
@@ -22,7 +24,9 @@ export function TerminalDropdown({
   onViewGitHistory,
   onChangeWorkDir,
   onOpenWorkDir,
-  onOpenProjectEditor
+  onOpenProjectEditor,
+  onToggleBrowser,
+  isBrowserOpen
 }: TerminalDropdownProps) {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
@@ -142,6 +146,19 @@ export function TerminalDropdown({
               <path d="M6.25 6.5a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5H8.5v3.25a.75.75 0 0 1-1.5 0V7.25H7a.75.75 0 0 1-.75-.75z" />
             </svg>
             <span>{t('terminalDropdown.projectEditor')}</span>
+          </div>
+
+          <div
+            className={`terminal-dropdown-item${isBrowserOpen ? ' is-active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleMenuItemClick(onToggleBrowser)
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm7.5-6.923c-.67.204-1.335.82-1.887 1.855A8 8 0 0 0 5.145 4H7.5V1.077zM4.09 4a9.3 9.3 0 0 1 .64-1.539 7 7 0 0 1 .597-.933A7 7 0 0 0 2.255 4zm-.582 3.5c.03-.877.138-1.718.312-2.5H1.674a7 7 0 0 0-.656 2.5zM4.847 5a12.5 12.5 0 0 0-.338 2.5H7.5V5zM8.5 5v2.5h2.99a12.5 12.5 0 0 0-.337-2.5zM4.51 8.5a12.5 12.5 0 0 0 .337 2.5H7.5V8.5zm3.99 0V11h2.653c.187-.765.306-1.608.338-2.5zM5.145 12a8 8 0 0 0 .468 1.068c.552 1.035 1.218 1.65 1.887 1.855V12zm.182 2.472a7 7 0 0 1-.597-.933A9.3 9.3 0 0 1 4.09 12H2.255a7 7 0 0 0 3.072 2.472zM3.82 11a13.7 13.7 0 0 1-.312-2.5H1.674A7 7 0 0 0 1.018 11zm6.853 3.472A7 7 0 0 0 13.745 12H11.91a9.3 9.3 0 0 1-.64 1.539 7 7 0 0 1-.597.933M8.5 12v2.923c.67-.204 1.335-.82 1.887-1.855A8 8 0 0 0 10.855 12zm2.31-1H14.33a7 7 0 0 0 .656-2.5H12.18c-.03.877-.138 1.718-.312 2.5zm.747-3.5H14.98a7 7 0 0 0-.656-2.5h-2.49c.174.782.282 1.623.312 2.5zM11.91 4a9.3 9.3 0 0 0-.64-1.539 7 7 0 0 0-.597-.933A7 7 0 0 1 13.745 4zm-1.055 0H8.5V1.077c.67.204 1.335.82 1.887 1.855.173.324.33.682.468 1.068z"/>
+            </svg>
+            <span>{t(isBrowserOpen ? 'terminalDropdown.closeBrowser' : 'terminalDropdown.openBrowser')}</span>
           </div>
         </div>
       )}

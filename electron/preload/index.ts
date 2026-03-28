@@ -658,6 +658,35 @@ export interface DebugAPI {
   quit: () => Promise<void>
 }
 
+export interface BrowserNavState {
+  canGoBack: boolean
+  canGoForward: boolean
+  url: string
+  title: string
+  isLoading: boolean
+}
+
+export interface BrowserAPI {
+  create: (id: string, url?: string) => Promise<{ success: boolean; id: string; error?: string }>
+  destroy: (id: string) => Promise<boolean>
+  navigate: (id: string, url: string) => Promise<boolean>
+  goBack: (id: string) => Promise<boolean>
+  goForward: (id: string) => Promise<boolean>
+  reload: (id: string) => Promise<boolean>
+  stop: (id: string) => Promise<boolean>
+  setBounds: (id: string, rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>
+  show: (id: string) => Promise<boolean>
+  hide: (id: string) => Promise<boolean>
+  getNavState: (id: string) => Promise<BrowserNavState | null>
+  clearCookies: (maxAge?: number) => Promise<{ removed: number }>
+  onUrlChanged: (callback: (id: string, url: string) => void) => () => void
+  onTitleChanged: (callback: (id: string, title: string) => void) => () => void
+  onLoadingChanged: (callback: (id: string, isLoading: boolean) => void) => () => void
+  onNavStateChanged: (callback: (id: string, state: { canGoBack: boolean; canGoForward: boolean }) => void) => () => void
+  onFullscreenChanged: (callback: (id: string, isFullscreen: boolean) => void) => () => void
+  onEscapePressed: (callback: (id: string) => void) => () => void
+}
+
 const terminalAPI: TerminalAPI = {
   create: (id: string, options?: TerminalOptions) => {
     return ipcRenderer.invoke('terminal:create', id, options)
@@ -1066,6 +1095,99 @@ const debugAPI: DebugAPI = {
   }
 }
 
+const browserAPI: BrowserAPI = {
+  create: (id: string, url?: string) => {
+    return ipcRenderer.invoke('browser:create', id, url)
+  },
+  destroy: (id: string) => {
+    return ipcRenderer.invoke('browser:destroy', id)
+  },
+  navigate: (id: string, url: string) => {
+    return ipcRenderer.invoke('browser:navigate', id, url)
+  },
+  goBack: (id: string) => {
+    return ipcRenderer.invoke('browser:go-back', id)
+  },
+  goForward: (id: string) => {
+    return ipcRenderer.invoke('browser:go-forward', id)
+  },
+  reload: (id: string) => {
+    return ipcRenderer.invoke('browser:reload', id)
+  },
+  stop: (id: string) => {
+    return ipcRenderer.invoke('browser:stop', id)
+  },
+  setBounds: (id: string, rect: { x: number; y: number; width: number; height: number }) => {
+    return ipcRenderer.invoke('browser:set-bounds', id, rect)
+  },
+  show: (id: string) => {
+    return ipcRenderer.invoke('browser:show', id)
+  },
+  hide: (id: string) => {
+    return ipcRenderer.invoke('browser:hide', id)
+  },
+  getNavState: (id: string) => {
+    return ipcRenderer.invoke('browser:get-nav-state', id)
+  },
+  clearCookies: (maxAge?: number) => {
+    return ipcRenderer.invoke('browser:clear-cookies', maxAge)
+  },
+  onUrlChanged: (callback: (id: string, url: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, url: string) => {
+      callback(id, url)
+    }
+    ipcRenderer.on('browser:url-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('browser:url-changed', listener)
+    }
+  },
+  onTitleChanged: (callback: (id: string, title: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, title: string) => {
+      callback(id, title)
+    }
+    ipcRenderer.on('browser:title-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('browser:title-changed', listener)
+    }
+  },
+  onLoadingChanged: (callback: (id: string, isLoading: boolean) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, isLoading: boolean) => {
+      callback(id, isLoading)
+    }
+    ipcRenderer.on('browser:loading-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('browser:loading-changed', listener)
+    }
+  },
+  onNavStateChanged: (callback: (id: string, state: { canGoBack: boolean; canGoForward: boolean }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, state: { canGoBack: boolean; canGoForward: boolean }) => {
+      callback(id, state)
+    }
+    ipcRenderer.on('browser:nav-state-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('browser:nav-state-changed', listener)
+    }
+  },
+  onFullscreenChanged: (callback: (id: string, isFullscreen: boolean) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, isFullscreen: boolean) => {
+      callback(id, isFullscreen)
+    }
+    ipcRenderer.on('browser:fullscreen-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('browser:fullscreen-changed', listener)
+    }
+  },
+  onEscapePressed: (callback: (id: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string) => {
+      callback(id)
+    }
+    ipcRenderer.on('browser:escape-pressed', listener)
+    return () => {
+      ipcRenderer.removeListener('browser:escape-pressed', listener)
+    }
+  }
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   terminal: terminalAPI,
   prompt: promptAPI,
@@ -1078,6 +1200,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   project: projectAPI,
   settings: settingsAPI,
   appInfo: appInfoAPI,
+  browser: browserAPI,
   debug: debugAPI,
   platform: process.platform as 'darwin' | 'win32' | 'linux'
 })

@@ -549,6 +549,35 @@ export interface DebugAPI {
   quit: () => Promise<void>
 }
 
+export interface BrowserNavState {
+  canGoBack: boolean
+  canGoForward: boolean
+  url: string
+  title: string
+  isLoading: boolean
+}
+
+export interface BrowserAPI {
+  create: (id: string, url?: string) => Promise<{ success: boolean; id: string; error?: string }>
+  destroy: (id: string) => Promise<boolean>
+  navigate: (id: string, url: string) => Promise<boolean>
+  goBack: (id: string) => Promise<boolean>
+  goForward: (id: string) => Promise<boolean>
+  reload: (id: string) => Promise<boolean>
+  stop: (id: string) => Promise<boolean>
+  setBounds: (id: string, rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>
+  show: (id: string) => Promise<boolean>
+  hide: (id: string) => Promise<boolean>
+  getNavState: (id: string) => Promise<BrowserNavState | null>
+  clearCookies: (maxAge?: number) => Promise<{ removed: number }>
+  onUrlChanged: (callback: (id: string, url: string) => void) => () => void
+  onTitleChanged: (callback: (id: string, title: string) => void) => () => void
+  onLoadingChanged: (callback: (id: string, isLoading: boolean) => void) => () => void
+  onNavStateChanged: (callback: (id: string, state: { canGoBack: boolean; canGoForward: boolean }) => void) => () => void
+  onFullscreenChanged: (callback: (id: string, isFullscreen: boolean) => void) => () => void
+  onEscapePressed: (callback: (id: string) => void) => () => void
+}
+
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
@@ -561,6 +590,7 @@ export interface ElectronAPI {
   project: ProjectAPI
   settings: SettingsAPI
   appInfo: AppInfoAPI
+  browser: BrowserAPI
   debug: DebugAPI
   platform: 'darwin' | 'win32' | 'linux'
 }
