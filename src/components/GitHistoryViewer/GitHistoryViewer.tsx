@@ -55,17 +55,36 @@ function formatRelativeTime(dateText: string, locale: string) {
   const seconds = Math.round(diffMs / 1000)
   const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
   const absSeconds = Math.abs(seconds)
-  if (absSeconds < 60) return rtf.format(-seconds, 'second')
-  const minutes = Math.round(seconds / 60)
-  if (Math.abs(minutes) < 60) return rtf.format(-minutes, 'minute')
-  const hours = Math.round(minutes / 60)
-  if (Math.abs(hours) < 24) return rtf.format(-hours, 'hour')
-  const days = Math.round(hours / 24)
-  if (Math.abs(days) < 30) return rtf.format(-days, 'day')
-  const months = Math.round(days / 30)
-  if (Math.abs(months) < 12) return rtf.format(-months, 'month')
-  const years = Math.round(months / 12)
-  return rtf.format(-years, 'year')
+  let relative: string
+  if (absSeconds < 60) {
+    relative = rtf.format(-seconds, 'second')
+  } else {
+    const minutes = Math.round(seconds / 60)
+    if (Math.abs(minutes) < 60) {
+      relative = rtf.format(-minutes, 'minute')
+    } else {
+      const hours = Math.round(minutes / 60)
+      if (Math.abs(hours) < 24) {
+        relative = rtf.format(-hours, 'hour')
+      } else {
+        const days = Math.round(hours / 24)
+        if (Math.abs(days) < 30) {
+          relative = rtf.format(-days, 'day')
+        } else {
+          const months = Math.round(days / 30)
+          if (Math.abs(months) < 12) {
+            relative = rtf.format(-months, 'month')
+          } else {
+            relative = rtf.format(-Math.round(months / 12), 'year')
+          }
+        }
+      }
+    }
+  }
+  const wrappedRelative = locale.startsWith('zh')
+    ? `（${relative}）`
+    : ` (${relative})`
+  return `${formatAbsoluteTime(dateText, locale)}${wrappedRelative}`
 }
 
 function formatAbsoluteTime(dateText: string, locale: string) {
@@ -200,6 +219,10 @@ export function GitHistoryViewer({
   }, [activeCwd])
   const terminalId = _terminalId
   const historyStateKey = activeCwd ? `${STORAGE_KEY_STATE_PREFIX}:${activeCwd}` : null
+  const historyStateKeyRef = useRef(historyStateKey)
+  useEffect(() => {
+    historyStateKeyRef.current = historyStateKey
+  }, [historyStateKey])
   const isSwitchingRepoRef = useRef(false)
 
   const commitIndexMap = useMemo(() => {
@@ -441,27 +464,32 @@ export function GitHistoryViewer({
     localStorage.setItem(historyStateKey, JSON.stringify(payload))
   }, [historyStateKey])
 
+  const persistStateRef = useRef(persistState)
+  useEffect(() => {
+    persistStateRef.current = persistState
+  }, [persistState])
+
   const schedulePersist = useCallback(() => {
-    if (!historyStateKey) return
+    if (!historyStateKeyRef.current) return
     if (persistTimerRef.current) {
       window.clearTimeout(persistTimerRef.current)
     }
     persistTimerRef.current = window.setTimeout(() => {
-      persistState()
+      persistStateRef.current()
     }, 200)
-  }, [historyStateKey, persistState])
+  }, [])
 
   useEffect(() => {
     if (isOpen) {
       resetState()
       void loadHistory(true)
     } else {
-      persistState()
+      persistStateRef.current()
       resetState()
       setSelectedRepoRoot(null)
       setRepoSearch('')
     }
-  }, [isOpen, loadHistory, resetState, persistState])
+  }, [isOpen, loadHistory, resetState])
 
   useEffect(() => {
     if (!isOpen) return

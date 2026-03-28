@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { LayoutMode, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest } from '../../types/prompt'
 import { TerminalDropdown } from '../TerminalDropdown'
@@ -81,6 +81,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   perfMonitor.recordReactRender()
 
   const { t } = useI18n()
+  const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const hiddenRef = useRef(hidden)
   const containerRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
@@ -523,6 +524,58 @@ export const TerminalGrid = memo(function TerminalGrid({
     })
   }, [attemptFocusRequest, cancelPendingFocus])
 
+  const adaptiveCollapseRef = useRef<ResizeObserver | null>(null)
+
+  useLayoutEffect(() => {
+    if (hidden) return
+    const wrapper = gridWrapperRef.current
+    if (!wrapper) return
+
+    const checkOverflow = () => {
+      const cells = wrapper.querySelectorAll('.terminal-grid-cell')
+      cells.forEach((cell) => {
+        const headerLeft = cell.querySelector('.terminal-grid-header-left') as HTMLElement | null
+        if (!headerLeft) return
+
+        const cwdEl = headerLeft.querySelector('.terminal-grid-adaptive-cwd')
+        const repoEl = headerLeft.querySelector('.terminal-grid-adaptive-repo')
+        const branchEl = headerLeft.querySelector('.terminal-grid-branch')
+
+        cwdEl?.classList.remove('adaptive-force-collapsed')
+        repoEl?.classList.remove('adaptive-force-collapsed')
+        branchEl?.classList.remove('branch-allow-shrink')
+
+        void headerLeft.offsetWidth
+
+        if (headerLeft.scrollWidth > headerLeft.clientWidth + 1) {
+          cwdEl?.classList.add('adaptive-force-collapsed')
+          void headerLeft.offsetWidth
+
+          if (headerLeft.scrollWidth > headerLeft.clientWidth + 1) {
+            repoEl?.classList.add('adaptive-force-collapsed')
+            void headerLeft.offsetWidth
+
+            if (headerLeft.scrollWidth > headerLeft.clientWidth + 1) {
+              branchEl?.classList.add('branch-allow-shrink')
+            }
+          }
+        }
+      })
+    }
+
+    checkOverflow()
+
+    const observer = new ResizeObserver(checkOverflow)
+    adaptiveCollapseRef.current = observer
+    const cells = wrapper.querySelectorAll('.terminal-grid-cell')
+    cells.forEach((cell) => observer.observe(cell))
+
+    return () => {
+      observer.disconnect()
+      adaptiveCollapseRef.current = null
+    }
+  }, [editingId, hidden, terminalInfos, visibleTerminals])
+
   // Clean up terminal resources (when Tab is destroyed)
   useEffect(() => {
     return () => {
@@ -960,7 +1013,7 @@ export const TerminalGrid = memo(function TerminalGrid({
 
   return (
     <>
-      <div className={`terminal-grid-wrapper ${hidden ? 'terminal-grid-hidden' : ''}`}>
+      <div ref={gridWrapperRef} className={`terminal-grid-wrapper ${hidden ? 'terminal-grid-hidden' : ''}`}>
         <div className="terminal-grid" data-layout={displayLayoutMode}>
           {visibleTerminals.map((termInfo, index) => {
             const terminalInfo = terminalInfos[termInfo.id]

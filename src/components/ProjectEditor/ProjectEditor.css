@@ -27,7 +27,7 @@
   background-color: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  min-width: 720px;
+  min-width: min(720px, 95vw);
   min-height: 420px;
   max-width: 95vw;
   max-height: 95vh;
