@@ -14,6 +14,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Prompt cleanup and retention behavior
 - Markdown preview rendering
 - Git state inspection and Git Diff behavior
+- Terminal autofollow and viewport preservation
 - CPU and performance regression checks
 - Terminal focus restore and activation behavior
 - Stability when switching between Project Editor, Git Diff, and Git History
@@ -56,6 +57,7 @@ src/autotest/
 ├── test-per-agent-font.ts
 ├── test-git-history.ts
 ├── test-git-cross-platform.ts
+├── test-terminal-autofollow.ts
 ├── test-prompt-cleanup.ts
 ├── test-regression.ts
 └── test-stress.ts
@@ -74,6 +76,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
 | `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
+| `window.__onwardTerminalDebug` | `TerminalGrid.tsx` | Terminal viewport state, tail text, fit / remount helpers |
 
 ## Environment Variables
 
@@ -222,6 +225,12 @@ Designed to catch platform-specific issues when porting to new platforms. Run th
 - `XP-12`: getDiff IPC returns valid result
 - `XP-13`: getHistory completes within platform-specific latency threshold
 - `XP-14`: getDiff completes within platform-specific latency threshold
+
+### Phase 0.1: Terminal Autofollow
+
+Source set: terminal viewport preservation validation suite
+
+- `TA-00` to `TA-10`: bottom-follow persistence, manual-scroll preservation, fit handling, remount handling, and repeated fit/remount stress coverage
 - `XP-15`: rapid open/close cycle (5 iterations) — no stale state
 - `XP-16`: Git Diff ↔ Git History mutual exclusion
 

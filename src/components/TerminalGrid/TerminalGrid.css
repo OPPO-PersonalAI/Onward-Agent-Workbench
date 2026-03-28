@@ -67,6 +67,8 @@
 
 /* terminal cell */
 .terminal-grid-cell {
+  container-type: inline-size;
+  container-name: terminal-cell;
   display: flex;
   flex-direction: column;
   background-color: var(--bg-1);
@@ -109,8 +111,9 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .terminal-grid-title {
@@ -122,9 +125,11 @@
   border-radius: var(--radius-sm);
   transition: background-color 0.15s ease;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
 }
-
-
 .terminal-grid-title:hover {
   background-color: var(--bg-1);
 }
@@ -158,6 +163,14 @@
   font-size: 11px;
   letter-spacing: 0.2px;
   user-select: none;
+  max-width: 160px;
+  flex-shrink: 1;
+  white-space: nowrap;
+}
+
+.terminal-grid-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .terminal-grid-copyable {
@@ -207,25 +220,116 @@
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.4);
 }
 
-.terminal-grid-cwd {
-  flex: 1 1 auto;
+.terminal-grid-adaptive-repo,
+.terminal-grid-adaptive-cwd {
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-3);
-  opacity: 0.9;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: clip;
-  /* Outer RTL makes clipping happen from the left, preserving the trailing path */
-  direction: rtl;
-  text-align: left;
+  user-select: none;
+  cursor: pointer;
 }
 
-.terminal-grid-cwd-text {
-  /* The inner LTR keeps the text reading direction normal */
-  direction: ltr;
-  unicode-bidi: bidi-override;
+.terminal-grid-adaptive-expanded {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-grid-adaptive-collapsed {
+  display: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: background-color 0.15s ease;
+}
+
+.terminal-grid-adaptive-collapsed:hover {
+  background-color: color-mix(in srgb, var(--text-3) 12%, transparent);
+}
+
+.terminal-grid-adaptive-collapsed svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.terminal-grid-adaptive-collapsed:hover svg {
+  opacity: 1;
+}
+
+.terminal-grid-adaptive-hover-text {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 0.25s ease, opacity 0.2s ease, margin-left 0.25s ease;
+  margin-left: 0;
+  white-space: nowrap;
+}
+
+.terminal-grid-adaptive-collapsed:hover .terminal-grid-adaptive-hover-text {
+  max-width: 200px;
+  opacity: 1;
+  margin-left: 4px;
+}
+
+.terminal-grid-adaptive-repo .terminal-grid-adaptive-expanded {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.terminal-grid-adaptive-cwd .terminal-grid-adaptive-expanded {
+  color: var(--text-3);
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.terminal-grid-cell.active .terminal-grid-adaptive-repo .terminal-grid-adaptive-expanded {
+  color: var(--text-1);
+}
+
+.terminal-grid-cell.active .terminal-grid-adaptive-cwd .terminal-grid-adaptive-expanded {
+  color: var(--text-2);
+  opacity: 1;
+}
+
+.terminal-grid-cell.active .terminal-grid-adaptive-collapsed {
+  color: var(--text-2);
+}
+
+.terminal-grid-cell.active .terminal-grid-adaptive-collapsed svg {
+  opacity: 0.85;
+}
+
+@container terminal-cell (max-width: 519px) {
+  .terminal-grid-adaptive-cwd .terminal-grid-adaptive-expanded {
+    display: none;
+  }
+
+  .terminal-grid-adaptive-cwd .terminal-grid-adaptive-collapsed {
+    display: inline-flex;
+  }
+}
+
+@container terminal-cell (max-width: 379px) {
+  .terminal-grid-adaptive-repo .terminal-grid-adaptive-expanded {
+    display: none;
+  }
+
+  .terminal-grid-adaptive-repo .terminal-grid-adaptive-collapsed {
+    display: inline-flex;
+  }
 }
 
 .terminal-grid-copy-notice {

@@ -13,6 +13,7 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_FAMILY } from '../../constants/terminal'
 import { terminalSessionManager, TerminalSessionOptions, TerminalSessionStatus } from '../../terminal/terminal-session-manager'
 import { focusCoordinator } from '../../terminal/focus-coordinator'
+import type { TerminalDebugApi } from '../../autotest/types'
 import { perfMonitor } from '../../utils/perf-monitor'
 import { useI18n } from '../../i18n/useI18n'
 import '@xterm/xterm/css/xterm.css'
@@ -644,6 +645,57 @@ export const TerminalGrid = memo(function TerminalGrid({
       .catch(() => setTerminalStatus(terminalId, 'error'))
   }, [setTerminalStatus])
 
+  useEffect(() => {
+    if (!window.electronAPI?.debug?.autotest) return
+
+    const debugWindow = window as Window & { __onwardTerminalDebug?: TerminalDebugApi }
+    const resolveTerminalId = (terminalId?: string) =>
+      terminalId ?? activeTerminalIdRef.current ?? terminalIdsRef.current[0] ?? null
+
+    const api: TerminalDebugApi = {
+      getTerminalIds: () => [...terminalIdsRef.current],
+      getActiveTerminalId: () => activeTerminalIdRef.current,
+      getViewportState: (terminalId) => {
+        const resolved = resolveTerminalId(terminalId)
+        if (!resolved) return null
+        return terminalSessionManager.getViewportDebugState(resolved)
+      },
+      getTailText: (terminalId, lastLines = 20) => {
+        const resolved = resolveTerminalId(terminalId)
+        if (!resolved) return null
+        const result = terminalSessionManager.getBufferContent(resolved, {
+          mode: 'tail-lines',
+          lastLines,
+          trimTrailingEmpty: false
+        })
+        return result.success ? (result.content ?? '') : null
+      },
+      scrollToTop: (terminalId) => {
+        const resolved = resolveTerminalId(terminalId)
+        return resolved ? terminalSessionManager.scrollToTop(resolved) : false
+      },
+      scrollToBottom: (terminalId) => {
+        const resolved = resolveTerminalId(terminalId)
+        return resolved ? terminalSessionManager.scrollToBottom(resolved) : false
+      },
+      forceFit: (terminalId) => {
+        const resolved = resolveTerminalId(terminalId)
+        return resolved ? terminalSessionManager.forceFit(resolved) : false
+      },
+      remountTerminal: (terminalId) => {
+        const resolved = resolveTerminalId(terminalId)
+        return resolved ? terminalSessionManager.remount(resolved) : false
+      }
+    }
+
+    debugWindow.__onwardTerminalDebug = api
+    return () => {
+      if (debugWindow.__onwardTerminalDebug === api) {
+        delete debugWindow.__onwardTerminalDebug
+      }
+    }
+  }, [activeTerminalId, terminals])
+
   // Start editing the title (editing the custom name part)
   const handleStartEdit = useCallback((id: string, currentCustomName: string | null) => {
     setEditingId(id)
@@ -857,15 +909,15 @@ export const TerminalGrid = memo(function TerminalGrid({
                 onClick={() => handleTerminalFocus(termInfo.id)}
               >
                 <div className="terminal-grid-header">
+                  <TerminalDropdown
+                    terminalId={termInfo.id}
+                    onViewGitDiff={() => handleViewGitDiff(termInfo.id)}
+                    onViewGitHistory={() => handleViewGitHistory(termInfo.id)}
+                    onChangeWorkDir={() => handleChangeWorkDir(termInfo.id)}
+                    onOpenWorkDir={() => handleOpenWorkDir(termInfo.id)}
+                    onOpenProjectEditor={() => onOpenProjectEditor(termInfo.id)}
+                  />
                   <div className="terminal-grid-header-left">
-                    <TerminalDropdown
-                      terminalId={termInfo.id}
-                      onViewGitDiff={() => handleViewGitDiff(termInfo.id)}
-                      onViewGitHistory={() => handleViewGitHistory(termInfo.id)}
-                      onChangeWorkDir={() => handleChangeWorkDir(termInfo.id)}
-                      onOpenWorkDir={() => handleOpenWorkDir(termInfo.id)}
-                      onOpenProjectEditor={() => onOpenProjectEditor(termInfo.id)}
-                    />
                     {editingId === termInfo.id ? (
                       <input
                         ref={editInputRef}
@@ -891,8 +943,20 @@ export const TerminalGrid = memo(function TerminalGrid({
                       </span>
                     )}
                     {repoName && (
-                      <span className="terminal-grid-repo" title={t('terminalGrid.repoTitle', { repoName })}>
-                        {repoName}
+                      <span
+                        className="terminal-grid-adaptive-repo terminal-grid-copyable"
+                        title={t('terminalGrid.repoTitle', { repoName })}
+                        onDoubleClick={() => {
+                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.repo'), repoName)
+                        }}
+                      >
+                        <span className="terminal-grid-adaptive-expanded">{repoName}</span>
+                        <span className="terminal-grid-adaptive-collapsed">
+                          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5 8 5.961 14.154 3.5 8.186 1.113zM15 4.239l-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923l6.5 2.6zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.928l-7.185 2.874a.5.5 0 0 1-.372 0L.63 13.09a1 1 0 0 1-.63-.928V3.5a.5.5 0 0 1 .314-.464L7.443.184z" />
+                          </svg>
+                          <span className="terminal-grid-adaptive-hover-text">{repoName}</span>
+                        </span>
                       </span>
                     )}
                     {branch && (
@@ -903,21 +967,27 @@ export const TerminalGrid = memo(function TerminalGrid({
                           void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
                         }}
                       >
-                        {branch}
+                        <span className="terminal-grid-branch-name">{branch}</span>
+                      </span>
+                    )}
+                    {compactCwd && (
+                      <span
+                        className="terminal-grid-adaptive-cwd terminal-grid-copyable"
+                        title={cwd || ''}
+                        onDoubleClick={() => {
+                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.path'), cwd)
+                        }}
+                      >
+                        <span className="terminal-grid-adaptive-expanded">{compactCwd}</span>
+                        <span className="terminal-grid-adaptive-collapsed">
+                          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+                          </svg>
+                          <span className="terminal-grid-adaptive-hover-text">{compactCwd}</span>
+                        </span>
                       </span>
                     )}
                   </div>
-                  {compactCwd && (
-                    <div
-                      className="terminal-grid-cwd terminal-grid-copyable"
-                      title={cwd || ''}
-                      onDoubleClick={() => {
-                        void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.path'), cwd)
-                      }}
-                    >
-                      <span className="terminal-grid-cwd-text">{compactCwd}</span>
-                    </div>
-                  )}
                 </div>
                 {copyNotice?.terminalId === termInfo.id && (
                   <div

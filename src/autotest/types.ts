@@ -172,6 +172,33 @@ export interface TerminalFocusDebugApi {
   }
 }
 
+export interface TerminalDebugApi {
+  getTerminalIds: () => string[]
+  getActiveTerminalId: () => string | null
+  getViewportState: (terminalId?: string) => {
+    terminalId: string
+    bufferType: 'normal' | 'alternate'
+    baseY: number
+    viewportY: number
+    rows: number
+    cols: number
+    isNearBottom: boolean
+    userWantsBottom: boolean
+    pendingRestore: {
+      followBottom: boolean
+      viewportY: number
+      bufferType: 'normal' | 'alternate'
+      reason: 'output' | 'fit' | 'attach'
+      capturedAt: number
+    } | null
+  } | null
+  getTailText: (terminalId?: string, lastLines?: number) => string | null
+  scrollToTop: (terminalId?: string) => boolean
+  scrollToBottom: (terminalId?: string) => boolean
+  forceFit: (terminalId?: string) => boolean
+  remountTerminal: (terminalId?: string) => boolean
+}
+
 // ============================================================
 // Test run environment
 // ============================================================
@@ -229,5 +256,6 @@ declare global {
     __onwardPromptNotebookDebug?: PromptNotebookDebugApi
     __onwardProjectEditorDebug?: ProjectEditorDebugApi
     __onwardTerminalFocusDebug?: TerminalFocusDebugApi
+    __onwardTerminalDebug?: TerminalDebugApi
   }
 }

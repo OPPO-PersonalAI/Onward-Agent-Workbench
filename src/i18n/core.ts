@@ -277,6 +277,7 @@ const en = {
   'terminal.contextMenu.clear': 'Clear Terminal',
 
   'terminalGrid.copyNotice': 'Copied {{label}}: {{text}}',
+  'terminalGrid.copyLabel.repo': 'repository',
   'terminalGrid.copyLabel.branch': 'branch',
   'terminalGrid.copyLabel.path': 'path',
   'terminalGrid.placeholderTask': 'Task {{index}}',
@@ -1007,6 +1008,7 @@ const zhCN: LocaleTranslations = {
   'terminal.contextMenu.clear': '清除终端',
 
   'terminalGrid.copyNotice': '已复制{{label}}：{{text}}',
+  'terminalGrid.copyLabel.repo': '仓库',
   'terminalGrid.copyLabel.branch': '分支',
   'terminalGrid.copyLabel.path': '路径',
   'terminalGrid.placeholderTask': 'Task {{index}}',

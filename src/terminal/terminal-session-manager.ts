@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Terminal as XTerm } from '@xterm/xterm'
+import { Terminal as XTerm, type IDisposable } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
@@ -42,11 +42,35 @@ export interface TerminalFocusSessionDebugSnapshot {
   activeElementMatchesTextarea: boolean
 }
 
+type TerminalBufferType = 'normal' | 'alternate'
+type TerminalViewportRestoreReason = 'output' | 'fit' | 'attach'
+
+interface TerminalViewportRestoreState {
+  followBottom: boolean
+  viewportY: number
+  bufferType: TerminalBufferType
+  reason: TerminalViewportRestoreReason
+  capturedAt: number
+}
+
+export interface TerminalViewportDebugState {
+  terminalId: string
+  bufferType: TerminalBufferType
+  baseY: number
+  viewportY: number
+  rows: number
+  cols: number
+  isNearBottom: boolean
+  userWantsBottom: boolean
+  pendingRestore: TerminalViewportRestoreState | null
+}
+
 interface TerminalSession {
   id: string
   terminal: XTerm
   fitAddon: FitAddon
   searchAddon: SearchAddon
+  writeParsedDisposable: IDisposable
   status: TerminalSessionStatus
   readyPromise: Promise<void> | null
   open: boolean
@@ -57,6 +81,11 @@ interface TerminalSession {
   lastFitHeight: number
   webglAddon?: WebglAddon
   lastOptions: TerminalSessionOptions | null
+  pendingViewportRestore: TerminalViewportRestoreState | null
+  pendingRestoreAnimationFrame: number | null
+  userWantsBottom: boolean
+  lastProgrammaticScrollAt: number
+  scrollTrackingDisposable: IDisposable | null
   // Visibility-based rendering optimization
   visible: boolean
   pendingData: string[]
@@ -78,6 +107,8 @@ const VISIBLE_WRITE_THROTTLE_MS = 50
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
+const AUTOFOLLOW_THRESHOLD_LINES = 2
+const PROGRAMMATIC_SCROLL_GUARD_MS = 50
 
 function handleTerminalLinkClick(_event: MouseEvent, uri: string) {
   void requestOpenExternalHttpLink(uri).then((result) => {
@@ -189,6 +220,7 @@ export class TerminalSessionManager {
       const session = this.sessions.get(termId)
       if (!session || session.pendingData.length === 0) continue
 
+      const pending = this.captureViewportIntent(session, 'output')
       const merged = session.pendingData.length === 1
         ? session.pendingData[0]
         : session.pendingData.join('')
@@ -196,7 +228,9 @@ export class TerminalSessionManager {
       session.pendingDataBytes = 0
 
       const t0 = performance.now()
-      session.terminal.write(merged)
+      session.terminal.write(merged, () => {
+        this.applyOutputBottomFastPath(session, pending)
+      })
       perfMonitor.recordXtermWrite(performance.now() - t0)
     }
     this.dirtyVisibleSessions.clear()
@@ -235,6 +269,137 @@ export class TerminalSessionManager {
         window.electronAPI.terminal.sendBufferResponse(requestId, result)
       }
     )
+  }
+
+  private isNearBottom(baseY: number, viewportY: number): boolean {
+    return baseY - viewportY <= AUTOFOLLOW_THRESHOLD_LINES
+  }
+
+  private getActiveViewportState(session: TerminalSession) {
+    const buffer = session.terminal.buffer.active
+    return {
+      bufferType: buffer.type as TerminalBufferType,
+      baseY: buffer.baseY,
+      viewportY: buffer.viewportY
+    }
+  }
+
+  private captureViewportIntent(
+    session: TerminalSession,
+    reason: TerminalViewportRestoreReason
+  ): TerminalViewportRestoreState | null {
+    if (!session.open) return null
+    if (session.pendingViewportRestore) return session.pendingViewportRestore
+
+    const viewport = this.getActiveViewportState(session)
+    const pending: TerminalViewportRestoreState = {
+      followBottom: session.userWantsBottom,
+      viewportY: viewport.viewportY,
+      bufferType: viewport.bufferType,
+      reason,
+      capturedAt: Date.now()
+    }
+
+    session.pendingViewportRestore = pending
+    return pending
+  }
+
+  private clearPendingRestoreAnimationFrame(session: TerminalSession): void {
+    if (session.pendingRestoreAnimationFrame !== null) {
+      cancelAnimationFrame(session.pendingRestoreAnimationFrame)
+      session.pendingRestoreAnimationFrame = null
+    }
+  }
+
+  private scrollTerminalToBottom(session: TerminalSession): void {
+    session.lastProgrammaticScrollAt = Date.now()
+    session.terminal.scrollToBottom()
+  }
+
+  private scrollTerminalToTop(session: TerminalSession): void {
+    session.lastProgrammaticScrollAt = Date.now()
+    session.terminal.scrollToTop()
+  }
+
+  private scrollTerminalToLine(session: TerminalSession, line: number): void {
+    session.lastProgrammaticScrollAt = Date.now()
+    session.terminal.scrollToLine(line)
+  }
+
+  private isProgrammaticScroll(session: TerminalSession): boolean {
+    return Date.now() - session.lastProgrammaticScrollAt < PROGRAMMATIC_SCROLL_GUARD_MS
+  }
+
+  private scrollToBottomWithVerify(session: TerminalSession): void {
+    this.scrollTerminalToBottom(session)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (session.status === 'disposed' || !session.open || !session.userWantsBottom) return
+        const viewport = this.getActiveViewportState(session)
+        if (!this.isNearBottom(viewport.baseY, viewport.viewportY)) {
+          this.scrollTerminalToBottom(session)
+        }
+      })
+    })
+  }
+
+  private installScrollTracking(session: TerminalSession): void {
+    session.scrollTrackingDisposable = session.terminal.onScroll(() => {
+      if (this.isProgrammaticScroll(session) || session.status === 'disposed') return
+      const viewport = this.getActiveViewportState(session)
+      session.userWantsBottom = this.isNearBottom(viewport.baseY, viewport.viewportY)
+    })
+  }
+
+  private applyPendingViewportRestore(
+    session: TerminalSession,
+    reason: TerminalViewportRestoreReason
+  ): void {
+    const pending = session.pendingViewportRestore
+    if (!pending || session.status === 'disposed') return
+
+    const before = this.getActiveViewportState(session)
+    if (!pending.followBottom && before.bufferType !== pending.bufferType) {
+      session.pendingViewportRestore = null
+      return
+    }
+
+    if (pending.followBottom) {
+      if (reason === 'output' && this.isNearBottom(before.baseY, before.viewportY)) {
+        session.pendingViewportRestore = null
+        return
+      }
+      this.scrollToBottomWithVerify(session)
+    } else {
+      const targetLine = Math.max(0, Math.min(pending.viewportY, before.baseY))
+      this.scrollTerminalToLine(session, targetLine)
+    }
+
+    session.pendingViewportRestore = null
+  }
+
+  private schedulePendingViewportRestore(
+    session: TerminalSession,
+    reason: TerminalViewportRestoreReason
+  ): void {
+    if (!session.pendingViewportRestore || !session.open) return
+    this.clearPendingRestoreAnimationFrame(session)
+    session.pendingRestoreAnimationFrame = requestAnimationFrame(() => {
+      session.pendingRestoreAnimationFrame = null
+      this.applyPendingViewportRestore(session, reason)
+    })
+  }
+
+  private applyOutputBottomFastPath(
+    session: TerminalSession,
+    pending: TerminalViewportRestoreState | null
+  ): void {
+    if (!pending || pending.reason !== 'output' || !pending.followBottom || session.status === 'disposed') {
+      return
+    }
+    if (session.pendingViewportRestore !== pending) return
+    this.scrollToBottomWithVerify(session)
+    session.pendingViewportRestore = null
   }
 
   getBufferContent(id: string, options?: TerminalBufferOptions): TerminalBufferResult {
@@ -344,7 +509,46 @@ export class TerminalSessionManager {
     session.lastOptions = options
   }
 
+  getViewportDebugState(id: string): TerminalViewportDebugState | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+
+    const viewport = this.getActiveViewportState(session)
+    return {
+      terminalId: id,
+      bufferType: viewport.bufferType,
+      baseY: viewport.baseY,
+      viewportY: viewport.viewportY,
+      rows: session.terminal.rows,
+      cols: session.terminal.cols,
+      isNearBottom: this.isNearBottom(viewport.baseY, viewport.viewportY),
+      userWantsBottom: session.userWantsBottom,
+      pendingRestore: session.pendingViewportRestore
+    }
+  }
+
+  scrollToTop(id: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session?.open) return false
+    this.clearPendingRestoreAnimationFrame(session)
+    session.pendingViewportRestore = null
+    session.userWantsBottom = false
+    this.scrollTerminalToTop(session)
+    return true
+  }
+
+  scrollToBottom(id: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session?.open) return false
+    this.clearPendingRestoreAnimationFrame(session)
+    session.pendingViewportRestore = null
+    session.userWantsBottom = true
+    this.scrollTerminalToBottom(session)
+    return true
+  }
+
   private createSession(id: string, options: TerminalSessionOptions): TerminalSession {
+    const noopDisposable: IDisposable = { dispose() {} }
     const terminal = new XTerm({
       theme: buildTheme(options),
       fontSize: options.terminalStyle?.fontSize || options.fontSize,
@@ -417,6 +621,7 @@ export class TerminalSessionManager {
       terminal,
       fitAddon,
       searchAddon,
+      writeParsedDisposable: noopDisposable,
       status: 'idle',
       readyPromise: null,
       open: false,
@@ -426,12 +631,24 @@ export class TerminalSessionManager {
       lastFitWidth: 0,
       lastFitHeight: 0,
       lastOptions: null,
+      pendingViewportRestore: null,
+      pendingRestoreAnimationFrame: null,
+      userWantsBottom: true,
+      lastProgrammaticScrollAt: 0,
+      scrollTrackingDisposable: null,
       visible: true,
       pendingData: [],
       pendingDataBytes: 0
     }
 
+    session.writeParsedDisposable = terminal.onWriteParsed(() => {
+      const currentSession = this.sessions.get(id)
+      if (!currentSession) return
+      this.applyPendingViewportRestore(currentSession, 'output')
+    })
+
     this.sessions.set(id, session)
+    this.installScrollTracking(session)
     return session
   }
 
@@ -573,6 +790,7 @@ export class TerminalSessionManager {
   private flushPendingData(session: TerminalSession): void {
     if (session.pendingData.length === 0) return
 
+    const pending = this.captureViewportIntent(session, 'output')
     const merged = session.pendingData.length === 1
       ? session.pendingData[0]
       : session.pendingData.join('')
@@ -580,7 +798,9 @@ export class TerminalSessionManager {
     session.pendingDataBytes = 0
 
     const t0 = performance.now()
-    session.terminal.write(merged)
+    session.terminal.write(merged, () => {
+      this.applyOutputBottomFastPath(session, pending)
+    })
     perfMonitor.recordXtermWrite(performance.now() - t0)
   }
 
@@ -629,6 +849,7 @@ export class TerminalSessionManager {
         console.warn('WebGL addon failed to load, using canvas renderer')
       }
     } else if (session.terminal.element && session.terminal.element.parentElement !== container) {
+      this.captureViewportIntent(session, 'attach')
       while (container.firstChild) {
         container.removeChild(container.firstChild)
       }
@@ -636,6 +857,7 @@ export class TerminalSessionManager {
     }
 
     this.fit(id)
+    this.schedulePendingViewportRestore(session, 'attach')
   }
 
   detach(id: string): void {
@@ -657,7 +879,11 @@ export class TerminalSessionManager {
     const width = container.clientWidth
     const height = container.clientHeight
     if (width <= 0 || height <= 0) return
-    if (width === session.lastFitWidth && height === session.lastFitHeight) return
+    if (width === session.lastFitWidth && height === session.lastFitHeight) {
+      this.schedulePendingViewportRestore(session, 'fit')
+      return
+    }
+    this.captureViewportIntent(session, 'fit')
     session.lastFitWidth = width
     session.lastFitHeight = height
 
@@ -676,6 +902,28 @@ export class TerminalSessionManager {
     } catch (e) {
       // Ignore fit errors during transitions
     }
+
+    this.schedulePendingViewportRestore(session, 'fit')
+  }
+
+  forceFit(id: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session?.open) return false
+    session.lastFitWidth = 0
+    session.lastFitHeight = 0
+    this.fit(id)
+    return true
+  }
+
+  remount(id: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session?.open || !session.container || !session.lastOptions) return false
+
+    const container = session.container
+    const options = session.lastOptions
+    this.detach(id)
+    this.attach(id, container, options)
+    return true
   }
 
   private getTextareaElementForSession(session: TerminalSession): HTMLTextAreaElement | null {
@@ -814,6 +1062,9 @@ export class TerminalSessionManager {
     const session = this.sessions.get(id)
     if (!session || !session.lastOptions) return
 
+    this.clearPendingRestoreAnimationFrame(session)
+    session.pendingViewportRestore = null
+    session.userWantsBottom = true
     session.terminal.clear()
     session.terminal.reset()
 
@@ -829,9 +1080,12 @@ export class TerminalSessionManager {
     session.pendingData = []
     session.pendingDataBytes = 0
     this.dirtyVisibleSessions.delete(id)
+    this.clearPendingRestoreAnimationFrame(session)
 
     // Data/exit IPC listeners are global; no per-session cleanup needed
     window.electronAPI.terminal.dispose(id)
+    session.writeParsedDisposable.dispose()
+    session.scrollTrackingDisposable?.dispose()
     if (session.webglAddon) {
       session.webglAddon.dispose()
       session.webglAddon = undefined

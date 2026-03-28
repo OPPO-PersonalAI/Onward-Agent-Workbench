@@ -9,6 +9,7 @@
  * Called from ProjectEditor's autotest useEffect, all test suites are executed sequentially by stage.
  */
 import type { AutotestContext, TestResult, TestSuiteResult } from './types'
+import { testTerminalAutofollow } from './test-terminal-autofollow'
 import { testPromptSender } from './test-prompt-sender'
 import { testPerAgentFont } from './test-per-agent-font'
 import { testGitHistory } from './test-git-history'
@@ -66,6 +67,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(600)
       await window.electronAPI.git.notifyTerminalActivity(ctx.terminalId)
       await sleep(600)
+    }
+
+    if (!ctx.cancelled() && shouldRun('terminal-autofollow')) {
+      log('phase0.1:begin')
+      const results = await testTerminalAutofollow(ctx)
+      collectSuiteResults('TerminalAutofollow', results)
+      await sleep(400)
     }
 
     // Phase 0.4: ProjectEditor resumes logical unit testing
