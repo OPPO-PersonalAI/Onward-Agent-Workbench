@@ -4,9 +4,9 @@
  */
 
 /**
- * Automated test master orchestrator
+ * Automated test master orchestrator.
  *
- * Called from ProjectEditor's autotest useEffect, all test suites are executed sequentially by stage.
+ * Called from the Project Editor autotest effect. All suites run sequentially by phase.
  */
 import type { AutotestContext, TestResult, TestSuiteResult } from './types'
 import { testTerminalAutofollow } from './test-terminal-autofollow'
@@ -35,11 +35,61 @@ import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-termi
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
 
+function normalizeRuntimeMessage(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message || value.name || String(value)
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  if (value && typeof value === 'object') {
+    const name = 'name' in value ? String((value as { name?: unknown }).name ?? '') : ''
+    const message = 'message' in value ? String((value as { message?: unknown }).message ?? '') : ''
+    if (name && message) return `${name}: ${message}`
+    if (message) return message
+    if (name) return name
+  }
+  return String(value ?? 'unknown error')
+}
+
+function isIgnorableRuntimeIssue(type: 'error' | 'unhandledrejection', message: string): boolean {
+  const normalized = message.trim().toLowerCase()
+  if (type === 'error' && normalized.includes('resizeobserver loop completed with undelivered notifications')) {
+    return true
+  }
+  if (type === 'unhandledrejection') {
+    if (normalized === 'canceled') return true
+    if (normalized === 'canceled: canceled') return true
+    if (normalized === 'error: canceled') return true
+  }
+  return false
+}
+
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
   const suiteFilter = (window.electronAPI.debug.autotestSuite || '').trim().toLowerCase()
   const runSingleSuite = suiteFilter.length > 0 && suiteFilter !== 'all'
   const shouldRun = (suiteId: string) => !runSingleSuite || suiteFilter === suiteId
+  const runtimeErrors: Array<{ type: 'error' | 'unhandledrejection'; message: string }> = []
+  const handleWindowError = (event: ErrorEvent) => {
+    const message = normalizeRuntimeMessage(event.error ?? event.message)
+    if (isIgnorableRuntimeIssue('error', message)) {
+      log('runtime-issue-ignored', { type: 'error', message })
+      return
+    }
+    runtimeErrors.push({ type: 'error', message })
+  }
+  const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+    const message = normalizeRuntimeMessage(event.reason)
+    if (isIgnorableRuntimeIssue('unhandledrejection', message)) {
+      log('runtime-issue-ignored', { type: 'unhandledrejection', message })
+      return
+    }
+    runtimeErrors.push({ type: 'unhandledrejection', message })
+  }
+
+  window.addEventListener('error', handleWindowError)
+  window.addEventListener('unhandledrejection', handleUnhandledRejection)
 
   log('=== Autotest Start ===')
   log('autotest-config', {
@@ -79,7 +129,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(400)
     }
 
-    // Phase 0.4: ProjectEditor resumes logical unit testing
+    // Phase 0.4: Project Editor restore unit tests
     if (!ctx.cancelled() && shouldRun('project-editor-restore-unit')) {
       log('phase0.4:begin')
       const results = await testProjectEditorRestoreUnit(ctx)
@@ -87,7 +137,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(300)
     }
 
-    // Phase 0.5: ProjectEditor memory recovery interactive test
+    // Phase 0.5: Project Editor restore interactive tests
     if (!ctx.cancelled() && shouldRun('project-editor-restore')) {
       log('phase0.5:begin')
       const results = await testProjectEditorRestore(ctx)
@@ -95,7 +145,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 0.6: ProjectEditor open file location special test
+    // Phase 0.6: Project Editor open-position tests
     if (!ctx.cancelled() && shouldRun('project-editor-open-position')) {
       log('phase0.6:begin')
       const results = await testProjectEditorOpenPosition(ctx)
@@ -103,7 +153,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 0.7: ProjectEditor multi-terminal isolation recovery test in the same directory
+    // Phase 0.7: Project Editor multi-terminal scope isolation tests
     if (!ctx.cancelled() && shouldRun('project-editor-multi-terminal-scope')) {
       log('phase0.7:begin')
       const results = await testProjectEditorMultiTerminalScope(ctx)
@@ -111,7 +161,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 0.8: ProjectEditor Markdown LaTeX preview special test
+    // Phase 0.8: Project Editor Markdown LaTeX preview tests
     if (!ctx.cancelled() && shouldRun('markdown-latex-preview')) {
       log('phase0.8:begin')
       const results = await testMarkdownLatexPreview(ctx)
@@ -142,12 +192,15 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
 
     if (!ctx.cancelled() && shouldRun('preview-position-restore')) {
       log('phase0.89:begin')
+      await ctx.reopenProjectEditor('phase0.89-setup')
+      await sleep(300)
       const results = await testPreviewPositionRestore(ctx)
       collectSuiteResults('PreviewPositionRestore', results)
+      await ctx.reopenProjectEditor('phase0.89-cleanup')
       await sleep(500)
     }
 
-    // Phase 0.9: ProjectEditor SQLite preview and special test of adding, deleting, modifying and checking
+    // Phase 0.9: Project Editor SQLite add/delete/update/query tests
     if (!ctx.cancelled() && shouldRun('project-editor-sqlite')) {
       log('phase0.9:begin')
       const results = await testProjectEditorSqlite(ctx)
@@ -155,7 +208,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 1: PromptSender UI testing
+    // Phase 1: Prompt sender UI tests
     if (!ctx.cancelled() && shouldRun('prompt-sender')) {
       log('phase1:begin')
       const results = await testPromptSender(ctx)
@@ -163,7 +216,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 2: Per-Agent font testing
+    // Phase 2: Per-agent font tests
     if (!ctx.cancelled() && shouldRun('per-agent-font')) {
       log('phase2:begin')
       await ctx.reopenProjectEditor('phase2-setup')
@@ -174,7 +227,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 3: Git History Test
+    // Phase 3: Git History tests
     if (!ctx.cancelled() && shouldRun('git-history')) {
       log('phase3:begin')
       await ctx.reopenProjectEditor('phase3-setup')
@@ -195,7 +248,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 4: Prompt cleanup test
+    // Phase 4: Prompt cleanup tests
     if (!ctx.cancelled() && shouldRun('prompt-cleanup')) {
       log('phase4:begin')
       const results = await testPromptCleanup(ctx)
@@ -203,7 +256,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 4.5: Scheduled task function test
+    // Phase 4.5: Schedule tests
     if (!ctx.cancelled() && shouldRun('schedule')) {
       log('phase4.5:begin')
       const results = await testSchedule(ctx)
@@ -211,7 +264,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 5: Regression testing
+    // Phase 5: Regression tests
     if (!ctx.cancelled() && shouldRun('regression')) {
       log('phase5:begin')
       await ctx.reopenProjectEditor('phase5-setup')
@@ -222,7 +275,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 5.4: Git cross-platform test
+    // Phase 5.4: Git cross-platform tests
     if (!ctx.cancelled() && shouldRun('git-cross-platform')) {
       log('phase5.4:begin')
       await ctx.reopenProjectEditor('phase5.4-setup')
@@ -233,7 +286,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 5.5: Git Diff subdirectory special test
+    // Phase 5.5: Git Diff subdirectory tests
     if (!ctx.cancelled() && shouldRun('git-diff-subdir')) {
       log('phase5.5:begin')
       await ctx.reopenProjectEditor('phase5.5-setup')
@@ -254,7 +307,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 5.6: Terminal performance test
+    // Phase 5.6: Terminal performance tests
     if (!ctx.cancelled() && shouldRun('terminal-perf')) {
       log('phase5.6:begin')
       const results = await testTerminalPerf(ctx)
@@ -278,7 +331,7 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 6: Stress Test
+    // Phase 6: Stress tests
     if (!ctx.cancelled() && shouldRun('stress')) {
       log('phase6:begin')
       await ctx.reopenProjectEditor('phase6-setup')
@@ -289,16 +342,33 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 7: Summary Report
+    // Phase 7: Summary report
     const elapsedMs = Math.round(performance.now() - startTime)
-    const totalPassed = allTestResults.filter(r => r.ok).length
-    const totalFailed = allTestResults.filter(r => !r.ok).length
-    const totalTests = allTestResults.length
+
+    if (runtimeErrors.length > 0) {
+      const runtimeErrorResult: TestResult = {
+        name: 'AT-RT-no-runtime-errors',
+        ok: false,
+        detail: {
+          count: runtimeErrors.length,
+          errors: runtimeErrors.slice(0, 10)
+        }
+      }
+      allTestResults.push(runtimeErrorResult)
+      allResults.push({
+        suite: 'RuntimeErrors',
+        results: [runtimeErrorResult],
+        passed: 0,
+        failed: 1,
+        skipped: 0
+      })
+      log('runtime-errors-detected', runtimeErrorResult.detail)
+    }
 
     log('=== Test Summary ===', {
-      totalTests,
-      totalPassed,
-      totalFailed,
+      totalTests: allTestResults.length,
+      totalPassed: allTestResults.filter(r => r.ok).length,
+      totalFailed: allTestResults.filter(r => !r.ok).length,
       elapsedMs,
       suites: allResults.map(s => ({
         suite: s.suite,
@@ -327,12 +397,15 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
 
     log('=== Autotest Completed ===', {
       elapsed: `${(elapsedMs / 1000).toFixed(1)}s`,
-      passed: totalPassed,
-      failed: totalFailed,
-      total: totalTests
+      passed: allTestResults.filter(r => r.ok).length,
+      failed: allTestResults.filter(r => !r.ok).length,
+      total: allTestResults.length
     })
 
   } catch (error) {
     log('autotest-error', { error: String(error) })
+  } finally {
+    window.removeEventListener('error', handleWindowError)
+    window.removeEventListener('unhandledrejection', handleUnhandledRejection)
   }
 }

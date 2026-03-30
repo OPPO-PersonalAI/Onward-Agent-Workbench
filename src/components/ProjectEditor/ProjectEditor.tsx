@@ -2443,10 +2443,16 @@ export function ProjectEditor({
       setRootPath(null)
       setRootError(null)
       setSearchOpen(false)
+      setGlobalSearchOpen(false)
+      setGlobalSearchInitialType('content')
       setSearchQuery('')
       setSearchResults([])
       setSearchActiveIndex(0)
       setContextMenu(null)
+      setPreviewSearchOpen(false)
+      previewSearchOpenRef.current = false
+      setDialog(null)
+      setDialogInput('')
       setMarkdownImageMap({})
       rootRef.current = null
       fileIndexRef.current = []

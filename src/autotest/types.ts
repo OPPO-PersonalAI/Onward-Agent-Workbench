@@ -201,7 +201,16 @@ export interface TerminalFocusDebugApi {
 
 export interface TerminalDebugApi {
   getTerminalIds: () => string[]
+  getVisibleTerminalIds: () => string[]
   getActiveTerminalId: () => string | null
+  getSessionState: (terminalId?: string) => {
+    terminalId: string
+    status: 'idle' | 'initializing' | 'ready' | 'error' | 'disposed'
+    open: boolean
+    visible: boolean
+    pendingDataChunks: number
+    pendingDataBytes: number
+  } | null
   getViewportState: (terminalId?: string) => {
     terminalId: string
     bufferType: 'normal' | 'alternate'

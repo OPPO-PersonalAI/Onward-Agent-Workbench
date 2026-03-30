@@ -40,6 +40,23 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   if (!apiReady || cancelled()) return results
 
   const api = debugApi()!
+  const sessionReady = await waitFor('terminal-session-ready', () => {
+    const state = api.getSessionState(terminalId)
+    return Boolean(state?.status === 'ready' && state.open)
+  }, 12000, 120)
+  record('TA-00a-terminal-session-ready', sessionReady, {
+    sessionState: api.getSessionState(terminalId)
+  })
+  if (!sessionReady || cancelled()) return results
+
+  await execCommand('echo __AUTOTEST_TERMINAL_READY__', 'shell-ready-probe', 250)
+  const shellReady = await waitFor('terminal-shell-ready', () => {
+    return readTail(api, 40).includes('__AUTOTEST_TERMINAL_READY__')
+  }, 8000, 120)
+  record('TA-00b-terminal-shell-ready', shellReady, {
+    tail: readTail(api, 40)
+  })
+  if (!shellReady || cancelled()) return results
 
   await execCommand(`node "${fixturePath}"`, 'start-fixture', 200)
 
@@ -170,7 +187,11 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   const fixtureCompleted = await waitFor('terminal-autofollow-finished', () => {
     return readTail(api, 30).includes('[AUTOFOLLOW] end')
   }, 10000, 150)
-  record('TA-10-fixture-completed', fixtureCompleted, { tail: readTail(api, 30) })
+  record('TA-10-fixture-completed', fixtureCompleted, {
+    tail: readTail(api, 30),
+    viewport: readViewport(api),
+    sessionState: api.getSessionState(terminalId)
+  })
 
   log('terminal-autofollow:done', {
     total: results.length,

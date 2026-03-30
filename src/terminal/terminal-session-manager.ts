@@ -65,6 +65,15 @@ export interface TerminalViewportDebugState {
   pendingRestore: TerminalViewportRestoreState | null
 }
 
+export interface TerminalSessionDebugState {
+  terminalId: string
+  status: TerminalSessionStatus
+  open: boolean
+  visible: boolean
+  pendingDataChunks: number
+  pendingDataBytes: number
+}
+
 interface TerminalSession {
   id: string
   terminal: XTerm
@@ -96,6 +105,8 @@ interface TerminalSession {
 // 512 KB is enough to hold several screens of output while preventing
 // unbounded memory growth for long-running hidden sessions.
 const PENDING_DATA_MAX_BYTES = 512 * 1024
+const VISIBLE_PENDING_DATA_MAX_BYTES = 8 * 1024 * 1024
+const VISIBLE_WRITE_MAX_CHUNK_BYTES = 256 * 1024
 
 // Throttle interval for visible terminal writes.  Instead of calling
 // terminal.write() on every IPC message (which can reach 18,000/s across
@@ -139,6 +150,8 @@ export class TerminalSessionManager {
   private dirtyVisibleSessions: Set<string> = new Set()
   private visibleFlushScheduled = false
   private lastVisibleFlushTime = 0
+  private visibleFlushTimeoutId: number | null = null
+  private visibleFlushAnimationFrameId: number | null = null
 
   constructor() {
     this.registerBufferRequestListener()
@@ -165,14 +178,12 @@ export class TerminalSessionManager {
       session.pendingDataBytes += data.length
 
       if (!session.visible) {
-        // Hidden: cap buffer to prevent unbounded memory growth
-        while (session.pendingDataBytes > PENDING_DATA_MAX_BYTES && session.pendingData.length > 1) {
-          const dropped = session.pendingData.shift()!
-          session.pendingDataBytes -= dropped.length
-        }
+        this.trimPendingData(session, PENDING_DATA_MAX_BYTES)
         perfMonitor.recordHiddenTermWrite(data.length)
         return
       }
+
+      this.trimPendingData(session, VISIBLE_PENDING_DATA_MAX_BYTES)
 
       // Visible: mark dirty and schedule a throttled flush
       this.dirtyVisibleSessions.add(termId)
@@ -200,40 +211,68 @@ export class TerminalSessionManager {
 
     const elapsed = performance.now() - this.lastVisibleFlushTime
     const delay = Math.max(0, VISIBLE_WRITE_THROTTLE_MS - elapsed)
+    const scheduleFlush = () => {
+      // Prefer rAF for normal paint-aligned updates, but keep a timeout
+      // fallback so visible PTY data still flushes when the window is
+      // backgrounded or frame scheduling is throttled.
+      this.visibleFlushAnimationFrameId = requestAnimationFrame(() => {
+        this.visibleFlushAnimationFrameId = null
+        this.flushVisibleSessions()
+      })
+      this.visibleFlushTimeoutId = window.setTimeout(() => {
+        this.visibleFlushTimeoutId = null
+        this.flushVisibleSessions()
+      }, 32)
+    }
 
     if (delay <= 0) {
-      // Enough time has passed — flush on the next animation frame
-      requestAnimationFrame(() => this.flushVisibleSessions())
-    } else {
-      // Wait for the remaining throttle window, then use rAF
-      setTimeout(() => {
-        requestAnimationFrame(() => this.flushVisibleSessions())
-      }, delay)
+      scheduleFlush()
+      return
     }
+
+    this.visibleFlushTimeoutId = window.setTimeout(() => {
+      this.visibleFlushTimeoutId = null
+      scheduleFlush()
+    }, delay)
   }
 
   private flushVisibleSessions(): void {
+    if (!this.visibleFlushScheduled) return
     this.visibleFlushScheduled = false
+    if (this.visibleFlushTimeoutId !== null) {
+      window.clearTimeout(this.visibleFlushTimeoutId)
+      this.visibleFlushTimeoutId = null
+    }
+    if (this.visibleFlushAnimationFrameId !== null) {
+      cancelAnimationFrame(this.visibleFlushAnimationFrameId)
+      this.visibleFlushAnimationFrameId = null
+    }
     this.lastVisibleFlushTime = performance.now()
+    const requeue: string[] = []
 
     for (const termId of this.dirtyVisibleSessions) {
       const session = this.sessions.get(termId)
       if (!session || session.pendingData.length === 0) continue
 
       const pending = this.captureViewportIntent(session, 'output')
-      const merged = session.pendingData.length === 1
-        ? session.pendingData[0]
-        : session.pendingData.join('')
-      session.pendingData = []
-      session.pendingDataBytes = 0
+      const merged = this.consumePendingDataChunk(session, VISIBLE_WRITE_MAX_CHUNK_BYTES)
+      if (!merged) continue
 
       const t0 = performance.now()
       session.terminal.write(merged, () => {
         this.applyOutputBottomFastPath(session, pending)
       })
       perfMonitor.recordXtermWrite(performance.now() - t0)
+
+      if (session.pendingData.length > 0) {
+        requeue.push(termId)
+      }
     }
     this.dirtyVisibleSessions.clear()
+    requeue.forEach((termId) => this.dirtyVisibleSessions.add(termId))
+    if (this.dirtyVisibleSessions.size > 0) {
+      this.scheduleVisibleFlush()
+    }
   }
 
   /**
@@ -527,6 +566,19 @@ export class TerminalSessionManager {
     }
   }
 
+  getSessionDebugState(id: string): TerminalSessionDebugState | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    return {
+      terminalId: id,
+      status: session.status,
+      open: session.open,
+      visible: session.visible,
+      pendingDataChunks: session.pendingData.length,
+      pendingDataBytes: session.pendingDataBytes
+    }
+  }
+
   scrollToTop(id: string): boolean {
     const session = this.sessions.get(id)
     if (!session?.open) return false
@@ -791,17 +843,62 @@ export class TerminalSessionManager {
     if (session.pendingData.length === 0) return
 
     const pending = this.captureViewportIntent(session, 'output')
-    const merged = session.pendingData.length === 1
-      ? session.pendingData[0]
-      : session.pendingData.join('')
-    session.pendingData = []
-    session.pendingDataBytes = 0
+    const merged = this.consumePendingDataChunk(session, PENDING_DATA_MAX_BYTES)
+    if (!merged) return
 
     const t0 = performance.now()
     session.terminal.write(merged, () => {
       this.applyOutputBottomFastPath(session, pending)
     })
     perfMonitor.recordXtermWrite(performance.now() - t0)
+
+    if (session.pendingData.length > 0) {
+      this.flushPendingData(session)
+    }
+  }
+
+  private trimPendingData(session: TerminalSession, maxBytes: number): void {
+    while (session.pendingDataBytes > maxBytes && session.pendingData.length > 1) {
+      const dropped = session.pendingData.shift()!
+      session.pendingDataBytes -= dropped.length
+    }
+
+    if (session.pendingDataBytes <= maxBytes || session.pendingData.length === 0) return
+
+    const retained = session.pendingData[0].slice(-maxBytes)
+    session.pendingData[0] = retained
+    session.pendingDataBytes = retained.length
+  }
+
+  private consumePendingDataChunk(session: TerminalSession, maxBytes: number): string | null {
+    if (session.pendingData.length === 0) return null
+
+    const chunks: string[] = []
+    let chunkBytes = 0
+
+    while (session.pendingData.length > 0 && chunkBytes < maxBytes) {
+      const next = session.pendingData[0]
+      const remaining = maxBytes - chunkBytes
+
+      if (next.length <= remaining) {
+        chunks.push(next)
+        chunkBytes += next.length
+        session.pendingData.shift()
+        continue
+      }
+
+      if (remaining <= 0) break
+
+      chunks.push(next.slice(0, remaining))
+      session.pendingData[0] = next.slice(remaining)
+      chunkBytes += remaining
+      break
+    }
+
+    if (chunkBytes === 0) return null
+
+    session.pendingDataBytes = Math.max(0, session.pendingDataBytes - chunkBytes)
+    return chunks.length === 1 ? chunks[0] : chunks.join('')
   }
 
   private ensureWebglAddon(session: TerminalSession): void {

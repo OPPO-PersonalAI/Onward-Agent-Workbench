@@ -41,11 +41,7 @@ export ONWARD_AUTOTEST_SUITE=terminal-stress
 export ONWARD_AUTOTEST_CWD="$ROOT_DIR"
 export ONWARD_AUTOTEST_EXIT=1
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  open -W "$APP_BIN" --args 2>&1 | tee "$LOG_FILE" || true
-else
-  "$APP_BIN" > "$LOG_FILE" 2>&1 || true
-fi
+"$APP_BIN" > "$LOG_FILE" 2>&1 || true
 
 unset ONWARD_DEBUG ONWARD_AUTOTEST ONWARD_AUTOTEST_SUITE ONWARD_AUTOTEST_CWD ONWARD_AUTOTEST_EXIT
 

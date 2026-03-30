@@ -78,13 +78,12 @@ export async function testImageDiff(ctx: AutotestContext): Promise<TestResult[]>
   }
 
   if (!cancelled() && gitDiffOpened && foundIndex >= 0) {
-    const api = getGitDiffApi()
-    const selected = api?.selectFileByIndex(foundIndex) === true
+    const selected = getGitDiffApi()?.selectFileByIndex(foundIndex) === true
     record('ID-04-selected', selected)
     const previewLoaded = selected ? await waitForImagePreview('preview') : false
     record('ID-04-image-preview-loaded', previewLoaded)
     if (previewLoaded) {
-      const state = api?.getImagePreviewState?.()
+      const state = getGitDiffApi()?.getImagePreviewState?.()
       record('ID-04-is-image', state?.isImage === true, state || undefined)
       record('ID-04-has-modified-url', state?.hasModifiedUrl === true, state || undefined)
       record('ID-04-no-original-url', state?.hasOriginalUrl === false, state || undefined)

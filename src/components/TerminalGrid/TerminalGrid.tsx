@@ -768,7 +768,12 @@ export const TerminalGrid = memo(function TerminalGrid({
 
     const api: TerminalDebugApi = {
       getTerminalIds: () => [...terminalIdsRef.current],
+      getVisibleTerminalIds: () => visibleTerminals.map((terminal) => terminal.id),
       getActiveTerminalId: () => activeTerminalIdRef.current,
+      getSessionState: (terminalId) => {
+        const resolved = resolveTerminalId(terminalId)
+        return resolved ? terminalSessionManager.getSessionDebugState(resolved) : null
+      },
       getViewportState: (terminalId) => {
         const resolved = resolveTerminalId(terminalId)
         if (!resolved) return null
@@ -808,7 +813,7 @@ export const TerminalGrid = memo(function TerminalGrid({
         delete debugWindow.__onwardTerminalDebug
       }
     }
-  }, [activeTerminalId, terminals])
+  }, [activeTerminalId, displayLayoutMode, terminals, visibleTerminals])
 
   // Start editing the title (editing the custom name part)
   const handleStartEdit = useCallback((id: string, currentCustomName: string | null) => {
@@ -894,23 +899,11 @@ export const TerminalGrid = memo(function TerminalGrid({
       handleViewGitDiff(terminalId)
     }
 
-    const handleCloseGitDiffEvent = (event: Event) => {
-      if (hidden) return
-      const customEvent = event as CustomEvent<{ terminalId?: string }>
-      const terminalId = customEvent.detail?.terminalId
-      if (!terminalId) return
-      debugLog('gitdiff:event:close', { terminalId })
-      if (!terminals.some(term => term.id === terminalId)) return
-      handleCloseGitDiff()
-    }
-
     window.addEventListener('git-diff:open', handleOpenGitDiff as EventListener)
-    window.addEventListener('git-diff:close', handleCloseGitDiffEvent as EventListener)
     return () => {
       window.removeEventListener('git-diff:open', handleOpenGitDiff as EventListener)
-      window.removeEventListener('git-diff:close', handleCloseGitDiffEvent as EventListener)
     }
-  }, [handleCloseGitDiff, handleViewGitDiff, hidden, terminals])
+  }, [handleViewGitDiff, hidden, terminals, visibleTerminals])
 
   useEffect(() => {
     const handleOpenGitHistory = (event: Event) => {

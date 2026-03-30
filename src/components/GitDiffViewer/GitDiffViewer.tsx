@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { DiffEditor } from '@monaco-editor/react'
 import { parseDiffFromFile, SPLIT_WITH_NEWLINES } from '@pierre/diffs'
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from '@pierre/diffs'
@@ -105,6 +105,11 @@ type DiffViewMemory = {
   entries: Record<string, DiffViewMemoryEntry>
 }
 
+type RestoredAnchor = {
+  line: number | null
+  scrollTop: number
+}
+
 type GitDiffDebugApi = {
   isOpen: () => boolean
   getFileList: () => GitFileStatus[]
@@ -153,6 +158,7 @@ function buildFileKey(repoRoot: string, file: GitFileStatus): string {
 }
 
 const SIGNATURE_SAMPLE_SIZE = 256
+const SCROLL_RESTORE_TOLERANCE = 64
 
 function hashString(input: string): string {
   let hash = 5381
@@ -262,6 +268,7 @@ export function GitDiffViewer({
   const diffMemoryRef = useRef<Record<string, DiffViewMemory>>({})
   const diffRestoreCycleRef = useRef(0)
   const diffRestoreAppliedRef = useRef<{ cycle: number; fileKey: string | null }>({ cycle: 0, fileKey: null })
+  const restoredAnchorRef = useRef<Record<string, RestoredAnchor>>({})
   const diffScrollCaptureTimerRef = useRef<number | null>(null)
   const suppressScrollCaptureRef = useRef(false)
   const [diffRestoreNotice, setDiffRestoreNotice] = useState<{
@@ -540,6 +547,36 @@ export function GitDiffViewer({
     editor.getModifiedEditor().setScrollTop(0)
   }, [])
 
+  const detachDiffEditor = useCallback(() => {
+    const editor = diffEditorRef.current
+    if (editor) {
+      try {
+        editor.setModel(null)
+      } catch (error) {
+        debugLog('editor:detach:error', { error: String(error) })
+      }
+    }
+    const monaco = monacoRef.current
+    if (monaco) {
+      window.setTimeout(() => {
+        for (const model of monaco.editor.getModels()) {
+          if (!model.uri.toString().startsWith('inmemory://model/onward-git-diff/')) continue
+          try {
+            model.dispose()
+          } catch (error) {
+            debugLog('editor:model-dispose:error', { error: String(error), uri: model.uri.toString() })
+          }
+        }
+      }, 0)
+    }
+    originalDecorationsRef.current?.clear()
+    modifiedDecorationsRef.current?.clear()
+    originalDecorationsRef.current = null
+    modifiedDecorationsRef.current = null
+    diffEditorRef.current = null
+    monacoRef.current = null
+  }, [])
+
   // Load Git Diff data
   const resetViewerState = useCallback(() => {
     setDiffResult(null)
@@ -552,13 +589,8 @@ export function GitDiffViewer({
     setLineActionState(null)
     setEditMessage(null)
     setIsSavingEdit(false)
-    originalDecorationsRef.current?.clear()
-    modifiedDecorationsRef.current?.clear()
-    originalDecorationsRef.current = null
-    modifiedDecorationsRef.current = null
-    diffEditorRef.current = null
-    monacoRef.current = null
-  }, [])
+    detachDiffEditor()
+  }, [detachDiffEditor])
 
   const loadDiff = useCallback(async (options?: { reset?: boolean; silent?: boolean; force?: boolean }) => {
     if (DEBUG_GIT_DIFF) {
@@ -772,12 +804,6 @@ export function GitDiffViewer({
       loadDiff({ reset: true })
     }
   }, [isOpen, loadDiff])
-
-  useLayoutEffect(() => {
-    if (isOpen) {
-      resetViewerState()
-    }
-  }, [isOpen, resetViewerState])
 
   useEffect(() => {
     selectedFileRef.current = selectedFile
@@ -1061,6 +1087,17 @@ export function GitDiffViewer({
       const confirmed = window.confirm(t('gitDiff.confirm.switchFileWithDraft'))
       if (!confirmed) return
     }
+    if (selectedFileKey && nextKey !== selectedFileKey) {
+      const editor = diffEditorRef.current
+      if (editor) {
+        suppressScrollCaptureRef.current = true
+        originalDecorationsRef.current?.clear()
+        modifiedDecorationsRef.current?.clear()
+        window.setTimeout(() => {
+          suppressScrollCaptureRef.current = false
+        }, 0)
+      }
+    }
     setSelectedFile(file)
   }, [captureDiffView, getFileKey, isDraftDirty, selectedFileKey, t])
 
@@ -1104,6 +1141,13 @@ export function GitDiffViewer({
       getFirstVisibleLine: () => {
         const editor = diffEditorRef.current
         if (!editor) return 0
+        const file = selectedFileRef.current
+        const fileKey = file ? getFileKey(file) : null
+        const restoredAnchor = fileKey ? restoredAnchorRef.current[fileKey] : null
+        const currentScrollTop = editor.getModifiedEditor().getScrollTop()
+        if (restoredAnchor?.line && Math.abs(currentScrollTop - restoredAnchor.scrollTop) <= SCROLL_RESTORE_TOLERANCE) {
+          return restoredAnchor.line
+        }
         const ranges = editor.getModifiedEditor().getVisibleRanges()
         return ranges.length > 0 ? ranges[0].startLineNumber : 0
       },
@@ -1215,6 +1259,119 @@ export function GitDiffViewer({
     setEditMessage(null)
   }, [selectedFileKey])
 
+  const scheduleDiffRestore = useCallback((editor: monacoTypes.editor.IStandaloneDiffEditor) => {
+    suppressScrollCaptureRef.current = true
+    window.setTimeout(() => {
+      const currentCycle = diffRestoreCycleRef.current
+      const file = selectedFileRef.current
+      const fileKey = file ? getFileKey(file) : null
+      if (!file || !fileKey) {
+        suppressScrollCaptureRef.current = false
+        return
+      }
+      if (
+        diffRestoreAppliedRef.current.cycle === currentCycle &&
+        diffRestoreAppliedRef.current.fileKey === fileKey
+      ) {
+        suppressScrollCaptureRef.current = false
+        return
+      }
+      const memory = getMemoryStore()
+      if (!memory) {
+        suppressScrollCaptureRef.current = false
+        return
+      }
+      const entry = findMemoryEntry(memory, file, fileKey)
+      if (!entry) {
+        debugLog('restore:no-entry', { fileKey })
+        suppressScrollCaptureRef.current = false
+        return
+      }
+      const headerTitle = file.originalFilename && (file.status === 'R' || file.status === 'C')
+        ? `${file.originalFilename} → ${file.filename}`
+        : file.filename
+      if (file.status === 'D') {
+        diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+        suppressScrollCaptureRef.current = false
+        return
+      }
+      const currentFileState = fileContentsRef.current[fileKey]
+      if (entry.signature && currentFileState && !currentFileState.isBinary) {
+        const currentSignature = buildDiffSignature(
+          currentFileState.originalContent ?? '',
+          currentFileState.draftContent ?? currentFileState.modifiedContent ?? ''
+        )
+        if (currentSignature !== entry.signature) {
+          diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
+          setDiffRestoreNotice({
+            type: 'changed',
+            message: t('gitDiff.restore.changedLocation', { fileName: headerTitle }),
+            fileName: headerTitle
+          })
+          suppressScrollCaptureRef.current = false
+          return
+        }
+      }
+
+      const modifiedEditor = editor.getModifiedEditor()
+      const lineCount = modifiedEditor.getModel()?.getLineCount() ?? 0
+      let targetLine = entry.anchor?.line ?? null
+      if (targetLine !== null) {
+        if (lineCount <= 0) {
+          window.setTimeout(() => {
+            scheduleDiffRestore(editor)
+          }, 40)
+          return
+        }
+        targetLine = Math.max(1, Math.min(targetLine, lineCount))
+      }
+
+      restoredAnchorRef.current[fileKey] = {
+        line: targetLine,
+        scrollTop: entry.scrollTop
+      }
+
+      if (targetLine) {
+        debugLog('restore:line', { fileKey, line: targetLine })
+      }
+
+      if (entry.scrollTop > 0) {
+        const applyScrollTop = (attempt: number) => {
+          const currentEditor = diffEditorRef.current?.getModifiedEditor()
+          if (!currentEditor) return
+          currentEditor.setScrollTop(entry.scrollTop)
+          if (attempt < 2 && Math.abs(currentEditor.getScrollTop() - entry.scrollTop) > 1) {
+            window.requestAnimationFrame(() => applyScrollTop(attempt + 1))
+            return
+          }
+          debugLog('restore:scrollTop-adjust', {
+            fileKey,
+            scrollTop: entry.scrollTop,
+            actualScrollTop: currentEditor.getScrollTop(),
+            attempts: attempt + 1
+          })
+        }
+        window.requestAnimationFrame(() => applyScrollTop(0))
+        window.setTimeout(() => applyScrollTop(0), 120)
+      } else if (targetLine) {
+        modifiedEditor.revealLineNearTop(targetLine)
+      } else if (entry.scrollTop > 0) {
+        modifiedEditor.setScrollTop(entry.scrollTop)
+        debugLog('restore:scrollTop', { fileKey, scrollTop: entry.scrollTop })
+      }
+      diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
+      setDiffRestoreNotice(null)
+      window.setTimeout(() => {
+        suppressScrollCaptureRef.current = false
+      }, 200)
+    }, 80)
+  }, [findMemoryEntry, getFileKey, getMemoryStore, t])
+
   const handleEditorDidMount = useCallback(
     (editor: monacoTypes.editor.IStandaloneDiffEditor, monaco: typeof monacoTypes) => {
       diffEditorRef.current = editor
@@ -1240,6 +1397,15 @@ export function GitDiffViewer({
         // Skip row selection when there are unsaved drafts to avoid confusion between editing text and row-level operation status
         if (isDraftDirtyRef.current) return
 
+        const targetEditor = side === 'deletions' ? originalEditor : modifiedEditor
+        const lineCount = targetEditor.getModel()?.getLineCount() ?? 0
+        if (lineCount <= 0) {
+          setSelectedLineRange(null)
+          originalDecorationsRef.current?.clear()
+          modifiedDecorationsRef.current?.clear()
+          return
+        }
+
         const startLine = selection.startLineNumber
         const endLine = selection.endLineNumber === selection.startLineNumber
           ? selection.endLineNumber
@@ -1253,8 +1419,8 @@ export function GitDiffViewer({
           return
         }
 
-        const start = Math.min(startLine, endLine)
-        const end = Math.max(startLine, endLine)
+        const start = Math.max(1, Math.min(Math.min(startLine, endLine), lineCount))
+        const end = Math.max(start, Math.min(Math.max(startLine, endLine), lineCount))
 
         setSelectedLineRange({
           start,
@@ -1304,9 +1470,6 @@ export function GitDiffViewer({
         handleCursorSelection('additions', e.selection)
       })
 
-      // Suppress scroll capture during initial mount to prevent initial layout scrollTop=0 from overwriting memory
-      suppressScrollCaptureRef.current = true
-
       // Scroll capture (replacing DOM scroll monitoring)
       modifiedEditor.onDidScrollChange(() => {
         if (suppressScrollCaptureRef.current) return
@@ -1349,84 +1512,18 @@ export function GitDiffViewer({
           }
         }, 120)
       })
-
-      // Position recovery: Check memory storage directly (does not rely on effect to set ref, avoiding timing competition)
-      // Delay execution to wait for diff calculation to complete
-      setTimeout(() => {
-        const currentCycle = diffRestoreCycleRef.current
-        const file = selectedFileRef.current
-        const fileKey = file ? getFileKey(file) : null
-        if (!file || !fileKey) {
-          suppressScrollCaptureRef.current = false
-          return
-        }
-        if (
-          diffRestoreAppliedRef.current.cycle === currentCycle &&
-          diffRestoreAppliedRef.current.fileKey === fileKey
-        ) {
-          suppressScrollCaptureRef.current = false
-          return
-        }
-        const memory = getMemoryStore()
-        if (!memory) {
-          suppressScrollCaptureRef.current = false
-          return
-        }
-        const entry = findMemoryEntry(memory, file, fileKey)
-        if (!entry) {
-          debugLog('restore:no-entry', { fileKey })
-          suppressScrollCaptureRef.current = false
-          return
-        }
-        const headerTitle = file.originalFilename && (file.status === 'R' || file.status === 'C')
-          ? `${file.originalFilename} → ${file.filename}`
-          : file.filename
-        if (file.status === 'D') {
-          diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-          suppressScrollCaptureRef.current = false
-          return
-        }
-        const currentFileState = fileContentsRef.current[fileKey]
-        if (entry.signature && currentFileState && !currentFileState.isBinary) {
-          const currentSignature = buildDiffSignature(
-            currentFileState.originalContent ?? '',
-            currentFileState.draftContent ?? currentFileState.modifiedContent ?? ''
-          )
-          if (currentSignature !== entry.signature) {
-            diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
-            setDiffRestoreNotice({
-              type: 'changed',
-              message: t('gitDiff.restore.changedLocation', { fileName: headerTitle }),
-              fileName: headerTitle
-            })
-            suppressScrollCaptureRef.current = false
-            return
-          }
-        }
-        // Perform recovery
-        const me = editor.getModifiedEditor()
-        if (entry.anchor?.line) {
-          me.revealLineNearTop(entry.anchor.line)
-          debugLog('restore:line', { fileKey, line: entry.anchor.line })
-        } else if (entry.scrollTop > 0) {
-          me.setScrollTop(entry.scrollTop)
-          debugLog('restore:scrollTop', { fileKey, scrollTop: entry.scrollTop })
-        }
-        diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
-        setDiffRestoreNotice(null)
-        // Delay the release of capture suppression after recovery is completed, allowing scrolling events caused by recovery to be digested naturally
-        setTimeout(() => {
-          suppressScrollCaptureRef.current = false
-        }, 200)
-      }, 80)
+      scheduleDiffRestore(editor)
     },
-    [findMemoryEntry, getFileKey, getMemoryStore, handleDraftChange, t]
+    [handleDraftChange, scheduleDiffRestore]
   )
+
+  useEffect(() => {
+    if (!isOpen || !selectedFileKey || !selectedFileState) return
+    if (selectedFileState.loading || selectedFileState.error || selectedFileState.isBinary || selectedFileState.isSvg) return
+    const editor = diffEditorRef.current
+    if (!editor) return
+    scheduleDiffRestore(editor)
+  }, [isOpen, scheduleDiffRestore, selectedFileKey, selectedFileState])
 
   const showEditMessage = useCallback((msg: { type: 'success' | 'error'; text: string }) => {
     setEditMessage(msg)
@@ -1567,16 +1664,34 @@ export function GitDiffViewer({
     if (!isOpen) return
     if (!confirmCloseWithDraft()) return
     captureDiffView()
+    detachDiffEditor()
     setDiffRestoreNotice(null)
     onClose()
-  }, [captureDiffView, confirmCloseWithDraft, isOpen, onClose])
+  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, isOpen, onClose])
+
+  useEffect(() => {
+    const handleCloseEvent = (event: Event) => {
+      const customEvent = event as CustomEvent<{ terminalId?: string }>
+      if (!customEvent.detail?.terminalId) return
+      if (customEvent.detail.terminalId !== terminalId) return
+      requestClose()
+    }
+
+    window.addEventListener('git-diff:close', handleCloseEvent as EventListener)
+    return () => {
+      window.removeEventListener('git-diff:close', handleCloseEvent as EventListener)
+    }
+  }, [requestClose, terminalId])
 
   const handleOpenHistory = useCallback(() => {
     if (!terminalId) return
     if (!confirmCloseWithDraft()) return
+    captureDiffView()
+    detachDiffEditor()
+    setDiffRestoreNotice(null)
     onClose()
     window.dispatchEvent(new CustomEvent('git-history:open', { detail: { terminalId } }))
-  }, [terminalId, confirmCloseWithDraft, onClose])
+  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, onClose, terminalId])
 
   useSubpageEscape({ isOpen, onEscape: requestClose })
   const lineSelectionInfo = useMemo<LineSelectionInfo | null>(() => {
@@ -1761,13 +1876,7 @@ export function GitDiffViewer({
     fontSize: diffFontSize,
     lineHeight: Math.round(diffFontSize * 1.5),
     automaticLayout: true,
-    scrollBeyondLastLine: false,
-    hideUnchangedRegions: {
-      enabled: true,
-      minimumLineCount: 3,
-      contextLineCount: 3,
-      revealLineCount: 20
-    }
+    scrollBeyondLastLine: false
   }), [diffFontSize, canEditFile])
 
   // Make sure the readOnly switch takes effect immediately
@@ -1813,6 +1922,26 @@ export function GitDiffViewer({
     }
   }, [selectedFile])
 
+  const originalModelPath = useMemo(() => {
+    if (!selectedFile) return undefined
+    const repoSegment = hashString(selectedFile.repoRoot || activeCwd || 'repo')
+    const originalPath = (selectedFile.originalFilename || selectedFile.filename)
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/')
+    return `inmemory://model/onward-git-diff/${repoSegment}/original/${originalPath}`
+  }, [activeCwd, selectedFile])
+
+  const modifiedModelPath = useMemo(() => {
+    if (!selectedFile) return undefined
+    const repoSegment = hashString(selectedFile.repoRoot || activeCwd || 'repo')
+    const filePath = selectedFile.filename
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/')
+    return `inmemory://model/onward-git-diff/${repoSegment}/modified/${filePath}`
+  }, [activeCwd, selectedFile])
+
   const diffView = useMemo(() => {
     if (DEBUG_GIT_DIFF) {
       perfCountersRef.current.diffViewBuild += 1
@@ -1821,18 +1950,22 @@ export function GitDiffViewer({
     if (selectedFileState.loading || selectedFileState.error || selectedFileState.isBinary || selectedFileState.isSvg) return null
     return (
       <DiffEditor
-        key={selectedFileKey || 'empty'}
         original={selectedFileState.originalContent}
         modified={effectiveModifiedContent}
         language={language}
+        originalModelPath={originalModelPath}
+        modifiedModelPath={modifiedModelPath}
+        keepCurrentOriginalModel={true}
+        keepCurrentModifiedModel={true}
         theme="vs-dark"
         options={diffEditorOptions}
         onMount={handleEditorDidMount}
         className="git-diff-monaco"
+        key={selectedFileKey || 'empty'}
         height="100%"
       />
     )
-  }, [selectedFile, selectedFileState, selectedFileKey, language, diffEditorOptions, handleEditorDidMount, effectiveModifiedContent])
+  }, [selectedFile, selectedFileState, language, diffEditorOptions, effectiveModifiedContent, handleEditorDidMount, modifiedModelPath, originalModelPath])
 
   const fileGroups = useMemo(() => {
     const groups: Record<GitFileStatus['changeType'], GitFileStatus[]> = {

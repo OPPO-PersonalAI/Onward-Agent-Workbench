@@ -77,6 +77,20 @@ function getSessionManager(): any {
   return (window as any).__terminalSessionManager
 }
 
+function getTerminalDebugApi(): {
+  getVisibleTerminalIds?: () => string[]
+  getSessionState?: (terminalId?: string) => {
+    terminalId: string
+    status: string
+    open: boolean
+    visible: boolean
+    pendingDataChunks: number
+    pendingDataBytes: number
+  } | null
+} | null {
+  return (window as any).__onwardTerminalDebug ?? null
+}
+
 export async function testTerminalStress(ctx: AutotestContext): Promise<TestResult[]> {
   const { log, sleep, assert, cancelled } = ctx
   const results: TestResult[] = []
@@ -105,45 +119,68 @@ export async function testTerminalStress(ctx: AutotestContext): Promise<TestResu
   // ================================================================
   if (!cancelled()) {
     log('TP-06:begin')
-    const termIds: string[] = []
-    let createOk = true
+    const terminalDebugApi = getTerminalDebugApi()
+    let termIds = terminalDebugApi?.getVisibleTerminalIds?.() ?? []
+
+    if (termIds.length < 2) {
+      const layoutButton = document.querySelector<HTMLButtonElement>('button[title="Two terminals"]')
+      layoutButton?.click()
+      const hasTwoVisibleTerminals = await ctx.waitFor(
+        'TP-06-layout-two-terminals',
+        () => (getTerminalDebugApi()?.getVisibleTerminalIds?.().length ?? 0) >= 2,
+        6000,
+        100
+      )
+      log('TP-06:layout', {
+        clicked: Boolean(layoutButton),
+        hasTwoVisibleTerminals,
+        visibleTerminalIds: getTerminalDebugApi()?.getVisibleTerminalIds?.() ?? []
+      })
+      termIds = getTerminalDebugApi()?.getVisibleTerminalIds?.() ?? []
+    }
+
+    const hiddenIds = termIds.length > 1
+      ? termIds.slice(Math.max(1, Math.ceil(termIds.length / 2)))
+      : []
 
     try {
-      for (let i = 0; i < 6; i++) {
-        const id = `tp06-${i}-${Date.now()}`
-        const result = await window.electronAPI.terminal.create(id, { cols: 80, rows: 24 })
-        if (!result?.success) { createOk = false; break }
-        termIds.push(id)
-      }
-
-      if (createOk && sessionMgr) {
+      if (termIds.length >= 2 && hiddenIds.length > 0 && sessionMgr) {
         await sleep(2000)
 
-        // Phase A: all 6 visible, all outputting
+        // Phase A: all mounted visible terminals output continuously.
         const cmd = getHighOutputCmd(platform)
         for (const id of termIds) {
           await window.electronAPI.terminal.write(id, cmd)
         }
         await sleep(1500)
-        log('TP-06:phase-A collecting (all visible)')
+        log('TP-06:phase-A collecting', { visibleTerminalIds: termIds })
         const snapsA = perfMon ? await collectSnapshots(5) : []
 
-        // Phase B: hide 3 terminals via setVisibility
-        const hiddenIds = termIds.slice(3)
         for (const id of hiddenIds) {
           sessionMgr.setVisibility(id, false)
         }
-        // Wait for metrics to reflect the change
+        await sleep(300)
+
+        const hiddenPhaseCmd = getHighOutputCmd(platform)
+        for (const id of termIds) {
+          await window.electronAPI.terminal.write(id, hiddenPhaseCmd)
+        }
         await sleep(1500)
-        log('TP-06:phase-B collecting (3 hidden)')
+        log('TP-06:phase-B collecting', { hiddenTerminalIds: hiddenIds })
         const snapsB = perfMon ? await collectSnapshots(5) : []
 
-        // Restore visibility
+        const hiddenStates = hiddenIds
+          .map((id) => getTerminalDebugApi()?.getSessionState?.(id))
+          .filter((state): state is NonNullable<typeof state> => Boolean(state))
+        const visibleStates = termIds
+          .filter((id) => !hiddenIds.includes(id))
+          .map((id) => getTerminalDebugApi()?.getSessionState?.(id))
+          .filter((state): state is NonNullable<typeof state> => Boolean(state))
+
         for (const id of hiddenIds) {
           sessionMgr.setVisibility(id, true)
         }
 
-        // Stop output
         for (const id of termIds) {
           await window.electronAPI.terminal.write(id, '\x03')
         }
@@ -156,8 +193,23 @@ export async function testTerminalStress(ctx: AutotestContext): Promise<TestResu
           ? +((1 - statsB.totalWrites / statsA.totalWrites) * 100).toFixed(1)
           : 0
         const hiddenBuffered = statsB.totalHidden
+        const baselineWrites = statsA.totalWrites
+        const hiddenSessionsBuffered = hiddenStates.length > 0 && hiddenStates.every((state) =>
+          state.visible === false &&
+          state.pendingDataBytes > 0 &&
+          state.pendingDataChunks > 0
+        )
+        const visibleSessionsStayedVisible = visibleStates.length > 0 && visibleStates.every((state) =>
+          state.visible === true &&
+          state.open
+        )
+        const testValid = hiddenSessionsBuffered && visibleSessionsStayedVisible && (!perfMon || baselineWrites > 0)
 
-        _assert('TP-06-hidden-optimization-ab', hiddenBuffered > 0 || !perfMon, {
+        _assert('TP-06-hidden-optimization-ab', testValid, {
+          mountedVisibleTerminals: termIds,
+          hiddenTerminalIds: hiddenIds,
+          hiddenSessionStates: hiddenStates,
+          visibleSessionStates: visibleStates,
           phaseA_allVisible: {
             snapshots: snapsA.length,
             avgFps: statsA.avgFps,
@@ -180,13 +232,13 @@ export async function testTerminalStress(ctx: AutotestContext): Promise<TestResu
         })
       } else {
         _assert('TP-06-hidden-optimization-ab', false, {
-          reason: !createOk ? 'terminal creation failed' : 'sessionMgr not available'
+          reason: sessionMgr ? 'need at least 2 mounted visible terminals' : 'sessionMgr not available',
+          mountedVisibleTerminals: termIds
         })
       }
     } finally {
-      for (const id of termIds) {
+      for (const id of hiddenIds) {
         if (sessionMgr) sessionMgr.setVisibility(id, true)
-        await window.electronAPI.terminal.dispose(id).catch(() => {})
       }
     }
     await sleep(500)
