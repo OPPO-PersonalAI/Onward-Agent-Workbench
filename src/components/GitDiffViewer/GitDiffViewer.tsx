@@ -1891,8 +1891,6 @@ export function GitDiffViewer({
     }
   }, [activeCwd])
 
-  if (!isOpen) return null
-
   // Render Git not installed prompt
   const renderGitNotInstalled = () => (
     <div className="git-diff-not-installed">
@@ -2641,6 +2639,8 @@ export function GitDiffViewer({
   const overlayClassName = `git-diff-overlay ${isPanel ? 'panel' : ''}`
   const modalClassName = `git-diff-modal ${isPanel ? 'panel' : ''}`
   const modalStyle = isPanel ? { width: '100%', height: '100%' } : { width: modalSize.width, height: modalSize.height }
+
+  if (!isOpen) return null
 
   return (
     <div className={overlayClassName} onClick={isPanel ? undefined : requestClose}>
