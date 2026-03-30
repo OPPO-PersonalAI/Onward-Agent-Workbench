@@ -13,9 +13,6 @@ import { terminalSessionManager } from '../terminal/terminal-session-manager'
 /** Maximum polling interval (60 seconds) */
 const MAX_POLL_INTERVAL = 60 * 1000
 
-/** Delay from sending content to carriage return (consistent with handleSendAndExecuteOnTerminals in App.tsx) */
-const ENTER_DELAY_MS = 50
-
 /** Maximum number of execution logs */
 const MAX_LOG_ENTRIES = 50
 
@@ -140,10 +137,13 @@ export function useScheduleEngine({
           continue
         }
         // Fallback: direct PTY write
-        const ok = await window.electronAPI.terminal.write(terminalId, prompt.content)
-        if (ok) {
-          await new Promise(resolve => setTimeout(resolve, ENTER_DELAY_MS))
-          await window.electronAPI.terminal.write(terminalId, '\r')
+        const result = await window.electronAPI.terminal.writeSplit(terminalId, prompt.content, '\r')
+        if (!result.ok) {
+          console.warn('[Schedule] writeSplit failed:', {
+            terminalId,
+            phase: result.phase,
+            error: result.error
+          })
         }
       }
 

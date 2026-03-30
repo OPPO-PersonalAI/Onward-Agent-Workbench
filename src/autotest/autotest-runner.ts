@@ -32,6 +32,8 @@ import { testImageDiff } from './test-image-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 import { testGlobalSearch } from './test-global-search'
 import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
+import { testFileWatch } from './test-file-watch'
+import { testPreviewPositionRestore } from './test-preview-position-restore'
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
@@ -128,6 +130,20 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.875:begin')
       const results = await testGlobalSearch(ctx)
       collectSuiteResults('GlobalSearch', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('file-watch')) {
+      log('phase0.88:begin')
+      const results = await testFileWatch(ctx)
+      collectSuiteResults('FileWatch', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('preview-position-restore')) {
+      log('phase0.89:begin')
+      const results = await testPreviewPositionRestore(ctx)
+      collectSuiteResults('PreviewPositionRestore', results)
       await sleep(500)
     }
 

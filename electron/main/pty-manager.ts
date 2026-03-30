@@ -157,12 +157,17 @@ export class PtyManager {
 
   write(id: string, data: string): boolean | Promise<boolean> {
     const record = this.instances.get(id)
-    if (!record || record.disposed) return false
+    if (!record || record.disposed || record.exited) return false
 
     if (data.length <= SMALL_WRITE_THRESHOLD) {
-      // Short input (keystrokes, short commands): pass through directly
-      record.pty.write(data)
-      return true
+      try {
+        // Short input (keystrokes, short commands): pass through directly
+        record.pty.write(data)
+        return true
+      } catch (error) {
+        console.warn('[PTY] write failed:', { id, error: String(error) })
+        return false
+      }
     }
 
     // Large data: enqueue chunked write and return Promise.
@@ -173,6 +178,66 @@ export class PtyManager {
       this.writeChunked(record, data)
     )
     return record.writeQueue.then(() => true)
+  }
+
+  async writeSplit(
+    id: string,
+    content: string,
+    suffix: string,
+    delayMs: number = 150
+  ): Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }> {
+    const record = this.instances.get(id)
+    if (!record || record.disposed || record.exited) {
+      return { ok: false, phase: 'content', error: record?.exited ? 'pty exited' : 'pty not found' }
+    }
+
+    let failedPhase: 'content' | 'suffix' = 'content'
+    let failedError: unknown = null
+
+    const task = record.writeQueue.then(async () => {
+      if (record.disposed || record.exited) {
+        failedPhase = 'content'
+        throw new Error(record.exited ? 'pty exited' : 'pty disposed')
+      }
+
+      try {
+        if (content.length <= SMALL_WRITE_THRESHOLD) {
+          record.pty.write(content)
+        } else {
+          await this.writeChunked(record, content)
+        }
+      } catch (error) {
+        failedPhase = 'content'
+        failedError = error
+        throw error
+      }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+
+      if (record.disposed || record.exited) {
+        failedPhase = 'suffix'
+        throw new Error(record.exited ? 'pty exited during split delay' : 'pty disposed during split delay')
+      }
+
+      try {
+        record.pty.write(suffix)
+      } catch (error) {
+        failedPhase = 'suffix'
+        failedError = error
+        throw error
+      }
+    })
+
+    record.writeQueue = task.catch(() => {})
+
+    try {
+      await task
+      return { ok: true }
+    } catch (error) {
+      const message = String(failedError ?? error)
+      console.warn('[PTY] writeSplit failed:', { id, phase: failedPhase, error: message })
+      return { ok: false, phase: failedPhase, error: message }
+    }
   }
 
   private async writeChunked(record: PtyRecord, data: string): Promise<void> {

@@ -127,6 +127,7 @@ export interface ProjectEditorDebugApi {
   isOpen: () => boolean
   getRootPath: () => string | null
   getActiveFilePath: () => string | null
+  getEditorContent: () => string
   getEditorLineCount: () => number
   openFileByPath: (filePath: string) => Promise<void>
   triggerEditorSaveCommand: () => boolean
@@ -146,6 +147,13 @@ export interface ProjectEditorDebugApi {
   getOutlineActiveItemName?: () => string | null
   getPreviewActiveSlug?: () => string | null
   scrollPreviewToFraction?: (fraction: number) => boolean
+  getPreviewScrollTop?: () => number
+  getPreviewScrollHeight?: () => number
+  isPreviewTransitioning?: () => boolean
+  isPreviewContentVisible?: () => boolean
+  getPreviewRestorePhase?: () => 'idle' | 'waiting-html' | 'restoring-layout' | 'revealing'
+  debugScanPreviewHeadings?: () => { nearest: string | null }
+  runPreviewPositionTest?: (mdFilePath: string, otherFilePath: string) => Promise<boolean>
   getCursorPosition: () => { lineNumber: number; column: number } | null
   setCursorPosition: (lineNumber: number, column?: number) => boolean
   getScrollTop: () => number

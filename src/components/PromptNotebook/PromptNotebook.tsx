@@ -626,6 +626,8 @@ export const PromptNotebook = memo(function PromptNotebook({
       setEditingPrompt(null)
     }
 
+    setSelectedId(null)
+
     return result
   }, [editingPrompt, hasEditorContent, onEditorDraftChange, onTouchPromptLastUsed, onUpdatePrompt, saveEditorContentAsNewPrompt, selectedPrompt])
 

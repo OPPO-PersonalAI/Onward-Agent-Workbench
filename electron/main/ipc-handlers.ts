@@ -4,7 +4,7 @@
  */
 
 import { app, ipcMain, BrowserWindow, dialog, shell } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
 import { GitWatchManager } from './git-watch-manager'
@@ -34,6 +34,7 @@ import {
 import {
   listDirectory,
   readProjectFile,
+  resolveInRoot,
   saveProjectFile,
   createProjectFile,
   createProjectFolder,
@@ -53,9 +54,11 @@ import { gitRuntimeManager } from './git-runtime-manager'
 import { openExternalUrlWithConfirm } from './external-link-guard'
 import { RipgrepSearchManager } from './ripgrep-search'
 import { browserViewManager } from './browser-view-manager'
+import { FileWatchManager } from './file-watch-manager'
 
 let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
+let fileWatchManager: FileWatchManager | null = null
 
 /**
  * Batches PTY output data into periodic flushes to reduce IPC message rate.
@@ -256,6 +259,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     if (mainWindow.isDestroyed()) return
     mainWindow.webContents.send('git:terminal-info', terminalId, info)
   })
+  fileWatchManager = new FileWatchManager(mainWindow)
 
   ipcMain.on('debug:log', (_event, payload: { message?: string; data?: unknown }) => {
     log('[RendererDebug]', payload?.message ?? '', payload?.data ?? '')
@@ -383,10 +387,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
 
   // Write data to terminal
-  ipcMain.handle('terminal:write', (_, id: string, data: string) => {
+  ipcMain.handle('terminal:write', async (_, id: string, data: string) => {
     // Git activity notification moved to ptyProcess.onData with 500ms throttle
     // (user keystrokes don't change git state; PTY output means command execution)
-    return ptyManager.write(id, data)
+    return await ptyManager.write(id, data)
+  })
+
+  ipcMain.handle('terminal:write-split', async (_, id: string, content: string, suffix: string, delayMs?: number) => {
+    return await ptyManager.writeSplit(id, content, suffix, delayMs)
   })
 
   // Resize terminal
@@ -709,7 +717,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
 
   ipcMain.handle('project:save-file', async (_, root: string, path: string, content: string) => {
-    return await saveProjectFile(root, path, content)
+    const result = await saveProjectFile(root, path, content)
+    if (result.success && fileWatchManager) {
+      const fullPath = resolveInRoot(resolve(root), path)
+      if (fullPath) {
+        fileWatchManager.suppressNext(fullPath)
+      }
+    }
+    return result
+  })
+
+  ipcMain.handle('project:watch-file', async (_, root: string, path: string) => {
+    const fullPath = resolveInRoot(resolve(root), path)
+    if (!fullPath) {
+      return { success: false, error: 'Invalid path.' }
+    }
+    fileWatchManager?.watch(fullPath)
+    return { success: true }
+  })
+
+  ipcMain.handle('project:unwatch-file', async (_, root: string, path: string) => {
+    const fullPath = resolveInRoot(resolve(root), path)
+    if (!fullPath) {
+      return { success: false }
+    }
+    fileWatchManager?.unwatch(fullPath)
+    return { success: true }
   })
 
   ipcMain.handle('project:create-file', async (_, root: string, path: string, content: string) => {
@@ -949,10 +982,13 @@ export function cleanupIpcHandlers(): void {
   gitWatchManager = null
   ripgrepSearchManager?.dispose()
   ripgrepSearchManager = null
+  fileWatchManager?.dispose()
+  fileWatchManager = null
   ipcMain.removeHandler('app:get-info')
   ipcMain.removeHandler('app:read-notice')
   ipcMain.removeHandler('terminal:create')
   ipcMain.removeHandler('terminal:write')
+  ipcMain.removeHandler('terminal:write-split')
   ipcMain.removeHandler('terminal:resize')
   ipcMain.removeHandler('terminal:dispose')
   ipcMain.removeHandler('prompt:load')
@@ -1011,6 +1047,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('project:delete-path')
   ipcMain.removeHandler('project:search-start')
   ipcMain.removeHandler('project:search-cancel')
+  ipcMain.removeHandler('project:watch-file')
+  ipcMain.removeHandler('project:unwatch-file')
   ipcMain.removeHandler('settings:load')
   ipcMain.removeHandler('settings:save')
   ipcMain.removeHandler('settings:update')

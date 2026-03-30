@@ -34,7 +34,6 @@ import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/fo
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
 import './App.css'
 
-const SCHEDULE_RETRY_ENTER_DELAY_MS = 50
 const MAX_SCHEDULE_LOG_ENTRIES = 50
 const DEBUG_TERMINAL_FOCUS = Boolean(window.electronAPI?.debug?.enabled)
 
@@ -473,10 +472,13 @@ function AppContent({
     )
 
     for (const terminalId of availableTerminalIds) {
-      const ok = await window.electronAPI.terminal.write(terminalId, prompt.content)
-      if (ok) {
-        await new Promise(resolve => setTimeout(resolve, SCHEDULE_RETRY_ENTER_DELAY_MS))
-        await window.electronAPI.terminal.write(terminalId, '\r')
+      const result = await window.electronAPI.terminal.writeSplit(terminalId, prompt.content, '\r')
+      if (!result.ok) {
+        console.warn('[Schedule] retry writeSplit failed:', {
+          terminalId,
+          phase: result.phase,
+          error: result.error
+        })
       }
     }
 
@@ -639,14 +641,16 @@ function AppContent({
 
       // Tier 2: direct PTY write (no session)
       try {
-        const ok = await window.electronAPI.terminal.write(id, content)
-        if (!ok) { failedIds.push(id); continue }
-        await new Promise(resolve => setTimeout(resolve, 50))
-        const execOk = await window.electronAPI.terminal.write(id, '\r')
-        if (execOk) {
+        const result = await window.electronAPI.terminal.writeSplit(id, content, '\r')
+        if (result.ok) {
           successIds.push(id)
         } else {
           failedIds.push(id)
+          console.warn('[PromptSender] send-and-execute writeSplit failed:', {
+            terminalId: id,
+            phase: result.phase,
+            error: result.error
+          })
         }
       } catch (error) {
         failedIds.push(id)

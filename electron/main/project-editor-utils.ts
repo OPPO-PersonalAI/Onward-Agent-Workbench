@@ -95,7 +95,7 @@ function isSubPath(root: string, target: string): boolean {
   return targetNormalized.startsWith(rootNormalized + sep)
 }
 
-function resolveInRoot(root: string, relativePath: string): string | null {
+export function resolveInRoot(root: string, relativePath: string): string | null {
   const safeRelative = relativePath
     ? relativePath.split('/').join(sep)
     : ''

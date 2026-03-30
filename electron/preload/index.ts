@@ -51,6 +51,12 @@ export interface PromptBridgeSendResult {
 export interface TerminalAPI {
   create: (id: string, options?: TerminalOptions) => Promise<{ success: boolean; id?: string; error?: string }>
   write: (id: string, data: string) => Promise<boolean>
+  writeSplit: (
+    id: string,
+    content: string,
+    suffix: string,
+    delayMs?: number
+  ) => Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }>
   resize: (id: string, cols: number, rows: number) => Promise<boolean>
   dispose: (id: string) => Promise<boolean>
   onData: (callback: (id: string, data: string) => void) => () => void
@@ -513,6 +519,9 @@ export interface ProjectAPI {
   searchCancel: () => Promise<{ success: boolean }>
   onSearchResult: (callback: (searchId: string, matches: ProjectSearchMatch[]) => void) => () => void
   onSearchDone: (callback: (stats: ProjectSearchStats) => void) => () => void
+  watchFile: (root: string, path: string) => Promise<{ success: boolean; error?: string }>
+  unwatchFile: (root: string, path: string) => Promise<{ success: boolean }>
+  onFileChanged: (callback: (fullPath: string, changeType: 'changed' | 'deleted', content?: string) => void) => () => void
 }
 
 // Shortcut configuration
@@ -694,6 +703,10 @@ const terminalAPI: TerminalAPI = {
 
   write: (id: string, data: string) => {
     return ipcRenderer.invoke('terminal:write', id, data)
+  },
+
+  writeSplit: (id: string, content: string, suffix: string, delayMs?: number) => {
+    return ipcRenderer.invoke('terminal:write-split', id, content, suffix, delayMs)
   },
 
   resize: (id: string, cols: number, rows: number) => {
@@ -992,6 +1005,29 @@ const projectAPI: ProjectAPI = {
     ipcRenderer.on('project:search-done', listener)
     return () => {
       ipcRenderer.removeListener('project:search-done', listener)
+    }
+  },
+
+  watchFile: (root: string, path: string) => {
+    return ipcRenderer.invoke('project:watch-file', root, path)
+  },
+
+  unwatchFile: (root: string, path: string) => {
+    return ipcRenderer.invoke('project:unwatch-file', root, path)
+  },
+
+  onFileChanged: (callback: (fullPath: string, changeType: 'changed' | 'deleted', content?: string) => void) => {
+    const listener = (
+      _: Electron.IpcRendererEvent,
+      fullPath: string,
+      changeType: 'changed' | 'deleted',
+      content?: string
+    ) => {
+      callback(fullPath, changeType, content)
+    }
+    ipcRenderer.on('project:file-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('project:file-changed', listener)
     }
   }
 }

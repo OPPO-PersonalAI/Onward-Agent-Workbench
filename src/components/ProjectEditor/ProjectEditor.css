@@ -1102,10 +1102,72 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   color: var(--text-1);
   font-size: var(--project-editor-font-size, 14px);
   line-height: 1.65;
+  position: relative;
 }
 
 .project-editor-preview-content {
   min-height: 100%;
+  opacity: 1;
+  transition: opacity 0.15s ease-out;
+}
+
+.project-editor-preview-body.preview-phase-waiting-html .project-editor-preview-content,
+.project-editor-preview-body.preview-phase-restoring-layout .project-editor-preview-content {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+.project-editor-preview-transition-indicator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.project-editor-preview-body.preview-phase-waiting-html .project-editor-preview-transition-indicator,
+.project-editor-preview-body.preview-phase-restoring-layout .project-editor-preview-transition-indicator {
+  opacity: 1;
+}
+
+.project-editor-preview-body.preview-phase-revealing .project-editor-preview-transition-indicator {
+  opacity: 0;
+}
+
+.preview-loading-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.preview-loading-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: preview-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.preview-loading-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.preview-loading-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes preview-dot-bounce {
+  0%, 80%, 100% {
+    opacity: 0.2;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 0.8;
+    transform: translateY(-8px);
+  }
 }
 
 .project-editor-preview-placeholder {
