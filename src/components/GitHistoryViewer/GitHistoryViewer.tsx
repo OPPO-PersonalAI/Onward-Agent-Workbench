@@ -10,7 +10,8 @@ import type {
   GitHistoryResult,
   GitCommitInfo,
   GitHistoryFile,
-  GitHistoryDiffResult
+  GitHistoryDiffResult,
+  GitRepoContext
 } from '../../types/electron'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
@@ -209,14 +210,21 @@ export function GitHistoryViewer({
   })
   const persistTimerRef = useRef<number | null>(null)
   const [selectedRepoRoot, setSelectedRepoRoot] = useState<string | null>(null)
+  const selectedRepoRootRef = useRef<string | null>(selectedRepoRoot)
+  const skipRepoReloadRef = useRef(true)
   const [repoSearch, setRepoSearch] = useState('')
   const [cachedRepos, setCachedRepos] = useState<GitHistoryResult['repos']>(undefined)
   const [cachedParentCwd, setCachedParentCwd] = useState<string | null>(null)
+  const cachedParentCwdRef = useRef<string | null>(cachedParentCwd)
   const activeCwd = selectedRepoRoot || historyResult?.cwd || cachedParentCwd || cwd
   const activeCwdRef = useRef(activeCwd)
+  const cwdRef = useRef(cwd)
   useEffect(() => {
     activeCwdRef.current = activeCwd
   }, [activeCwd])
+  useEffect(() => {
+    cwdRef.current = cwd
+  }, [cwd])
   const terminalId = _terminalId
   const historyStateKey = activeCwd ? `${STORAGE_KEY_STATE_PREFIX}:${activeCwd}` : null
   const historyStateKeyRef = useRef(historyStateKey)
@@ -224,6 +232,12 @@ export function GitHistoryViewer({
     historyStateKeyRef.current = historyStateKey
   }, [historyStateKey])
   const isSwitchingRepoRef = useRef(false)
+  useEffect(() => {
+    selectedRepoRootRef.current = selectedRepoRoot
+  }, [selectedRepoRoot])
+  useEffect(() => {
+    cachedParentCwdRef.current = cachedParentCwd
+  }, [cachedParentCwd])
 
   const commitIndexMap = useMemo(() => {
     const map = new Map<string, number>()
@@ -322,10 +336,19 @@ export function GitHistoryViewer({
     ++patchTokenRef.current
     didRestoreRef.current = false
     pendingScrollRef.current = null
+    selectedRepoRootRef.current = null
+    cachedParentCwdRef.current = null
+    setSelectedRepoRoot(null)
+    setCachedRepos(undefined)
+    setCachedParentCwd(null)
+    setRepoSearch('')
+    skipRepoReloadRef.current = true
   }, [])
 
   const loadHistory = useCallback(async (reset = false) => {
-    const targetCwd = selectedRepoRoot || cachedParentCwd || cwd
+    const targetRepoRoot = selectedRepoRootRef.current
+    const targetParentCwd = cachedParentCwdRef.current
+    const targetCwd = targetRepoRoot || targetParentCwd || cwdRef.current
     if (!targetCwd) return
     if (loadingRef.current) return
     loadingRef.current = true
@@ -340,7 +363,8 @@ export function GitHistoryViewer({
       })
       if (token !== loadTokenRef.current) return
       setHistoryResult(result)
-      if (result.repos && result.repos.length > 1) {
+      if (!targetRepoRoot && result.repos && result.repos.length > 1) {
+        cachedParentCwdRef.current = result.cwd
         setCachedRepos(result.repos)
         setCachedParentCwd(result.cwd)
       }
@@ -373,7 +397,7 @@ export function GitHistoryViewer({
       }
       loadingRef.current = false
     }
-  }, [cachedParentCwd, cwd, selectedRepoRoot])
+  }, [])
 
   const loadFilesForRange = useCallback(async (base: string, head: string) => {
     const cwdToUse = activeCwdRef.current
@@ -448,6 +472,7 @@ export function GitHistoryViewer({
     fileCacheRef.current.clear()
     patchCacheRef.current.clear()
     didRestoreRef.current = false
+    selectedRepoRootRef.current = repoRoot
     setSelectedRepoRoot(repoRoot)
   }, [])
 
@@ -480,22 +505,23 @@ export function GitHistoryViewer({
   }, [])
 
   useEffect(() => {
-    if (isOpen) {
-      resetState()
-      void loadHistory(true)
-    } else {
+    if (!isOpen) {
       persistStateRef.current()
       resetState()
-      setSelectedRepoRoot(null)
-      setRepoSearch('')
+      return
     }
-  }, [isOpen, loadHistory, resetState])
+    resetState()
+    void loadHistory(true)
+  }, [cwd, isOpen, loadHistory, resetState, terminalId])
 
   useEffect(() => {
     if (!isOpen) return
-    if (!isSwitchingRepoRef.current) return
+    if (skipRepoReloadRef.current) {
+      skipRepoReloadRef.current = false
+      return
+    }
     void loadHistory(true)
-  }, [cachedParentCwd, isOpen, loadHistory, selectedRepoRoot])
+  }, [isOpen, loadHistory, selectedRepoRoot])
 
   useEffect(() => {
     return () => {
@@ -659,6 +685,22 @@ export function GitHistoryViewer({
   // Debug API (only exposed in automated testing mode)
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
+    const mapInjectedRepos = (repos?: Array<{
+      root: string
+      label: string
+      isSubmodule?: boolean
+      depth?: number
+      changeCount?: number
+    }>): GitRepoContext[] | undefined => {
+      if (!repos) return undefined
+      return repos.map(repo => ({
+        root: repo.root,
+        label: repo.label,
+        isSubmodule: repo.isSubmodule ?? true,
+        depth: repo.depth ?? 1,
+        changeCount: repo.changeCount ?? 0
+      }))
+    }
     const api = {
       isOpen: () => isOpen,
       getCommitCount: () => commits.length,
@@ -666,6 +708,34 @@ export function GitHistoryViewer({
       getFiles: () => files.map(f => ({ filename: f.filename, status: f.status })),
       getSelectedFile: () => selectedFile ? { filename: selectedFile.filename } : null,
       isLoading: () => loading || filesLoading || diffLoading,
+      getActiveCwd: () => activeCwdRef.current ?? null,
+      getRepoState: () => ({
+        selectedRepoRoot,
+        cachedParentCwd,
+        repoSearch,
+        cachedRepoCount: cachedRepos?.length ?? 0
+      }),
+      injectRepoState: (state: {
+        selectedRepoRoot: string | null
+        cachedParentCwd: string | null
+        repoSearch?: string
+        cachedRepos?: Array<{
+          root: string
+          label: string
+          isSubmodule?: boolean
+          depth?: number
+          changeCount?: number
+        }>
+      }) => {
+        skipRepoReloadRef.current = true
+        selectedRepoRootRef.current = state.selectedRepoRoot
+        cachedParentCwdRef.current = state.cachedParentCwd
+        setSelectedRepoRoot(state.selectedRepoRoot)
+        setCachedParentCwd(state.cachedParentCwd)
+        setRepoSearch(state.repoSearch ?? '')
+        setCachedRepos(mapInjectedRepos(state.cachedRepos))
+        return true
+      },
       selectCommitByIndex: (index: number) => {
         if (index < 0 || index >= commits.length) return false
         const commit = commits[index]
@@ -695,7 +765,7 @@ export function GitHistoryViewer({
         delete (window as any).__onwardGitHistoryDebug
       }
     }
-  }, [isOpen, commits, selectedShas, files, selectedFile, loading, filesLoading, diffLoading, diffStyle, hideWhitespace])
+  }, [isOpen, commits, selectedShas, files, selectedFile, loading, filesLoading, diffLoading, diffStyle, hideWhitespace, selectedRepoRoot, cachedParentCwd, repoSearch, cachedRepos])
 
   useSubpageEscape({ isOpen, onEscape: onClose })
 

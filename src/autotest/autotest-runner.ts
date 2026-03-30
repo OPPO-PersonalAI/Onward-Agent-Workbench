@@ -31,6 +31,7 @@ import { testTerminalStress } from './test-terminal-stress'
 import { testImageDiff } from './test-image-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 import { testGlobalSearch } from './test-global-search'
+import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
@@ -165,6 +166,16 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testGitHistory(ctx)
       collectSuiteResults('GitHistory', results)
       await ctx.reopenProjectEditor('phase3-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('git-history-multi-terminal-scope')) {
+      log('phase3.5:begin')
+      await ctx.reopenProjectEditor('phase3.5-setup')
+      await sleep(300)
+      const results = await testGitHistoryMultiTerminalScope(ctx)
+      collectSuiteResults('GitHistoryMultiTerminalScope', results)
+      await ctx.reopenProjectEditor('phase3.5-cleanup')
       await sleep(500)
     }
 

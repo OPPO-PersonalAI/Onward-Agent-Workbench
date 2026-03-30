@@ -56,6 +56,7 @@ src/autotest/
 ├── test-prompt-sender.ts
 ├── test-per-agent-font.ts
 ├── test-git-history.ts
+├── test-git-history-multi-terminal-scope.ts
 ├── test-git-cross-platform.ts
 ├── test-terminal-autofollow.ts
 ├── test-prompt-cleanup.ts
@@ -73,7 +74,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 |-----|-----------|---------|
 | `window.__onwardGitDiffDebug` | `GitDiffViewer.tsx` | Diff state, scroll state, font size |
 | `window.__onwardPromptSenderDebug` | `PromptSender.tsx` | Terminal cards, selection state, action buttons |
-| `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style |
+| `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style, repo-scope state |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
 | `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
 | `window.__onwardTerminalDebug` | `TerminalGrid.tsx` | Terminal viewport state, tail text, fit / remount helpers |
@@ -157,6 +158,12 @@ Source set: Git History validation suite
 - `GH-08`: Git History can be entered from Git Diff
 - `GH-09`: repeated open / close cycles do not leak state
 - `GH-10`: rapid commit switching leaves the final selection consistent
+
+### Phase 3.5: Git History Multi-Terminal Scope
+
+Source set: Git History terminal-switch isolation regression suite
+
+- `GHMS-01` to `GHMS-11`: dual-terminal layout setup, stale repo-state injection, terminal switch reload, and stale state cleanup
 
 ### Phase 4: Prompt Cleanup
 

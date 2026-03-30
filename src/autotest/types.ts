@@ -58,6 +58,25 @@ export interface GitHistoryDebugApi {
   getFiles: () => Array<{ filename: string; status: string }>
   getSelectedFile: () => { filename: string } | null
   isLoading: () => boolean
+  getActiveCwd: () => string | null
+  getRepoState: () => {
+    selectedRepoRoot: string | null
+    cachedParentCwd: string | null
+    repoSearch: string
+    cachedRepoCount: number
+  }
+  injectRepoState: (state: {
+    selectedRepoRoot: string | null
+    cachedParentCwd: string | null
+    repoSearch?: string
+    cachedRepos?: Array<{
+      root: string
+      label: string
+      isSubmodule?: boolean
+      depth?: number
+      changeCount?: number
+    }>
+  }) => boolean
   selectCommitByIndex: (index: number) => boolean
   selectFileByIndex: (index: number) => boolean
   getDiffStyle: () => 'split' | 'unified'
