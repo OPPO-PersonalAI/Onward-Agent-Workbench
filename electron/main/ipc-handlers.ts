@@ -278,6 +278,24 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   ipcMain.handle('debug:get-app-metrics', () => {
     return app.getAppMetrics()
   })
+  ipcMain.handle('debug:focus-window', () => {
+    if (mainWindow.isDestroyed()) return false
+
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+
+    mainWindow.show()
+    mainWindow.focus()
+    mainWindow.moveTop()
+
+    if (process.platform === 'darwin') {
+      app.dock?.show()
+      app.focus({ steal: true })
+    }
+
+    return mainWindow.isFocused()
+  })
   ipcMain.handle('debug:get-git-runtime-metrics', () => {
     return gitRuntimeManager.getMetrics()
   })
@@ -876,6 +894,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('settings:check-shortcut-available')
   ipcMain.removeHandler('settings:check-shortcut-conflict')
   ipcMain.removeHandler('debug:get-app-metrics')
+  ipcMain.removeHandler('debug:focus-window')
   ipcMain.removeHandler('debug:get-git-runtime-metrics')
   ipcMain.removeHandler('debug:quit')
   ipcMain.removeAllListeners('debug:log')

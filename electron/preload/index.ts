@@ -576,6 +576,7 @@ export interface DebugAPI {
   autotestSuite: string | null
   autotestExit: boolean
   log: (message: string, data?: unknown) => void
+  focusWindow: () => Promise<boolean>
   getAppMetrics: () => Promise<Record<string, unknown>[]>
   getGitRuntimeMetrics: () => Promise<GitRuntimeMetrics>
   quit: () => Promise<void>
@@ -939,6 +940,9 @@ const debugAPI: DebugAPI = {
   log: (message: string, data?: unknown) => {
     if (!debugEnabled) return
     ipcRenderer.send('debug:log', { message, data })
+  },
+  focusWindow: () => {
+    return ipcRenderer.invoke('debug:focus-window')
   },
   getAppMetrics: () => {
     return ipcRenderer.invoke('debug:get-app-metrics')

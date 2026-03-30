@@ -15,7 +15,7 @@ import { Settings } from './components/Settings'
 import { ProjectEditor } from './components/ProjectEditor'
 import { useScheduleEngine } from './hooks/useScheduleEngine'
 import type { ScheduleNotification } from './hooks/useScheduleEngine'
-import { LayoutMode, TerminalBatchResult, TerminalInfo, TerminalShortcutAction } from './types/prompt'
+import { LayoutMode, TerminalBatchResult, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest } from './types/prompt'
 import type { Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
@@ -23,6 +23,8 @@ import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { computeNextExecution } from './utils/schedule'
 import { useI18n } from './i18n/useI18n'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
+import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/focus-coordinator'
+import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
 import './App.css'
 
 interface ExportedPromptRecord extends Omit<Prompt, 'createdAt' | 'updatedAt' | 'lastUsedAt'> {
@@ -36,6 +38,17 @@ interface ExportedPromptRecord extends Omit<Prompt, 'createdAt' | 'updatedAt' | 
 
 const SCHEDULE_RETRY_ENTER_DELAY_MS = 50
 const MAX_SCHEDULE_LOG_ENTRIES = 50
+const DEBUG_TERMINAL_FOCUS = Boolean(window.electronAPI?.debug?.enabled)
+
+function debugTerminalFocus(message: string, data?: unknown) {
+  if (!DEBUG_TERMINAL_FOCUS) return
+  console.log(`[TerminalFocus] ${message}`, data)
+  try {
+    window.electronAPI.debug.log(`[TerminalFocus] ${message}`, data)
+  } catch {
+    // ignore debug logging failures
+  }
+}
 
 function appendScheduleLogEntry(schedule: PromptSchedule, entry: ExecutionLogEntry): ExecutionLogEntry[] {
   const log = [...(schedule.executionLog ?? []), entry]
@@ -103,7 +116,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onTerminalFocus,
   onTerminalRename,
   onOpenProjectEditor,
-  shouldAutoFocus,
+  focusRequest,
   shortcutAction
 }: {
   tab: TabState
@@ -111,7 +124,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onTerminalFocus: (tabId: string, terminalId: string) => void
   onTerminalRename: (tabId: string, terminalId: string, newTitle: string) => void
   onOpenProjectEditor: (terminalId: string) => void
-  shouldAutoFocus: () => boolean
+  focusRequest: TerminalFocusRequest | null
   shortcutAction: TerminalShortcutAction | null
 }) {
   const { getTerminalDisplayName } = useAppState()
@@ -138,6 +151,12 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
     return shortcutAction
   }, [shortcutAction, tab.terminals])
 
+  const focusRequestForTab = useMemo(() => {
+    if (!focusRequest) return null
+    if (!tab.terminals.some(t => t.id === focusRequest.terminalId)) return null
+    return focusRequest
+  }, [focusRequest, tab.terminals])
+
   return (
     <TerminalGrid
       layoutMode={tab.layoutMode}
@@ -147,10 +166,10 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       onTerminalFocus={handleTerminalFocus}
       onTerminalRename={handleTerminalRename}
       onOpenProjectEditor={onOpenProjectEditor}
-      shouldAutoFocus={shouldAutoFocus}
       tabId={tab.id}
       hidden={!isActive}
       shortcutAction={actionForTab}
+      focusRequest={focusRequestForTab}
     />
   )
 })
@@ -346,7 +365,13 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   )
 })
 
-function AppContent({ terminalShortcutAction }: { terminalShortcutAction: TerminalShortcutAction | null }) {
+function AppContent({
+  terminalShortcutAction,
+  terminalFocusRequest
+}: {
+  terminalShortcutAction: TerminalShortcutAction | null
+  terminalFocusRequest: TerminalFocusRequest | null
+}) {
   const { t } = useI18n()
   const {
     state,
@@ -365,7 +390,6 @@ function AppContent({ terminalShortcutAction }: { terminalShortcutAction: Termin
     setLastFocusedTerminalId,
     getTerminalDisplayName,
     setLastFocusOwner,
-    getLastFocusOwner,
     addSchedule,
     updateSchedule,
     deleteSchedule
@@ -533,10 +557,6 @@ function AppContent({ terminalShortcutAction }: { terminalShortcutAction: Termin
     updateSchedule,
     onNotification: handleScheduleNotification
   })
-
-  const shouldAutoFocusTerminal = useCallback(() => {
-    return getLastFocusOwner() === 'terminal'
-  }, [getLastFocusOwner])
 
   const writeToTerminals = useCallback(async (
     terminalIds: string[],
@@ -997,7 +1017,7 @@ function AppContent({ terminalShortcutAction }: { terminalShortcutAction: Termin
                 onTerminalFocus={handleTerminalFocusWithTab}
                 onTerminalRename={handleTerminalRenameWithTab}
                 onOpenProjectEditor={handleOpenProjectEditor}
-                shouldAutoFocus={shouldAutoFocusTerminal}
+                focusRequest={terminalFocusRequest}
                 shortcutAction={terminalShortcutAction}
               />
             ))}
@@ -1039,7 +1059,55 @@ function SettingsProviderWithHandler() {
   const { focusEditor, submitEditor, closeSettings } = usePromptActions()
   const lastFocusedElementRef = useRef<HTMLElement | null>(null)
   const [terminalShortcutAction, setTerminalShortcutAction] = useState<TerminalShortcutAction | null>(null)
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null)
   const terminalShortcutSeqRef = useRef(0)
+  const terminalFocusSeqRef = useRef(0)
+
+  const requestTerminalFocus = useCallback((terminalId: string, reason: TerminalFocusRequest['reason']) => {
+    const immediateFocused = terminalSessionManager.focusIfNeeded(terminalId)
+    debugTerminalFocus('request-terminal-focus', {
+      terminalId,
+      reason,
+      immediateFocused,
+      snapshot: terminalSessionManager.getFocusDebugSnapshot(terminalId)
+    })
+
+    if (immediateFocused) {
+      setTerminalFocusRequest(null)
+      return
+    }
+
+    terminalFocusSeqRef.current += 1
+    const nextRequest = {
+      terminalId,
+      reason,
+      token: terminalFocusSeqRef.current
+    }
+    debugTerminalFocus('queue-terminal-focus-request', nextRequest)
+    setTerminalFocusRequest(nextRequest)
+  }, [])
+
+  const prepareTerminalRestore = useCallback((terminalId: string) => {
+    if (!activeTab || !activeTab.terminals.some(t => t.id === terminalId)) {
+      return false
+    }
+
+    setLastFocusOwner('terminal')
+    setLastFocusedTerminalId(terminalId)
+    if (activeTab.activeTerminalId !== terminalId) {
+      updateActiveTab({ activeTerminalId: terminalId })
+    }
+    return true
+  }, [activeTab, setLastFocusedTerminalId, setLastFocusOwner, updateActiveTab])
+
+  useEffect(() => {
+    const handleMouseDown = (event: MouseEvent) => {
+      focusCoordinator.notePointerDown(event.target)
+    }
+
+    document.addEventListener('mousedown', handleMouseDown, true)
+    return () => document.removeEventListener('mousedown', handleMouseDown, true)
+  }, [])
 
   // Record the latest input focus (to avoid being snatched away by the terminal when returning to the window)
   useEffect(() => {
@@ -1100,20 +1168,7 @@ function SettingsProviderWithHandler() {
             // Only update activeTerminalId, do not change activePanel (keep Prompt panel state)
             updateActiveTab({ activeTerminalId: terminalId })
             setLastFocusedTerminalId(terminalId)
-            // Force focus on terminal: direct focus via DOM API
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                // First blur the current focus
-                if (document.activeElement instanceof HTMLElement) {
-                  document.activeElement.blur()
-                }
-                // Find and focus the target terminal
-                const terminalCell = document.querySelector(`[data-terminal-id="${terminalId}"] .xterm-helper-textarea`) as HTMLElement
-                if (terminalCell) {
-                  terminalCell.focus()
-                }
-              })
-            })
+            requestTerminalFocus(terminalId, 'shortcut-terminal')
           }
         }
         break
@@ -1184,53 +1239,86 @@ function SettingsProviderWithHandler() {
         break
       }
     }
-  }, [activeTab, state.tabs, switchTab, updateActiveTab, getLastFocusedTerminalId, setLastFocusedTerminalId, setLastFocusOwner, closeSettings, focusEditor, submitEditor])
+  }, [activeTab, state.tabs, switchTab, updateActiveTab, getLastFocusedTerminalId, setLastFocusedTerminalId, setLastFocusOwner, closeSettings, focusEditor, submitEditor, requestTerminalFocus])
 
-  const restoreLastFocus = useCallback(() => {
+  const restoreLastFocus = useCallback((reason: TerminalFocusRestoreReason) => {
     if (!activeTab) return
 
     window.setTimeout(() => {
       const activeElement = document.activeElement as HTMLElement | null
-      if (activeElement && activeElement !== document.body && activeElement !== document.documentElement) {
+      const shouldPreserveCurrentFocus = reason !== 'shortcut-activated'
+      if (
+        shouldPreserveCurrentFocus &&
+        activeElement &&
+        activeElement !== document.body &&
+        activeElement !== document.documentElement
+      ) {
         return
       }
 
       const focusOwner = getLastFocusOwner()
       const lastFocusedElement = lastFocusedElementRef.current
+      const lastTerminalId = getLastFocusedTerminalId()
+
+      debugTerminalFocus('restore-last-focus:start', {
+        reason,
+        focusOwner,
+        activeTagName: activeElement?.tagName ?? null,
+        activeClassName: activeElement?.className ?? null,
+        activeTerminalId: activeTab.activeTerminalId,
+        lastTerminalId,
+        pointer: focusCoordinator.getDebugState()
+      })
 
       if (focusOwner === 'input') {
+        if (!focusCoordinator.shouldRestoreInput(reason)) {
+          debugTerminalFocus('restore-last-focus:skip-input', { reason })
+          return
+        }
         if (lastFocusedElement && document.contains(lastFocusedElement)) {
           lastFocusedElement.focus()
+          debugTerminalFocus('restore-last-focus:focused-input-element', {
+            reason,
+            tagName: lastFocusedElement.tagName,
+            className: lastFocusedElement.className
+          })
           return
         }
         if (activeTab.activePanel === 'prompt') {
           focusEditor()
+          debugTerminalFocus('restore-last-focus:focused-prompt-editor', { reason })
           return
         }
       }
 
-      const lastTerminalId = getLastFocusedTerminalId()
       if (lastTerminalId && activeTab.terminals.some(t => t.id === lastTerminalId)) {
+        if (!focusCoordinator.shouldRestoreTerminal(reason)) {
+          debugTerminalFocus('restore-last-focus:skip-terminal', {
+            reason,
+            terminalId: lastTerminalId
+          })
+          return
+        }
         setLastFocusOwner('terminal')
         if (activeTab.activeTerminalId !== lastTerminalId) {
           updateActiveTab({ activeTerminalId: lastTerminalId })
         }
-        requestAnimationFrame(() => {
-          const terminalCell = document.querySelector(
-            `[data-terminal-id="${lastTerminalId}"] .xterm-helper-textarea`
-          ) as HTMLElement | null
-          terminalCell?.focus()
+        debugTerminalFocus('restore-last-focus:request-terminal', {
+          reason,
+          terminalId: lastTerminalId,
+          activeTerminalId: activeTab.activeTerminalId
         })
+        requestTerminalFocus(lastTerminalId, reason)
       }
     }, 0)
-  }, [activeTab, focusEditor, getLastFocusOwner, getLastFocusedTerminalId, setLastFocusOwner, updateActiveTab])
+  }, [activeTab, focusEditor, getLastFocusOwner, getLastFocusedTerminalId, setLastFocusOwner, updateActiveTab, requestTerminalFocus])
 
   // Listen for window activation events (wake up from the background)
   useEffect(() => {
     if (!window.electronAPI?.settings?.onActivated) return
 
     const unsubscribe = window.electronAPI.settings.onActivated(() => {
-      restoreLastFocus()
+      restoreLastFocus('shortcut-activated')
     })
 
     return unsubscribe
@@ -1239,7 +1327,7 @@ function SettingsProviderWithHandler() {
   // Restore input position when window regains focus
   useEffect(() => {
     const handleWindowFocus = () => {
-      restoreLastFocus()
+      restoreLastFocus('window-focus')
     }
 
     window.addEventListener('focus', handleWindowFocus)
@@ -1255,7 +1343,7 @@ function SettingsProviderWithHandler() {
         return
       }
       if (getLastFocusOwner() !== 'input') return
-      restoreLastFocus()
+      restoreLastFocus('window-focus')
     }
 
     window.addEventListener('keyup', handleKeyUp)
@@ -1273,9 +1361,23 @@ function SettingsProviderWithHandler() {
     return unsubscribe
   }, [handleShortcutAction])
 
+  useEffect(() => {
+    if (!window.electronAPI?.debug?.enabled && !window.electronAPI?.debug?.autotest) return
+    return registerTerminalFocusDebugApi({
+      restoreFocus: restoreLastFocus,
+      prepareTerminalRestore,
+      getLastFocusOwner,
+      getLastFocusedTerminalId,
+      getActiveTerminalId: () => activeTab?.activeTerminalId ?? null
+    })
+  }, [activeTab?.activeTerminalId, getLastFocusOwner, getLastFocusedTerminalId, prepareTerminalRestore, restoreLastFocus])
+
   return (
     <SettingsProvider onShortcutAction={handleShortcutAction}>
-      <AppContent terminalShortcutAction={terminalShortcutAction} />
+      <AppContent
+        terminalShortcutAction={terminalShortcutAction}
+        terminalFocusRequest={terminalFocusRequest}
+      />
     </SettingsProvider>
   )
 }

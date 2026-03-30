@@ -25,6 +25,7 @@ import { testProjectEditorMultiTerminalScope } from './test-project-editor-multi
 import { testMarkdownLatexPreview } from './test-markdown-latex-preview'
 import { testProjectEditorSqlite } from './test-project-editor-sqlite'
 import { testTerminalPerf } from './test-terminal-perf'
+import { testTerminalFocusActivation } from './test-terminal-focus-activation'
 import { testTerminalStress } from './test-terminal-stress'
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
@@ -199,9 +200,17 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
-    // Phase 5.7: Terminal stress test (extended multi-terminal pressure)
-    if (!ctx.cancelled() && shouldRun('terminal-stress')) {
+    // Phase 5.7: Terminal focus activation regression test
+    if (!ctx.cancelled() && shouldRun('terminal-focus-activation')) {
       log('phase5.7:begin')
+      const results = await testTerminalFocusActivation(ctx)
+      collectSuiteResults('TerminalFocusActivation', results)
+      await sleep(500)
+    }
+
+    // Phase 5.8: Terminal stress test (extended multi-terminal pressure)
+    if (!ctx.cancelled() && shouldRun('terminal-stress')) {
+      log('phase5.8:begin')
       const results = await testTerminalStress(ctx)
       collectSuiteResults('TerminalStress', results)
       await sleep(500)

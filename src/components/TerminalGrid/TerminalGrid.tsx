@@ -5,13 +5,14 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
-import { LayoutMode, TerminalInfo, TerminalShortcutAction } from '../../types/prompt'
+import { LayoutMode, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest } from '../../types/prompt'
 import { TerminalDropdown } from '../TerminalDropdown'
 import { GitDiffViewer } from '../GitDiffViewer'
 import { GitHistoryViewer } from '../GitHistoryViewer'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_FAMILY } from '../../constants/terminal'
 import { terminalSessionManager, TerminalSessionOptions, TerminalSessionStatus } from '../../terminal/terminal-session-manager'
+import { focusCoordinator } from '../../terminal/focus-coordinator'
 import { perfMonitor } from '../../utils/perf-monitor'
 import { useI18n } from '../../i18n/useI18n'
 import '@xterm/xterm/css/xterm.css'
@@ -40,10 +41,10 @@ interface TerminalGridProps {
   onTerminalFocus: (id: string) => void
   onTerminalRename: (id: string, newTitle: string) => void
   onOpenProjectEditor: (terminalId: string) => void
-  shouldAutoFocus?: () => boolean
   tabId?: string
   hidden?: boolean
   shortcutAction?: TerminalShortcutAction | null
+  focusRequest?: TerminalFocusRequest | null
 }
 
 interface TerminalGitInfo {
@@ -54,6 +55,8 @@ interface TerminalGitInfo {
 }
 
 const TERMINAL_PATH_SEGMENTS = 3
+const FOCUS_REQUEST_MAX_ATTEMPTS = 12
+const FOCUS_REQUEST_RETRY_MS = 50
 
 export const TerminalGrid = memo(function TerminalGrid({
   layoutMode,
@@ -65,10 +68,10 @@ export const TerminalGrid = memo(function TerminalGrid({
   onTerminalFocus,
   onTerminalRename,
   onOpenProjectEditor,
-  shouldAutoFocus,
   tabId: _tabId,
   hidden = false,
-  shortcutAction = null
+  shortcutAction = null,
+  focusRequest = null
 }: TerminalGridProps) {
   // Performance instrumentation: track render count
   perfMonitor.recordReactRender()
@@ -77,8 +80,8 @@ export const TerminalGrid = memo(function TerminalGrid({
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const hiddenRef = useRef(hidden)
   const containerRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
-  const activeTerminalIdRef = useRef(activeTerminalId)
   const terminalIdsRef = useRef<string[]>([])
+  const visibleTerminalIdsRef = useRef<string[]>([])
   const transitionRef = useRef(0)
   const getTerminalOptionsRef = useRef<(terminalId: string) => TerminalSessionOptions>(() => ({
     theme,
@@ -98,6 +101,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   const editInputRef = useRef<HTMLInputElement>(null)
   const editingIdRef = useRef<string | null>(null)
   const focusRafRef = useRef<number | null>(null)
+  const focusRetryTimerRef = useRef<number | null>(null)
+  const latestFocusRequestRef = useRef<TerminalFocusRequest | null>(focusRequest)
+  const lastHandledFocusTokenRef = useRef<number | null>(null)
 
   // Git Diff Viewer Status
   const [gitDiffOpen, setGitDiffOpen] = useState(false)
@@ -119,10 +125,6 @@ export const TerminalGrid = memo(function TerminalGrid({
   useEffect(() => {
     hiddenRef.current = hidden
   }, [hidden])
-
-  useEffect(() => {
-    activeTerminalIdRef.current = activeTerminalId
-  }, [activeTerminalId])
 
   useEffect(() => {
     editingIdRef.current = editingId
@@ -157,6 +159,14 @@ export const TerminalGrid = memo(function TerminalGrid({
   const visibleTerminals = useMemo(() => {
     return terminals.slice(0, displayLayoutMode)
   }, [terminals, displayLayoutMode])
+
+  useEffect(() => {
+    visibleTerminalIdsRef.current = visibleTerminals.map(term => term.id)
+  }, [visibleTerminals])
+
+  useEffect(() => {
+    latestFocusRequestRef.current = focusRequest
+  }, [focusRequest])
 
   const getTerminalOptions = useCallback((terminalId: string): TerminalSessionOptions => {
     return {
@@ -366,6 +376,125 @@ export const TerminalGrid = memo(function TerminalGrid({
     })
   }, [visibleTerminals, fitTerminal])
 
+  const cancelPendingFocus = useCallback(() => {
+    if (focusRafRef.current !== null) {
+      cancelAnimationFrame(focusRafRef.current)
+      focusRafRef.current = null
+    }
+    if (focusRetryTimerRef.current !== null) {
+      window.clearTimeout(focusRetryTimerRef.current)
+      focusRetryTimerRef.current = null
+    }
+  }, [])
+
+  const attemptFocusRequest = useCallback((request: TerminalFocusRequest, attempt: number) => {
+    if (latestFocusRequestRef.current?.token !== request.token) {
+      debugLog('focus-request:drop-stale-token', {
+        request,
+        latest: latestFocusRequestRef.current
+      })
+      return
+    }
+
+    if (hiddenRef.current || editingIdRef.current) {
+      debugLog('focus-request:skip-hidden-or-editing', {
+        request,
+        hidden: hiddenRef.current,
+        editingId: editingIdRef.current
+      })
+      return
+    }
+
+    const isVisible = visibleTerminalIdsRef.current.includes(request.terminalId)
+    if (!isVisible) {
+      debugLog('focus-request:skip-invisible', {
+        request,
+        visibleTerminalIds: visibleTerminalIdsRef.current
+      })
+      return
+    }
+
+    const focused = terminalSessionManager.focusIfNeeded(request.terminalId)
+    debugLog('focus-request:attempt', {
+      request,
+      attempt,
+      focused,
+      snapshot: terminalSessionManager.getFocusDebugSnapshot(request.terminalId)
+    })
+    if (focused) {
+      lastHandledFocusTokenRef.current = request.token
+      return
+    }
+
+    if (attempt + 1 >= FOCUS_REQUEST_MAX_ATTEMPTS) {
+      debugLog('focus-request:exhausted', {
+        request,
+        attempt,
+        snapshot: terminalSessionManager.getFocusDebugSnapshot(request.terminalId)
+      })
+      return
+    }
+
+    focusRetryTimerRef.current = window.setTimeout(() => {
+      focusRetryTimerRef.current = null
+      focusRafRef.current = requestAnimationFrame(() => {
+        focusRafRef.current = null
+        attemptFocusRequest(request, attempt + 1)
+      })
+    }, FOCUS_REQUEST_RETRY_MS)
+  }, [])
+
+  const scheduleFocusRequest = useCallback((request: TerminalFocusRequest | null) => {
+    cancelPendingFocus()
+    if (!request) return
+
+    if (hiddenRef.current || editingIdRef.current) {
+      debugLog('focus-request:not-scheduled-hidden-or-editing', {
+        request,
+        hidden: hiddenRef.current,
+        editingId: editingIdRef.current
+      })
+      return
+    }
+
+    const isVisible = visibleTerminalIdsRef.current.includes(request.terminalId)
+    if (!isVisible) {
+      debugLog('focus-request:not-scheduled-invisible', {
+        request,
+        visibleTerminalIds: visibleTerminalIdsRef.current
+      })
+      return
+    }
+
+    if (!focusCoordinator.shouldApplyFocusRequest(request.reason)) {
+      debugLog('focus-request:suppressed', {
+        request,
+        pointer: focusCoordinator.getDebugState()
+      })
+      lastHandledFocusTokenRef.current = request.token
+      return
+    }
+
+    if (lastHandledFocusTokenRef.current === request.token && terminalSessionManager.isFocused(request.terminalId)) {
+      debugLog('focus-request:already-focused', {
+        request,
+        snapshot: terminalSessionManager.getFocusDebugSnapshot(request.terminalId)
+      })
+      return
+    }
+
+    debugLog('focus-request:scheduled', {
+      request,
+      snapshot: terminalSessionManager.getFocusDebugSnapshot(request.terminalId)
+    })
+    focusRafRef.current = requestAnimationFrame(() => {
+      focusRafRef.current = requestAnimationFrame(() => {
+        focusRafRef.current = null
+        attemptFocusRequest(request, 0)
+      })
+    })
+  }, [attemptFocusRequest, cancelPendingFocus])
+
   // Clean up terminal resources (when Tab is destroyed)
   useEffect(() => {
     return () => {
@@ -441,30 +570,12 @@ export const TerminalGrid = memo(function TerminalGrid({
       })
   }, [layoutMode, displayLayoutMode, terminals, getTerminalOptions])
 
-  // Focus on active terminal - triggered when activeTerminalId or layout changes
   useEffect(() => {
-    if (!activeTerminalId || hidden || editingIdRef.current) return
-    if (shouldAutoFocus && !shouldAutoFocus()) return
-
-    const isVisible = visibleTerminals.some(t => t.id === activeTerminalId)
-    if (!isVisible) return
-
-    const scheduleFocus = () => {
-      if (editingIdRef.current) return
-      terminalSessionManager.focus(activeTerminalId)
-    }
-
-    focusRafRef.current = requestAnimationFrame(() => {
-      focusRafRef.current = requestAnimationFrame(scheduleFocus)
-    })
-
+    scheduleFocusRequest(focusRequest)
     return () => {
-      if (focusRafRef.current !== null) {
-        cancelAnimationFrame(focusRafRef.current)
-        focusRafRef.current = null
-      }
+      cancelPendingFocus()
     }
-  }, [activeTerminalId, hidden, visibleTerminals, editingId])
+  }, [focusRequest, hidden, visibleTerminals, editingId, scheduleFocusRequest, cancelPendingFocus])
 
   // Save the container ref and mount the terminal
   const setContainerRef = useCallback((id: string, el: HTMLDivElement | null) => {
@@ -497,14 +608,9 @@ export const TerminalGrid = memo(function TerminalGrid({
       el.addEventListener('contextmenu', onContextMenu)
       contextMenuListeners.current.set(id, onContextMenu)
 
-      if (activeTerminalIdRef.current === id && !hiddenRef.current) {
-        if (shouldAutoFocus && !shouldAutoFocus()) return
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (editingIdRef.current) return
-            terminalSessionManager.focus(id)
-          })
-        })
+      const pendingRequest = latestFocusRequestRef.current
+      if (pendingRequest?.terminalId === id) {
+        scheduleFocusRequest(pendingRequest)
       }
     } else {
       // Remove context menu listener on detach

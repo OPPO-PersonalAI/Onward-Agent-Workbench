@@ -15,6 +15,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Markdown preview rendering
 - Git state inspection and Git Diff behavior
 - CPU and performance regression checks
+- Terminal focus restore and activation behavior
 - Stability when switching between Project Editor, Git Diff, and Git History
 
 Reference document for Markdown + LaTeX syntax:
@@ -60,6 +61,8 @@ src/autotest/
 └── test-stress.ts
 ```
 
+Additional suite: `src/autotest/test-terminal-focus-activation.ts`
+
 ## Debug APIs
 
 Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTOTEST=1`.
@@ -70,6 +73,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 | `window.__onwardPromptSenderDebug` | `PromptSender.tsx` | Terminal cards, selection state, action buttons |
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
+| `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
 
 ## Environment Variables
 
@@ -229,6 +233,29 @@ test/run-git-cross-platform-autotest.sh
 
 # Windows (PowerShell)
 test/run-git-cross-platform-autotest.ps1
+```
+
+### Phase 5.7: Terminal Focus Activation
+
+Source set: terminal focus activation regression suite
+
+- `TFA-01`: debug API is available in autotest mode
+- `TFA-02`: terminal restore state can be prepared deterministically
+- `TFA-03`: shortcut-triggered restore focuses the terminal
+- `TFA-04`: explicit blur clears terminal focus state
+- `TFA-05`: recent terminal pointer activity suppresses window-focus restore
+- `TFA-06`: shortcut activation still restores terminal focus after suppression
+- `TFA-07`: non-terminal mouse activation also suppresses implicit terminal restore
+- `TFA-08`: stale pointer state allows normal window-focus restore again
+
+Launch:
+
+```bash
+# macOS / Linux
+test/run-terminal-focus-activation-autotest.sh
+
+# Windows (PowerShell)
+test/run-terminal-focus-activation-autotest.ps1
 ```
 
 ### Phase 5: Regression

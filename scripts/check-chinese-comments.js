@@ -13,6 +13,8 @@ const HAN_RE = /\p{Script=Han}/u
 const BINARY_RE = /\0/
 const ALLOWLIST = new Set([
   'src/i18n/core.ts',
+  // Historical lessons are maintained in Chinese for the local team.
+  'docs/lessons.md',
   // Test files may contain Chinese strings as test data (not comments)
   'test/test-full-e2e.ts',
   'test/test-prompt-integrity.ts'

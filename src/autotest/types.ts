@@ -114,6 +114,43 @@ export interface ProjectEditorDebugApi {
   getMissingFileNotice: () => { path: string; message: string } | null
 }
 
+export interface TerminalFocusDebugApi {
+  blurActiveElement: () => boolean
+  prepareTerminalRestore: (terminalId: string) => boolean
+  simulatePointerTarget: (target: 'terminal' | 'input' | 'other', terminalId?: string | null) => boolean
+  simulateRestore: (reason: 'window-focus' | 'shortcut-activated' | 'shortcut-terminal') => void
+  getFocusedTerminalId: () => string | null
+  getState: () => {
+    windowHasFocus: boolean
+    activeTagName: string | null
+    activeClassName: string | null
+    focusedTerminalId: string | null
+    activeTerminalId: string | null
+    lastFocusedTerminalId: string | null
+    lastFocusOwner: 'terminal' | 'input'
+    recentPointer: boolean
+    pointerTarget: 'terminal' | 'input' | 'other'
+    targetTerminal: {
+      exists: boolean
+      open: boolean | null
+      status: 'idle' | 'initializing' | 'ready' | 'error' | 'disposed' | null
+      visible: boolean | null
+      hasContainer: boolean
+      containerConnected: boolean
+      containerWidth: number | null
+      containerHeight: number | null
+      containerDisplay: string | null
+      hasTextarea: boolean
+      textareaConnected: boolean
+      textareaDisabled: boolean | null
+      textareaTabIndex: number | null
+      textareaDisplay: string | null
+      terminalElementConnected: boolean
+      activeElementMatchesTextarea: boolean
+    }
+  }
+}
+
 // ============================================================
 // Test run environment
 // ============================================================
@@ -170,5 +207,6 @@ declare global {
     __onwardGitHistoryDebug?: GitHistoryDebugApi
     __onwardPromptNotebookDebug?: PromptNotebookDebugApi
     __onwardProjectEditorDebug?: ProjectEditorDebugApi
+    __onwardTerminalFocusDebug?: TerminalFocusDebugApi
   }
 }

@@ -23,6 +23,25 @@ export interface TerminalSessionOptions {
   terminalStyle?: TerminalStyleConfig | null
 }
 
+export interface TerminalFocusSessionDebugSnapshot {
+  exists: boolean
+  open: boolean | null
+  status: TerminalSessionStatus | null
+  visible: boolean | null
+  hasContainer: boolean
+  containerConnected: boolean
+  containerWidth: number | null
+  containerHeight: number | null
+  containerDisplay: string | null
+  hasTextarea: boolean
+  textareaConnected: boolean
+  textareaDisabled: boolean | null
+  textareaTabIndex: number | null
+  textareaDisplay: string | null
+  terminalElementConnected: boolean
+  activeElementMatchesTextarea: boolean
+}
+
 interface TerminalSession {
   id: string
   terminal: XTerm
@@ -659,11 +678,101 @@ export class TerminalSessionManager {
     }
   }
 
-  focus(id: string): void {
+  private getTextareaElementForSession(session: TerminalSession): HTMLTextAreaElement | null {
+    if (!session.container) return null
+    return session.container.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+  }
+
+  getTextareaElement(id: string): HTMLTextAreaElement | null {
     const session = this.sessions.get(id)
-    if (session?.open) {
-      session.terminal.focus()
+    if (!session) return null
+    return this.getTextareaElementForSession(session)
+  }
+
+  isFocused(id: string): boolean {
+    const textarea = this.getTextareaElement(id)
+    return textarea !== null && document.activeElement === textarea
+  }
+
+  getFocusedTerminalId(): string | null {
+    for (const [id] of this.sessions) {
+      if (this.isFocused(id)) {
+        return id
+      }
     }
+    return null
+  }
+
+  getFocusDebugSnapshot(id: string): TerminalFocusSessionDebugSnapshot {
+    const session = this.sessions.get(id)
+    if (!session) {
+      return {
+        exists: false,
+        open: null,
+        status: null,
+        visible: null,
+        hasContainer: false,
+        containerConnected: false,
+        containerWidth: null,
+        containerHeight: null,
+        containerDisplay: null,
+        hasTextarea: false,
+        textareaConnected: false,
+        textareaDisabled: null,
+        textareaTabIndex: null,
+        textareaDisplay: null,
+        terminalElementConnected: false,
+        activeElementMatchesTextarea: false
+      }
+    }
+
+    const container = session.container
+    const textarea = this.getTextareaElementForSession(session)
+    const terminalElement = session.terminal.element
+
+    return {
+      exists: true,
+      open: session.open,
+      status: session.status,
+      visible: session.visible,
+      hasContainer: container !== null,
+      containerConnected: container?.isConnected ?? false,
+      containerWidth: container?.clientWidth ?? null,
+      containerHeight: container?.clientHeight ?? null,
+      containerDisplay: container ? window.getComputedStyle(container).display : null,
+      hasTextarea: textarea !== null,
+      textareaConnected: textarea?.isConnected ?? false,
+      textareaDisabled: textarea?.disabled ?? null,
+      textareaTabIndex: textarea?.tabIndex ?? null,
+      textareaDisplay: textarea ? window.getComputedStyle(textarea).display : null,
+      terminalElementConnected: terminalElement?.isConnected ?? false,
+      activeElementMatchesTextarea: textarea !== null && document.activeElement === textarea
+    }
+  }
+
+  focus(id: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session?.open) return false
+
+    const textarea = this.getTextareaElementForSession(session)
+    if (textarea) {
+      textarea.focus()
+      if (document.activeElement === textarea) {
+        return true
+      }
+    }
+
+    session.terminal.focus()
+
+    const focusedTextarea = this.getTextareaElementForSession(session)
+    return focusedTextarea !== null && document.activeElement === focusedTextarea
+  }
+
+  focusIfNeeded(id: string): boolean {
+    if (this.isFocused(id)) {
+      return true
+    }
+    return this.focus(id)
   }
 
   async ensureReady(id: string, options: TerminalSessionOptions): Promise<void> {

@@ -60,6 +60,12 @@ export type TerminalShortcutAction = {
   token: number
 }
 
+export type TerminalFocusRequest = {
+  terminalId: string
+  token: number
+  reason: 'shortcut-activated' | 'shortcut-terminal' | 'window-focus'
+}
+
 /**
  * Prompt Storage API
  */

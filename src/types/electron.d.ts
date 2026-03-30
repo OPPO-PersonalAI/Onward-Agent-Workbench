@@ -479,6 +479,7 @@ export interface DebugAPI {
   autotestSuite: string | null
   autotestExit: boolean
   log: (message: string, data?: unknown) => void
+  focusWindow: () => Promise<boolean>
   getAppMetrics: () => Promise<Record<string, unknown>[]>
   getGitRuntimeMetrics: () => Promise<GitRuntimeMetrics>
   quit: () => Promise<void>
