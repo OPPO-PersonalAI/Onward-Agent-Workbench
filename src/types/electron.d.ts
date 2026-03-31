@@ -588,6 +588,66 @@ export interface BrowserAPI {
   onEscapePressed: (callback: (id: string) => void) => () => void
 }
 
+// Coding Agent integration types
+export type CodingAgentType = 'claude-code' | 'codex'
+export type CodingAgentProvider = 'openrouter' | 'custom'
+
+export interface CodingAgentConfigInput {
+  agentType: CodingAgentType
+  provider?: CodingAgentProvider
+  apiUrl?: string
+  apiKey?: string
+  model?: string
+  extraArgs?: string
+}
+
+export interface CodingAgentHistoryEntry {
+  id: string
+  agentType: CodingAgentType
+  provider?: CodingAgentProvider
+  apiUrl?: string
+  apiKey?: string
+  model?: string
+  extraArgs: string
+  createdAt: number
+  lastUsedAt: number
+}
+
+export interface CodingAgentConfigState {
+  version: number
+  lastUsedId: Record<CodingAgentType, string | null>
+  history: CodingAgentHistoryEntry[]
+}
+
+export interface CodingAgentConfigAPI {
+  load: (agentType?: CodingAgentType) => Promise<CodingAgentConfigState>
+  save: (config: CodingAgentConfigInput) => Promise<CodingAgentConfigState>
+  delete: (id: string) => Promise<CodingAgentConfigState>
+}
+
+export interface CodingAgentPrepareResult {
+  success: boolean
+  error?: string
+}
+
+export interface CodingAgentLaunchInput {
+  terminalId: string
+  agentType: CodingAgentType
+  config: CodingAgentConfigInput
+  cols?: number
+  rows?: number
+}
+
+export interface CodingAgentLaunchResult {
+  success: boolean
+  error?: string
+}
+
+export interface CodingAgentAPI {
+  prepare: (agentType: CodingAgentType) => Promise<CodingAgentPrepareResult>
+  launch: (payload: CodingAgentLaunchInput) => Promise<CodingAgentLaunchResult>
+}
+
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
@@ -601,6 +661,8 @@ export interface ElectronAPI {
   settings: SettingsAPI
   appInfo: AppInfoAPI
   browser: BrowserAPI
+  codingAgentConfig: CodingAgentConfigAPI
+  codingAgent: CodingAgentAPI
   debug: DebugAPI
   platform: 'darwin' | 'win32' | 'linux'
 }

@@ -48,6 +48,7 @@
   box-shadow: var(--shadow-1);
   z-index: 100;
   padding: 4px 0;
+  overflow: visible;
   animation: dropdown-fade-in 0.15s ease;
 }
 
@@ -93,6 +94,56 @@
 
 .terminal-dropdown-item:hover svg {
   color: var(--text-2);
+}
+
+/* Submenu parent - arrow indicator */
+.terminal-dropdown-submenu-parent {
+  position: relative;
+}
+
+.terminal-dropdown-arrow {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+/* Submenu container - shown on hover */
+.terminal-dropdown-submenu {
+  display: none;
+  position: absolute;
+  left: calc(100% + 2px);
+  top: -6px;
+  min-width: 260px;
+  white-space: nowrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: var(--shadow-1);
+  animation: dropdown-fade-in 0.15s ease;
+  z-index: 101;
+}
+
+/* Invisible bridge to prevent hover gap between parent and submenu */
+.terminal-dropdown-submenu::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: 0;
+  width: 8px;
+  height: 100%;
+}
+
+.terminal-dropdown-submenu-parent:hover > .terminal-dropdown-submenu {
+  display: block;
+}
+
+.terminal-dropdown-submenu-parent:hover {
+  background-color: var(--bg-1);
+}
+
+.terminal-dropdown-submenu .terminal-dropdown-item {
+  border-radius: 6px;
 }
 
 /* Active terminal dropdown button */

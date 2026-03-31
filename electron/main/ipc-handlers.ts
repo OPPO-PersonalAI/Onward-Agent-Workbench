@@ -11,6 +11,8 @@ import { GitWatchManager } from './git-watch-manager'
 import { getPromptStorage, Prompt } from './prompt-storage'
 import { getTerminalConfigStorage, TerminalWindowConfig } from './terminal-config-storage'
 import { getCommandPresetStorage, CommandPreset } from './command-preset-storage'
+import { getCodingAgentConfigStorage, CodingAgentConfigInput, CodingAgentType } from './coding-agent-config-storage'
+import { getCodingAgentRuntimeInfo } from './coding-agent-runtime'
 import { getAppStateStorage, AppState } from './app-state-storage'
 import {
   checkGitInstalled,
@@ -349,8 +351,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     app.exit(0)
   })
 
+  // Saved cwd for terminals running coding agents, so that
+  // when the agent exits and the renderer calls terminal:create
+  // to restart, we can restore the original working directory.
+  const agentRestartCwdMap = new Map<string, string>()
+
   const createTerminalProcess = (id: string, options?: PtyOptions) => {
     try {
+      // If no cwd provided but we have a saved agent cwd, use it
+      if (!options?.cwd) {
+        const savedCwd = agentRestartCwdMap.get(id)
+        if (savedCwd) {
+          options = { ...options, cwd: savedCwd }
+        }
+      }
+      // Clear the saved cwd after using it once
+      agentRestartCwdMap.delete(id)
+
       const ptyProcess = ptyManager.create(id, options)
 
       // IPC data buffer: merge high-frequency PTY output into batched sends
@@ -659,6 +676,114 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   // Delete a command preset
   ipcMain.handle('command-preset:delete', (_, id: string) => {
     return commandPresetStorage.delete(id)
+  })
+
+  // Coding Agent configuration storage
+  const codingAgentConfigStorage = getCodingAgentConfigStorage()
+
+  ipcMain.handle('coding-agent-config:load', (_, agentType?: CodingAgentType) => {
+    return codingAgentConfigStorage.get(agentType)
+  })
+
+  ipcMain.handle('coding-agent-config:save', (_, config: CodingAgentConfigInput) => {
+    return codingAgentConfigStorage.save(config)
+  })
+
+  ipcMain.handle('coding-agent-config:delete', (_, id: string) => {
+    return codingAgentConfigStorage.delete(id)
+  })
+
+  ipcMain.handle('coding-agent:prepare', async (_, agentType: CodingAgentType) => {
+    const info = await getCodingAgentRuntimeInfo(agentType || 'claude-code')
+    if (!info.success) {
+      return { success: false, error: info.error }
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('coding-agent:launch', async (_, payload: { terminalId: string; agentType: CodingAgentType; config: CodingAgentConfigInput; cols?: number; rows?: number }) => {
+    const terminalId = payload?.terminalId
+    if (!terminalId) {
+      return { success: false, error: 'Terminal ID missing' }
+    }
+
+    const agentType: CodingAgentType = payload.agentType || 'claude-code'
+    const runtimeInfo = await getCodingAgentRuntimeInfo(agentType)
+    if (!runtimeInfo.success || !runtimeInfo.executablePath) {
+      return { success: false, error: runtimeInfo.error || 'Agent not ready' }
+    }
+
+    const config = payload.config
+    if (!config) {
+      return { success: false, error: 'Agent configuration missing' }
+    }
+
+    const cwd = await getTerminalCwd(terminalId)
+    const cols = payload.cols || 80
+    const rows = payload.rows || 24
+    const restartCwd = cwd || process.env.HOME || process.cwd()
+
+    // Build environment: only set API env vars for claude-code
+    const env: NodeJS.ProcessEnv = { ...process.env }
+    if (agentType === 'claude-code') {
+      const apiUrl = (config.apiUrl || '').trim()
+      const apiKey = (config.apiKey || '').trim()
+      const model = (config.model || '').trim()
+      if (!apiUrl || !apiKey || !model) {
+        return { success: false, error: 'Claude Code API configuration incomplete' }
+      }
+      env.ANTHROPIC_BASE_URL = apiUrl
+      env.ANTHROPIC_AUTH_TOKEN = apiKey
+      env.ANTHROPIC_MODEL = model
+      env.ANTHROPIC_API_KEY = config.provider === 'openrouter' ? '' : apiKey
+      env.ANTHROPIC_DEFAULT_OPUS_MODEL = model
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL = model
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model
+      env.CLAUDE_CODE_SUBAGENT_MODEL = model
+      if (config.provider === 'custom') {
+        env.ANTHROPIC_AUTH_TOKEN = apiKey
+        env.ANTHROPIC_API_KEY = apiKey
+      }
+    }
+
+    // Parse user-provided extra arguments with shell-aware quoting
+    const extraArgs: string[] = []
+    const rawArgs = (config.extraArgs || '').trim()
+    if (rawArgs) {
+      // Match: "quoted string", 'quoted string', or unquoted-token
+      const tokens = rawArgs.match(/(?:"[^"]*"|'[^']*'|\S+)/g) || []
+      for (const token of tokens) {
+        // Strip surrounding quotes
+        if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
+          extraArgs.push(token.slice(1, -1))
+        } else {
+          extraArgs.push(token)
+        }
+      }
+    }
+
+    // Save cwd so the renderer's restartShell can restore it after agent exit
+    agentRestartCwdMap.set(terminalId, restartCwd)
+
+    // Use the same cleanup path as terminal:dispose to drain buffers and unsubscribe watchers
+    const buf = terminalDataBuffers.get(terminalId)
+    if (buf) {
+      buf.dispose()
+      terminalDataBuffers.delete(terminalId)
+    }
+    ipcDataCounters.delete(terminalId)
+    gitWatchManager?.unsubscribe(terminalId)
+    ptyManager.dispose(terminalId)
+
+    // Spawn the agent; on exit the renderer's global exit handler will prompt restart
+    return createTerminalProcess(terminalId, {
+      cols,
+      rows,
+      cwd: restartCwd,
+      env,
+      command: runtimeInfo.executablePath,
+      args: extraArgs
+    })
   })
 
   // App state storage handlers
@@ -1076,6 +1201,11 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('command-preset:load')
   ipcMain.removeHandler('command-preset:save')
   ipcMain.removeHandler('command-preset:delete')
+  ipcMain.removeHandler('coding-agent-config:load')
+  ipcMain.removeHandler('coding-agent-config:save')
+  ipcMain.removeHandler('coding-agent-config:delete')
+  ipcMain.removeHandler('coding-agent:prepare')
+  ipcMain.removeHandler('coding-agent:launch')
   ipcMain.removeHandler('app-state:load')
   ipcMain.removeHandler('app-state:save')
   ipcMain.removeHandler('git:check-installed')
