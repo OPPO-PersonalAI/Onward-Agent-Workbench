@@ -63,6 +63,7 @@ export interface TerminalAPI {
     delayMs?: number
   ) => Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }>
   resize: (id: string, cols: number, rows: number) => Promise<boolean>
+  setBufferFastPath: (id: string, enabled: boolean) => void
   dispose: (id: string) => Promise<boolean>
   onData: (callback: (id: string, data: string) => void) => () => void
   onExit: (callback: (id: string, exitCode: number, signal?: number) => void) => () => void

@@ -713,6 +713,10 @@ const terminalAPI: TerminalAPI = {
     return ipcRenderer.invoke('terminal:resize', id, cols, rows)
   },
 
+  setBufferFastPath: (id: string, enabled: boolean) => {
+    ipcRenderer.send('terminal:set-buffer-fast-path', id, enabled)
+  },
+
   dispose: (id: string) => {
     return ipcRenderer.invoke('terminal:dispose', id)
   },

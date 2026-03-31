@@ -179,14 +179,18 @@ export class TerminalSessionManager {
       // Fast path: for visible terminals with no pending data, write small
       // interactive data (keystroke echoes) directly to xterm, bypassing
       // the 50 ms throttled flush.  This eliminates the renderer-side
-      // latency for interactive typing.
+      // latency for interactive typing while preserving viewport intent
+      // (autofollow / manual scroll restoration).
       if (
         session.visible &&
         session.terminal &&
         data.length <= TerminalSessionManager.INTERACTIVE_FAST_PATH_BYTES &&
         session.pendingDataBytes === 0
       ) {
-        session.terminal.write(data)
+        const pending = this.captureViewportIntent(session, 'output')
+        session.terminal.write(data, () => {
+          this.applyOutputBottomFastPath(session, pending)
+        })
 
         // Still record input latency for the perf monitor
         const ksTs = (session as any)._lastKeystrokeTs as number | undefined
@@ -846,6 +850,11 @@ export class TerminalSessionManager {
     if (!session || session.visible === visible) return
 
     session.visible = visible
+
+    // Sync the main-process IPC data buffer: enable fast-path for visible
+    // terminals (low-latency keystroke echoes), disable for hidden ones
+    // (avoid high-rate unbatched IPC traffic with no user-visible benefit).
+    window.electronAPI.terminal.setBufferFastPath(id, visible)
 
     if (visible) {
       // Flush buffered data that accumulated while hidden

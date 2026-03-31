@@ -94,6 +94,15 @@ class TerminalDataBuffer {
   // through the batched path.
   private static readonly FAST_PATH_THRESHOLD = 128
 
+  // Whether the fast path is enabled for this terminal.  Disabled for
+  // hidden terminals to avoid generating high-rate IPC traffic with no
+  // user-visible benefit (the renderer buffers hidden terminal data anyway).
+  private _fastPathEnabled = true
+
+  setFastPathEnabled(enabled: boolean): void {
+    this._fastPathEnabled = enabled
+  }
+
   push(data: string): void {
     if (this.disposed) return
 
@@ -101,7 +110,12 @@ class TerminalDataBuffer {
     // sequences) is sent immediately when no data is already buffered.
     // This eliminates the 100 ms batching delay for interactive typing
     // while keeping the batched path for bulk output.
-    if (data.length <= TerminalDataBuffer.FAST_PATH_THRESHOLD && this.chunks.length === 0) {
+    // Only enabled for visible terminals — hidden terminals always batch.
+    if (
+      this._fastPathEnabled &&
+      data.length <= TerminalDataBuffer.FAST_PATH_THRESHOLD &&
+      this.chunks.length === 0
+    ) {
       this.send(this.terminalId, data)
       return
     }
@@ -143,6 +157,12 @@ class TerminalDataBuffer {
 
 // Active data buffers keyed by terminal ID
 const terminalDataBuffers = new Map<string, TerminalDataBuffer>()
+
+// Tracks the desired fast-path state per terminal so that a
+// `terminal:set-buffer-fast-path` message arriving before the buffer is
+// created (race between renderer setVisibility and terminal:create) is
+// not lost.  When a new buffer is created it reads from this map.
+const terminalFastPathState = new Map<string, boolean>()
 
 // Buffer request waiting queue
 interface TerminalBufferResult {
@@ -348,6 +368,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       })
       terminalDataBuffers.set(id, dataBuffer)
 
+      // Apply any fast-path state that arrived before the buffer was created
+      // (e.g. setVisibility(id, false) sent before terminal:create completed).
+      const pendingFastPath = terminalFastPathState.get(id)
+      if (pendingFastPath !== undefined) {
+        dataBuffer.setFastPathEnabled(pendingFastPath)
+      }
+
       // Throttle git activity notifications from PTY output (500ms)
       let lastGitActivityAt = 0
       const GIT_ACTIVITY_THROTTLE_MS = 500
@@ -414,6 +441,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await ptyManager.writeSplit(id, content, suffix, delayMs)
   })
 
+  // Toggle fast-path on the IPC data buffer for a terminal.
+  // Called by the renderer when terminal visibility changes so that hidden
+  // terminals don't generate high-rate unbatched IPC traffic.
+  // The state is also persisted in terminalFastPathState so that it survives
+  // the race where setVisibility fires before the buffer is created.
+  ipcMain.on('terminal:set-buffer-fast-path', (_, id: string, enabled: boolean) => {
+    terminalFastPathState.set(id, enabled)
+    const buf = terminalDataBuffers.get(id)
+    if (buf) buf.setFastPathEnabled(enabled)
+  })
+
   // Resize terminal
   ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
     return ptyManager.resize(id, cols, rows)
@@ -427,6 +465,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       buf.dispose()
       terminalDataBuffers.delete(id)
     }
+    terminalFastPathState.delete(id)
     ipcDataCounters.delete(id)
     gitWatchManager?.unsubscribe(id)
     return ptyManager.dispose(id)
@@ -994,6 +1033,7 @@ export function cleanupIpcHandlers(): void {
     buf.dispose()
   }
   terminalDataBuffers.clear()
+  terminalFastPathState.clear()
 
   gitWatchManager?.dispose()
   gitWatchManager = null
@@ -1006,6 +1046,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('terminal:create')
   ipcMain.removeHandler('terminal:write')
   ipcMain.removeHandler('terminal:write-split')
+  ipcMain.removeAllListeners('terminal:set-buffer-fast-path')
   ipcMain.removeHandler('terminal:resize')
   ipcMain.removeHandler('terminal:dispose')
   ipcMain.removeHandler('prompt:load')
