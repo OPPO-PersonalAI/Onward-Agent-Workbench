@@ -23,7 +23,7 @@
 }
 
 .outline-panel-title {
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
   color: var(--text-3);
   font-weight: 600;
 }
@@ -35,7 +35,7 @@
 }
 
 .outline-panel-loading {
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
   color: var(--text-4);
 }
 
@@ -55,7 +55,7 @@
   color: var(--text-3);
   padding: 4px 8px;
   border-radius: 999px;
-  font-size: calc(var(--project-editor-font-size, 14px) - 2px);
+  font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -83,7 +83,7 @@
   color: var(--text-1);
   padding: 4px 8px;
   border-radius: var(--radius-sm);
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
   outline: none;
 }
 

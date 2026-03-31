@@ -8,7 +8,7 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
 }
 
 .global-search-type-bar {
@@ -26,7 +26,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--text-3);
-  font-size: calc(var(--project-editor-font-size, 14px) - 2px);
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
@@ -66,7 +66,7 @@
   border-radius: 4px;
   background: var(--bg-1);
   color: var(--text-1);
-  font-size: calc(var(--project-editor-font-size, 14px) - 2px);
+  font-size: 12px;
   font-family: inherit;
   outline: none;
   min-width: 0;
@@ -91,7 +91,7 @@
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   font-weight: 600;
   font-family: monospace;
   flex-shrink: 0;
@@ -117,7 +117,7 @@
   border: none;
   background: none;
   color: var(--text-3);
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -146,7 +146,7 @@
   border-radius: 4px;
   background: var(--bg-1);
   color: var(--text-1);
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   font-family: inherit;
   outline: none;
 }
@@ -160,14 +160,14 @@
 }
 
 .global-search-glob-label {
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   color: var(--text-3);
   margin-bottom: 1px;
 }
 
 .global-search-status {
   padding: 4px 10px;
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   color: var(--text-3);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -202,7 +202,7 @@
   padding: 20px 10px;
   text-align: center;
   color: var(--text-3);
-  font-size: calc(var(--project-editor-font-size, 14px) - 2px);
+  font-size: 12px;
 }
 
 .global-search-file-header {
@@ -212,7 +212,7 @@
   padding: 3px 8px;
   cursor: pointer;
   user-select: none;
-  font-size: calc(var(--project-editor-font-size, 14px) - 1px);
+  font-size: 13px;
   color: var(--text-1);
   background: color-mix(in srgb, var(--bg-2) 50%, transparent);
   position: sticky;
@@ -247,7 +247,7 @@
 
 .global-search-file-dir {
   color: var(--text-3);
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -258,7 +258,7 @@
 
 .global-search-file-count {
   flex-shrink: 0;
-  font-size: calc(var(--project-editor-font-size, 14px) - 4px);
+  font-size: 10px;
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
   padding: 1px 6px;
@@ -271,7 +271,7 @@
   align-items: flex-start;
   padding: 2px 8px 2px 26px;
   cursor: pointer;
-  font-size: calc(var(--project-editor-font-size, 14px) - 1px);
+  font-size: 13px;
   line-height: 1.4;
   color: var(--text-2);
   min-height: 22px;
@@ -289,7 +289,7 @@
   flex-shrink: 0;
   width: 36px;
   color: var(--text-3);
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   text-align: right;
   margin-right: 8px;
   font-family: monospace;
@@ -302,7 +302,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: monospace;
-  font-size: calc(var(--project-editor-font-size, 14px) - 1px);
+  font-size: 13px;
 }
 
 .global-search-highlight {
@@ -314,7 +314,7 @@
 
 .global-search-limit-warning {
   padding: 6px 10px;
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   color: var(--text-3);
   text-align: center;
   border-top: 1px solid var(--border);
@@ -327,7 +327,7 @@
   gap: 8px;
   padding: 5px 10px;
   cursor: pointer;
-  font-size: calc(var(--project-editor-font-size, 14px) - 1px);
+  font-size: 13px;
   color: var(--text-2);
   transition: background 0.1s;
 }
@@ -348,7 +348,7 @@
 }
 
 .global-search-filename-path {
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;

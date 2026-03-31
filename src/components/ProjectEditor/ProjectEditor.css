@@ -260,7 +260,7 @@
   flex: 1;
   overflow: auto;
   padding: 6px 0;
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
 }
 
 .project-editor-tree-root {
@@ -1414,7 +1414,7 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   padding: 12px 14px;
   background-color: var(--bg-2);
   color: var(--text-1);
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
 }
 
 .project-editor-search-results {
@@ -1438,19 +1438,19 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
 }
 
 .project-editor-search-item-name {
-  font-size: var(--project-editor-font-size, 14px);
+  font-size: 14px;
   font-weight: 600;
 }
 
 .project-editor-search-item-path {
-  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  font-size: 11px;
   color: var(--text-3);
 }
 
 .project-editor-search-empty {
   padding: 14px;
   color: var(--text-3);
-  font-size: calc(var(--project-editor-font-size, 14px) - 2px);
+  font-size: 12px;
 }
 
 .project-editor-empty {
