@@ -63,6 +63,14 @@ For platform-related commands, always consider these three platforms:
     - Separator: `margin: 4px 6px`
 - Development principle: any subpage entered from the terminal entry point (such as Git Diff, Git History, or the Project Editor) must respond to ESC consistently and return to the terminal. Prefer reusing a shared ESC handling mechanism (for example, a common Hook) to avoid inconsistent implementations across pages.
 - Process management safety: when killing or searching for processes (e.g., `taskkill`, `Get-Process`, `pkill`), always use the exact process name — never use wildcards or partial matches. Using wildcards risks terminating unrelated processes.
+- Hard rule — Cross-platform development (Windows / macOS / Linux):
+    - Every new feature and bug fix must be designed and validated for all three platforms from the start. Do not implement for one platform first and "port later."
+    - Platform-divergent areas require explicit per-platform branching (e.g., `process.platform` checks). The most error-prone areas, based on historical experience, include:
+        1. **Git operations** (Git History, Git Diff): line-ending handling (`CRLF` vs `LF`), path separators (`\` vs `/`), shell escaping, locale-dependent output, and Git executable resolution differ significantly across platforms.
+        2. **Terminal / shell operations**: default shell (`cmd.exe` / `powershell` vs `bash` / `zsh`), environment variable syntax (`%VAR%` vs `$VAR`), signal handling (`SIGTERM` vs `taskkill`), and PTY implementations vary.
+        3. **File-system operations**: path length limits, case sensitivity, reserved filenames (`CON`, `NUL`, etc. on Windows), symlink behavior, and file-locking semantics.
+    - When writing or reviewing platform-related code, always ask: "Will this behave correctly on the other two platforms?" If unsure, add explicit handling or at minimum a `TODO(cross-platform)` comment explaining the risk.
+    - Automated tests that touch any of the above areas should include platform-specific assertions or be clearly marked as platform-conditional.
 - Every task completion report must include:
     1. What is the task goal of the code, and what solution / design approach was used?
     2. What changes were made to which files?
