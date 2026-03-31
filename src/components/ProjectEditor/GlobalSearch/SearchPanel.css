@@ -356,3 +356,40 @@
   flex: 1;
   min-width: 0;
 }
+
+/* ---------- Sidebar Mode Bar ---------- */
+
+.project-editor-sidebar-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pe-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.pe-mode-btn:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-1);
+}
+
+.pe-mode-btn.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}

@@ -564,8 +564,8 @@ export function ProjectEditor({
   const [isLoadingFile, setIsLoadingFile] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
-  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
-  const [globalSearchInitialType, setGlobalSearchInitialType] = useState<'content' | 'filename'>('content')
+  const [sidebarMode, setSidebarMode] = useState<'files' | 'search'>('files')
+  const [initialSearchType, setInitialSearchType] = useState<'content' | 'filename'>('content')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<string[]>([])
   const [searchActiveIndex, setSearchActiveIndex] = useState(0)
@@ -615,6 +615,7 @@ export function ProjectEditor({
   const dialogResolveRef = useRef<((value: boolean | string | null) => void) | null>(null)
   const dialogInputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const globalSearchInputRef = useRef<HTMLInputElement>(null)
 
   const editorRef = useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(null)
   const editorScrollDisposableRef = useRef<import('monaco-editor').IDisposable | null>(null)
@@ -1328,10 +1329,10 @@ export function ProjectEditor({
   }, [dialog])
 
   useEffect(() => {
-    if (dialog || searchOpen || globalSearchOpen) {
+    if (dialog || searchOpen) {
       setContextMenu(null)
     }
-  }, [dialog, globalSearchOpen, searchOpen])
+  }, [dialog, searchOpen])
 
   useEffect(() => {
     if (!isDraggingRef.current) {
@@ -2409,14 +2410,7 @@ export function ProjectEditor({
     setSearchActiveIndex(0)
   }, [])
 
-  const handleOpenGlobalSearch = useCallback((initialType: 'content' | 'filename' = 'content') => {
-    setGlobalSearchInitialType(initialType)
-    setGlobalSearchOpen(true)
-  }, [])
-
-  const handleCloseGlobalSearch = useCallback(() => {
-    setGlobalSearchOpen(false)
-  }, [])
+  // (sidebar search is now controlled by sidebarMode state, no overlay needed)
 
 
   const loadRoot = useCallback(async (root: string) => {
@@ -2480,8 +2474,8 @@ export function ProjectEditor({
       setRootPath(null)
       setRootError(null)
       setSearchOpen(false)
-      setGlobalSearchOpen(false)
-      setGlobalSearchInitialType('content')
+      setSidebarMode('files')
+      setInitialSearchType('content')
       setSearchQuery('')
       setSearchResults([])
       setSearchActiveIndex(0)
@@ -2522,7 +2516,7 @@ export function ProjectEditor({
       setTree([])
       setContextMenu(null)
       setSearchOpen(false)
-      setGlobalSearchOpen(false)
+      setSidebarMode('files')
       setSearchQuery('')
       setSearchResults([])
       setSearchActiveIndex(0)
@@ -2871,21 +2865,42 @@ export function ProjectEditor({
     await openFile(path, 'user', { trackRecent: true })
   }, [handleCloseSearch, openFile])
 
-  const handleGlobalSearchOpenFile = useCallback((path: string) => {
-    handleCloseGlobalSearch()
-    void openFile(path, 'user', { trackRecent: true })
-  }, [handleCloseGlobalSearch, openFile])
-
-  const handleGlobalSearchNavigate = useCallback((path: string, line: number, column: number) => {
-    handleCloseGlobalSearch()
-    void openFile(path, 'user', {
+  const handleSearchNavigate = useCallback(async (
+    file: string,
+    line: number,
+    column: number,
+    matchLength: number
+  ) => {
+    // Pass cursorPosition through openFile to avoid race with saved editor state
+    await openFile(file, 'user', {
       trackRecent: true,
-      cursorPosition: {
-        lineNumber: line,
-        column
+      cursorPosition: { lineNumber: line, column }
+    })
+    // Wait for the editor model to be ready before applying highlight decoration
+    if (activeFilePathRef.current === file) {
+      await waitForEditorModelReady(file)
+    }
+    requestAnimationFrame(() => {
+      const editor = editorRef.current
+      if (!editor) return
+      editor.revealLineInCenter(line)
+      editor.focus()
+      if (matchLength > 0 && monacoRef.current) {
+        try {
+          const deco = editor.createDecorationsCollection([{
+            range: new monacoRef.current.Range(line, column, line, column + matchLength),
+            options: {
+              className: 'global-search-editor-highlight',
+              isWholeLine: false
+            }
+          }])
+          setTimeout(() => deco.clear(), 2000)
+        } catch {
+          // Decoration is nice-to-have, not critical
+        }
       }
     })
-  }, [handleCloseGlobalSearch, openFile])
+  }, [openFile, waitForEditorModelReady])
 
   const handleSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
@@ -3301,10 +3316,6 @@ export function ProjectEditor({
       handleDialogCancel()
       return
     }
-    if (globalSearchOpen) {
-      handleCloseGlobalSearch()
-      return
-    }
     if (searchOpen) {
       handleCloseSearch()
       return
@@ -3313,8 +3324,12 @@ export function ProjectEditor({
       setPreviewSearchOpen(false)
       return
     }
+    if (sidebarMode === 'search') {
+      setSidebarMode('files')
+      return
+    }
     void handleRequestClose()
-  }, [dialog, globalSearchOpen, handleCloseGlobalSearch, handleDialogCancel, handleCloseSearch, handleRequestClose, previewSearchOpen, searchOpen])
+  }, [dialog, handleDialogCancel, searchOpen, handleCloseSearch, previewSearchOpen, handleRequestClose, sidebarMode])
 
   const handleOpenGitDiff = useCallback(async (source: 'user' | 'debug' = 'user') => {
     if (!_terminalId) return
@@ -4030,19 +4045,24 @@ export function ProjectEditor({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (dialog) return
-      if (searchOpen || globalSearchOpen) return
+      if (searchOpen) return
+
+      // Cmd/Ctrl+Shift+F — global content search (sidebar)
+      const isGlobalSearch = (event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f'
+      if (isGlobalSearch) {
+        event.preventDefault()
+        event.stopPropagation()
+        setContextMenu(null)
+        setInitialSearchType('content')
+        setSidebarMode('search')
+        setTimeout(() => globalSearchInputRef.current?.focus(), 0)
+        return
+      }
 
       const isSearch = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'p'
       if (isSearch) {
         event.preventDefault()
         void handleOpenSearch()
-        return
-      }
-
-      const isGlobalSearch = (event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f'
-      if (isGlobalSearch) {
-        event.preventDefault()
-        handleOpenGlobalSearch('content')
         return
       }
 
@@ -4071,7 +4091,7 @@ export function ProjectEditor({
 
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [dialog, globalSearchOpen, handleOpenGlobalSearch, handleOpenSearch, isMarkdownPreviewVisible, isOpen, searchOpen])
+  }, [dialog, handleOpenSearch, isMarkdownPreviewVisible, isOpen, searchOpen])
 
   useSubpageEscape({ isOpen, onEscape: handleEscape })
 
@@ -4566,53 +4586,77 @@ export function ProjectEditor({
 
         <div className="project-editor-body">
           <div className="project-editor-sidebar" style={{ width: fileTreeWidth }}>
-            <div className="project-editor-sidebar-header">
-              <span className="project-editor-sidebar-title">{t('projectEditor.fileBrowser')}</span>
-              <div className="project-editor-sidebar-actions">
-                <button
-                  className="project-editor-action-btn"
-                  onClick={() => void handleOpenSearch()}
-                  title={t('projectEditor.searchPlaceholder')}
-                  type="button"
-                >
-                  {t('projectEditor.search')}
-                </button>
-                <button
-                  className="project-editor-action-btn"
-                  onClick={() => handleOpenGlobalSearch('content')}
-                  title={t('projectEditor.globalSearchContentTitle', {
-                    key: `${window.electronAPI.platform === 'darwin' ? 'Command' : 'Ctrl'}+Shift+F`
-                  })}
-                  type="button"
-                >
-                  {t('projectEditor.globalSearch')}
-                </button>
-              </div>
+            <div className="project-editor-sidebar-mode-bar">
+              <button
+                className={`pe-mode-btn ${sidebarMode === 'files' ? 'active' : ''}`}
+                onClick={() => setSidebarMode('files')}
+                title={t('projectEditor.sidebarFilesTooltip')}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H7.71L6.85 2.57A1.5 1.5 0 0 0 5.57 2H1.5zM1 3.5a.5.5 0 0 1 .5-.5h4.07a.5.5 0 0 1 .43.24l.86 1.43a.5.5 0 0 0 .43.24H14.5a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-9z" />
+                </svg>
+                <span>{t('projectEditor.sidebarFiles')}</span>
+              </button>
+              <button
+                className={`pe-mode-btn ${sidebarMode === 'search' ? 'active' : ''}`}
+                onClick={() => {
+                  setInitialSearchType('content')
+                  setSidebarMode('search')
+                  setTimeout(() => globalSearchInputRef.current?.focus(), 0)
+                }}
+                title={t('projectEditor.sidebarSearchTooltip', {
+                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}+Shift+F`
+                })}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.44 1.16a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
+                </svg>
+                <span>{t('projectEditor.sidebarSearch')}</span>
+              </button>
             </div>
-            <div
-              className="project-editor-tree"
-              ref={fileTreeContainerRef}
-              onContextMenu={(event) => openContextMenu(event, { path: null, type: null })}
-            >
-              {rootError ? (
-                <div className="project-editor-empty">
-                  <p>{rootError}</p>
-                  <button className="project-editor-action-btn" onClick={() => rootPath && void loadRoot(rootPath)}>
-                    {t('projectEditor.reload')}
-                  </button>
+            {sidebarMode === 'files' ? (
+              <>
+                <div className="project-editor-sidebar-header">
+                  <span className="project-editor-sidebar-title">{t('projectEditor.fileBrowser')}</span>
                 </div>
-              ) : (
-                <>
-                  <div
-                    className="project-editor-tree-root"
-                    onContextMenu={(event) => openContextMenu(event, { path: '', type: 'dir' })}
-                  >
-                    <div className="project-editor-tree-root-label" title={rootPath || ''}>{rootLabel}</div>
-                  </div>
-                  {treeNodes}
-                </>
-              )}
-            </div>
+                <div
+                  className="project-editor-tree"
+                  ref={fileTreeContainerRef}
+                  onContextMenu={(event) => openContextMenu(event, { path: null, type: null })}
+                >
+                  {rootError ? (
+                    <div className="project-editor-empty">
+                      <p>{rootError}</p>
+                      <button className="project-editor-action-btn" onClick={() => rootPath && void loadRoot(rootPath)}>
+                        {t('projectEditor.reload')}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        className="project-editor-tree-root"
+                        onContextMenu={(event) => openContextMenu(event, { path: '', type: 'dir' })}
+                      >
+                        <div className="project-editor-tree-root-label" title={rootPath || ''}>{rootLabel}</div>
+                      </div>
+                      {treeNodes}
+                    </>
+                  )}
+                </div>
+              </>
+            ) : (
+              <SearchPanel
+                rootPath={rootPath}
+                isActive={sidebarMode === 'search' && isOpen}
+                initialSearchType={initialSearchType}
+                onNavigate={handleSearchNavigate}
+                onOpenFile={(filePath) => void openFile(filePath, 'user', { trackRecent: true })}
+                onClose={() => setSidebarMode('files')}
+                buildFileIndex={buildFileIndex}
+                getFileIndex={getFileIndex}
+                searchInputRef={globalSearchInputRef}
+              />
+            )}
             <div className="project-editor-file-tree-resizer" onMouseDown={handleResizeMouseDown} />
           </div>
 
@@ -5071,25 +5115,6 @@ export function ProjectEditor({
                   </div>
                 ))}
               </div>
-            </div>
-          </div>
-        )}
-
-        {globalSearchOpen && (
-          <div className="project-editor-search-overlay" onClick={handleCloseGlobalSearch}>
-            <div className="project-editor-search project-editor-global-search" onClick={(event) => event.stopPropagation()}>
-              <SearchPanel
-                rootPath={rootPath}
-                isActive={globalSearchOpen}
-                initialSearchType={globalSearchInitialType}
-                onNavigate={(file, line, column) => {
-                  handleGlobalSearchNavigate(file, line, column)
-                }}
-                onOpenFile={handleGlobalSearchOpenFile}
-                onClose={handleCloseGlobalSearch}
-                buildFileIndex={buildFileIndex}
-                getFileIndex={getFileIndex}
-              />
             </div>
           </div>
         )}
