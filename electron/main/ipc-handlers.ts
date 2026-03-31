@@ -87,8 +87,25 @@ class TerminalDataBuffer {
     private readonly send: (id: string, data: string) => void
   ) {}
 
+  // Small data threshold for the fast path.  Keystroke echoes from the PTY
+  // are typically 1-4 bytes; ANSI escape sequences for cursor movement or
+  // colour are ~10-30 bytes.  128 bytes is generous enough to cover all
+  // interactive typing feedback while still routing bulk command output
+  // through the batched path.
+  private static readonly FAST_PATH_THRESHOLD = 128
+
   push(data: string): void {
     if (this.disposed) return
+
+    // Fast path: small interactive data (keystroke echoes, short escape
+    // sequences) is sent immediately when no data is already buffered.
+    // This eliminates the 100 ms batching delay for interactive typing
+    // while keeping the batched path for bulk output.
+    if (data.length <= TerminalDataBuffer.FAST_PATH_THRESHOLD && this.chunks.length === 0) {
+      this.send(this.terminalId, data)
+      return
+    }
+
     this.chunks.push(data)
     this.totalBytes += data.length
 

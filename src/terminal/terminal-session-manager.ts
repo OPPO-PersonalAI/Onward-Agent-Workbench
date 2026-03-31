@@ -164,6 +164,11 @@ export class TerminalSessionManager {
    * Dispatches to the correct session via Map.get() — O(1) per message
    * instead of O(N) when each session had its own listener filtering by ID.
    */
+  // Small data threshold for the fast path — must match the main-process
+  // TerminalDataBuffer.FAST_PATH_THRESHOLD so that interactive keystroke
+  // echoes bypass BOTH the IPC buffer and the renderer throttle.
+  private static readonly INTERACTIVE_FAST_PATH_BYTES = 128
+
   private registerGlobalDataListener(): void {
     this.globalDataUnsubscribe = window.electronAPI.terminal.onData((termId, data) => {
       const session = this.sessions.get(termId)
@@ -171,7 +176,28 @@ export class TerminalSessionManager {
 
       perfMonitor.recordIpcData(data.length)
 
-      // All terminals (visible or hidden) buffer data first.
+      // Fast path: for visible terminals with no pending data, write small
+      // interactive data (keystroke echoes) directly to xterm, bypassing
+      // the 50 ms throttled flush.  This eliminates the renderer-side
+      // latency for interactive typing.
+      if (
+        session.visible &&
+        session.terminal &&
+        data.length <= TerminalSessionManager.INTERACTIVE_FAST_PATH_BYTES &&
+        session.pendingDataBytes === 0
+      ) {
+        session.terminal.write(data)
+
+        // Still record input latency for the perf monitor
+        const ksTs = (session as any)._lastKeystrokeTs as number | undefined
+        if (ksTs && data.length <= 16) {
+          perfMonitor.recordInputLatency(performance.now() - ksTs)
+          ;(session as any)._lastKeystrokeTs = undefined
+        }
+        return
+      }
+
+      // Slow path: buffer data for throttled flush.
       // Visible terminals are flushed on a throttled schedule (every 50ms);
       // hidden terminals keep buffering until they become visible.
       session.pendingData.push(data)
