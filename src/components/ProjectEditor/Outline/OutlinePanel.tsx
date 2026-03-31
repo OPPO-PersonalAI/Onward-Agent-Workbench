@@ -342,28 +342,32 @@ export function OutlinePanel({
     <div className="outline-panel">
       <div className="outline-panel-header">
         <span className="outline-panel-title">{t('outlinePanel.title')}</span>
-        <div className="outline-panel-header-actions">
-          {isMarkdown && onOutlineTargetChange && (
-            <div className="outline-panel-target-toggle" role="tablist" aria-label={t('outlinePanel.title')}>
-              <button
-                type="button"
-                className={`outline-panel-target-btn ${outlineTarget === 'editor' ? 'active' : ''}`}
-                onClick={() => onOutlineTargetChange('editor')}
-              >
-                {t('outlinePanel.target.editor')}
-              </button>
-              <button
-                type="button"
-                className={`outline-panel-target-btn ${outlineTarget === 'preview' ? 'active' : ''}`}
-                onClick={() => onOutlineTargetChange('preview')}
-              >
-                {t('outlinePanel.target.preview')}
-              </button>
-            </div>
-          )}
-          {isLoading && <span className="outline-panel-loading">{t('outlinePanel.loading')}</span>}
-        </div>
+        {isLoading && <span className="outline-panel-loading">{t('outlinePanel.loading')}</span>}
       </div>
+      {isMarkdown && onOutlineTargetChange && (
+        <div className="outline-panel-target-bar">
+          <span className="outline-panel-target-label">{t('outlinePanel.target.label')}</span>
+          <div className="outline-panel-target-seg" data-active={outlineTarget}>
+            <span className="outline-panel-target-indicator" />
+            <button
+              type="button"
+              className={`outline-panel-target-btn${outlineTarget === 'editor' ? ' active' : ''}`}
+              onClick={() => onOutlineTargetChange('editor')}
+              title={t('outlinePanel.target.editor.tooltip')}
+            >
+              {t('outlinePanel.target.editor')}
+            </button>
+            <button
+              type="button"
+              className={`outline-panel-target-btn${outlineTarget === 'preview' ? ' active' : ''}`}
+              onClick={() => onOutlineTargetChange('preview')}
+              title={t('outlinePanel.target.preview.tooltip')}
+            >
+              {t('outlinePanel.target.preview')}
+            </button>
+          </div>
+        </div>
+      )}
       {showFilter && (
         <div className="outline-panel-filter">
           <input

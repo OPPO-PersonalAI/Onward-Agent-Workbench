@@ -28,28 +28,61 @@
   font-weight: 600;
 }
 
-.outline-panel-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .outline-panel-loading {
   font-size: 14px;
   color: var(--text-4);
 }
 
-.outline-panel-target-toggle {
-  display: inline-flex;
+.outline-panel-target-bar {
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-2);
+  flex-shrink: 0;
+}
+
+.outline-panel-target-label {
+  font-size: calc(var(--project-editor-font-size, 14px) - 3px);
+  color: var(--text-4);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* --- Segmented Control --- */
+.outline-panel-target-seg {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  background-color: var(--bg-0);
+  border-radius: 6px;
   padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-1);
+}
+
+/* Sliding indicator */
+.outline-panel-target-indicator {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  background-color: var(--panel);
+  border-radius: 4px;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+.outline-panel-target-seg[data-active="preview"] .outline-panel-target-indicator {
+  transform: translateX(100%);
 }
 
 .outline-panel-target-btn {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 3px 0;
   border: none;
   background: transparent;
   color: var(--text-3);
@@ -57,17 +90,20 @@
   border-radius: 999px;
   font-size: 12px;
   cursor: pointer;
+  transition: color 0.15s ease;
   white-space: nowrap;
+  line-height: 1.3;
+  text-align: center;
+  border-radius: 4px;
 }
 
 .outline-panel-target-btn:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--text-1);
+  color: var(--text-2);
 }
 
 .outline-panel-target-btn.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text-1);
+  font-weight: 500;
 }
 
 .outline-panel-filter {

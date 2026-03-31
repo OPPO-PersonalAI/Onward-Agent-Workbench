@@ -471,8 +471,11 @@ const en = {
 
   'outlinePanel.title': 'Outline',
   'outlinePanel.loading': 'Parsing...',
+  'outlinePanel.target.label': 'Jump to',
   'outlinePanel.target.editor': 'Editor',
+  'outlinePanel.target.editor.tooltip': 'Click an outline heading to scroll the editor to that source line',
   'outlinePanel.target.preview': 'Preview',
+  'outlinePanel.target.preview.tooltip': 'Click an outline heading to scroll the preview to the rendered position',
   'outlinePanel.filterPlaceholder': 'Filter symbols...',
   'outlinePanel.empty.selectFile': 'Select a file',
   'outlinePanel.empty.noMatch': 'No matching symbols',
@@ -1264,8 +1267,11 @@ const zhCN: LocaleTranslations = {
 
   'outlinePanel.title': '大纲',
   'outlinePanel.loading': '解析中...',
+  'outlinePanel.target.label': '跳转到',
   'outlinePanel.target.editor': '编辑器',
+  'outlinePanel.target.editor.tooltip': '点击大纲标题时，滚动编辑器到对应源码行',
   'outlinePanel.target.preview': '预览',
+  'outlinePanel.target.preview.tooltip': '点击大纲标题时，滚动预览窗口到对应渲染位置',
   'outlinePanel.filterPlaceholder': '过滤符号...',
   'outlinePanel.empty.selectFile': '请选择文件',
   'outlinePanel.empty.noMatch': '无匹配符号',
