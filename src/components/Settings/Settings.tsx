@@ -293,6 +293,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
 
               {terminals.length > 0 && selectedTerminalId && (
                 <>
+                  {/* Apply globally hint */}
+                  <div className="apply-globally-hint">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1a6 6 0 0 1 4.47 10.002L8 9.5V2zM3.53 12.002A6 6 0 0 1 8 2v7.5l4.47 2.502A6 6 0 0 1 3.53 12.002z" />
+                    </svg>
+                    <span>{t('settings.terminal.applyGloballyHint')}</span>
+                  </div>
+
                   {/* Foreground Color */}
                   <div className="settings-row">
                     <span className="settings-row-label">{t('settings.terminal.foregroundColor')}</span>
@@ -308,7 +316,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onClick={() => handleApplyGlobally('foregroundColor')}
                         title={t('settings.terminal.applyGlobally')}
                       >
-                        {t('settings.terminal.applyGloballyShort')}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1a6 6 0 0 1 4.47 10.002L8 9.5V2zM3.53 12.002A6 6 0 0 1 8 2v7.5l4.47 2.502A6 6 0 0 1 3.53 12.002z" />
+                        </svg>
                       </button>
                     </div>
                   </div>
@@ -328,7 +338,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onClick={() => handleApplyGlobally('backgroundColor')}
                         title={t('settings.terminal.applyGlobally')}
                       >
-                        {t('settings.terminal.applyGloballyShort')}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1a6 6 0 0 1 4.47 10.002L8 9.5V2zM3.53 12.002A6 6 0 0 1 8 2v7.5l4.47 2.502A6 6 0 0 1 3.53 12.002z" />
+                        </svg>
                       </button>
                     </div>
                   </div>
@@ -347,7 +359,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onClick={() => handleApplyGlobally('fontFamily')}
                         title={t('settings.terminal.applyGlobally')}
                       >
-                        {t('settings.terminal.applyGloballyShort')}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1a6 6 0 0 1 4.47 10.002L8 9.5V2zM3.53 12.002A6 6 0 0 1 8 2v7.5l4.47 2.502A6 6 0 0 1 3.53 12.002z" />
+                        </svg>
                       </button>
                     </div>
                   </div>
@@ -370,7 +384,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onClick={() => handleApplyGlobally('fontSize')}
                         title={t('settings.terminal.applyGlobally')}
                       >
-                        {t('settings.terminal.applyGloballyShort')}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1a6 6 0 0 1 4.47 10.002L8 9.5V2zM3.53 12.002A6 6 0 0 1 8 2v7.5l4.47 2.502A6 6 0 0 1 3.53 12.002z" />
+                        </svg>
                       </button>
                     </div>
                   </div>
@@ -393,17 +409,13 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         onClick={() => handleApplyGlobally('gitDiffFontSize')}
                         title={t('settings.terminal.applyGlobally')}
                       >
-                        {t('settings.terminal.applyGloballyShort')}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1a6 6 0 0 1 4.47 10.002L8 9.5V2zM3.53 12.002A6 6 0 0 1 8 2v7.5l4.47 2.502A6 6 0 0 1 3.53 12.002z" />
+                        </svg>
                       </button>
                     </div>
                   </div>
 
-                  <div className="settings-row">
-                    <span className="settings-row-label">{t('settings.terminal.globalHintLabel')}</span>
-                    <div className="settings-row-input settings-row-input-column">
-                      <span className="settings-row-hint">{t('settings.terminal.globalHint')}</span>
-                    </div>
-                  </div>
 
                 </>
               )}
