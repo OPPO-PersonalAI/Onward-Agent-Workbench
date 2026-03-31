@@ -95,6 +95,20 @@ export interface ProjectEditorState {
   cursorLine?: number
   cursorColumn?: number
   savedAt: number
+  // UI layout state (per-scope persistence)
+  isPreviewOpen?: boolean
+  isEditorVisible?: boolean
+  isOutlineVisible?: boolean
+  outlineTarget?: 'editor' | 'preview'
+  fileTreeWidth?: number
+  previewWidth?: number
+  outlineWidth?: number
+  modalWidth?: number
+  modalHeight?: number
+  // Scroll position memory
+  previewScrollAnchor?: { slug: string | null; ratio: number }
+  fileTreeScrollTop?: number
+  outlineScrollTop?: number
 }
 
 /**

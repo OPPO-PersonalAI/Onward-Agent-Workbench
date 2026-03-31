@@ -256,6 +256,12 @@ function getFileScrollKey(scope: ProjectEditorScope | null, filePath: string | n
   return JSON.stringify([scope.terminalId, scope.cwd, filePath])
 }
 
+/** Scroll position memory — scope key (for file tree) */
+function getScrollScopeKey(scope: ProjectEditorScope | null): string | null {
+  if (!scope) return null
+  return JSON.stringify([scope.terminalId, scope.cwd])
+}
+
 function debugLog(...args: unknown[]) {
   if (!DEBUG_PROJECT_EDITOR) return
   console.log('[ProjectEditor]', ...args)
@@ -656,6 +662,10 @@ export function ProjectEditor({
     const saved = localStorage.getItem(STORAGE_KEY_FILE_TREE_WIDTH)
     return saved ? parseInt(saved, 10) : DEFAULT_FILE_TREE_WIDTH
   })
+  const fileTreeWidthRef = useRef(fileTreeWidth)
+  const fileTreeContainerRef = useRef<HTMLDivElement | null>(null)
+  const fileTreeScrollTopRef = useRef<Map<string, number>>(new Map())
+  const outlineScrollTopRef = useRef<Map<string, number>>(new Map())
   const isDraggingRef = useRef(false)
 
   const [modalSize, setModalSize] = useState(() => {
@@ -787,6 +797,10 @@ export function ProjectEditor({
   useEffect(() => {
     outlineTargetRef.current = outlineTarget
   }, [outlineTarget])
+
+  useEffect(() => {
+    fileTreeWidthRef.current = fileTreeWidth
+  }, [fileTreeWidth])
 
   const editorFontSize = useMemo(() => {
     if (!_terminalId) return DEFAULT_GIT_DIFF_FONT_SIZE
@@ -959,6 +973,13 @@ export function ProjectEditor({
         recentCount: recentFiles.length
       })
     }
+    // Capture scroll positions before saving
+    const treeKey = getScrollScopeKey(scope)
+    const currentFileTreeScrollTop = treeKey ? fileTreeScrollTopRef.current.get(treeKey) : undefined
+    const previewKey = getFileScrollKey(scope, currentActiveFilePath)
+    const previewMem = previewKey ? previewScrollMemoryRef.current.get(previewKey) : undefined
+    const outlineKey = getFileScrollKey(scope, currentActiveFilePath)
+    const currentOutlineScrollTop = outlineKey ? outlineScrollTopRef.current.get(outlineKey) : undefined
     setProjectEditorState(scope, {
       rootPath: normalizedRootPath,
       activeFilePath: currentActiveFilePath ?? null,
@@ -968,7 +989,23 @@ export function ProjectEditor({
       editorViewState: viewState ?? undefined,
       cursorLine: cursorPosition?.lineNumber,
       cursorColumn: cursorPosition?.column,
-      savedAt: Date.now()
+      savedAt: Date.now(),
+      // UI layout state
+      isPreviewOpen: isMarkdownPreviewOpenRef.current,
+      isEditorVisible: isMarkdownEditorVisibleRef.current,
+      isOutlineVisible: isOutlineVisibleRef.current,
+      outlineTarget: outlineTargetRef.current,
+      fileTreeWidth: fileTreeWidthRef.current,
+      previewWidth: markdownPreviewWidthRef.current,
+      outlineWidth: outlineWidthRef.current,
+      modalWidth: modalSizeRef.current.width,
+      modalHeight: modalSizeRef.current.height,
+      // Scroll positions
+      previewScrollAnchor: previewMem
+        ? { slug: previewMem.nearestHeadingSlug, ratio: previewMem.scrollRatio }
+        : undefined,
+      fileTreeScrollTop: currentFileTreeScrollTop,
+      outlineScrollTop: currentOutlineScrollTop
     })
   }, [expandedDirs, getViewStateKey, pinnedFiles, recentFiles, resolveEditorScope, rootPath, setProjectEditorState])
 
@@ -2675,6 +2712,62 @@ export function ProjectEditor({
       return
     }
 
+    // Restore UI layout state (apply immediately after tree loads)
+    if (stored.isPreviewOpen !== undefined) {
+      setIsMarkdownPreviewOpen(stored.isPreviewOpen)
+      isMarkdownPreviewOpenRef.current = stored.isPreviewOpen
+    }
+    if (stored.isEditorVisible !== undefined) {
+      setIsMarkdownEditorVisible(stored.isEditorVisible)
+      isMarkdownEditorVisibleRef.current = stored.isEditorVisible
+    }
+    if (stored.isOutlineVisible !== undefined) {
+      setIsOutlineVisible(stored.isOutlineVisible)
+      isOutlineVisibleRef.current = stored.isOutlineVisible
+    }
+    if (stored.outlineTarget !== undefined) {
+      setOutlineTarget(stored.outlineTarget)
+      outlineTargetRef.current = stored.outlineTarget
+    }
+    if (typeof stored.fileTreeWidth === 'number') {
+      setFileTreeWidth(stored.fileTreeWidth)
+      fileTreeWidthRef.current = stored.fileTreeWidth
+    }
+    if (typeof stored.previewWidth === 'number') {
+      setMarkdownPreviewWidth(stored.previewWidth)
+      markdownPreviewWidthRef.current = stored.previewWidth
+    }
+    if (typeof stored.outlineWidth === 'number') {
+      setOutlineWidth(stored.outlineWidth)
+      outlineWidthRef.current = stored.outlineWidth
+    }
+    if (typeof stored.modalWidth === 'number' && typeof stored.modalHeight === 'number') {
+      const size = { width: stored.modalWidth, height: stored.modalHeight }
+      setModalSize(size)
+      modalSizeRef.current = size
+    }
+    // Write persisted scroll positions into memory refs for later application
+    const restoreScope = lastEditorScopeRef.current
+    if (stored.previewScrollAnchor && stored.activeFilePath) {
+      const pKey = getFileScrollKey(restoreScope, stored.activeFilePath)
+      if (pKey) {
+        previewScrollMemoryRef.current.set(pKey, {
+          scrollRatio: stored.previewScrollAnchor.ratio,
+          nearestHeadingSlug: stored.previewScrollAnchor.slug,
+          headingOffsetY: 0,
+          scrollTop: 0
+        })
+      }
+    }
+    if (typeof stored.outlineScrollTop === 'number' && stored.activeFilePath) {
+      const oKey = getFileScrollKey(restoreScope, stored.activeFilePath)
+      if (oKey) outlineScrollTopRef.current.set(oKey, stored.outlineScrollTop)
+    }
+    if (typeof stored.fileTreeScrollTop === 'number') {
+      const tKey = getScrollScopeKey(restoreScope)
+      if (tKey) fileTreeScrollTopRef.current.set(tKey, stored.fileTreeScrollTop)
+    }
+
     // The recovery process is only triggered once; subsequent operations are directed by the user to prevent asynchronous recovery from preempting clicks.
     hasRestoredStateRef.current = true
     restoringStateRef.current = true
@@ -3014,6 +3107,24 @@ export function ProjectEditor({
     }
   }, [capturePreviewScrollMemory, handlePreviewScroll, isMarkdownRenderAllowed])
 
+  // File tree scroll position capture
+  useEffect(() => {
+    const treeEl = fileTreeContainerRef.current
+    if (!treeEl || !isOpen) return
+    const handler = () => {
+      const key = getScrollScopeKey(lastEditorScopeRef.current)
+      if (key) fileTreeScrollTopRef.current.set(key, treeEl.scrollTop)
+    }
+    treeEl.addEventListener('scroll', handler, { passive: true })
+    return () => treeEl.removeEventListener('scroll', handler)
+  }, [isOpen, tree.length])
+
+  // Outline scroll position capture callback
+  const handleOutlineScrollCapture = useCallback((scrollTop: number) => {
+    const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePathRef.current)
+    if (key) outlineScrollTopRef.current.set(key, scrollTop)
+  }, [])
+
   useEffect(() => {
     if (!DEBUG_PROJECT_EDITOR) return
     if (perfIntervalRef.current) return
@@ -3169,10 +3280,16 @@ export function ProjectEditor({
   const handleRequestClose = useCallback(async () => {
     const canClose = await confirmDiscardChanges()
     if (!canClose) return
-    capturePreviewScrollMemory()
-    if (lastEditorScopeRef.current) {
+    // Capture all scroll positions before final persist
+    const scope = lastEditorScopeRef.current
+    if (scope) {
+      const treeEl = fileTreeContainerRef.current
+      const treeKey = getScrollScopeKey(scope)
+      if (treeEl && treeKey) {
+        fileTreeScrollTopRef.current.set(treeKey, treeEl.scrollTop)
+      }
       capturePreviewScrollMemory()
-      persistProjectEditorState(lastEditorScopeRef.current)
+      persistProjectEditorState(scope)
     }
     skipClosePersistRef.current = true
     resetActiveFileState()
@@ -4474,6 +4591,7 @@ export function ProjectEditor({
             </div>
             <div
               className="project-editor-tree"
+              ref={fileTreeContainerRef}
               onContextMenu={(event) => openContextMenu(event, { path: null, type: null })}
             >
               {rootError ? (
@@ -4763,7 +4881,8 @@ export function ProjectEditor({
                           isLoading={outlineLoading}
                           filePath={activeFilePath}
                           editor={editorRef.current}
-                          initialScrollTop={0}
+                          initialScrollTop={outlineScrollTopRef.current.get(getFileScrollKey(lastEditorScopeRef.current, activeFilePath) ?? '') ?? 0}
+                          onScrollCapture={handleOutlineScrollCapture}
                         />
                       </div>
                       <div className="project-editor-outline-resizer" onMouseDown={handleOutlineResizeMouseDown} />
@@ -4900,6 +5019,8 @@ export function ProjectEditor({
                           previewRef={previewRef}
                           outlineTarget={outlineTarget}
                           previewActiveSlug={previewActiveSlug}
+                          initialScrollTop={outlineScrollTopRef.current.get(getFileScrollKey(lastEditorScopeRef.current, activeFilePath) ?? '') ?? 0}
+                          onScrollCapture={handleOutlineScrollCapture}
                           onOutlineTargetChange={(target) => {
                             setOutlineTarget(target)
                             outlineTargetRef.current = target
