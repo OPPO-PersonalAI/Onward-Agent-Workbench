@@ -84,6 +84,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const hiddenRef = useRef(hidden)
+  const activeTerminalIdRef = useRef(activeTerminalId)
   const containerRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
   const terminalIdsRef = useRef<string[]>([])
   const visibleTerminalIdsRef = useRef<string[]>([])
@@ -133,6 +134,10 @@ export const TerminalGrid = memo(function TerminalGrid({
   useEffect(() => {
     hiddenRef.current = hidden
   }, [hidden])
+
+  useEffect(() => {
+    activeTerminalIdRef.current = activeTerminalId
+  }, [activeTerminalId])
 
   useEffect(() => {
     editingIdRef.current = editingId
@@ -476,6 +481,10 @@ export const TerminalGrid = memo(function TerminalGrid({
   const scheduleFocusRequest = useCallback((request: TerminalFocusRequest | null) => {
     cancelPendingFocus()
     if (!request) return
+
+    if (lastHandledFocusTokenRef.current === request.token) {
+      return
+    }
 
     if (hiddenRef.current || editingIdRef.current) {
       debugLog('focus-request:not-scheduled-hidden-or-editing', {
@@ -883,10 +892,16 @@ export const TerminalGrid = memo(function TerminalGrid({
   // Close the Git Diff viewer
   const handleCloseGitDiff = useCallback(() => {
     debugLog('gitdiff:close')
+    const openedFrom = gitDiffTerminalId
     setGitDiffOpen(false)
     setGitDiffTerminalId(null)
     setGitDiffCwd(null)
-  }, [])
+    // Restore focus to the terminal that opened the diff viewer
+    requestAnimationFrame(() => {
+      const tid = openedFrom ?? activeTerminalIdRef.current
+      if (tid) terminalSessionManager.focusIfNeeded(tid)
+    })
+  }, [gitDiffTerminalId])
 
   useEffect(() => {
     const handleOpenGitDiff = (event: Event) => {
@@ -938,10 +953,16 @@ export const TerminalGrid = memo(function TerminalGrid({
   }, [handleOpenBrowser, hidden, terminals])
 
   const handleCloseGitHistory = useCallback(() => {
+    const openedFrom = gitHistoryTerminalId
     setGitHistoryOpen(false)
     setGitHistoryTerminalId(null)
     setGitHistoryCwd(null)
-  }, [])
+    // Restore focus to the terminal that opened the history viewer
+    requestAnimationFrame(() => {
+      const tid = openedFrom ?? activeTerminalIdRef.current
+      if (tid) terminalSessionManager.focusIfNeeded(tid)
+    })
+  }, [gitHistoryTerminalId])
 
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalId: string) => {
@@ -999,9 +1020,16 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [shortcutAction, hidden, visibleTerminals, handleViewGitDiff, handleViewGitHistory, handleChangeWorkDir, handleOpenWorkDir, onOpenProjectEditor])
 
-  const handleTerminalFocus = useCallback((terminalId: string) => {
+  const handleTerminalFocus = useCallback((terminalId: string, event?: React.MouseEvent) => {
+    // Skip focus steal when click originates inside a browser panel
+    if (event?.target instanceof Element && event.target.closest('.browser-panel')) {
+      return
+    }
     void window.electronAPI.git.notifyTerminalFocus(terminalId)
     onTerminalFocus(terminalId)
+    // Ensure terminal gets keyboard focus even when clicking header area
+    // or activating the window — bypasses pointer suppression intentionally
+    terminalSessionManager.focusIfNeeded(terminalId)
   }, [onTerminalFocus])
 
   return (
@@ -1029,7 +1057,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                 key={termInfo.id}
                 className={`terminal-grid-cell ${activeTerminalId === termInfo.id ? 'active' : ''}`}
                 data-terminal-id={termInfo.id}
-                onClick={() => handleTerminalFocus(termInfo.id)}
+                onClick={(e) => handleTerminalFocus(termInfo.id, e)}
               >
                 <div className="terminal-grid-header">
                   <TerminalDropdown

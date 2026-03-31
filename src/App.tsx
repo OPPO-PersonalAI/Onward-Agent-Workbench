@@ -835,6 +835,42 @@ function AppContent({
     }
   }, [registerCloseSettings, handleCloseSettings])
 
+  // Restore focus when ProjectEditor or Settings panel closes
+  const prevProjectEditorOpenRef = useRef(projectEditorOpen)
+  const projectEditorTerminalIdRef = useRef(projectEditorTerminalId)
+  const prevShowSettingsRef = useRef(showSettings)
+
+  useEffect(() => {
+    projectEditorTerminalIdRef.current = projectEditorTerminalId
+  }, [projectEditorTerminalId])
+
+  useEffect(() => {
+    const wasOpen = prevProjectEditorOpenRef.current
+    prevProjectEditorOpenRef.current = projectEditorOpen
+    if (wasOpen && !projectEditorOpen) {
+      // Restore focus to the terminal that opened the editor
+      const terminalId = projectEditorTerminalIdRef.current ?? activeTab?.activeTerminalId
+      if (terminalId) {
+        requestAnimationFrame(() => {
+          terminalSessionManager.focusIfNeeded(terminalId)
+        })
+      }
+    }
+  }, [projectEditorOpen, activeTab?.activeTerminalId])
+
+  useEffect(() => {
+    const wasOpen = prevShowSettingsRef.current
+    prevShowSettingsRef.current = showSettings
+    if (wasOpen && !showSettings) {
+      const terminalId = activeTab?.activeTerminalId
+      if (terminalId) {
+        requestAnimationFrame(() => {
+          terminalSessionManager.focusIfNeeded(terminalId)
+        })
+      }
+    }
+  }, [showSettings, activeTab?.activeTerminalId])
+
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalIds: string[], directory: string) => {
     const platform = window.electronAPI.platform
@@ -1150,11 +1186,18 @@ function SettingsProviderWithHandler() {
         break
       }
       case 'switchTab': {
-        // Switch to the specified Tab
+        // Switch to the specified Tab and restore terminal focus
         if (action.index <= state.tabs.length) {
-          const tabId = state.tabs[action.index - 1]?.id
-          if (tabId) {
-            switchTab(tabId)
+          const targetTab = state.tabs[action.index - 1]
+          if (targetTab) {
+            closeSettings()
+            switchTab(targetTab.id)
+            const terminalId = targetTab.activeTerminalId
+            if (terminalId) {
+              setLastFocusOwner('terminal')
+              setLastFocusedTerminalId(terminalId)
+              requestTerminalFocus(terminalId, 'shortcut-activated')
+            }
           }
         }
         break
