@@ -1876,7 +1876,13 @@ export function GitDiffViewer({
     fontSize: diffFontSize,
     lineHeight: Math.round(diffFontSize * 1.5),
     automaticLayout: true,
-    scrollBeyondLastLine: false
+    scrollBeyondLastLine: false,
+    hideUnchangedRegions: {
+      enabled: true,
+      minimumLineCount: 3,
+      contextLineCount: 3,
+      revealLineCount: 20
+    }
   }), [diffFontSize, canEditFile])
 
   // Make sure the readOnly switch takes effect immediately
