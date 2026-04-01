@@ -939,7 +939,7 @@ export async function getGitBranchAndStatus(cwd: string): Promise<GitBranchAndSt
   try {
     const { stdout } = await execFileAsync(
       meta.gitExecutable || 'git',
-      ['-c', 'core.quotepath=false', 'status', '--porcelain=2', '--branch', '-uno'],
+      ['-c', 'core.quotepath=false', 'status', '--porcelain=2', '--branch', '-uall'],
       {
         cwd: meta.repoRoot,
         timeout: EXEC_TIMEOUT,
@@ -950,7 +950,7 @@ export async function getGitBranchAndStatus(cwd: string): Promise<GitBranchAndSt
         repoKey: meta.repoRoot,
         priority: 'high',
         dedupeKey: `branch-status:${resolve(meta.repoRoot)}`,
-        label: 'git status --porcelain=2 --branch -uno'
+        label: 'git status --porcelain=2 --branch -uall'
       }
     )
     const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
@@ -971,7 +971,7 @@ export async function getGitStatusSummary(cwd: string): Promise<TerminalGitStatu
   try {
     const { stdout } = await execFileAsync(
       gitExecutable,
-      ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uno'],
+      ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uall'],
       {
         cwd,
         timeout: EXEC_TIMEOUT,
@@ -981,7 +981,7 @@ export async function getGitStatusSummary(cwd: string): Promise<TerminalGitStatu
       {
         repoKey: cwd,
         priority: 'normal',
-        label: 'git status --porcelain -uno'
+        label: 'git status --porcelain -uall'
       }
     )
     const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')

@@ -1136,6 +1136,17 @@ export const TerminalGrid = memo(function TerminalGrid({
                         {termInfo.title}
                       </span>
                     )}
+                    {branch && (
+                      <span
+                        className={`${branchClassName} terminal-grid-copyable`}
+                        title={t('terminalGrid.branchTitle', { branch })}
+                        onDoubleClick={() => {
+                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
+                        }}
+                      >
+                        <span className="terminal-grid-branch-name">{branch}</span>
+                      </span>
+                    )}
                     {repoName && (
                       <span
                         className="terminal-grid-adaptive-repo terminal-grid-copyable"
@@ -1151,17 +1162,6 @@ export const TerminalGrid = memo(function TerminalGrid({
                           </svg>
                           <span className="terminal-grid-adaptive-hover-text">{repoName}</span>
                         </span>
-                      </span>
-                    )}
-                    {branch && (
-                      <span
-                        className={`${branchClassName} terminal-grid-copyable`}
-                        title={t('terminalGrid.branchTitle', { branch })}
-                        onDoubleClick={() => {
-                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
-                        }}
-                      >
-                        <span className="terminal-grid-branch-name">{branch}</span>
                       </span>
                     )}
                     {compactCwd && (
