@@ -35,6 +35,7 @@ For platform-related commands, always consider these three platforms:
     - After generating tray icons, update all referenced paths so the resource filenames and code stay consistent.
 - After the build completes, show the current status and provide the command to run the program. Example: `open "project-dir/release/mac-arm64/Onward 2-branch-name.app"` to launch the app.
 - Whenever `CLAUDE.md` is modified, automatically run `./claude-sync-to-agents.sh`.
+- Git commit messages must be written in English.
 - Hard rule: all code comments must use English. Do not use any Simplified Chinese in code comments.
 - Copyright and license compliance:
     - Never copy or adapt code from third-party projects, Stack Overflow, blog posts, or any other external source without verifying its license compatibility with Apache-2.0. Do not reproduce substantial code blocks whose origin is unclear. When in doubt, write an original implementation instead of reusing external snippets.

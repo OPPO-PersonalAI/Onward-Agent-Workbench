@@ -73,6 +73,27 @@ function normalizeVersion(value: unknown): string {
   return trimmed || '0.0.0'
 }
 
+function formatDailyTagForDisplay(tag: string): string | null {
+  const semverDailyMatch = /^v\d+\.\d+\.\d+-daily\.(\d{4})(\d{2})(\d{2})\.\d+$/.exec(tag)
+  if (semverDailyMatch) {
+    return `v${semverDailyMatch[1]}.${semverDailyMatch[2]}.${semverDailyMatch[3]}`
+  }
+
+  const legacyDailyMatch = /^v(\d{4})\.(\d{2})\.(\d{2})(?:\.\d+)?$/.exec(tag)
+  if (legacyDailyMatch) {
+    return `v${legacyDailyMatch[1]}.${legacyDailyMatch[2]}.${legacyDailyMatch[3]}`
+  }
+
+  return null
+}
+
+function formatTagForDisplay(tag: string, releaseChannel: ReleaseChannel): string {
+  if (releaseChannel === 'daily') {
+    return formatDailyTagForDisplay(tag) ?? tag
+  }
+  return tag
+}
+
 export function getAppInfo(): AppInfo {
   if (cachedInfo) return cachedInfo
 
@@ -94,7 +115,7 @@ export function getAppInfo(): AppInfo {
     displayName = `${displayName}-${branch}`
   }
   if (buildChannel === 'prod' && tag) {
-    displayName = `${productName} ${tag}`
+    displayName = `${productName} ${formatTagForDisplay(tag, releaseChannel)}`
   }
 
   cachedInfo = {
