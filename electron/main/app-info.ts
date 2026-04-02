@@ -8,11 +8,15 @@ import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 
 export type BuildChannel = 'dev' | 'prod'
+export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
 
 export interface AppInfo {
   buildChannel: BuildChannel
   branch: string | null
   tag: string | null
+  releaseChannel: ReleaseChannel
+  releaseOs: ReleaseOs
   version: string
   productName: string
   displayName: string
@@ -49,6 +53,20 @@ function normalizeTag(value: unknown): string | null {
   return trimmed ? trimmed : null
 }
 
+function normalizeReleaseOs(value: unknown): ReleaseOs {
+  if (value === 'macos' || value === 'windows' || value === 'linux') {
+    return value
+  }
+  return 'unknown'
+}
+
+function normalizeReleaseChannel(value: unknown): ReleaseChannel {
+  if (value === 'daily' || value === 'stable') {
+    return value
+  }
+  return 'unknown'
+}
+
 function normalizeVersion(value: unknown): string {
   if (typeof value !== 'string') return '0.0.0'
   const trimmed = value.trim()
@@ -67,6 +85,8 @@ export function getAppInfo(): AppInfo {
   const buildChannel = normalizeBuildChannel(pkg?.buildChannel ?? envBuild, isPackaged)
   const branch = normalizeBranch(pkg?.branch ?? envBranch)
   const tag = normalizeTag(pkg?.tag ?? process.env.ONWARD_TAG)
+  const releaseChannel = normalizeReleaseChannel(pkg?.releaseChannel)
+  const releaseOs = normalizeReleaseOs(pkg?.releaseOs)
   const version = normalizeVersion(pkg?.version ?? app.getVersion())
 
   let displayName = productName
@@ -81,6 +101,8 @@ export function getAppInfo(): AppInfo {
     buildChannel,
     branch,
     tag,
+    releaseChannel,
+    releaseOs,
     version,
     productName,
     displayName,
@@ -105,9 +127,15 @@ function getDevUserDataPath(displayName: string): string {
 
 export function initializeAppIdentity(): AppInfo {
   const appInfo = getAppInfo()
+  const forcedUserDataPath = String(process.env.ONWARD_USER_DATA_DIR || '').trim()
 
   if (app.getName() !== appInfo.displayName) {
     app.setName(appInfo.displayName)
+  }
+
+  if (forcedUserDataPath) {
+    app.setPath('userData', forcedUserDataPath)
+    return appInfo
   }
 
   if (appInfo.buildChannel === 'dev' && appInfo.isPackaged) {

@@ -9,7 +9,10 @@ on:
       - 'v[0-9]*'
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -23,13 +26,17 @@ jobs:
         include:
           - os: macos-latest    # Apple Silicon (arm64)
             arch: arm64
+            release_os: macos
           - os: macos-15-intel  # Intel (x64)
             arch: x64
+            release_os: macos
           # Windows and Linux - uncomment when ready:
           # - os: windows-latest
           #   arch: x64
+          #   release_os: windows
           # - os: ubuntu-latest
           #   arch: x64
+          #   release_os: linux
 
     runs-on: ${{ matrix.os }}
 
@@ -83,6 +90,7 @@ jobs:
       - name: Build release
         env:
           ONWARD_TAG: ${{ steps.tag.outputs.version }}
+          ONWARD_RELEASE_OS: ${{ matrix.release_os }}
         run: rm -rf out release && pnpm dist:release
 
       - name: Upload build artifacts
@@ -97,14 +105,29 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist-artifacts
           pattern: release-*
           merge-multiple: true
+
+      - name: Generate update manifests
+        env:
+          ONWARD_GITHUB_REPOSITORY: ${{ github.repository }}
+          ONWARD_RELEASE_TAG: ${{ github.ref_name }}
+          ONWARD_ARTIFACT_DIR: dist-artifacts
+          ONWARD_MANIFEST_DIR: update-manifests
+        run: node scripts/generate-update-manifest.js
 
       - name: Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -120,3 +143,34 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish update manifests to gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages
+            git worktree add gh-pages-worktree origin/gh-pages
+          else
+            git worktree add --detach gh-pages-worktree
+            (
+              cd gh-pages-worktree
+              git checkout --orphan gh-pages
+              git rm -rf . >/dev/null 2>&1 || true
+            )
+          fi
+          mkdir -p gh-pages-worktree/updates
+          rsync -a update-manifests/ gh-pages-worktree/updates/
+          touch gh-pages-worktree/.nojekyll
+          (
+            cd gh-pages-worktree
+            git add updates .nojekyll
+            git commit -m "Update manifests for ${RELEASE_TAG}" || true
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
+          )

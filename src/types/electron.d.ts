@@ -497,11 +497,16 @@ export interface ProjectAPI {
 import type { SettingsState, ShortcutAction, SettingsAPI } from './settings.d.ts'
 
 export type { SettingsState, ShortcutAction }
+export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
+export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
 export interface AppInfo {
   buildChannel: 'dev' | 'prod'
   branch: string | null
   tag: string | null
+  releaseChannel: ReleaseChannel
+  releaseOs: ReleaseOs
   version: string
   productName: string
   displayName: string
@@ -511,6 +516,29 @@ export interface AppInfo {
 export interface AppInfoAPI {
   get: () => Promise<AppInfo>
   readNotice: (locale?: string) => Promise<string | null>
+}
+
+export interface UpdaterStatus {
+  phase: UpdatePhase
+  supported: boolean
+  currentVersion: string
+  currentTag: string | null
+  currentChannel: ReleaseChannel
+  currentReleaseOs: ReleaseOs
+  targetVersion: string | null
+  targetTag: string | null
+  downloadedFileName: string | null
+  lastCheckedAt: number | null
+  error: string | null
+  bannerDismissed: boolean
+}
+
+export interface UpdaterAPI {
+  getStatus: () => Promise<UpdaterStatus>
+  checkNow: () => Promise<UpdaterStatus>
+  restartToUpdate: () => Promise<{ success: boolean; error?: string }>
+  dismissBanner: () => Promise<UpdaterStatus>
+  onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void
 }
 
 export interface GitRuntimeLatencySummary {
@@ -662,6 +690,7 @@ export interface ElectronAPI {
   project: ProjectAPI
   settings: SettingsAPI
   appInfo: AppInfoAPI
+  updater: UpdaterAPI
   browser: BrowserAPI
   codingAgentConfig: CodingAgentConfigAPI
   codingAgent: CodingAgentAPI

@@ -10,6 +10,12 @@ import { writeFileSync, unlinkSync, existsSync } from 'fs'
 import { getAppStateStorage } from './app-state-storage'
 import { getAppInfo } from './app-info'
 import { getTerminalBuffer, sendPromptViaBridge } from './ipc-handlers'
+import { getUpdateService } from './update-service'
+
+interface ApiServerOptions {
+  onRestartToApplyUpdate?: () => Promise<{ success: boolean; error?: string }>
+  onGracefulQuitForDebug?: () => Promise<{ success: boolean; error?: string }>
+}
 
 let server: http.Server | null = null
 let apiPort: number = 0
@@ -82,7 +88,7 @@ function parseQuery(url: string): Record<string, string> {
 /**
  * Start HTTP API Server
  */
-export async function startApiServer(mainWindow: BrowserWindow): Promise<number> {
+export async function startApiServer(mainWindow: BrowserWindow, options: ApiServerOptions = {}): Promise<number> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now()
 
@@ -101,9 +107,44 @@ export async function startApiServer(mainWindow: BrowserWindow): Promise<number>
             uptime: Math.floor((Date.now() - startTime) / 1000),
             app: appInfo.displayName,
             version: appInfo.version,
-            buildChannel: appInfo.buildChannel
+            buildChannel: appInfo.buildChannel,
+            releaseChannel: appInfo.releaseChannel,
+            releaseOs: appInfo.releaseOs
           })
           return
+        }
+
+        if (process.env.ONWARD_DEBUG === '1') {
+          if (method === 'GET' && pathname === '/api/debug/updater/status') {
+            sendJson(res, 200, getUpdateService().getStatus())
+            return
+          }
+
+          if (method === 'POST' && pathname === '/api/debug/updater/check') {
+            const status = await getUpdateService().checkNow()
+            sendJson(res, 200, status)
+            return
+          }
+
+          if (method === 'POST' && pathname === '/api/debug/updater/restart') {
+            if (!options.onRestartToApplyUpdate) {
+              sendJson(res, 501, { success: false, error: 'Updater restart callback is not configured.' })
+              return
+            }
+            const result = await options.onRestartToApplyUpdate()
+            sendJson(res, result.success ? 200 : 409, result)
+            return
+          }
+
+          if (method === 'POST' && pathname === '/api/debug/app/quit') {
+            if (!options.onGracefulQuitForDebug) {
+              sendJson(res, 501, { success: false, error: 'Graceful quit callback is not configured.' })
+              return
+            }
+            const result = await options.onGracefulQuitForDebug()
+            sendJson(res, result.success ? 200 : 409, result)
+            return
+          }
         }
 
         // GET /api/tasks

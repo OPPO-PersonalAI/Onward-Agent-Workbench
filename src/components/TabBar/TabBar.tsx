@@ -7,6 +7,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { TabItem } from './TabItem'
 import { useAppState } from '../../hooks/useAppState'
 import { useI18n } from '../../i18n/useI18n'
+import type { UpdaterStatus } from '../../types/electron.d.ts'
 import './TabBar.css'
 
 interface ConfirmDialogState {
@@ -34,6 +35,8 @@ export function TabBar() {
     tabName: ''
   })
   const [appName, setAppName] = useState('Onward 2')
+  const [updateStatus, setUpdateStatus] = useState<UpdaterStatus | null>(null)
+  const [isRestartingForUpdate, setIsRestartingForUpdate] = useState(false)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
 
@@ -53,8 +56,51 @@ export function TabBar() {
     }
   }, [])
 
+  useEffect(() => {
+    let isActive = true
+    window.electronAPI.updater.getStatus()
+      .then((status) => {
+        if (isActive) {
+          setUpdateStatus(status)
+        }
+      })
+      .catch(() => {})
+
+    const unsubscribe = window.electronAPI.updater.onStatusChanged((status) => {
+      setUpdateStatus(status)
+    })
+
+    return () => {
+      isActive = false
+      unsubscribe()
+    }
+  }, [])
+
   const highlightName = appName.startsWith('Onward') ? 'Onward' : null
   const restName = highlightName ? appName.slice(highlightName.length) : appName
+  const showUpdateBanner = updateStatus?.phase === 'downloaded' && !updateStatus.bannerDismissed
+  const installableVersion = updateStatus?.phase === 'downloaded' ? updateStatus.targetVersion : null
+
+  const handleRestartToUpdate = useCallback(async () => {
+    setIsRestartingForUpdate(true)
+    try {
+      const result = await window.electronAPI.updater.restartToUpdate()
+      if (!result.success) {
+        setIsRestartingForUpdate(false)
+      }
+    } catch {
+      setIsRestartingForUpdate(false)
+    }
+  }, [])
+
+  const handleDismissUpdateBanner = useCallback(async () => {
+    try {
+      const status = await window.electronAPI.updater.dismissBanner()
+      setUpdateStatus(status)
+    } catch {
+      // ignore dismiss failures
+    }
+  }, [])
 
   const handleCloseTab = (tabId: string, tabIndex: number) => {
     const tab = state.tabs.find(t => t.id === tabId)
@@ -133,7 +179,41 @@ export function TabBar() {
             ) : (
               <span className="app-name">{appName}</span>
             )}
+            {installableVersion && (
+              <span className="tab-bar-installable-version">
+                {t('tabBar.updateReady.installableVersion', { version: installableVersion })}
+              </span>
+            )}
           </div>
+
+          {showUpdateBanner && (
+            <div className="tab-bar-update-banner" role="status" aria-live="polite">
+              <span className="tab-bar-update-text">
+                {t('tabBar.updateReady.message', { version: updateStatus?.targetVersion || '' })}
+              </span>
+              <button
+                className="tab-bar-update-action"
+                type="button"
+                onClick={handleRestartToUpdate}
+                disabled={isRestartingForUpdate}
+                title={t('tabBar.updateReady.restart')}
+              >
+                {isRestartingForUpdate ? t('tabBar.updateReady.restarting') : t('tabBar.updateReady.restart')}
+              </button>
+              <button
+                className="tab-bar-update-close"
+                type="button"
+                onClick={handleDismissUpdateBanner}
+                title={t('tabBar.updateReady.dismiss')}
+                aria-label={t('tabBar.updateReady.dismiss')}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <line x1="9" y1="3" x2="3" y2="9" />
+                  <line x1="3" y1="3" x2="9" y2="9" />
+                </svg>
+              </button>
+            </div>
+          )}
 
           {/* Tab list */}
           <div className="tab-list">

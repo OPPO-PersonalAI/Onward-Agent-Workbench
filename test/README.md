@@ -9,6 +9,7 @@ This directory contains reusable automation notes and validation procedures for 
 
 - PromptSender UI behavior
 - Prompt send / execute flow and failure handling
+- Auto-update behavior, including "download only until explicit restart" and GitHub release publishing
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
 - Prompt cleanup and retention behavior
@@ -93,6 +94,9 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 | `ONWARD_AUTOTEST_EXIT=1` | Exit automatically after the suite finishes |
 | `ONWARD_DEBUG=1` | Enable debug logging |
 | `ONWARD_DEBUG_CAPTURE=1` | Capture screenshots during debugging |
+| `ONWARD_USER_DATA_DIR=/tmp/onward-user-data` | Override the app user-data directory for isolated local updater tests |
+| `ONWARD_UPDATE_BASE_URL=http://127.0.0.1:8765/updates` | Override the updater manifest base URL |
+| `ONWARD_UPDATE_CHECK_INTERVAL_MS=1000` | Override the periodic updater polling interval (minimum 1000 ms) |
 
 ## Automation Launch Commands
 
@@ -127,6 +131,41 @@ $env:ONWARD_DEBUG="1"
 ```
 
 ## Current Suite Inventory
+
+### Auto-Update Suites
+
+- `test/test-auto-update-local-e2e.mjs`
+  - Builds three macOS production fixtures
+  - Verifies periodic updater polling picks up a newer manifest automatically
+  - Verifies "graceful quit does not install"
+  - Verifies only explicit restart triggers helper installation and relaunch
+  - Verifies stale downloaded archives are cleaned up
+- `test/test-auto-update-github-e2e.mjs`
+  - Pushes a temporary tag to GitHub
+  - Waits for the `Daily Build` workflow to finish
+  - Verifies the GitHub Release assets
+  - Verifies the `gh-pages` updater manifest matches the pushed tag
+
+Run the local auto-update suite:
+
+```bash
+node test/test-auto-update-local-e2e.mjs
+```
+
+Run the GitHub release + manifest validation suite:
+
+```bash
+node test/test-auto-update-github-e2e.mjs --tag v2.1.0-daily.20260402.200 --create-tag
+```
+
+Optional: push the current HEAD to a temporary branch before pushing the tag.
+
+```bash
+node test/test-auto-update-github-e2e.mjs \
+  --tag v2.1.0-daily.20260402.200 \
+  --push-branch codex/auto-update-e2e-20260402 \
+  --create-tag
+```
 
 ### Phase 1: PromptSender UI
 

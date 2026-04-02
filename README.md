@@ -96,6 +96,7 @@ pnpm dist
 ## Documentation
 
 - Architecture: `docs/architecture.md`
+- Auto update: `docs/auto-update.md`
 - Build and release guide: `docs/build-and-release.md`
 - Design decisions: `docs/design-decisions.md`
 - API reference: `docs/api-reference.md`

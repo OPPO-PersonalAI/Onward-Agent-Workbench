@@ -245,6 +245,27 @@
   color: var(--text-3);
 }
 
+.settings-placeholder-note {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent);
+}
+
+.settings-placeholder-title {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+
+.settings-placeholder-text {
+  font-size: var(--font-xs);
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
 /* Shortcut Input style */
 .shortcut-input-wrapper {
   display: flex;
@@ -402,6 +423,12 @@
 .font-selector:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+.font-selector:disabled,
+.reset-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* Number Input style */

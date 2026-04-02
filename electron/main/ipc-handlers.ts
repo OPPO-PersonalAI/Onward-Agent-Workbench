@@ -57,6 +57,7 @@ import { openExternalUrlWithConfirm } from './external-link-guard'
 import { RipgrepSearchManager } from './ripgrep-search'
 import { browserViewManager } from './browser-view-manager'
 import { FileWatchManager } from './file-watch-manager'
+import { getUpdateService } from './update-service'
 
 let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
@@ -197,6 +198,7 @@ let promptBridgeCounter = 0
 
 interface RegisterIpcHandlersOptions {
   onSettingsChanged?: (settings: SettingsState) => void
+  onRestartToApplyUpdate?: () => Promise<{ success: boolean; error?: string }>
 }
 
 /**
@@ -440,6 +442,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       }
     }
     return null
+  })
+
+  ipcMain.handle('updater:get-status', () => {
+    return getUpdateService().getStatus()
+  })
+
+  ipcMain.handle('updater:check-now', async () => {
+    return await getUpdateService().checkNow()
+  })
+
+  ipcMain.handle('updater:restart-to-update', async () => {
+    if (!options.onRestartToApplyUpdate) {
+      return { success: false, error: 'Restart action is unavailable.' }
+    }
+    return await options.onRestartToApplyUpdate()
+  })
+
+  ipcMain.handle('updater:dismiss-banner', () => {
+    return getUpdateService().dismissBanner()
   })
 
   // Create a new terminal
@@ -1168,6 +1189,10 @@ export function cleanupIpcHandlers(): void {
   fileWatchManager = null
   ipcMain.removeHandler('app:get-info')
   ipcMain.removeHandler('app:read-notice')
+  ipcMain.removeHandler('updater:get-status')
+  ipcMain.removeHandler('updater:check-now')
+  ipcMain.removeHandler('updater:restart-to-update')
+  ipcMain.removeHandler('updater:dismiss-banner')
   ipcMain.removeHandler('terminal:create')
   ipcMain.removeHandler('terminal:write')
   ipcMain.removeHandler('terminal:write-split')

@@ -39,35 +39,42 @@ Use this when preparing a release-style package.
 Local command:
 
 ```bash
-rm -rf out release && ONWARD_TAG=v2026.04.02 pnpm dist:release
+rm -rf out release && ONWARD_TAG=v2.1.0-daily.20260402.1 ONWARD_RELEASE_OS=macos pnpm dist:release
 ```
 
 Behavior:
 
 - Uses the production packaging path
 - Reads the release tag from `ONWARD_TAG`
+- Reads the release operating system from `ONWARD_RELEASE_OS` when provided
 - Displays the raw tag in the app title
 - Converts the tag date into an Electron-compatible version number
 
 Examples:
 
-- Tag: `v2026.04.02`
-- App title: `Onward 2 v2026.04.02`
-- App version: `2026.4.2`
-- Artifact name example: `Onward 2-v2026.04.02-arm64.dmg`
+- Tag: `v2.1.0-daily.20260402.1`
+- App title: `Onward 2 v2.1.0-daily.20260402.1`
+- App version: `2.1.0-daily.20260402.1`
+- Artifact name example: `Onward 2-v2.1.0-daily.20260402.1-macos-arm64.dmg`
 
 Supported tag formats:
 
+- `vMAJOR.MINOR.PATCH`
+- `vMAJOR.MINOR.PATCH-daily.YYYYMMDD.N`
 - `vYYYY.MM.DD`
 - `vYYYY.MM.DD.N`
 
 Examples:
 
+- `v2.1.0`
+- `v2.1.0-daily.20260402.1`
 - `v2026.04.02`
 - `v2026.04.02.2`
 
 Version mapping rules:
 
+- `v2.1.0` -> `2.1.0`
+- `v2.1.0-daily.20260402.1` -> `2.1.0-daily.20260402.1`
 - `v2026.04.02` -> `2026.4.2`
 - `v2026.04.02.2` -> `2026.4.2-2`
 
@@ -84,9 +91,11 @@ Current trigger:
 Current build behavior:
 
 1. Build on `macos-latest` for `arm64`
-2. Build on `macos-13` for `x64`
+2. Build on `macos-15-intel` for `x64`
 3. Upload packaged artifacts as workflow artifacts
-4. Publish a GitHub prerelease for the same tag
+4. Generate update manifests for `channel / os / arch`
+5. Publish a GitHub prerelease for the same tag
+6. Publish manifests to the `gh-pages` branch
 
 Current command executed in CI:
 
@@ -95,6 +104,22 @@ rm -rf out release && pnpm dist:release
 ```
 
 The workflow injects the pushed tag through `ONWARD_TAG`.
+The workflow injects the platform label through `ONWARD_RELEASE_OS`.
+
+Current artifact naming rule:
+
+- `${productName}-${tag}-${releaseOs}-${arch}.${ext}`
+
+Examples:
+
+- `Onward 2-v2.1.0-daily.20260402.1-macos-arm64.dmg`
+- `Onward 2-v2.1.0-daily.20260402.1-macos-x64.zip`
+
+Reserved operating system labels for future expansion:
+
+- `macos`
+- `windows`
+- `linux`
 
 ## 4. Daily Build vs Formal Release
 
@@ -111,12 +136,13 @@ Recommended release discipline for this repository:
 - `pnpm dist:dev` for local developer packages
 - Branch-based CI for verification only
 - Optional nightly workflow for preview packages
-- Tag-based workflow for release candidates and formal release packages
+- Tag-based workflow for Daily packages, release candidates, and formal release packages
 
-In other words:
+In this repository, the current plan is:
 
-- Daily Build usually comes from branch or scheduled workflows
-- Formal release usually comes from a signed release tag
+- `Daily` packages come from Daily tags such as `v2.1.0-daily.20260402.1`
+- `Stable` packages will later come from stable tags such as `v2.1.0`
+- The same artifact naming and manifest structure will be reused across macOS, Linux, and Windows
 
 ## 5. How To Publish A Formal Release
 
@@ -239,6 +265,7 @@ Already implemented:
 
 - `dist:release` script
 - Tag injection through `ONWARD_TAG`
+- Release OS injection through `ONWARD_RELEASE_OS`
 - Release title display with tag
 - Version mapping from tag date
 - GitHub Actions macOS matrix build
@@ -278,6 +305,12 @@ Launch the locally packaged macOS app:
 
 ```bash
 open "release/mac-arm64/Onward 2.app"
+```
+
+Local release build with explicit operating system label:
+
+```bash
+rm -rf out release && ONWARD_TAG=v2026.04.02.4 ONWARD_RELEASE_OS=macos pnpm dist:release
 ```
 
 View a release with GitHub CLI:

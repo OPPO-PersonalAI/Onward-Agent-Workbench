@@ -5,6 +5,13 @@
   "author": "OPPO",
   "description": "VS Code style terminal application built with Electron + React",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OPPO-PersonalAI/Onward.git"
+  },
+  "onward": {
+    "updateManifestBaseUrl": "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

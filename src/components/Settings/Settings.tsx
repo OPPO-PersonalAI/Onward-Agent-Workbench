@@ -13,6 +13,7 @@ import { ThemeSelector } from './ThemeSelector'
 import { DEFAULT_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE } from '../../constants/terminal'
 import { DEFAULT_GIT_DIFF_FONT_SIZE, MIN_GIT_DIFF_FONT_SIZE, MAX_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import type { ShortcutConfig, TerminalStyleConfig, GlobalTerminalStyle } from '../../types/settings'
+import type { AppInfo, UpdaterStatus } from '../../types/electron.d.ts'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
 import './Settings.css'
@@ -92,11 +93,44 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     applyStyleGlobally
   } = useSettings()
   const { t, locale, locales, updateLanguage } = useI18n()
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
+  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null)
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(
     terminals[0]?.id || ''
   )
   const [isDragging, setIsDragging] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const currentChannelKey: TranslationKey = (() => {
+    switch (appInfo?.releaseChannel) {
+      case 'stable':
+        return 'settings.update.channel.stable'
+      case 'daily':
+        return 'settings.update.channel.daily'
+      default:
+        return 'settings.update.channel.unavailable'
+    }
+  })()
+  const updateStatusKey: TranslationKey = (() => {
+    switch (updaterStatus?.phase) {
+      case 'checking':
+        return 'settings.update.statusValue.checking'
+      case 'downloading':
+        return 'settings.update.statusValue.downloading'
+      case 'downloaded':
+        return 'settings.update.statusValue.downloaded'
+      case 'up-to-date':
+        return 'settings.update.statusValue.up-to-date'
+      case 'unsupported':
+        return 'settings.update.statusValue.unsupported'
+      case 'error':
+        return 'settings.update.statusValue.error'
+      default:
+        return 'settings.update.statusValue.idle'
+    }
+  })()
+  const autoUpdateEnabledKey: TranslationKey = updaterStatus?.supported
+    ? 'settings.update.enabled'
+    : 'settings.update.disabled'
 
   // Get the style of the currently selected terminal
   const currentTerminalStyle = useMemo(() => {
@@ -147,6 +181,34 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   }, [])
 
   // Handle drag move and end
+  useEffect(() => {
+    let isActive = true
+    window.electronAPI.appInfo.get()
+      .then((info) => {
+        if (isActive) {
+          setAppInfo(info)
+        }
+      })
+      .catch(() => {})
+
+    window.electronAPI.updater.getStatus()
+      .then((status) => {
+        if (isActive) {
+          setUpdaterStatus(status)
+        }
+      })
+      .catch(() => {})
+
+    const unsubscribe = window.electronAPI.updater.onStatusChanged((status) => {
+      setUpdaterStatus(status)
+    })
+
+    return () => {
+      isActive = false
+      unsubscribe()
+    }
+  }, [])
+
   useEffect(() => {
     if (!isDragging) return
 
@@ -199,9 +261,48 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       <div className="settings-content">
         {/* Version Info */}
         <div className="settings-version">
-          <span className="settings-version-number">v2.0.1</span>
+          <span className="settings-version-number">{appInfo?.tag || `v${appInfo?.version || '2.0.1'}`}</span>
           <span className="settings-version-label">{t('settings.versionLabel')}</span>
           <span className="settings-version-copyright">Copyright 2026 OPPO</span>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-title">{t('settings.section.updates')}</div>
+          <div className="settings-section-content">
+            <div className="settings-group">
+              <div className="settings-row">
+                <span className="settings-row-label">{t('settings.update.currentChannel')}</span>
+                <div className="settings-row-input">
+                  <span className="settings-row-value">{t(currentChannelKey)}</span>
+                </div>
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t('settings.update.targetChannel')}</span>
+                <div className="settings-row-input">
+                  <select className="font-selector" value="daily" disabled aria-label={t('settings.update.targetChannel')}>
+                    <option value="daily">{t('settings.update.channel.daily')}</option>
+                    <option value="stable">{t('settings.update.channel.stable')}</option>
+                  </select>
+                </div>
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t('settings.update.autoCheck')}</span>
+                <div className="settings-row-input">
+                  <button className="reset-btn" type="button" disabled>{t(autoUpdateEnabledKey)}</button>
+                </div>
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t('settings.update.status')}</span>
+                <div className="settings-row-input">
+                  <span className="settings-row-value">{t(updateStatusKey)}</span>
+                </div>
+              </div>
+              <div className="settings-placeholder-note">
+                <div className="settings-placeholder-title">{t('settings.update.placeholderTitle')}</div>
+                <div className="settings-placeholder-text">{t('settings.update.placeholderBody')}</div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Language Section */}

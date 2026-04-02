@@ -219,8 +219,79 @@
   color: var(--text-2);
 }
 
+.tab-bar-installable-version {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
 .tab-bar-title .app-name-highlight {
   color: var(--accent);
+}
+
+.tab-bar-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 10px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-1));
+  color: var(--text-1);
+  -webkit-app-region: no-drag;
+}
+
+.tab-bar-update-text {
+  font-size: var(--font-sm);
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.tab-bar-update-action,
+.tab-bar-update-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+.tab-bar-update-action {
+  padding: 4px 10px;
+  background: var(--accent);
+  color: var(--bg-0);
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
+.tab-bar-update-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 84%, white);
+}
+
+.tab-bar-update-action:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.tab-bar-update-close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.tab-bar-update-close:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
 }
 
 /* Confirm Dialog Overlay */

@@ -36,17 +36,95 @@ function getBaseProductName() {
   }
 }
 
+function assertNoInjectedBuildSecrets() {
+  const forbiddenEnvKeys = ['GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_API_TOKEN']
+  const injectedKeys = forbiddenEnvKeys.filter(key => {
+    const value = process.env[key]
+    return typeof value === 'string' && value.trim().length > 0
+  })
+
+  if (injectedKeys.length > 0) {
+    console.error(`Error: Release build step must not receive repository tokens: ${injectedKeys.join(', ')}`)
+    process.exit(1)
+  }
+}
+
+function getReleaseOsName() {
+  const configured = String(process.env.ONWARD_RELEASE_OS || '').trim().toLowerCase()
+  if (configured === 'macos' || configured === 'windows' || configured === 'linux') {
+    return configured
+  }
+
+  switch (process.platform) {
+    case 'darwin':
+      return 'macos'
+    case 'win32':
+      return 'windows'
+    case 'linux':
+      return 'linux'
+    default:
+      console.error(`Error: Unsupported platform "${process.platform}" for release build.`)
+      process.exit(1)
+  }
+}
+
+function parseSemverReleaseTag(tag) {
+  const match = /^v(\d+)\.(\d+)\.(\d+)(?:-(daily)\.(\d{8})\.(\d+))?$/.exec(tag)
+  if (!match) {
+    return null
+  }
+
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  const patch = Number(match[3])
+  const prereleaseType = match[4] || null
+  const buildDate = match[5] || null
+  const buildNumber = match[6] || null
+
+  if (prereleaseType === 'daily') {
+    const year = Number(buildDate.slice(0, 4))
+    const month = Number(buildDate.slice(4, 6))
+    const day = Number(buildDate.slice(6, 8))
+    const utc = new Date(Date.UTC(year, month - 1, day))
+    const isValidDate =
+      utc.getUTCFullYear() === year &&
+      utc.getUTCMonth() === month - 1 &&
+      utc.getUTCDate() === day
+
+    if (!isValidDate) {
+      console.error(`Error: Invalid calendar date in tag "${tag}".`)
+      process.exit(1)
+    }
+  }
+
+  return {
+    tag,
+    version: tag.slice(1),
+    releaseChannel: prereleaseType === 'daily' ? 'daily' : 'stable',
+    major,
+    minor,
+    patch,
+    buildDate,
+    buildNumber
+  }
+}
+
 function parseReleaseTag(tag) {
   if (!tag) {
     console.error('Error: ONWARD_TAG environment variable is not set.')
-    console.error('Usage: ONWARD_TAG=v2026.04.01 node scripts/dist-release.js')
+    console.error('Usage: ONWARD_TAG=v2.1.0-daily.20260402.1 node scripts/dist-release.js')
     process.exit(1)
+  }
+
+  const semverRelease = parseSemverReleaseTag(tag)
+  if (semverRelease) {
+    return semverRelease
   }
 
   const match = /^v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$/.exec(tag)
   if (!match) {
     console.error(`Error: Invalid tag format "${tag}".`)
-    console.error('Expected format: v2026.04.01 or v2026.04.01.2')
+    console.error('Expected format: v2.1.0, v2.1.0-daily.20260402.1, v2026.04.01, or v2026.04.01.2')
     process.exit(1)
   }
 
@@ -70,16 +148,22 @@ function parseReleaseTag(tag) {
 
   return {
     tag,
-    version
+    version,
+    releaseChannel: 'daily'
   }
 }
 
+assertNoInjectedBuildSecrets()
+
 const release = parseReleaseTag(process.env.ONWARD_TAG)
 const baseProductName = getBaseProductName()
-const artifactName = `${baseProductName}-${release.tag}-\${arch}.\${ext}`
+const releaseOs = getReleaseOsName()
+const artifactName = `${baseProductName}-${release.tag}-${releaseOs}-\${arch}.\${ext}`
 
 console.log(`Building release with tag: ${release.tag}`)
 console.log(`Resolved app version: ${release.version}`)
+console.log(`Resolved release channel: ${release.releaseChannel}`)
+console.log(`Resolved release OS: ${releaseOs}`)
 
 run('node', [join(__dirname, 'check-chinese-comments.js')])
 // Generate third-party license notices for binary distribution
@@ -93,6 +177,8 @@ run('electron-builder', [
   `${q}-c.extraMetadata.version=${release.version}${q}`,
   '-c.extraMetadata.buildChannel=prod',
   `${q}-c.extraMetadata.tag=${release.tag}${q}`,
+  `${q}-c.extraMetadata.releaseChannel=${release.releaseChannel}${q}`,
+  `${q}-c.extraMetadata.releaseOs=${releaseOs}${q}`,
   '-c.npmRebuild=false',
   '--publish',
   'never'

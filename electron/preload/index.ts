@@ -32,6 +32,10 @@ export interface TerminalBufferResult {
   error?: string
 }
 
+export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
+export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+
 export type PromptBridgeAction = 'send' | 'execute' | 'send-and-execute'
 
 export interface PromptBridgeSendRequest {
@@ -610,6 +614,8 @@ export interface AppInfo {
   buildChannel: 'dev' | 'prod'
   branch: string | null
   tag: string | null
+  releaseChannel: ReleaseChannel
+  releaseOs: ReleaseOs
   version: string
   productName: string
   displayName: string
@@ -619,6 +625,29 @@ export interface AppInfo {
 export interface AppInfoAPI {
   get: () => Promise<AppInfo>
   readNotice: () => Promise<string | null>
+}
+
+export interface UpdaterStatus {
+  phase: UpdatePhase
+  supported: boolean
+  currentVersion: string
+  currentTag: string | null
+  currentChannel: ReleaseChannel
+  currentReleaseOs: ReleaseOs
+  targetVersion: string | null
+  targetTag: string | null
+  downloadedFileName: string | null
+  lastCheckedAt: number | null
+  error: string | null
+  bannerDismissed: boolean
+}
+
+export interface UpdaterAPI {
+  getStatus: () => Promise<UpdaterStatus>
+  checkNow: () => Promise<UpdaterStatus>
+  restartToUpdate: () => Promise<{ success: boolean; error?: string }>
+  dismissBanner: () => Promise<UpdaterStatus>
+  onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void
 }
 
 export interface GitRuntimeLatencySummary {
@@ -1163,6 +1192,30 @@ const appInfoAPI: AppInfoAPI = {
   }
 }
 
+const updaterAPI: UpdaterAPI = {
+  getStatus: () => {
+    return ipcRenderer.invoke('updater:get-status')
+  },
+  checkNow: () => {
+    return ipcRenderer.invoke('updater:check-now')
+  },
+  restartToUpdate: () => {
+    return ipcRenderer.invoke('updater:restart-to-update')
+  },
+  dismissBanner: () => {
+    return ipcRenderer.invoke('updater:dismiss-banner')
+  },
+  onStatusChanged: (callback: (status: UpdaterStatus) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, status: UpdaterStatus) => {
+      callback(status)
+    }
+    ipcRenderer.on('updater:status-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('updater:status-changed', listener)
+    }
+  }
+}
+
 const debugEnabled = process.env.ONWARD_DEBUG === '1' || process.env.ELECTRON_ENABLE_LOGGING === '1'
 const debugProfileEnabled = process.env.ONWARD_PROFILE === '1'
 const debugProfileCwd = process.env.ONWARD_PROFILE_CWD || null
@@ -1313,6 +1366,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   project: projectAPI,
   settings: settingsAPI,
   appInfo: appInfoAPI,
+  updater: updaterAPI,
   browser: browserAPI,
   codingAgentConfig: codingAgentConfigAPI,
   codingAgent: codingAgentAPI,

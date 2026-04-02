@@ -21,9 +21,11 @@ import { ptyManager } from './pty-manager'
 import { isSameAppNavigation, openExternalUrlWithConfirm } from './external-link-guard'
 import { startApiServer, stopApiServer } from './api-server'
 import { tMain } from './localization'
+import { getUpdateService } from './update-service'
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
+let installUpdateOnQuit = false
 
 if (process.env.ONWARD_DISABLE_GPU === '1') {
   app.disableHardwareAcceleration()
@@ -50,6 +52,7 @@ export async function requestQuit(): Promise<void> {
   if (isQuitting) return
   if (await confirmQuit()) {
     isQuitting = true
+    installUpdateOnQuit = false
     const shutdownResult = await ptyManager.shutdownAll()
     if (shutdownResult.timedOut > 0) {
       console.warn(
@@ -58,6 +61,49 @@ export async function requestQuit(): Promise<void> {
     }
     app.quit()
   }
+}
+
+export async function requestRestartToApplyUpdate(): Promise<{ success: boolean; error?: string }> {
+  if (isQuitting) {
+    return { success: false, error: 'Application is already quitting.' }
+  }
+
+  const result = getUpdateService().requestRestartToUpdate()
+  if (!result.success) {
+    return result
+  }
+
+  isQuitting = true
+  installUpdateOnQuit = true
+
+  const shutdownResult = await ptyManager.shutdownAll()
+  if (shutdownResult.timedOut > 0) {
+    console.warn(
+      `[PTY] shutdown timed out: ${shutdownResult.timedOut}/${shutdownResult.total}`
+    )
+  }
+
+  app.quit()
+  return { success: true }
+}
+
+export async function requestQuitForDebug(): Promise<{ success: boolean; error?: string }> {
+  if (isQuitting) {
+    return { success: false, error: 'Application is already quitting.' }
+  }
+
+  isQuitting = true
+  installUpdateOnQuit = false
+
+  const shutdownResult = await ptyManager.shutdownAll()
+  if (shutdownResult.timedOut > 0) {
+    console.warn(
+      `[PTY] shutdown timed out: ${shutdownResult.timedOut}/${shutdownResult.total}`
+    )
+  }
+
+  app.quit()
+  return { success: true }
 }
 
 // Build menu template
@@ -248,7 +294,8 @@ function createWindow(displayName: string): void {
   registerIpcHandlers(mainWindow, {
     onSettingsChanged: () => {
       Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(displayName)))
-    }
+    },
+    onRestartToApplyUpdate: requestRestartToApplyUpdate
   })
 
   // Set up window shortcuts (before-input-event)
@@ -296,9 +343,13 @@ app.whenReady().then(() => {
 
   // Start HTTP API Server (for use by onward-bridge CLI)
   if (mainWindow) {
-    startApiServer(mainWindow).catch((error) => {
+    startApiServer(mainWindow, {
+      onRestartToApplyUpdate: requestRestartToApplyUpdate,
+      onGracefulQuitForDebug: requestQuitForDebug
+    }).catch((error) => {
       console.error('[API Server] Failed to start:', error)
     })
+    getUpdateService().start(mainWindow)
   }
 
   app.on('activate', () => {
@@ -330,6 +381,10 @@ app.on('before-quit', async (e) => {
 
 // Move the cleanup logic to will-quit (it will be triggered after confirming the exit)
 app.on('will-quit', () => {
+  if (installUpdateOnQuit) {
+    getUpdateService().installDownloadedUpdateOnQuit()
+  }
+  getUpdateService().stop()
   stopApiServer()
   cleanupIpcHandlers()
   getTrayManager().destroy()
