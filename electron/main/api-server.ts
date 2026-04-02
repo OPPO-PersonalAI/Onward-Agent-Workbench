@@ -100,7 +100,8 @@ export async function startApiServer(mainWindow: BrowserWindow): Promise<number>
             pid: process.pid,
             uptime: Math.floor((Date.now() - startTime) / 1000),
             app: appInfo.displayName,
-            version: appInfo.buildChannel
+            version: appInfo.version,
+            buildChannel: appInfo.buildChannel
           })
           return
         }

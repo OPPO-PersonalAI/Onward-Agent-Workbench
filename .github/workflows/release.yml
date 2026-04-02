@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: 2026 OPPO
+# SPDX-License-Identifier: Apache-2.0
+
+name: Daily Build
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest    # Apple Silicon (arm64)
+            arch: arm64
+          - os: macos-13        # Intel (x64)
+            arch: x64
+          # Windows and Linux - uncomment when ready:
+          # - os: windows-latest
+          #   arch: x64
+          # - os: ubuntu-latest
+          #   arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: echo "store-path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.store-path }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-pnpm-
+
+      - name: Cache Electron and electron-builder
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: ${{ runner.os }}-${{ matrix.arch }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-electron-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Extract tag name
+        id: tag
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release
+        env:
+          ONWARD_TAG: ${{ steps.tag.outputs.version }}
+        run: rm -rf out release && pnpm dist:release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ runner.os }}-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Upload artifacts to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Daily Build ${{ github.ref_name }}
+          files: |
+            dist-artifacts/*.dmg
+            dist-artifacts/*.zip
+          draft: false
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

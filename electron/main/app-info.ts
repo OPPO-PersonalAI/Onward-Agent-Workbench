@@ -12,6 +12,8 @@ export type BuildChannel = 'dev' | 'prod'
 export interface AppInfo {
   buildChannel: BuildChannel
   branch: string | null
+  tag: string | null
+  version: string
   productName: string
   displayName: string
   isPackaged: boolean
@@ -41,6 +43,18 @@ function normalizeBranch(value: unknown): string | null {
   return trimmed ? trimmed : null
 }
 
+function normalizeTag(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+function normalizeVersion(value: unknown): string {
+  if (typeof value !== 'string') return '0.0.0'
+  const trimmed = value.trim()
+  return trimmed || '0.0.0'
+}
+
 export function getAppInfo(): AppInfo {
   if (cachedInfo) return cachedInfo
 
@@ -52,15 +66,22 @@ export function getAppInfo(): AppInfo {
   const productName = (pkg?.productName as string) || app.getName() || 'Onward 2'
   const buildChannel = normalizeBuildChannel(pkg?.buildChannel ?? envBuild, isPackaged)
   const branch = normalizeBranch(pkg?.branch ?? envBranch)
+  const tag = normalizeTag(pkg?.tag ?? process.env.ONWARD_TAG)
+  const version = normalizeVersion(pkg?.version ?? app.getVersion())
 
   let displayName = productName
   if (buildChannel === 'dev' && branch && !displayName.includes(branch)) {
     displayName = `${displayName}-${branch}`
   }
+  if (buildChannel === 'prod' && tag) {
+    displayName = `${productName} ${tag}`
+  }
 
   cachedInfo = {
     buildChannel,
     branch,
+    tag,
+    version,
     productName,
     displayName,
     isPackaged

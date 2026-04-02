@@ -501,6 +501,8 @@ export type { SettingsState, ShortcutAction }
 export interface AppInfo {
   buildChannel: 'dev' | 'prod'
   branch: string | null
+  tag: string | null
+  version: string
   productName: string
   displayName: string
   isPackaged: boolean

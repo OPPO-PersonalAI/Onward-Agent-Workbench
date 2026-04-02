@@ -96,8 +96,10 @@ pnpm dist
 ## Documentation
 
 - Architecture: `docs/architecture.md`
+- Build and release guide: `docs/build-and-release.md`
 - Design decisions: `docs/design-decisions.md`
 - API reference: `docs/api-reference.md`
+- GitHub daily build: `docs/github-release-build.md`
 - Test guide: `test/README.md`
 
 ## Testing

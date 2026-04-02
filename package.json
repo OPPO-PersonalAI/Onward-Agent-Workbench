@@ -17,6 +17,7 @@
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder",
     "dist:dev": "node scripts/dist-dev.js",
+    "dist:release": "node scripts/dist-release.js",
     "generate-notices": "license-checker-rseidelsohn --production --plainVertical --out ThirdPartyNotices.txt"
   },
   "build": {
