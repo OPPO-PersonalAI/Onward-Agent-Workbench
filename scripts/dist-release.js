@@ -93,5 +93,7 @@ run('electron-builder', [
   `${q}-c.extraMetadata.version=${release.version}${q}`,
   '-c.extraMetadata.buildChannel=prod',
   `${q}-c.extraMetadata.tag=${release.tag}${q}`,
-  '-c.npmRebuild=false'
+  '-c.npmRebuild=false',
+  '--publish',
+  'never'
 ])
