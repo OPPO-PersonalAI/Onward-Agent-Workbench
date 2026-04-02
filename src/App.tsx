@@ -26,7 +26,7 @@ import {
   buildPromptExportPayload,
   formatExportFileName,
   parsePromptExportPayload,
-  type PromptImportResult
+  type ImportPrepareResult
 } from './utils/prompt-io'
 import { useI18n } from './i18n/useI18n'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
@@ -252,33 +252,22 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     }
   }, [getTabDisplayName, state, t])
 
-  const handleImportAllPrompts = useCallback(async (): Promise<PromptImportResult> => {
+  const handlePrepareImport = useCallback(async (): Promise<ImportPrepareResult> => {
     const fileResult = await window.electronAPI.dialog.openTextFile({
       title: t('app.importPrompts'),
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
 
     if (!fileResult.success) {
-      return {
-        success: false,
-        canceled: fileResult.canceled,
-        globalImported: 0,
-        localImported: 0,
-        skippedDuplicate: 0,
-        error: fileResult.error
+      if (fileResult.canceled) {
+        return { success: false, globals: [], locals: [], duplicateCount: 0 }
       }
+      return { success: false, globals: [], locals: [], duplicateCount: 0, error: fileResult.error }
     }
 
     const parsed = parsePromptExportPayload(fileResult.content ?? '')
     if (!parsed.success) {
-      console.error('Failed to parse prompt import payload:', parsed.error)
-      return {
-        success: false,
-        globalImported: 0,
-        localImported: 0,
-        skippedDuplicate: 0,
-        error: parsed.error
-      }
+      return { success: false, globals: [], locals: [], duplicateCount: 0, error: parsed.error }
     }
 
     const existingPrompts = [
@@ -286,14 +275,14 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       ...state.tabs.flatMap(item => item.localPrompts)
     ]
     const plan = buildImportPlan(parsed.payload, existingPrompts)
-    importPrompts(plan.globals, plan.locals)
+
     return {
       success: true,
-      globalImported: plan.globals.length,
-      localImported: plan.locals.length,
-      skippedDuplicate: plan.duplicateCount
+      globals: plan.globals,
+      locals: plan.locals,
+      duplicateCount: plan.duplicateCount
     }
-  }, [importPrompts, state.globalPrompts, state.tabs, t])
+  }, [state.globalPrompts, state.tabs, t])
 
   return (
     <PromptNotebook
@@ -315,7 +304,8 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       globalPromptIds={globalPromptIds}
       promptCleanup={state.promptCleanup}
       onExportAllPrompts={handleExportAllPrompts}
-      onImportAllPrompts={handleImportAllPrompts}
+      onPrepareImport={handlePrepareImport}
+      onExecuteImport={importPrompts}
       onTouchPromptLastUsed={onTouchPromptLastUsed}
       onCleanupPrompts={onCleanupPrompts}
       onUpdatePromptCleanup={onUpdatePromptCleanup}

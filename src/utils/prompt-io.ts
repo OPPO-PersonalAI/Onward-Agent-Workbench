@@ -65,6 +65,14 @@ export interface PromptImportResult {
   error?: string
 }
 
+export interface ImportPrepareResult {
+  success: boolean
+  globals: Prompt[]
+  locals: Prompt[]
+  duplicateCount: number
+  error?: string
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

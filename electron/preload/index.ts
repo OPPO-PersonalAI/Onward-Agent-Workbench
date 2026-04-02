@@ -1232,6 +1232,12 @@ const browserAPI: BrowserAPI = {
   clearCookies: (maxAge?: number) => {
     return ipcRenderer.invoke('browser:clear-cookies', maxAge)
   },
+  setRememberCookies: (rememberCookies: boolean) => {
+    return ipcRenderer.invoke('browser:set-remember-cookies', rememberCookies) as Promise<{ rememberCookies: boolean }>
+  },
+  showCookieMenu: (options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => {
+    return ipcRenderer.invoke('browser:show-cookie-menu', options) as Promise<{ action: string; rememberCookies?: boolean } | null>
+  },
   onUrlChanged: (callback: (id: string, url: string) => void) => {
     const listener = (_: Electron.IpcRendererEvent, id: string, url: string) => {
       callback(id, url)

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { app, ipcMain, BrowserWindow, dialog, shell } from 'electron'
+import { app, ipcMain, BrowserWindow, Menu, dialog, shell } from 'electron'
 import { join, resolve } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
@@ -660,6 +660,43 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return browserViewManager.clearCookies(maxAge)
   })
 
+  ipcMain.handle('browser:set-remember-cookies', (_, rememberCookies: boolean) => {
+    return browserViewManager.setRememberCookies(rememberCookies)
+  })
+
+  ipcMain.handle(
+    'browser:show-cookie-menu',
+    (_, options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => {
+      return new Promise<{ action: string; rememberCookies?: boolean } | null>((resolve) => {
+        const { rememberCookies, labels } = options
+        const items: Electron.MenuItemConstructorOptions[] = [
+          {
+            label: labels.remember,
+            type: 'checkbox',
+            checked: rememberCookies,
+            click: () => resolve({ action: 'toggleRemember', rememberCookies: !rememberCookies })
+          }
+        ]
+
+        if (rememberCookies) {
+          items.push(
+            { type: 'separator' },
+            { label: labels.clearDay, click: () => resolve({ action: 'clear', rememberCookies: undefined }) },
+            { label: labels.clearWeek, click: () => resolve({ action: 'clearWeek', rememberCookies: undefined }) },
+            { type: 'separator' },
+            { label: labels.clearAll, click: () => resolve({ action: 'clearAll', rememberCookies: undefined }) }
+          )
+        }
+
+        const menu = Menu.buildFromTemplate(items)
+        menu.popup({
+          window: mainWindow,
+          callback: () => resolve(null)
+        })
+      })
+    }
+  )
+
   // Command preset storage handlers
   const commandPresetStorage = getCommandPresetStorage()
 
@@ -1198,6 +1235,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('browser:hide')
   ipcMain.removeHandler('browser:get-nav-state')
   ipcMain.removeHandler('browser:clear-cookies')
+  ipcMain.removeHandler('browser:set-remember-cookies')
+  ipcMain.removeHandler('browser:show-cookie-menu')
   ipcMain.removeHandler('command-preset:load')
   ipcMain.removeHandler('command-preset:save')
   ipcMain.removeHandler('command-preset:delete')

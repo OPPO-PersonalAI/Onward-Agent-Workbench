@@ -1062,7 +1062,7 @@ export const TerminalGrid = memo(function TerminalGrid({
 
   const handleTerminalFocus = useCallback((terminalId: string, event?: React.MouseEvent) => {
     // Skip focus steal when click originates inside a browser panel
-    if (event?.target instanceof Element && event.target.closest('.browser-panel')) {
+    if (event?.target instanceof Element && event.target.closest('.browser-panel-cell')) {
       return
     }
     void window.electronAPI.git.notifyTerminalFocus(terminalId)

@@ -5,7 +5,7 @@
 
 import { BrowserWindow, WebContentsView, session } from 'electron'
 
-const BROWSER_PARTITION = 'onward-browser-panel'
+const BROWSER_PARTITION = 'persist:browser'
 
 function isAllowedUrl(url: string): boolean {
   return /^https?:\/\//i.test(url) || url === 'about:blank'
@@ -22,6 +22,7 @@ class BrowserViewManager {
   private readonly views = new Map<string, BrowserViewInfo>()
   private mainWindow: BrowserWindow | null = null
   private sessionInitialized = false
+  private rememberCookies = true
 
   init(mainWindow: BrowserWindow): void {
     this.mainWindow = mainWindow
@@ -89,6 +90,11 @@ class BrowserViewManager {
     }
 
     this.views.delete(id)
+    if (this.views.size === 0 && !this.rememberCookies) {
+      void this.clearCookies().catch(() => {
+        // Ignore cookie cleanup failures during browser view teardown.
+      })
+    }
     return true
   }
 
@@ -225,6 +231,11 @@ class BrowserViewManager {
     }
 
     return { removed }
+  }
+
+  setRememberCookies(rememberCookies: boolean): { rememberCookies: boolean } {
+    this.rememberCookies = rememberCookies
+    return { rememberCookies: this.rememberCookies }
   }
 
   destroyAll(): void {
@@ -388,7 +399,7 @@ class BrowserViewManager {
       }
     }
 
-    return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`
+    return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
   }
 }
 

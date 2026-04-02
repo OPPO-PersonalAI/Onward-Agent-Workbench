@@ -16,7 +16,7 @@ import { PromptSender } from './PromptSender'
 import { ScheduleConfigModal } from './ScheduleConfigModal'
 import { ScheduleNotificationBar } from './ScheduleNotification'
 import { useI18n } from '../../i18n/useI18n'
-import type { PromptImportResult } from '../../utils/prompt-io'
+import type { ImportPrepareResult } from '../../utils/prompt-io'
 import './PromptNotebook.css'
 
 interface PromptNotebookProps {
@@ -39,7 +39,8 @@ interface PromptNotebookProps {
   globalPromptIds: string[]
   promptCleanup: PromptCleanupConfig
   onExportAllPrompts: () => Promise<void> | void
-  onImportAllPrompts: () => Promise<PromptImportResult>
+  onPrepareImport: () => Promise<ImportPrepareResult>
+  onExecuteImport: (globals: Prompt[], locals: Prompt[]) => void
   onTouchPromptLastUsed: (promptId: string) => void
   onCleanupPrompts: (options: { keepDays: number; deleteColored: boolean }) => void
   onUpdatePromptCleanup: (partial: Partial<PromptCleanupConfig>) => void
@@ -65,6 +66,13 @@ interface DeleteConfirmState {
   isOpen: boolean
   promptId: string
   promptTitle: string
+}
+
+interface ImportConfirmState {
+  isOpen: boolean
+  globals: Prompt[]
+  locals: Prompt[]
+  duplicateCount: number
 }
 
 interface RetentionConfirmState {
@@ -95,7 +103,8 @@ export const PromptNotebook = memo(function PromptNotebook({
   globalPromptIds,
   promptCleanup,
   onExportAllPrompts,
-  onImportAllPrompts,
+  onPrepareImport,
+  onExecuteImport,
   onTouchPromptLastUsed,
   onCleanupPrompts,
   onUpdatePromptCleanup,
@@ -150,6 +159,12 @@ export const PromptNotebook = memo(function PromptNotebook({
     isOpen: false,
     promptId: '',
     promptTitle: ''
+  })
+  const [importConfirm, setImportConfirm] = useState<ImportConfirmState>({
+    isOpen: false,
+    globals: [],
+    locals: [],
+    duplicateCount: 0
   })
   const [retentionConfirm, setRetentionConfirm] = useState<RetentionConfirmState>({
     isOpen: false,
@@ -414,39 +429,52 @@ export const PromptNotebook = memo(function PromptNotebook({
     void onExportAllPrompts()
   }, [onExportAllPrompts])
 
-  const handleImportAllPrompts = useCallback(() => {
-    void onImportAllPrompts().then((result) => {
-      if (result.canceled) return
-      if (!result.success) {
-        showSaveMessage({
-          type: 'error',
-          text: t('promptNotebook.import.failed')
-        })
-        return
-      }
+  const handleImportPrompts = useCallback(async () => {
+    const result = await onPrepareImport()
+    // User canceled file selection — show nothing
+    if (!result.success && !result.error) return
+    if (!result.success) {
+      showSaveMessage({ type: 'error', text: result.error || t('promptNotebook.import.failed') })
+      return
+    }
+    const total = result.globals.length + result.locals.length
+    if (total === 0 && result.duplicateCount === 0) {
+      showSaveMessage({ type: 'success', text: t('promptNotebook.import.emptyFile') })
+      return
+    }
+    if (total === 0 && result.duplicateCount > 0) {
+      showSaveMessage({ type: 'success', text: t('promptNotebook.import.allDuplicates', { count: result.duplicateCount }) })
+      return
+    }
+    // Has importable content — open confirmation dialog
+    setImportConfirm({
+      isOpen: true,
+      globals: result.globals,
+      locals: result.locals,
+      duplicateCount: result.duplicateCount
+    })
+  }, [onPrepareImport, showSaveMessage, t])
 
-      const importedCount = result.globalImported + result.localImported
-      if (importedCount === 0) {
-        showSaveMessage({
-          type: 'success',
-          text: t('promptNotebook.import.noNewItems', { skipped: result.skippedDuplicate })
-        })
-        return
-      }
-
-      const translationKey = result.skippedDuplicate > 0
-        ? 'promptNotebook.import.successWithSkipped'
-        : 'promptNotebook.import.success'
-      showSaveMessage({
-        type: 'success',
-        text: t(translationKey, {
-          global: result.globalImported,
-          local: result.localImported,
-          skipped: result.skippedDuplicate
-        })
+  const handleConfirmImport = useCallback(() => {
+    const { globals, locals, duplicateCount } = importConfirm
+    onExecuteImport(globals, locals)
+    setImportConfirm({ isOpen: false, globals: [], locals: [], duplicateCount: 0 })
+    const translationKey = duplicateCount > 0
+      ? 'promptNotebook.import.successWithSkipped'
+      : 'promptNotebook.import.success'
+    showSaveMessage({
+      type: 'success',
+      text: t(translationKey, {
+        global: globals.length,
+        local: locals.length,
+        skipped: duplicateCount
       })
     })
-  }, [onImportAllPrompts, showSaveMessage, t])
+  }, [importConfirm, onExecuteImport, showSaveMessage, t])
+
+  const handleCancelImport = useCallback(() => {
+    setImportConfirm({ isOpen: false, globals: [], locals: [], duplicateCount: 0 })
+  }, [])
 
   const handleConfirmRetention = useCallback(() => {
     const resolvedKeepDays = retentionConfirm.isCustomDays
@@ -713,6 +741,22 @@ export const PromptNotebook = memo(function PromptNotebook({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [hidden, deleteConfirm.isOpen, handleConfirmDelete, handleCancelDelete])
 
+  // Import confirmation dialog shortcut
+  useEffect(() => {
+    if (hidden || !importConfirm.isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleCancelImport()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        handleConfirmImport()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [hidden, importConfirm.isOpen, handleConfirmImport, handleCancelImport])
+
   const retentionKeepDays = useMemo(() => {
     if (!retentionConfirm.isCustomDays) {
       return retentionConfirm.keepDays
@@ -787,7 +831,7 @@ export const PromptNotebook = memo(function PromptNotebook({
           onReorderPinned={onReorderPinnedPrompts}
           autoCleanupEnabled={promptCleanup.autoEnabled}
           onExportAllPrompts={handleExportAllPrompts}
-          onImportAllPrompts={handleImportAllPrompts}
+          onImportPrompts={handleImportPrompts}
           onRetentionKeepDays={handleRetentionKeepDays}
           onRetentionKeepCustom={handleRetentionKeepCustom}
           onToggleAutoCleanup={handleToggleAutoCleanup}
@@ -844,6 +888,37 @@ export const PromptNotebook = memo(function PromptNotebook({
               </button>
               <button className="confirm-dialog-btn confirm" onClick={handleConfirmDelete} autoFocus>
                 {t('promptNotebook.confirmY')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import confirmation dialog */}
+      {!hidden && importConfirm.isOpen && (
+        <div className="confirm-dialog-overlay" onClick={handleCancelImport}>
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-dialog-title">{t('promptNotebook.importConfirm.title')}</div>
+            <div className="confirm-dialog-message">
+              <div style={{ marginBottom: 8 }}>{t('promptNotebook.importConfirm.aboutToImport')}</div>
+              <div style={{ lineHeight: 1.8 }}>
+                {importConfirm.globals.length > 0 && (
+                  <div>• {t('promptNotebook.importConfirm.globalCount', { count: importConfirm.globals.length })}</div>
+                )}
+                {importConfirm.locals.length > 0 && (
+                  <div>• {t('promptNotebook.importConfirm.localCount', { count: importConfirm.locals.length })}</div>
+                )}
+                {importConfirm.duplicateCount > 0 && (
+                  <div style={{ opacity: 0.7 }}>• {t('promptNotebook.importConfirm.skippedDuplicates', { count: importConfirm.duplicateCount })}</div>
+                )}
+              </div>
+            </div>
+            <div className="confirm-dialog-actions">
+              <button className="confirm-dialog-btn cancel" onClick={handleCancelImport}>
+                {t('promptNotebook.importConfirm.cancel')}
+              </button>
+              <button className="confirm-dialog-btn confirm" onClick={handleConfirmImport} autoFocus>
+                {t('promptNotebook.importConfirm.confirm')}
               </button>
             </div>
           </div>

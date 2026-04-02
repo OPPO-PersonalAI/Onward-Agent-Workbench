@@ -580,6 +580,8 @@ export interface BrowserAPI {
   hide: (id: string) => Promise<boolean>
   getNavState: (id: string) => Promise<BrowserNavState | null>
   clearCookies: (maxAge?: number) => Promise<{ removed: number }>
+  setRememberCookies: (rememberCookies: boolean) => Promise<{ rememberCookies: boolean }>
+  showCookieMenu: (options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => Promise<{ action: string; rememberCookies?: boolean } | null>
   onUrlChanged: (callback: (id: string, url: string) => void) => () => void
   onTitleChanged: (callback: (id: string, title: string) => void) => () => void
   onLoadingChanged: (callback: (id: string, isLoading: boolean) => void) => () => void
