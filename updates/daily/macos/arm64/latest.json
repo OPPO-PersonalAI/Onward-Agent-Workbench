@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260402.1915",
-  "tag": "v2.1.0-daily.20260402.1915",
+  "version": "2.1.0-daily.20260402.1928",
+  "tag": "v2.1.0-daily.20260402.1928",
   "platform": "macos",
   "arch": "arm64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260402.1915-macos-arm64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260402.1915/Onward.2-v2.1.0-daily.20260402.1915-macos-arm64.zip",
-  "sha256": "22e9542ff7058d8f4ed3503caad0ee7eed33a536567f442c02a7647f9b1b51f1",
+  "artifactName": "Onward.2-v2.1.0-daily.20260402.1928-macos-arm64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260402.1928/Onward.2-v2.1.0-daily.20260402.1928-macos-arm64.zip",
+  "sha256": "b763fdf2f284fb6384a3287d3fd88d37e54b040a2ecd8d9d1a9aca6f6e809676",
   "releaseNotes": null,
-  "publishedAt": "2026-04-02T08:44:01.843Z"
+  "publishedAt": "2026-04-02T08:53:38.153Z"
 }
