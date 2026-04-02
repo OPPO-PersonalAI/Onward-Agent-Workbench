@@ -5,7 +5,7 @@
 
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
-import { assert, runShellCommand, waitFor } from './auto-update-test-lib.mjs'
+import { assert, runShellCommand, shellEscape, waitFor } from './auto-update-test-lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(__dirname, '..')
@@ -137,7 +137,7 @@ async function main() {
   console.log('[github-e2e] Verifying gh-pages update manifests through GitHub API')
   const manifestPath = `updates/daily/macos/arm64/latest.json`
   const manifestOutput = await captureCommand(
-    `gh api repos/${repository}/contents/${manifestPath}?ref=gh-pages --jq .content`
+    `gh api ${shellEscape(`repos/${repository}/contents/${manifestPath}?ref=gh-pages`)} --jq .content`
   )
   const decodedManifest = Buffer.from(manifestOutput.trim(), 'base64').toString('utf-8')
   const manifest = JSON.parse(decodedManifest)
