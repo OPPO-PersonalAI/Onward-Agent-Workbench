@@ -127,19 +127,26 @@ jobs:
         run: node scripts/generate-update-manifest.js
 
       - name: Upload artifacts to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Daily Build ${{ github.ref_name }}
-          files: |
-            dist-artifacts/*.dmg
-            dist-artifacts/*.zip
-          draft: false
-          prerelease: true
-          make_latest: false
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "Daily Build $RELEASE_TAG" \
+              --draft=false \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" \
+              dist-artifacts/*.dmg \
+              dist-artifacts/*.zip \
+              --title "Daily Build $RELEASE_TAG" \
+              --prerelease \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist-artifacts/*.dmg dist-artifacts/*.zip --clobber
 
       - name: Publish update manifests to gh-pages branch
         env:
