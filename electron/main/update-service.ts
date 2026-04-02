@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, net } from 'electron'
 import { createHash } from 'crypto'
 import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -61,6 +61,8 @@ const RELAUNCH_ENV_KEYS = [
 ] as const
 
 const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
+const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
+const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
 
 function readPackageMetadata(): Record<string, unknown> | null {
   try {
@@ -141,7 +143,9 @@ function resolveUpdateCheckIntervalMs(): number {
 }
 
 async function downloadFile(url: string, destinationPath: string): Promise<void> {
-  const response = await fetch(url)
+  const response = await fetchUpdateResource(url, {
+    timeoutMs: DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS
+  })
   if (!response.ok || !response.body) {
     throw new Error(`Download failed: ${response.status} ${response.statusText}`)
   }
@@ -149,6 +153,33 @@ async function downloadFile(url: string, destinationPath: string): Promise<void>
   mkdirSync(dirname(destinationPath), { recursive: true })
   const fileStream = createWriteStream(destinationPath)
   await pipeline(Readable.fromWeb(response.body as globalThis.ReadableStream), fileStream)
+}
+
+async function fetchUpdateResource(
+  url: string,
+  options: {
+    headers?: Record<string, string>
+    timeoutMs?: number
+  } = {}
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutHandle = setTimeout(() => {
+    controller.abort()
+  }, options.timeoutMs ?? DEFAULT_UPDATE_REQUEST_TIMEOUT_MS)
+
+  try {
+    return await net.fetch(url, {
+      headers: options.headers,
+      signal: controller.signal
+    })
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Update request timed out: ${url}`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
 }
 
 export class UpdateService {
@@ -220,10 +251,11 @@ export class UpdateService {
       throw new Error('Update manifest URL is not configured.')
     }
 
-    const response = await fetch(manifestUrl, {
+    const response = await fetchUpdateResource(manifestUrl, {
       headers: {
         Accept: 'application/json'
-      }
+      },
+      timeoutMs: DEFAULT_UPDATE_REQUEST_TIMEOUT_MS
     })
     if (!response.ok) {
       throw new Error(`Manifest request failed: ${response.status} ${response.statusText}`)

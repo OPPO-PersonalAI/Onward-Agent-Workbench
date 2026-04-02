@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { cpSync, existsSync, mkdtempSync, rmSync } from 'fs'
+import { cpSync, existsSync, mkdtempSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -27,6 +27,40 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(__dirname, '..')
 const productName = 'Onward 2'
 const releaseArch = 'arm64'
+const downloadTimeoutMs = 900000
+
+function getDownloadedArchivePath(userDataDir, version, fileName) {
+  if (!version || !fileName) {
+    return null
+  }
+  return join(userDataDir, 'updates', version, fileName)
+}
+
+async function waitForDownloadedPublicUpdate(port, targetVersion, userDataDir, description) {
+  let lastProgressAt = 0
+
+  return waitForUpdaterStatus(
+    port,
+    (status) => {
+      const archivePath = getDownloadedArchivePath(userDataDir, status.targetVersion, status.downloadedFileName)
+      const archiveSize = archivePath && existsSync(archivePath) ? statSync(archivePath).size : 0
+
+      if (Date.now() - lastProgressAt >= 10000) {
+        lastProgressAt = Date.now()
+        console.log(
+          `[public-github-e2e] ${description}: phase=${status.phase} target=${status.targetVersion || 'n/a'} file=${status.downloadedFileName || 'n/a'} size=${archiveSize}`
+        )
+      }
+
+      return status.phase === 'downloaded' && status.targetVersion === targetVersion ? status : null
+    },
+    {
+      timeoutMs: downloadTimeoutMs,
+      intervalMs: 2000,
+      description
+    }
+  )
+}
 
 function parseArgs(argv) {
   const args = {
@@ -118,14 +152,11 @@ async function main() {
       timeoutMs: 60000
     })
 
-    const downloadedStatus = await waitForUpdaterStatus(
+    const downloadedStatus = await waitForDownloadedPublicUpdate(
       latestLockData.port,
-      (status) => status.phase === 'downloaded' && status.targetVersion === args.targetVersion,
-      {
-        timeoutMs: 300000,
-        intervalMs: 2000,
-        description: `downloaded GitHub update ${args.targetVersion}`
-      }
+      args.targetVersion,
+      userDataDir,
+      `downloaded GitHub update ${args.targetVersion}`
     )
 
     assert(downloadedStatus.targetVersion === args.targetVersion, 'Expected downloaded target version to match the public GitHub release.')
@@ -150,14 +181,11 @@ async function main() {
       timeoutMs: 60000
     })
 
-    await waitForUpdaterStatus(
+    await waitForDownloadedPublicUpdate(
       latestLockData.port,
-      (status) => status.phase === 'downloaded' && status.targetVersion === args.targetVersion,
-      {
-        timeoutMs: 300000,
-        intervalMs: 2000,
-        description: `redownloaded GitHub update ${args.targetVersion}`
-      }
+      args.targetVersion,
+      userDataDir,
+      `redownloaded GitHub update ${args.targetVersion}`
     )
 
     const restartExitPromise = appProcess.waitForExit()
@@ -197,7 +225,9 @@ async function main() {
 
     console.log('[public-github-e2e] Passed')
   } finally {
-    if (appProcess?.child) {
+    if (latestLockData?.pid) {
+      await terminateProcessByPid(latestLockData.pid).catch(() => {})
+    } else if (appProcess?.child) {
       await stopChildProcess(appProcess.child).catch(() => {})
     }
   }
