@@ -145,6 +145,12 @@ $env:ONWARD_DEBUG="1"
   - Waits for the `Daily Build` workflow to finish
   - Verifies the GitHub Release assets
   - Verifies the `gh-pages` updater manifest matches the pushed tag
+- `test/test-auto-update-public-github-e2e.mjs`
+  - Builds a local old production fixture
+  - Uses the default public GitHub updater source without any local manifest override
+  - Verifies anonymous client download from public `gh-pages` + GitHub Release assets
+  - Verifies graceful quit still does not install
+  - Verifies explicit restart installs the public GitHub update
 
 Run the local auto-update suite:
 
@@ -165,6 +171,14 @@ node test/test-auto-update-github-e2e.mjs \
   --tag v2.1.0-daily.20260402.200 \
   --push-branch codex/auto-update-e2e-20260402 \
   --create-tag
+```
+
+Run the public GitHub client E2E suite after the repository is public and a newer Daily release exists:
+
+```bash
+node test/test-auto-update-public-github-e2e.mjs \
+  --old-tag v2.1.0-daily.20260402.1602 \
+  --target-version 2.1.0-daily.20260402.1701
 ```
 
 ### Phase 1: PromptSender UI
