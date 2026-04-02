@@ -41,13 +41,13 @@
   top: 100%;
   left: 0;
   margin-top: 4px;
-  min-width: 160px;
+  min-width: 236px;
   background-color: var(--panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 12px;
   box-shadow: var(--shadow-1);
   z-index: 100;
-  padding: 4px 0;
+  padding: 8px;
   overflow: visible;
   animation: dropdown-fade-in 0.15s ease;
 }
@@ -63,24 +63,57 @@
   }
 }
 
+.terminal-dropdown-section + .terminal-dropdown-section {
+  margin-top: 8px;
+}
+
+.terminal-dropdown-section-title {
+  margin-bottom: 6px;
+  padding: 0 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.terminal-dropdown-section-card {
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 10px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-1) 82%, var(--panel) 18%),
+      color-mix(in srgb, var(--bg-1) 55%, var(--panel) 45%)
+    );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 6%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, black 10%, transparent);
+}
+
 /* menu item */
 .terminal-dropdown-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
   color: var(--text-2);
   font-size: var(--font-sm);
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
 }
 
 .terminal-dropdown-item:hover {
-  background-color: var(--bg-1);
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-1);
 }
 
 .terminal-dropdown-item.is-active {
   color: var(--text-1);
+  background-color: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .terminal-dropdown-item.is-active svg {
@@ -111,8 +144,8 @@
 .terminal-dropdown-submenu {
   display: none;
   position: absolute;
-  left: calc(100% + 2px);
-  top: -6px;
+  left: calc(100% + 8px);
+  top: -4px;
   min-width: 260px;
   white-space: nowrap;
   background: var(--panel);
@@ -130,7 +163,7 @@
   position: absolute;
   right: 100%;
   top: 0;
-  width: 8px;
+  width: 12px;
   height: 100%;
 }
 
