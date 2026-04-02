@@ -36,3 +36,15 @@
 - **Problem**: When PowerShell commands were sent through `curl`, bash expanded PowerShell variables such as `$i` and `$_` as bash variables, which broke command delivery in most terminals. Python-generated terminal IDs also contained `\r`, which corrupted URL construction.
 - **Cause**: Cross-shell invocation chains such as `bash -> curl -> JSON -> PowerShell` introduce multiple escaping layers, and each layer can rewrite or consume special characters.
 - **Lesson**: When commands cross shells, prefer heredocs such as `<< 'EOF'` or file-based payloads to avoid multi-layer escaping bugs. Always normalize external command output with `tr -d '\r'` when Windows line endings may be present.
+
+## 2026-04-02: Settings closing logic must distinguish tab switches from task switches
+
+### 1. Do not apply a tab-switch fix blindly to task switching in the same tab
+- **Problem**: After introducing conditional Settings closing, the implementation also closed Settings during `focusTerminal` task switching inside the same tab. In the user flow `Prompt -> manually open Settings -> use task-switch shortcut`, the Settings button and panel disappeared unexpectedly.
+- **Cause**: The fix correctly identified that cross-tab navigation needed contextual handling, but it overgeneralized that rule to all shortcut-driven focus changes. Task switching and tab switching are different UX operations and should not share the same closing behavior by default.
+- **Lesson**: When a bug report is specifically about cross-tab state, keep the fix scoped to cross-tab transitions unless there is explicit evidence that same-tab task switching should behave the same way. Validate each shortcut path independently.
+
+### 2. Reproduce the exact user interaction sequence before finalizing a state-management fix
+- **Problem**: The first revision looked logically correct against the review comments, but it still broke a real user edge case that combined Prompt, manual Settings opening, and task-switch shortcuts.
+- **Cause**: The implementation was optimized around inferred state transitions instead of replaying the exact UI sequence the user would perform. That missed a behavior regression in a neighboring path.
+- **Lesson**: For UI state fixes, convert the user report into a concrete step-by-step scenario and verify the implementation against that scenario before treating the change as complete. Review comments are useful signals, but they do not replace end-user flow validation.
