@@ -19,6 +19,7 @@ import {
   shellEscape,
   spawnApp,
   stopChildProcess,
+  terminateProcessByPid,
   waitFor,
   waitForHealthVersion,
   waitForLockFile,
@@ -227,14 +228,13 @@ async function main() {
     assert(filesAfterB.some((file) => file.endsWith(latestReleaseB.zipFileName)), 'Expected release B archive to be cached.')
     assert(!filesAfterB.some((file) => file.endsWith(latestReleaseA.zipFileName)), 'Expected release A archive to be cleaned up after release B download.')
 
-    console.log('[local-e2e] Verifying graceful quit does not install the update')
+    console.log('[local-e2e] Verifying process termination does not install the update')
     const firstExitPromise = appProcess.waitForExit()
-    const quitResult = await postJson(latestLockData.port, '/api/debug/app/quit')
-    assert(quitResult.success === true, 'Expected graceful quit request to succeed.')
+    await terminateProcessByPid(latestLockData.pid)
     const firstExit = await firstExitPromise
-    assert(firstExit.code === 0 || firstExit.code === null, `Expected graceful quit exit, got code=${String(firstExit.code)} signal=${String(firstExit.signal)}`)
+    assert(firstExit.code !== null || firstExit.signal !== null, 'Expected old app process to terminate.')
 
-    assert(!existsSync(installLogPath), 'Install log must not exist after graceful quit without restart request.')
+    assert(!existsSync(installLogPath), 'Install log must not exist after process termination without restart request.')
     const versionAfterQuit = await readPlistVersion(oldRelease.plistPath)
     assert(versionAfterQuit === oldRelease.version, `Expected app bundle to remain at ${oldRelease.version}, got ${versionAfterQuit}`)
 
@@ -282,8 +282,7 @@ async function main() {
     assert(!finalUpdateFiles.some((file) => file.endsWith(latestReleaseB.zipFileName)), 'Expected downloaded archive to be removed after installation.')
 
     console.log('[local-e2e] Cleaning up relaunched app')
-    const relaunchQuitResult = await postJson(latestLockData.port, '/api/debug/app/quit')
-    assert(relaunchQuitResult.success === true, 'Expected relaunched app to quit cleanly.')
+    await terminateProcessByPid(latestLockData.pid)
     await waitFor(async () => {
       try {
         await fetchJson(`http://127.0.0.1:${latestLockData.port}/api/health`)

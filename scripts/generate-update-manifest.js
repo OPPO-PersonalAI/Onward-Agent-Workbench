@@ -55,8 +55,14 @@ function ensureDir(dirPath) {
   mkdirSync(dirPath, { recursive: true })
 }
 
+function toGitHubReleaseAssetName(fileName) {
+  // GitHub release uploads normalize spaces in asset names to dots.
+  return fileName.replace(/ /g, '.')
+}
+
 function buildAssetUrl(repository, tag, fileName) {
-  return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(fileName)}`
+  const releaseAssetName = toGitHubReleaseAssetName(fileName)
+  return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(releaseAssetName)}`
 }
 
 const repository = getRequiredEnv('ONWARD_GITHUB_REPOSITORY')
@@ -92,7 +98,7 @@ for (const fileName of artifactFiles) {
     tag: release.tag,
     platform: releaseOs,
     arch,
-    artifactName: basename(fileName),
+    artifactName: toGitHubReleaseAssetName(basename(fileName)),
     artifactUrl: buildAssetUrl(repository, release.tag, fileName),
     sha256: checksum,
     releaseNotes: null,

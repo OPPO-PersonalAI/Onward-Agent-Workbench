@@ -16,6 +16,7 @@ import {
   shellEscape,
   spawnApp,
   stopChildProcess,
+  terminateProcessByPid,
   waitFor,
   waitForHealthVersion,
   waitForLockFile,
@@ -129,12 +130,11 @@ async function main() {
 
     assert(downloadedStatus.targetVersion === args.targetVersion, 'Expected downloaded target version to match the public GitHub release.')
 
-    console.log('[public-github-e2e] Verifying graceful quit still does not install')
+    console.log('[public-github-e2e] Verifying process termination still does not install')
     const firstExitPromise = appProcess.waitForExit()
-    const quitResult = await postJson(latestLockData.port, '/api/debug/app/quit')
-    assert(quitResult.success === true, 'Expected graceful quit request to succeed.')
+    await terminateProcessByPid(latestLockData.pid)
     await firstExitPromise
-    assert(!existsSync(installLogPath), 'Install log must not exist after graceful quit without restart request.')
+    assert(!existsSync(installLogPath), 'Install log must not exist after process termination without restart request.')
 
     const versionAfterQuit = await readPlistVersion(oldRelease.plistPath)
     assert(versionAfterQuit === oldRelease.version, `Expected old bundle version ${oldRelease.version}, got ${versionAfterQuit}`)
@@ -181,8 +181,7 @@ async function main() {
     assert(updatedBundleVersion === args.targetVersion, `Expected installed bundle version ${args.targetVersion}, got ${updatedBundleVersion}`)
 
     console.log('[public-github-e2e] Cleaning up relaunched app')
-    const finalQuitResult = await postJson(latestLockData.port, '/api/debug/app/quit')
-    assert(finalQuitResult.success === true, 'Expected relaunched app to quit cleanly.')
+    await terminateProcessByPid(latestLockData.pid)
     await waitFor(async () => {
       try {
         await fetchJson(`http://127.0.0.1:${latestLockData.port}/api/health`)

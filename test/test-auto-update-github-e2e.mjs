@@ -74,6 +74,33 @@ async function captureCommand(command) {
   })
 }
 
+async function headJson(url) {
+  const { spawn } = await import('child_process')
+  return new Promise((resolve, reject) => {
+    const child = spawn('/bin/zsh', ['-lc', `curl -sS -I -L ${shellEscape(url)}`], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      if (code !== 0) {
+        reject(new Error(`HEAD request failed (${code}): ${url}\n${stderr}`))
+        return
+      }
+      resolve(stdout)
+    })
+  })
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
 
@@ -145,6 +172,8 @@ async function main() {
   assert(manifest.platform === 'macos', 'Expected gh-pages manifest platform=macos.')
   assert(manifest.arch === 'arm64', 'Expected gh-pages manifest arch=arm64.')
   assert(String(manifest.artifactUrl).includes(`/releases/download/${args.tag}/`), 'Expected manifest artifact URL to point at the pushed tag release.')
+  const headResponse = await headJson(manifest.artifactUrl)
+  assert(/HTTP\/2 200|HTTP\/1\.1 200/.test(headResponse), 'Expected manifest artifact URL to resolve successfully.')
 
   console.log('[github-e2e] Passed')
 }

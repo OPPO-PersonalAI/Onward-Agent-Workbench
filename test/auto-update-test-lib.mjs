@@ -116,6 +116,53 @@ export async function stopChildProcess(child, options = {}) {
   })
 }
 
+export function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function terminateProcessByPid(pid, options = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`Invalid process id "${String(pid)}".`)
+  }
+
+  if (!isProcessAlive(pid)) {
+    return
+  }
+
+  if (process.platform === 'win32') {
+    await runShellCommand(`taskkill /PID ${pid} /T /F`, {
+      cwd: options.cwd,
+      stdio: options.stdio ?? 'inherit'
+    })
+  } else {
+    process.kill(pid, 'SIGTERM')
+    await waitFor(
+      () => !isProcessAlive(pid),
+      {
+        timeoutMs: options.timeoutMs ?? 5000,
+        intervalMs: 200,
+        description: `process ${pid} exit`
+      }
+    ).catch(() => {
+      process.kill(pid, 'SIGKILL')
+    })
+  }
+
+  await waitFor(
+    () => !isProcessAlive(pid),
+    {
+      timeoutMs: options.timeoutMs ?? 15000,
+      intervalMs: 200,
+      description: `process ${pid} termination`
+    }
+  )
+}
+
 export function readJsonFile(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf-8'))
 }

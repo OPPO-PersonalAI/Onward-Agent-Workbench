@@ -137,7 +137,7 @@ $env:ONWARD_DEBUG="1"
 - `test/test-auto-update-local-e2e.mjs`
   - Builds three macOS production fixtures
   - Verifies periodic updater polling picks up a newer manifest automatically
-  - Verifies "graceful quit does not install"
+  - Verifies exact-PID process termination does not install a downloaded update
   - Verifies only explicit restart triggers helper installation and relaunch
   - Verifies stale downloaded archives are cleaned up
 - `test/test-auto-update-github-e2e.mjs`
@@ -149,7 +149,7 @@ $env:ONWARD_DEBUG="1"
   - Builds a local old production fixture
   - Uses the default public GitHub updater source without any local manifest override
   - Verifies anonymous client download from public `gh-pages` + GitHub Release assets
-  - Verifies graceful quit still does not install
+  - Verifies exact-PID process termination still does not install
   - Verifies explicit restart installs the public GitHub update
 
 Run the local auto-update suite:
