@@ -71,6 +71,8 @@ jobs:
             ${{ runner.os }}-${{ matrix.arch }}-electron-
 
       - name: Install dependencies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
 
       - name: Extract tag name
