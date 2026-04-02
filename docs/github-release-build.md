@@ -31,7 +31,8 @@ Supported release tags:
 
 Release behavior:
 
-- The app window title displays the raw tag, for example `Onward 2 v2.1.0-daily.20260402.1`
+- Daily build titles display the date only, for example `Onward 2 v2026.04.02`
+- Stable build titles continue to display the full stable tag
 - The packaged app version is normalized to Electron-compatible semver
 - Release artifacts include the operating system name and arch, for example `Onward 2-v2.1.0-daily.20260402.1-macos-arm64.dmg`
 - CI also publishes `channel / os / arch` update manifests for the in-app updater

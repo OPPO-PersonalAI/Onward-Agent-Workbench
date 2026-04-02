@@ -18,6 +18,7 @@ Current implementation:
 - Checks for updates at startup
 - Checks again every 1 hour
 - Downloads updates in the background
+- Uses a 1 hour download timeout for update archives
 - Shows a persistent title-bar banner after the update is downloaded
 - Lets the user restart to apply the update
 
@@ -67,6 +68,19 @@ The application reads the base URL from:
 1. `ONWARD_UPDATE_BASE_URL` when set
 2. `package.json > onward.updateManifestBaseUrl`
 3. The repository fallback `https://raw.githubusercontent.com/<owner>/<repo>/gh-pages/updates`
+
+## Download Failure Behavior
+
+Current download behavior is intentionally conservative:
+
+- Manifest requests use a 60 second timeout
+- Update archive downloads use a 1 hour timeout
+- The updater does not currently support resumable downloads
+- If a download is interrupted and leaves a partial file behind, the next verification pass will fail checksum validation
+- A checksum failure deletes the broken archive and the next check starts a fresh full download
+- After a newer version downloads successfully, older cached version directories are removed
+
+This means the current implementation prioritizes correctness and simple recovery over bandwidth efficiency.
 
 ## Runtime Flow
 
@@ -139,6 +153,7 @@ curl -X POST http://127.0.0.1:<port>/api/debug/updater/restart
 Current known limits:
 
 - The updater is not based on Electron's official signed macOS update path
+- The updater does not yet support HTTP range resume / breakpoint continuation
 - Replacing an app bundle inside a protected system directory may fail without sufficient permissions
 - The helper currently expects the update archive to extract to a top-level `.app`
 - Windows and Linux are reserved but not implemented yet

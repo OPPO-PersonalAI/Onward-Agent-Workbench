@@ -101,6 +101,7 @@ pnpm dist
 - Design decisions: `docs/design-decisions.md`
 - API reference: `docs/api-reference.md`
 - GitHub daily build: `docs/github-release-build.md`
+- Daily build operations: `docs/daily-build-operations.md`
 - Test guide: `test/README.md`
 
 ## Testing

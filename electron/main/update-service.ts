@@ -62,7 +62,7 @@ const RELAUNCH_ENV_KEYS = [
 
 const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
-const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
+const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000
 
 function readPackageMetadata(): Record<string, unknown> | null {
   try {
