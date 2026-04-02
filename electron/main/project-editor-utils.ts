@@ -14,12 +14,20 @@ const SQLITE_MAX_QUERY_ROWS = 500
 
 const IMAGE_EXTENSIONS = new Set([
   '.png',
+  '.apng',
   '.jpg',
   '.jpeg',
+  '.jfif',
+  '.pjpeg',
+  '.pjp',
   '.gif',
   '.webp',
+  '.avif',
   '.bmp',
   '.ico',
+  '.cur',
+  '.tif',
+  '.tiff',
   '.svg'
 ])
 
@@ -35,12 +43,20 @@ const SQLITE_MAGIC_HEADER = Buffer.from('SQLite format 3\u0000', 'utf-8')
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
+  '.apng': 'image/apng',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.jfif': 'image/jpeg',
+  '.pjpeg': 'image/jpeg',
+  '.pjp': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+  '.avif': 'image/avif',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
+  '.cur': 'image/x-icon',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
   '.svg': 'image/svg+xml'
 }
 

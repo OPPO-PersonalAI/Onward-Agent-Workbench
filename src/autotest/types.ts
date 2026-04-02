@@ -13,8 +13,8 @@
 
 export interface GitDiffDebugApi {
   isOpen: () => boolean
-  getFileList: () => { filename: string; originalFilename?: string }[]
-  getSelectedFile: () => { filename: string; originalFilename?: string } | null
+  getFileList: () => Array<{ filename: string; originalFilename?: string; status?: string; changeType?: string }>
+  getSelectedFile: () => { filename: string; originalFilename?: string; status?: string; changeType?: string } | null
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
   isSelectedReady: () => boolean
@@ -36,6 +36,14 @@ export interface GitDiffDebugApi {
     displayMode: 'original' | 'fit'
     loading: boolean
   } | null
+  getFileActionState?: () => {
+    fileActionsVisible: boolean
+    lineActionsVisible: boolean
+    keepDisabled: boolean
+    denyDisabled: boolean
+    pending: boolean
+  } | null
+  triggerFileAction?: (action: 'keep' | 'deny') => Promise<boolean>
 }
 
 export interface PromptSenderDebugApi {
@@ -128,6 +136,7 @@ export interface ProjectEditorDebugApi {
   getRootPath: () => string | null
   getActiveFilePath: () => string | null
   getEditorContent: () => string
+  setEditorContent?: (content: string) => boolean
   getEditorLineCount: () => number
   openFileByPath: (filePath: string) => Promise<void>
   triggerEditorSaveCommand: () => boolean
@@ -140,6 +149,12 @@ export interface ProjectEditorDebugApi {
   isPreviewSearchOpen?: () => boolean
   isMarkdownRenderPending: () => boolean
   getMarkdownRenderedHtml: () => string
+  getMarkdownPreviewImageState?: () => {
+    count: number
+    loadedCount: number
+    brokenCount: number
+    sources: string[]
+  }
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
   isOutlineVisible?: () => boolean

@@ -36,3 +36,20 @@
 - **Problem**: When PowerShell commands were sent through `curl`, bash expanded PowerShell variables such as `$i` and `$_` as bash variables, which broke command delivery in most terminals. Python-generated terminal IDs also contained `\r`, which corrupted URL construction.
 - **Cause**: Cross-shell invocation chains such as `bash -> curl -> JSON -> PowerShell` introduce multiple escaping layers, and each layer can rewrite or consume special characters.
 - **Lesson**: When commands cross shells, prefer heredocs such as `<< 'EOF'` or file-based payloads to avoid multi-layer escaping bugs. Always normalize external command output with `tr -d '\r'` when Windows line endings may be present.
+
+## 2026-04-02: Markdown migration regressions and incomplete first-pass fixes
+
+### 1. Migration review must include shell-level files such as `index.html`, not only component logic
+- **Problem**: Markdown images appeared to be wired correctly in the renderer and worker, but the packaged app still failed to display them.
+- **Cause**: The migration review focused on `ProjectEditor.tsx` and `markdownPreviewWorker.ts`, but did not compare the source project's `index.html`. The source project allowed Markdown images through CSP with `img-src 'self' data:`, while this repo's initial `index.html` omitted `img-src`, so the browser blocked image rendering even when the generated HTML was correct.
+- **Lesson**: When porting a working feature from another project, compare the full execution path end to end: HTML shell and CSP, preload boundaries, renderer state, worker output, and DOM behavior. Do not assume root-level files match the source project unless they have been explicitly diffed.
+
+### 2. End-to-end validation must check visible behavior, not only generated HTML
+- **Problem**: The first repair looked successful because the Markdown preview HTML already contained `<img src="data:image/...">`, yet the user still saw broken images.
+- **Cause**: The verification standard stopped at internal state and rendered HTML strings. That proved the data path was partly correct, but it did not prove that the browser actually loaded and displayed the image.
+- **Lesson**: For UI rendering bugs, autotests must verify the user-visible outcome. In this case the correct assertion is not just "the HTML contains an `<img>` tag" but also "the preview DOM contains images whose `naturalWidth > 0` and whose broken count is zero."
+
+### 3. When a user says the bug still exists, assume layered failures until disproven
+- **Problem**: The first Markdown image fix restored the missing re-render after image caching, but the overall issue still remained because a second independent failure was still active.
+- **Cause**: The debugging process converged too early on a plausible internal cause and treated that as the whole bug. In reality there were two separate regressions: the missing re-render path and the missing CSP `img-src` allowance.
+- **Lesson**: If a user reports that the visible bug still exists after a fix, immediately test for stacked regressions instead of defending the first explanation. Re-check every layer of the pipeline and look for independent blockers that can mask each other.

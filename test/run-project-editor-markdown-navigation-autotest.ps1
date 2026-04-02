@@ -43,8 +43,8 @@ if (Select-String -Path $LogFile -Pattern '\[AutoTest\] FAIL' -Quiet) {
   Write-Error "Project Editor Markdown navigation autotest failed"
 }
 
-if (-not (Select-String -Path $LogFile -Pattern 'PMN-10-markdown-editor-restored' -Quiet)) {
-  Write-Error "Missing PMN-10 result; the test may not have executed correctly"
+if (-not (Select-String -Path $LogFile -Pattern 'PMN-17-markdown-editor-restored' -Quiet)) {
+  Write-Error "Missing PMN-17 result; the test may not have executed correctly"
 }
 
 Write-Host "Project Editor Markdown navigation autotest passed"

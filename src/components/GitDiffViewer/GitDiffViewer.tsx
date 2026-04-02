@@ -113,7 +113,12 @@ type RestoredAnchor = {
 type GitDiffDebugApi = {
   isOpen: () => boolean
   getFileList: () => GitFileStatus[]
-  getSelectedFile: () => { filename: string; originalFilename?: string } | null
+  getSelectedFile: () => {
+    filename: string
+    originalFilename?: string
+    status: GitFileStatus['status']
+    changeType: GitFileStatus['changeType']
+  } | null
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
   isSelectedReady: () => boolean
@@ -135,6 +140,14 @@ type GitDiffDebugApi = {
     displayMode: ImageDisplayMode
     loading: boolean
   } | null
+  getFileActionState: () => {
+    fileActionsVisible: boolean
+    lineActionsVisible: boolean
+    keepDisabled: boolean
+    denyDisabled: boolean
+    pending: boolean
+  } | null
+  triggerFileAction: (action: 'keep' | 'deny') => Promise<boolean>
 }
 
 type LineSelectionInfo =
@@ -1079,6 +1092,7 @@ export function GitDiffViewer({
   useEffect(() => { isDraftDirtyRef.current = isDraftDirty }, [isDraftDirty])
   const handleFileSelect = useCallback((file: GitFileStatus) => {
     const nextKey = getFileKey(file)
+    const memory = getMemoryStore()
     if (selectedFileKey && nextKey !== selectedFileKey) {
       captureDiffView(selectedFileKey)
       setDiffRestoreNotice(null)
@@ -1098,125 +1112,21 @@ export function GitDiffViewer({
         }, 0)
       }
     }
+    if (memory) {
+      const previousEntry = memory.entries[nextKey]
+      memory.entries[nextKey] = {
+        fileKey: nextKey,
+        filePath: file.filename,
+        originalFilename: file.originalFilename,
+        anchor: previousEntry?.anchor ?? null,
+        scrollTop: previousEntry?.scrollTop ?? 0,
+        signature: previousEntry?.signature ?? null,
+        updatedAt: Date.now()
+      }
+      memory.selectedFileKey = nextKey
+    }
     setSelectedFile(file)
-  }, [captureDiffView, getFileKey, isDraftDirty, selectedFileKey, t])
-
-  useEffect(() => {
-    if (!window.electronAPI?.debug?.autotest) return
-    const api: GitDiffDebugApi = {
-      isOpen: () => isOpen,
-      getFileList: () => diffResult?.files ?? [],
-      getSelectedFile: () => (selectedFile ? {
-        filename: selectedFile.filename,
-        originalFilename: selectedFile.originalFilename
-      } : null),
-      selectFileByPath: (path: string) => {
-        const files = diffResult?.files ?? []
-        const target = files.find((file) =>
-          file.filename === path || file.originalFilename === path
-        )
-        if (target) {
-          handleFileSelect(target)
-          return true
-        }
-        return false
-      },
-      selectFileByIndex: (index: number) => {
-        const files = diffResult?.files ?? []
-        const target = files[index]
-        if (target) {
-          handleFileSelect(target)
-          return true
-        }
-        return false
-      },
-      isSelectedReady: () => {
-        const key = selectedFileKey
-        if (!key) return false
-        const state = fileContentsRef.current[key]
-        return Boolean(state && !state.loading && !state.error && !state.isBinary)
-      },
-      getRestoreNotice: () => diffRestoreNotice,
-      getScrollTop: () => diffEditorRef.current?.getModifiedEditor().getScrollTop() ?? 0,
-      getFirstVisibleLine: () => {
-        const editor = diffEditorRef.current
-        if (!editor) return 0
-        const file = selectedFileRef.current
-        const fileKey = file ? getFileKey(file) : null
-        const restoredAnchor = fileKey ? restoredAnchorRef.current[fileKey] : null
-        const currentScrollTop = editor.getModifiedEditor().getScrollTop()
-        if (restoredAnchor?.line && Math.abs(currentScrollTop - restoredAnchor.scrollTop) <= SCROLL_RESTORE_TOLERANCE) {
-          return restoredAnchor.line
-        }
-        const ranges = editor.getModifiedEditor().getVisibleRanges()
-        return ranges.length > 0 ? ranges[0].startLineNumber : 0
-      },
-      scrollToFraction: (fraction: number) => {
-        const editor = diffEditorRef.current
-        if (!editor) return false
-        const modifiedEditor = editor.getModifiedEditor()
-        const scrollHeight = modifiedEditor.getScrollHeight()
-        const clientHeight = modifiedEditor.getLayoutInfo().height
-        const max = Math.max(0, scrollHeight - clientHeight)
-        const next = Math.max(0, Math.min(max, max * Math.max(0, Math.min(1, fraction))))
-        modifiedEditor.setScrollTop(next)
-        window.requestAnimationFrame(() => {
-          if (!isDraftDirtyRef.current) {
-            captureDiffView()
-          }
-        })
-        return true
-      },
-      scrollToLine: (line: number) => {
-        const editor = diffEditorRef.current
-        if (!editor) return false
-        editor.getModifiedEditor().revealLineNearTop(line)
-        window.requestAnimationFrame(() => {
-          if (!isDraftDirtyRef.current) {
-            captureDiffView()
-          }
-        })
-        return true
-      },
-      getDiffFontSize: () => getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE,
-      getCwd: () => cwd,
-      getRepoRoot: () => diffResult?.cwd || null,
-      getImagePreviewState: () => {
-        const key = selectedFileKey
-        if (!key) return null
-        const state = fileContentsRef.current[key]
-        if (!state) return null
-        return {
-          isImage: Boolean(state.isImage),
-          isSvg: Boolean(state.isSvg),
-          isBinary: state.isBinary,
-          hasOriginalUrl: Boolean(state.originalImageUrl),
-          hasModifiedUrl: Boolean(state.modifiedImageUrl),
-          compareMode: imageCompareMode,
-          displayMode: imageDisplayMode,
-          loading: state.loading
-        }
-      }
-    }
-    ;(window as any).__onwardGitDiffDebug = api
-    return () => {
-      if ((window as any).__onwardGitDiffDebug === api) {
-        delete (window as any).__onwardGitDiffDebug
-      }
-    }
-  }, [
-    captureDiffView,
-    cwd,
-    diffRestoreNotice,
-    diffResult,
-    handleFileSelect,
-    isOpen,
-    selectedFile,
-    selectedFileKey,
-    imageCompareMode,
-    imageDisplayMode,
-    terminalId
-  ])
+  }, [captureDiffView, getFileKey, getMemoryStore, isDraftDirty, selectedFileKey, t])
 
   const clearLineSelection = useCallback(() => {
     setSelectedLineRange(null)
@@ -1591,7 +1501,7 @@ export function GitDiffViewer({
       } else {
         const message = selectedFile.changeType === 'staged' ? t('gitDiff.action.keepStaged') : t('gitDiff.action.staged')
         setActionMessage({ type: 'success', text: message })
-        await loadDiff()
+        await loadDiff({ force: true })
       }
     } catch (error) {
       setActionMessage({ type: 'error', text: t('gitDiff.error.stageFailedWithReason', { error: String(error) }) })
@@ -1620,7 +1530,7 @@ export function GitDiffViewer({
       } else {
         const message = selectedFile.changeType === 'staged' ? t('gitDiff.action.unstaged') : t('gitDiff.action.discarded')
         setActionMessage({ type: 'success', text: message })
-        await loadDiff()
+        await loadDiff({ force: true })
       }
     } catch (error) {
       setActionMessage({ type: 'error', text: t('gitDiff.error.discardFailedWithReason', { error: String(error) }) })
@@ -1856,6 +1766,7 @@ export function GitDiffViewer({
   const isLineActionPending = !!selectedFileKey && lineActionState?.fileKey === selectedFileKey
   const isLineKeepPending = isLineActionPending && lineActionState?.type === 'keep'
   const isLineDenyPending = isLineActionPending && lineActionState?.type === 'deny'
+  const isImageVisualPreview = Boolean(selectedFileState?.isImage && (selectedFileState.isBinary || (selectedFileState.isSvg && svgViewMode === 'visual')))
   const canUseLineActions = !!selectedFile &&
     !!selectedFileState &&
     !selectedFileState.loading &&
@@ -1865,6 +1776,9 @@ export function GitDiffViewer({
     !isDraftDirty &&
     selectedFile.changeType !== 'untracked' &&
     selectedFile.status !== 'D'
+  const canShowLineActionPanel = Boolean(selectedFile && !isImageVisualPreview)
+  const canShowFileActionPanel = Boolean(selectedFile)
+  const canShowEditActionPanel = Boolean(!isImageVisualPreview && (isDraftDirty || editMessage))
   const diffFontSize = getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
   const diffEditorOptions = useMemo(() => ({
     renderSideBySide: true,
@@ -1884,6 +1798,151 @@ export function GitDiffViewer({
       revealLineCount: 20
     }
   }), [diffFontSize, canEditFile])
+
+  useEffect(() => {
+    if (!window.electronAPI?.debug?.autotest) return
+    const api: GitDiffDebugApi = {
+      isOpen: () => isOpen,
+      getFileList: () => diffResult?.files ?? [],
+      getSelectedFile: () => (selectedFile ? {
+        filename: selectedFile.filename,
+        originalFilename: selectedFile.originalFilename,
+        status: selectedFile.status,
+        changeType: selectedFile.changeType
+      } : null),
+      selectFileByPath: (path: string) => {
+        const files = diffResult?.files ?? []
+        const target = files.find((file) =>
+          file.filename === path || file.originalFilename === path
+        )
+        if (target) {
+          handleFileSelect(target)
+          return true
+        }
+        return false
+      },
+      selectFileByIndex: (index: number) => {
+        const files = diffResult?.files ?? []
+        const target = files[index]
+        if (target) {
+          handleFileSelect(target)
+          return true
+        }
+        return false
+      },
+      isSelectedReady: () => {
+        const key = selectedFileKey
+        if (!key) return false
+        const state = fileContentsRef.current[key]
+        return Boolean(state && !state.loading && !state.error && !state.isBinary)
+      },
+      getRestoreNotice: () => diffRestoreNotice,
+      getScrollTop: () => diffEditorRef.current?.getModifiedEditor().getScrollTop() ?? 0,
+      getFirstVisibleLine: () => {
+        const editor = diffEditorRef.current
+        if (!editor) return 0
+        const file = selectedFileRef.current
+        const fileKey = file ? getFileKey(file) : null
+        const restoredAnchor = fileKey ? restoredAnchorRef.current[fileKey] : null
+        const currentScrollTop = editor.getModifiedEditor().getScrollTop()
+        if (restoredAnchor?.line && Math.abs(currentScrollTop - restoredAnchor.scrollTop) <= SCROLL_RESTORE_TOLERANCE) {
+          return restoredAnchor.line
+        }
+        const ranges = editor.getModifiedEditor().getVisibleRanges()
+        return ranges.length > 0 ? ranges[0].startLineNumber : 0
+      },
+      scrollToFraction: (fraction: number) => {
+        const editor = diffEditorRef.current
+        if (!editor) return false
+        const modifiedEditor = editor.getModifiedEditor()
+        const scrollHeight = modifiedEditor.getScrollHeight()
+        const clientHeight = modifiedEditor.getLayoutInfo().height
+        const max = Math.max(0, scrollHeight - clientHeight)
+        const next = Math.max(0, Math.min(max, max * Math.max(0, Math.min(1, fraction))))
+        modifiedEditor.setScrollTop(next)
+        window.requestAnimationFrame(() => {
+          if (!isDraftDirtyRef.current) {
+            captureDiffView()
+          }
+        })
+        return true
+      },
+      scrollToLine: (line: number) => {
+        const editor = diffEditorRef.current
+        if (!editor) return false
+        editor.getModifiedEditor().revealLineNearTop(line)
+        window.requestAnimationFrame(() => {
+          if (!isDraftDirtyRef.current) {
+            captureDiffView()
+          }
+        })
+        return true
+      },
+      getDiffFontSize: () => getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE,
+      getCwd: () => cwd,
+      getRepoRoot: () => diffResult?.cwd || null,
+      getImagePreviewState: () => {
+        const key = selectedFileKey
+        if (!key) return null
+        const state = fileContentsRef.current[key]
+        if (!state) return null
+        return {
+          isImage: Boolean(state.isImage),
+          isSvg: Boolean(state.isSvg),
+          isBinary: state.isBinary,
+          hasOriginalUrl: Boolean(state.originalImageUrl),
+          hasModifiedUrl: Boolean(state.modifiedImageUrl),
+          compareMode: imageCompareMode,
+          displayMode: imageDisplayMode,
+          loading: state.loading
+        }
+      },
+      getFileActionState: () => {
+        if (!selectedFile) return null
+        return {
+          fileActionsVisible: canShowFileActionPanel,
+          lineActionsVisible: canShowLineActionPanel,
+          keepDisabled: !selectedFileState || selectedFileState.loading || isActionPending || isDraftDirty,
+          denyDisabled: !selectedFileState || selectedFileState.loading || isActionPending || isDraftDirty,
+          pending: isActionPending
+        }
+      },
+      triggerFileAction: async (action: 'keep' | 'deny') => {
+        if (!selectedFile) return false
+        if (action === 'keep') {
+          await handleKeep()
+          return true
+        }
+        await handleDeny()
+        return true
+      }
+    }
+    ;(window as any).__onwardGitDiffDebug = api
+    return () => {
+      if ((window as any).__onwardGitDiffDebug === api) {
+        delete (window as any).__onwardGitDiffDebug
+      }
+    }
+  }, [
+    captureDiffView,
+    cwd,
+    diffRestoreNotice,
+    diffResult,
+    handleDeny,
+    handleFileSelect,
+    handleKeep,
+    imageCompareMode,
+    imageDisplayMode,
+    isActionPending,
+    isDraftDirty,
+    isOpen,
+    canShowFileActionPanel,
+    canShowLineActionPanel,
+    selectedFile,
+    selectedFileKey,
+    selectedFileState,
+    terminalId
+  ])
 
   // Make sure the readOnly switch takes effect immediately
   useEffect(() => {
@@ -2494,113 +2553,117 @@ export function GitDiffViewer({
               </span>
             )}
           </div>
-          {!(fileState?.isImage && (fileState.isBinary || (fileState.isSvg && svgViewMode === 'visual'))) && (
+          {(canShowLineActionPanel || canShowFileActionPanel || canShowEditActionPanel) && (
             <div className="git-diff-detail-actions-row">
-            <div className="git-diff-action-panel line">
-              <span className="git-diff-action-label line">{t('gitDiff.line.title')}</span>
-              <span className="git-diff-action-hint">
-                {isDraftDirty ? t('gitDiff.line.hintDisabled') : t('gitDiff.line.hint')}
-              </span>
-              <div className="git-diff-action-meta">
-                {lineMessage && (
-                  <span className={`git-diff-toast-message ${lineMessage.type}`}>
-                    {lineMessage.text}
+              {canShowLineActionPanel && (
+                <div className="git-diff-action-panel line">
+                  <span className="git-diff-action-label line">{t('gitDiff.line.title')}</span>
+                  <span className="git-diff-action-hint">
+                    {isDraftDirty ? t('gitDiff.line.hintDisabled') : t('gitDiff.line.hint')}
                   </span>
-                )}
-                <span className={`git-diff-line-count ${lineActionStatus.valid ? '' : 'invalid'}`}>
-                  {lineActionStatus.label}
-                </span>
-              </div>
-              <div className="git-diff-action-buttons">
-                <button
-                  className="git-diff-line-keep-btn"
-                  onClick={handleLineKeep}
-                  disabled={!canUseLineActions || !lineActionStatus.valid || isLineActionPending}
-                  title={t('gitDiff.line.keepTitle')}
-                >
-                  {isLineKeepPending ? t('gitDiff.processing') : 'Keep'}
-                </button>
-                <button
-                  className="git-diff-line-deny-btn"
-                  onClick={handleLineDeny}
-                  disabled={!canUseLineActions || !lineActionStatus.valid || isLineActionPending}
-                  title={t('gitDiff.line.denyTitle')}
-                >
-                  {isLineDenyPending ? t('gitDiff.processing') : 'Deny'}
-                </button>
-                <button
-                  className="git-diff-line-clear-btn"
-                  onClick={clearLineSelection}
-                  disabled={!lineActionStatus.hasSelection || isLineActionPending}
-                  title={t('gitDiff.line.clear')}
-                >
-                  {t('gitDiff.line.clear')}
-                </button>
-              </div>
-            </div>
-            <div className="git-diff-action-panel file">
-              <span className="git-diff-action-label file">{t('gitDiff.fileActions.title')}</span>
-              <span className="git-diff-action-hint">
-                {isDraftDirty ? t('gitDiff.fileActions.hintDisabled') : t('gitDiff.fileActions.hint')}
-              </span>
-              <div className="git-diff-action-meta">
-                {actionMessage && (
-                  <span className={`git-diff-toast-message ${actionMessage.type}`}>
-                    {actionMessage.text}
-                  </span>
-                )}
-              </div>
-              <div className="git-diff-action-buttons">
-                <button
-                  className="git-diff-keep-btn"
-                  onClick={handleKeep}
-                  disabled={!selectedFileState || selectedFileState.loading || isActionPending || isDraftDirty}
-                  title={selectedFile.changeType === 'staged' ? t('gitDiff.fileActions.keepStagedTitle') : t('gitDiff.fileActions.keepTitle')}
-                >
-                  {isKeepPending ? t('gitDiff.processing') : 'Keep'}
-                </button>
-                <button
-                  className="git-diff-deny-btn"
-                  onClick={handleDeny}
-                  disabled={!selectedFileState || selectedFileState.loading || isActionPending || isDraftDirty}
-                  title={selectedFile.changeType === 'staged' ? t('gitDiff.fileActions.unstageTitle') : t('gitDiff.fileActions.denyTitle')}
-                >
-                  {isDenyPending ? t('gitDiff.processing') : 'Deny'}
-                </button>
-              </div>
-            </div>
-            {(isDraftDirty || editMessage) && (
-              <div className="git-diff-action-panel edit">
-                <div className="git-diff-action-meta">
-                  {editMessage && (
-                    <span className={`git-diff-toast-message ${editMessage.type}`}>
-                      {editMessage.text}
+                  <div className="git-diff-action-meta">
+                    {lineMessage && (
+                      <span className={`git-diff-toast-message ${lineMessage.type}`}>
+                        {lineMessage.text}
+                      </span>
+                    )}
+                    <span className={`git-diff-line-count ${lineActionStatus.valid ? '' : 'invalid'}`}>
+                      {lineActionStatus.label}
                     </span>
-                  )}
-                  {isDraftDirty && (
-                    <span className="git-diff-unsaved">{t('gitDiff.unsaved')}</span>
-                  )}
-                </div>
-                {isDraftDirty && (
+                  </div>
                   <div className="git-diff-action-buttons">
                     <button
-                      className="git-diff-save-btn"
-                      onClick={handleSaveDraft}
-                      disabled={!canSaveDraft}
+                      className="git-diff-line-keep-btn"
+                      onClick={handleLineKeep}
+                      disabled={!canUseLineActions || !lineActionStatus.valid || isLineActionPending}
+                      title={t('gitDiff.line.keepTitle')}
                     >
-                      {isSavingEdit ? t('gitDiff.saving') : t('gitDiff.saveFile')}
+                      {isLineKeepPending ? t('gitDiff.processing') : 'Keep'}
                     </button>
                     <button
-                      className="git-diff-discard-btn"
-                      onClick={discardDraft}
-                      disabled={!isDraftDirty || isSavingEdit}
+                      className="git-diff-line-deny-btn"
+                      onClick={handleLineDeny}
+                      disabled={!canUseLineActions || !lineActionStatus.valid || isLineActionPending}
+                      title={t('gitDiff.line.denyTitle')}
                     >
-                      {t('gitDiff.discardDraft')}
+                      {isLineDenyPending ? t('gitDiff.processing') : 'Deny'}
+                    </button>
+                    <button
+                      className="git-diff-line-clear-btn"
+                      onClick={clearLineSelection}
+                      disabled={!lineActionStatus.hasSelection || isLineActionPending}
+                      title={t('gitDiff.line.clear')}
+                    >
+                      {t('gitDiff.line.clear')}
                     </button>
                   </div>
-                )}
-              </div>
-            )}
+                </div>
+              )}
+              {canShowFileActionPanel && (
+                <div className="git-diff-action-panel file">
+                  <span className="git-diff-action-label file">{t('gitDiff.fileActions.title')}</span>
+                  <span className="git-diff-action-hint">
+                    {isDraftDirty ? t('gitDiff.fileActions.hintDisabled') : t('gitDiff.fileActions.hint')}
+                  </span>
+                  <div className="git-diff-action-meta">
+                    {actionMessage && (
+                      <span className={`git-diff-toast-message ${actionMessage.type}`}>
+                        {actionMessage.text}
+                      </span>
+                    )}
+                  </div>
+                  <div className="git-diff-action-buttons">
+                    <button
+                      className="git-diff-keep-btn"
+                      onClick={handleKeep}
+                      disabled={!selectedFileState || selectedFileState.loading || isActionPending || isDraftDirty}
+                      title={selectedFile.changeType === 'staged' ? t('gitDiff.fileActions.keepStagedTitle') : t('gitDiff.fileActions.keepTitle')}
+                    >
+                      {isKeepPending ? t('gitDiff.processing') : 'Keep'}
+                    </button>
+                    <button
+                      className="git-diff-deny-btn"
+                      onClick={handleDeny}
+                      disabled={!selectedFileState || selectedFileState.loading || isActionPending || isDraftDirty}
+                      title={selectedFile.changeType === 'staged' ? t('gitDiff.fileActions.unstageTitle') : t('gitDiff.fileActions.denyTitle')}
+                    >
+                      {isDenyPending ? t('gitDiff.processing') : 'Deny'}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {canShowEditActionPanel && (
+                <div className="git-diff-action-panel edit">
+                  <div className="git-diff-action-meta">
+                    {editMessage && (
+                      <span className={`git-diff-toast-message ${editMessage.type}`}>
+                        {editMessage.text}
+                      </span>
+                    )}
+                    {isDraftDirty && (
+                      <span className="git-diff-unsaved">{t('gitDiff.unsaved')}</span>
+                    )}
+                  </div>
+                  {isDraftDirty && (
+                    <div className="git-diff-action-buttons">
+                      <button
+                        className="git-diff-save-btn"
+                        onClick={handleSaveDraft}
+                        disabled={!canSaveDraft}
+                      >
+                        {isSavingEdit ? t('gitDiff.saving') : t('gitDiff.saveFile')}
+                      </button>
+                      <button
+                        className="git-diff-discard-btn"
+                        onClick={discardDraft}
+                        disabled={!isDraftDirty || isSavingEdit}
+                      >
+                        {t('gitDiff.discardDraft')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
