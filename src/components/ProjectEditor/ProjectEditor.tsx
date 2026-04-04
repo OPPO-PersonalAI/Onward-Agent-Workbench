@@ -1597,7 +1597,10 @@ export function ProjectEditor({
       }))
       if (cancelled) return
       if (Object.keys(updates).length > 0) {
-        setMarkdownImageMap((prev) => ({ ...prev, ...updates }))
+        const nextMap = { ...markdownImageMapRef.current, ...updates }
+        markdownImageMapRef.current = nextMap
+        setMarkdownImageMap(nextMap)
+        sendMarkdownRenderRequest()
       }
     }
 
@@ -1605,7 +1608,7 @@ export function ProjectEditor({
     return () => {
       cancelled = true
     }
-  }, [isMarkdownRenderAllowed, markdownImageMap, markdownImagePaths, rootPath])
+  }, [isMarkdownRenderAllowed, markdownImageMap, markdownImagePaths, rootPath, sendMarkdownRenderRequest])
 
 
   const showStatus = useCallback((type: 'success' | 'error', text: string) => {
@@ -3401,6 +3404,15 @@ export function ProjectEditor({
       getRootPath: () => rootRef.current,
       getActiveFilePath: () => activeFilePathRef.current,
       getEditorContent: () => fileContentRef.current,
+      setEditorContent: (content: string) => {
+        const editor = editorRef.current
+        const model = editor?.getModel()
+        if (!editor || !model) return false
+        editor.pushUndoStop()
+        editor.executeEdits('debug-set-editor-content', [{ range: model.getFullModelRange(), text: content }])
+        editor.pushUndoStop()
+        return true
+      },
       getEditorLineCount: () => {
         const model = editorRef.current?.getModel()
         return model ? model.getLineCount() : 0
@@ -3427,6 +3439,24 @@ export function ProjectEditor({
       isPreviewSearchOpen: () => previewSearchOpenRef.current,
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
       getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
+      getMarkdownPreviewImageState: () => {
+        const preview = previewRef.current
+        if (!preview) {
+          return {
+            count: 0,
+            loadedCount: 0,
+            brokenCount: 0,
+            sources: []
+          }
+        }
+        const images = Array.from(preview.querySelectorAll('img')) as HTMLImageElement[]
+        return {
+          count: images.length,
+          loadedCount: images.filter((image) => image.complete && image.naturalWidth > 0).length,
+          brokenCount: images.filter((image) => image.complete && image.naturalWidth === 0).length,
+          sources: images.map((image) => image.currentSrc || image.src || '')
+        }
+      },
       isPreviewTransitioning: () => previewRestorePhaseRef.current !== 'idle',
       isPreviewContentVisible: () => isPreviewContentVisibleNow(),
       getPreviewRestorePhase: () => previewRestorePhaseRef.current,
@@ -3579,6 +3609,15 @@ export function ProjectEditor({
       getRootPath: () => rootRef.current,
       getActiveFilePath: () => activeFilePathRef.current,
       getEditorContent: () => fileContentRef.current,
+      setEditorContent: (content: string) => {
+        const editor = editorRef.current
+        const model = editor?.getModel()
+        if (!editor || !model) return false
+        editor.pushUndoStop()
+        editor.executeEdits('autotest-set-editor-content', [{ range: model.getFullModelRange(), text: content }])
+        editor.pushUndoStop()
+        return true
+      },
       getEditorLineCount: () => {
         const model = editorRef.current?.getModel()
         return model ? model.getLineCount() : 0
@@ -3674,6 +3713,24 @@ export function ProjectEditor({
       isPreviewSearchOpen: () => previewSearchOpenRef.current,
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
       getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
+      getMarkdownPreviewImageState: () => {
+        const preview = previewRef.current
+        if (!preview) {
+          return {
+            count: 0,
+            loadedCount: 0,
+            brokenCount: 0,
+            sources: []
+          }
+        }
+        const images = Array.from(preview.querySelectorAll('img')) as HTMLImageElement[]
+        return {
+          count: images.length,
+          loadedCount: images.filter((image) => image.complete && image.naturalWidth > 0).length,
+          brokenCount: images.filter((image) => image.complete && image.naturalWidth === 0).length,
+          sources: images.map((image) => image.currentSrc || image.src || '')
+        }
+      },
       isPreviewTransitioning: () => previewRestorePhaseRef.current !== 'idle',
       isPreviewContentVisible: () => isPreviewContentVisibleNow(),
       getPreviewRestorePhase: () => previewRestorePhaseRef.current,

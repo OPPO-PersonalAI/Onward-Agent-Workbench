@@ -8,7 +8,7 @@ import { promisify } from 'util'
 import { platform, tmpdir } from 'os'
 import { readFile, stat, writeFile, mkdir, access, mkdtemp, rm } from 'fs/promises'
 import { constants } from 'fs'
-import { resolve, relative, sep, isAbsolute, dirname, delimiter, basename, join } from 'path'
+import { resolve, relative, sep, isAbsolute, dirname, delimiter, basename, join, extname } from 'path'
 import { ptyManager } from './pty-manager'
 import { gitRuntimeManager, type GitTaskKind, type GitTaskPriority } from './git-runtime-manager'
 
@@ -205,28 +205,38 @@ const MAX_FILE_SIZE = 1024 * 1024  // 1MB
 const MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 const MAX_DIFF_OUTPUT = 10 * 1024 * 1024 // 10MB
 const IMAGE_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.svg'
+  '.png', '.apng', '.jpg', '.jpeg', '.jfif', '.pjpeg', '.pjp', '.gif', '.webp', '.avif', '.bmp', '.ico', '.cur', '.tif', '.tiff', '.svg'
 ])
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
+  '.apng': 'image/apng',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.jfif': 'image/jpeg',
+  '.pjpeg': 'image/jpeg',
+  '.pjp': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+  '.avif': 'image/avif',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
+  '.cur': 'image/x-icon',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
   '.svg': 'image/svg+xml'
 }
 
+function getNormalizedImageExtension(filename: string): string {
+  return extname(filename).toLowerCase()
+}
+
 function isImageFile(filename: string): boolean {
-  const ext = ('.' + filename.split('.').pop()?.toLowerCase()).replace('..', '.')
-  return IMAGE_EXTENSIONS.has(ext)
+  return IMAGE_EXTENSIONS.has(getNormalizedImageExtension(filename))
 }
 
 function getImageMime(filename: string): string {
-  const ext = ('.' + filename.split('.').pop()?.toLowerCase()).replace('..', '.')
-  return IMAGE_MIME_TYPES[ext] || 'application/octet-stream'
+  return IMAGE_MIME_TYPES[getNormalizedImageExtension(filename)] || 'application/octet-stream'
 }
 
 function bufferToImageDataUrl(buffer: Buffer, filename: string): string {
@@ -939,7 +949,7 @@ export async function getGitBranchAndStatus(cwd: string): Promise<GitBranchAndSt
   try {
     const { stdout } = await execFileAsync(
       meta.gitExecutable || 'git',
-      ['-c', 'core.quotepath=false', 'status', '--porcelain=2', '--branch', '-uno'],
+      ['-c', 'core.quotepath=false', 'status', '--porcelain=2', '--branch', '-uall'],
       {
         cwd: meta.repoRoot,
         timeout: EXEC_TIMEOUT,
@@ -950,7 +960,7 @@ export async function getGitBranchAndStatus(cwd: string): Promise<GitBranchAndSt
         repoKey: meta.repoRoot,
         priority: 'high',
         dedupeKey: `branch-status:${resolve(meta.repoRoot)}`,
-        label: 'git status --porcelain=2 --branch -uno'
+        label: 'git status --porcelain=2 --branch -uall'
       }
     )
     const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
@@ -971,7 +981,7 @@ export async function getGitStatusSummary(cwd: string): Promise<TerminalGitStatu
   try {
     const { stdout } = await execFileAsync(
       gitExecutable,
-      ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uno'],
+      ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uall'],
       {
         cwd,
         timeout: EXEC_TIMEOUT,
@@ -981,7 +991,7 @@ export async function getGitStatusSummary(cwd: string): Promise<TerminalGitStatu
       {
         repoKey: cwd,
         priority: 'normal',
-        label: 'git status --porcelain -uno'
+        label: 'git status --porcelain -uall'
       }
     )
     const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
@@ -1192,6 +1202,17 @@ async function getGitDiffNumstat(
     maxBuffer: MAX_DIFF_OUTPUT
   }, meta)
   return typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
+}
+
+async function isGitPathStaged(
+  cwd: string,
+  gitExecutable: string,
+  gitPath: string,
+  meta?: GitTaskMeta
+): Promise<boolean> {
+  const output = await getGitDiffNameStatus(cwd, gitExecutable, true, meta)
+  const entries = parseNameStatusZ(output)
+  return entries.some((entry) => entry.filename === gitPath || entry.originalFilename === gitPath)
 }
 
 async function getGitRangeNameStatus(
@@ -2158,6 +2179,30 @@ export async function stageGitFile(
       timeout: EXEC_TIMEOUT,
       env: getExecEnv()
     })
+    let staged = await isGitPathStaged(repoRoot, gitExecutable, gitPath, { repoKey: repoRoot, priority: 'high' })
+    if (!staged) {
+      await execFileAsync(gitExecutable, ['add', '-A', '--', gitPath], {
+        cwd: repoRoot,
+        timeout: EXEC_TIMEOUT,
+        env: getExecEnv()
+      })
+      staged = await isGitPathStaged(repoRoot, gitExecutable, gitPath, { repoKey: repoRoot, priority: 'high' })
+    }
+    if (!staged) {
+      try {
+        await execFileAsync(gitExecutable, ['add', '-f', '--', gitPath], {
+          cwd: repoRoot,
+          timeout: EXEC_TIMEOUT,
+          env: getExecEnv()
+        })
+        staged = await isGitPathStaged(repoRoot, gitExecutable, gitPath, { repoKey: repoRoot, priority: 'high' })
+      } catch {
+        // Ignore fallback failures and report the verification result below.
+      }
+    }
+    if (!staged) {
+      return { success: false, filename, error: 'Failed to stage file: Git did not report the file as staged.' }
+    }
     return { success: true, filename }
   } catch (error) {
     return { success: false, filename, error: `Failed to stage file: ${formatGitError(error) || String(error)}` }

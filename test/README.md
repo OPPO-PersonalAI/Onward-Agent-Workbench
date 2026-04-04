@@ -264,6 +264,12 @@ Source set: Markdown LaTeX preview validation suite
 
 - `MLP-00` to `MLP-15`: fixture existence, preview rendering, KaTeX output, and temporary file preview behavior
 
+### Phase 0.81: Image Diff
+
+Source set: Git Diff image validation suite
+
+- `ID-01` to `ID-21`: PNG keep / deny state transitions are validated end-to-end, while SVG preview loading and image-only action visibility are verified in the same Git Diff flow
+
 ### Phase 0.88: File Watch
 
 Source set: ProjectEditor external file refresh validation suite
