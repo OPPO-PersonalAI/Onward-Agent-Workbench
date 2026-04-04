@@ -18,6 +18,91 @@
  */
 import type { AutotestContext, TestResult } from './types'
 
+type PerfMonitorLike = {
+  recordInputLatency: (latencyMs: number) => void
+}
+
+type TerminalSessionManagerLike = {
+  focusIfNeeded: (id: string) => boolean
+  getSession: (id: string) => { terminal: { input: (data: string, wasUserInput?: boolean) => void } } | undefined
+}
+
+function getPerfMonitor(): PerfMonitorLike | null {
+  return ((window as unknown as { __perfMonitor?: PerfMonitorLike }).__perfMonitor) ?? null
+}
+
+function getSessionManager(): TerminalSessionManagerLike | null {
+  return ((window as unknown as { __terminalSessionManager?: TerminalSessionManagerLike }).__terminalSessionManager) ?? null
+}
+
+async function measureEchoLatencies(
+  inputId: string,
+  sampleCount: number,
+  sleep: AutotestContext['sleep']
+): Promise<number[]> {
+  const perfMonitor = getPerfMonitor()
+  const sessionManager = getSessionManager()
+  if (!perfMonitor || !sessionManager) {
+    return []
+  }
+
+  const samples: number[] = []
+  const originalRecord = perfMonitor.recordInputLatency.bind(perfMonitor)
+  let pendingResolver: ((latencyMs: number) => void) | null = null
+
+  perfMonitor.recordInputLatency = (latencyMs: number) => {
+    originalRecord(latencyMs)
+    pendingResolver?.(latencyMs)
+    pendingResolver = null
+  }
+
+  try {
+    for (let i = 0; i < sampleCount; i++) {
+      sessionManager.focusIfNeeded(inputId)
+      const session = sessionManager.getSession(inputId)
+      if (!session) break
+
+      const latency = await new Promise<number | null>((resolve) => {
+        pendingResolver = resolve
+        session.terminal.input('a', true)
+        window.setTimeout(() => {
+          if (pendingResolver === resolve) {
+            pendingResolver = null
+            resolve(null)
+          }
+        }, 1000)
+      })
+
+      if (latency !== null) {
+        samples.push(latency)
+      }
+
+      // Clear the partially typed shell input before the next sample.
+      await window.electronAPI.terminal.write(inputId, '\x03')
+      await sleep(80)
+    }
+  } finally {
+    perfMonitor.recordInputLatency = originalRecord
+  }
+
+  return samples
+}
+
+function computeLatencyStats(latencies: number[]) {
+  if (latencies.length === 0) {
+    return { avg: 0, p50: 0, p95: 0, max: 0 }
+  }
+
+  const sorted = [...latencies].sort((a, b) => a - b)
+  const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length
+  return {
+    avg: +avg.toFixed(1),
+    p50: +sorted[Math.floor(sorted.length * 0.5)].toFixed(1),
+    p95: +sorted[Math.floor(sorted.length * 0.95)].toFixed(1),
+    max: +sorted[sorted.length - 1].toFixed(1)
+  }
+}
+
 export async function testTerminalPerf(ctx: AutotestContext): Promise<TestResult[]> {
   const { log, sleep, assert, cancelled, terminalId } = ctx
   const results: TestResult[] = []
@@ -147,26 +232,24 @@ export async function testTerminalPerf(ctx: AutotestContext): Promise<TestResult
   }
 
   // TP-03: Input latency under load
-  // Measures terminal write roundtrip latency while 2 terminals are producing output.
+  // Measures real keystroke-to-echo latency on the attached xterm session.
   if (!cancelled()) {
     log('TP-03:begin')
     const bgIds: string[] = []
-    const inputId = `tp03-input-${Date.now()}`
-    const latencies: number[] = []
+    const inputId = terminalId
 
     try {
-      // Create 2 background output terminals
+      // Create 2 background PTYs to add upstream pressure in the main process.
       for (let i = 0; i < 2; i++) {
         const id = `tp03-bg-${i}-${Date.now()}`
         const result = await window.electronAPI.terminal.create(id, { cols: 80, rows: 24 })
         if (result?.success) bgIds.push(id)
       }
 
-      // Create the input test terminal
-      const inputResult = await window.electronAPI.terminal.create(inputId, { cols: 80, rows: 24 })
-
-      if (inputResult?.success && bgIds.length === 2) {
+      if (inputId && bgIds.length === 2 && getPerfMonitor() && getSessionManager()) {
         await sleep(2000)
+
+        const idleLatencies = await measureEchoLatencies(inputId, 10, sleep)
 
         // Start background output
         for (const id of bgIds) {
@@ -180,13 +263,7 @@ export async function testTerminalPerf(ctx: AutotestContext): Promise<TestResult
         // Let output ramp up
         await sleep(2000)
 
-        // Measure input latency
-        for (let i = 0; i < 30; i++) {
-          const t0 = performance.now()
-          await window.electronAPI.terminal.write(inputId, 'a')
-          latencies.push(performance.now() - t0)
-          await sleep(80)
-        }
+        const loadedLatencies = await measureEchoLatencies(inputId, 20, sleep)
 
         // Stop background output
         for (const id of bgIds) {
@@ -194,29 +271,28 @@ export async function testTerminalPerf(ctx: AutotestContext): Promise<TestResult
         }
         await sleep(1000)
 
-        const sorted = [...latencies].sort((a, b) => a - b)
-        const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length
-        const p50 = sorted[Math.floor(sorted.length * 0.5)]
-        const p95 = sorted[Math.floor(sorted.length * 0.95)]
-        const max = sorted[sorted.length - 1]
+        const idle = computeLatencyStats(idleLatencies)
+        const loaded = computeLatencyStats(loadedLatencies)
 
-        _assert('TP-03-input-latency-under-load', p95 < 200, {
-          samples: latencies.length,
-          avgMs: +avg.toFixed(1),
-          p50Ms: +p50.toFixed(1),
-          p95Ms: +p95.toFixed(1),
-          maxMs: +max.toFixed(1),
-          threshold: 'p95 < 200ms'
+        _assert('TP-03-input-latency-under-load', idle.p95 < 30 && loaded.p95 < 120, {
+          samplesIdle: idleLatencies.length,
+          samplesLoaded: loadedLatencies.length,
+          idleAvgMs: idle.avg,
+          idleP95Ms: idle.p95,
+          loadedAvgMs: loaded.avg,
+          loadedP95Ms: loaded.p95,
+          loadedMaxMs: loaded.max,
+          threshold: 'idle p95 < 30ms, loaded p95 < 120ms'
         })
       } else {
         _assert('TP-03-input-latency-under-load', false, {
-          reason: 'terminal creation failed',
+          reason: 'attached session or background terminals unavailable',
           bgTerminals: bgIds.length,
-          inputTerminal: inputResult?.success
+          inputTerminal: inputId
         })
       }
     } finally {
-      for (const id of [...bgIds, inputId]) {
+      for (const id of bgIds) {
         await window.electronAPI.terminal.dispose(id).catch(() => {})
       }
     }
@@ -249,7 +325,6 @@ export async function testTerminalPerf(ctx: AutotestContext): Promise<TestResult
         // (The buffer request goes renderer→main→renderer and back)
         // We check the last portion of output
         const bufferResult = await new Promise<{ success: boolean; content?: string; totalLines?: number }>((resolve) => {
-          const requestId = `tp04-buf-${Date.now()}`
           const timer = setTimeout(() => resolve({ success: false }), 5000)
           const unsub = window.electronAPI.terminal.onGetBufferRequest(
             (reqId: string, _termId: string) => {

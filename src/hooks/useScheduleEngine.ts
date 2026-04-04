@@ -130,19 +130,24 @@ export function useScheduleEngine({
 
     // Reuse the same send-and-execute logic as handleSendAndExecuteOnTerminals.
     // Tier 1: session manager (handles single-line vs multi-line internally).
-    // Tier 2: direct PTY write fallback for sessions without xterm instance.
+    // Tier 2: main-process input sequence fallback for sessions without xterm instance.
     try {
       for (const terminalId of existingTerminalIds) {
         if (terminalSessionManager.pasteAndExecute(terminalId, prompt.content)) {
           continue
         }
-        // Fallback: direct PTY write
-        const result = await window.electronAPI.terminal.writeSplit(terminalId, prompt.content, '\r')
+        const isMultiLine = /\r?\n/.test(prompt.content)
+        const result = isMultiLine
+          ? await window.electronAPI.terminal.sendInputSequence(terminalId, {
+            kind: 'pasteThenEnter',
+            content: prompt.content
+          })
+          : { ok: await window.electronAPI.terminal.write(terminalId, `${prompt.content}\r`) }
         if (!result.ok) {
-          console.warn('[Schedule] writeSplit failed:', {
+          console.warn('[Schedule] send-and-execute fallback failed:', {
             terminalId,
-            phase: result.phase,
-            error: result.error
+            phase: 'phase' in result ? result.phase : 'content',
+            error: 'error' in result ? result.error : 'terminal write failed'
           })
         }
       }

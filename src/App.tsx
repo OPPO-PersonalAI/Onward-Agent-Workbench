@@ -462,12 +462,18 @@ function AppContent({
     )
 
     for (const terminalId of availableTerminalIds) {
-      const result = await window.electronAPI.terminal.writeSplit(terminalId, prompt.content, '\r')
+      const isMultiLine = /\r?\n/.test(prompt.content)
+      const result = isMultiLine
+        ? await window.electronAPI.terminal.sendInputSequence(terminalId, {
+          kind: 'pasteThenEnter',
+          content: prompt.content
+        })
+        : { ok: await window.electronAPI.terminal.write(terminalId, `${prompt.content}\r`) }
       if (!result.ok) {
-        console.warn('[Schedule] retry writeSplit failed:', {
+        console.warn('[Schedule] retry send-and-execute failed:', {
           terminalId,
-          phase: result.phase,
-          error: result.error
+          phase: 'phase' in result ? result.phase : 'content',
+          error: 'error' in result ? result.error : 'terminal write failed'
         })
       }
     }
@@ -550,20 +556,14 @@ function AppContent({
     return { successIds, failedIds }
   }, [])
 
-  // Send content to terminals as a paste operation.
+  // Send content to terminals.
   //
   // Strategy (two tiers):
-  //   1. xterm.js paste — uses terminal.paste() which applies bracketed paste mode
-  //      when the child program supports it (e.g. Claude Code sends \x1b[?2004h).
-  //      Within bracketed paste, \r\n is safe — the child treats the entire block
-  //      as pasted text rather than interpreting each \r as Enter.
-  //   2. Direct PTY write — fallback when the xterm.js instance is unavailable
-  //      (e.g. terminal on an unmounted tab). Content is written as-is.
-  //
-  // Content is NOT modified (no line ending normalization). The bracketed paste
-  // mechanism is what protects multi-line content from being split — this is
-  // the same approach used by every modern terminal emulator (macOS Terminal,
-  // iTerm2, Windows Terminal, etc.).
+  //   1. Mounted xterm session: use terminal.paste() so bracketed paste mode
+  //      is applied when supported by the child program.
+  //   2. Session unavailable: use the main-process input sequence API so
+  //      multi-line content still goes through paste semantics instead of the
+  //      old direct PTY write fallback.
   const sendContentToTerminals = useCallback(async (
     terminalIds: string[],
     content: string,
@@ -581,7 +581,11 @@ function AppContent({
 
       // Tier 2: fallback to direct PTY write (session not found)
       try {
-        const ok = await window.electronAPI.terminal.write(id, content)
+        const isMultiLine = /\r?\n/.test(content)
+        const result = isMultiLine
+          ? await window.electronAPI.terminal.sendInputSequence(id, { kind: 'paste', content })
+          : { ok: await window.electronAPI.terminal.write(id, content) }
+        const ok = result.ok
         if (ok) {
           successIds.push(id)
         } else {
@@ -615,10 +619,11 @@ function AppContent({
     //
     // Tier 1 — via session manager (pasteAndExecute):
     //   Single-line: terminal.input(content + '\r') — raw input, no brackets.
-    //   Multi-line:  terminal.paste(content) + 300 ms delay + terminal.input('\r').
+    //   Multi-line:  terminal.paste(content) + adaptive Enter release.
     //
-    // Tier 2 — direct PTY write (session unavailable, e.g. unmounted tab):
-    //   Fallback to the old two-phase approach: pty.write(content), delay, pty.write('\r').
+    // Tier 2 — session unavailable:
+    //   Single-line: direct PTY write with trailing Enter.
+    //   Multi-line:  main-process pasteThenEnter sequence with protocol-aware fallback.
     const successIds: string[] = []
     const failedIds: string[] = []
 
@@ -631,15 +636,18 @@ function AppContent({
 
       // Tier 2: direct PTY write (no session)
       try {
-        const result = await window.electronAPI.terminal.writeSplit(id, content, '\r')
+        const isMultiLine = /\r?\n/.test(content)
+        const result = isMultiLine
+          ? await window.electronAPI.terminal.sendInputSequence(id, { kind: 'pasteThenEnter', content })
+          : { ok: await window.electronAPI.terminal.write(id, content + '\r') }
         if (result.ok) {
           successIds.push(id)
         } else {
           failedIds.push(id)
-          console.warn('[PromptSender] send-and-execute writeSplit failed:', {
+          console.warn('[PromptSender] send-and-execute fallback failed:', {
             terminalId: id,
-            phase: result.phase,
-            error: result.error
+            phase: 'phase' in result ? result.phase : 'content',
+            error: 'error' in result ? result.error : 'terminal write failed'
           })
         }
       } catch (error) {

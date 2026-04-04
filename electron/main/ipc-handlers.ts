@@ -62,6 +62,40 @@ let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
 let fileWatchManager: FileWatchManager | null = null
 
+type TerminalInputSequencePayload = {
+  kind: 'raw' | 'paste' | 'pasteThenEnter'
+  content: string
+}
+
+const BRACKETED_PASTE_ENABLE_RE = /\x1b\[\?2004h/g
+const BRACKETED_PASTE_DISABLE_RE = /\x1b\[\?2004l/g
+const BRACKETED_PASTE_START = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
+const INTERACTIVE_BOOST_WINDOW_MS = 250
+const FALLBACK_PASTE_ENTER_DELAY_MS = process.platform === 'win32' ? 120 : 40
+
+function prepareTextForPaste(text: string): string {
+  return text.replace(/\r?\n/g, '\r')
+}
+
+function wrapBracketedPaste(text: string, enabled: boolean): string {
+  return enabled ? `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}` : text
+}
+
+function updateBracketedPasteMode(current: boolean, data: string): boolean {
+  let next = current
+  BRACKETED_PASTE_ENABLE_RE.lastIndex = 0
+  BRACKETED_PASTE_DISABLE_RE.lastIndex = 0
+
+  for (const _ of data.matchAll(BRACKETED_PASTE_ENABLE_RE)) {
+    next = true
+  }
+  for (const _ of data.matchAll(BRACKETED_PASTE_DISABLE_RE)) {
+    next = false
+  }
+  return next
+}
+
 /**
  * Batches PTY output data into periodic flushes to reduce IPC message rate.
  * Instead of sending one IPC message per onData callback (which can be
@@ -72,6 +106,7 @@ class TerminalDataBuffer {
   private totalBytes = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
+  private interactiveBoostUntil = 0
 
   // IPC flush interval.  The previous value of 16 ms (~60 fps) sent up to
   // 360 IPC messages/s across 6 terminals, saturating the renderer's main
@@ -105,8 +140,26 @@ class TerminalDataBuffer {
     this._fastPathEnabled = enabled
   }
 
+  notifyInteractiveInput(): void {
+    this.interactiveBoostUntil = Date.now() + INTERACTIVE_BOOST_WINDOW_MS
+    if (this.chunks.length > 0) {
+      this.flush()
+    }
+  }
+
   push(data: string): void {
     if (this.disposed) return
+
+    const interactiveBoostActive = this._fastPathEnabled && Date.now() < this.interactiveBoostUntil
+
+    if (interactiveBoostActive && this.chunks.length > 0) {
+      this.flush()
+    }
+
+    if (interactiveBoostActive) {
+      this.send(this.terminalId, data)
+      return
+    }
 
     // Fast path: small interactive data (keystroke echoes, short escape
     // sequences) is sent immediately when no data is already buffered.
@@ -139,6 +192,10 @@ class TerminalDataBuffer {
   }
 
   flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
     if (this.chunks.length === 0) return
     const merged = this.chunks.length === 1 ? this.chunks[0] : this.chunks.join('')
     this.chunks = []
@@ -165,6 +222,7 @@ const terminalDataBuffers = new Map<string, TerminalDataBuffer>()
 // created (race between renderer setVisibility and terminal:create) is
 // not lost.  When a new buffer is created it reads from this map.
 const terminalFastPathState = new Map<string, boolean>()
+const terminalBracketedPasteState = new Map<string, boolean>()
 
 // Buffer request waiting queue
 interface TerminalBufferResult {
@@ -384,6 +442,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
         }
       })
       terminalDataBuffers.set(id, dataBuffer)
+      terminalBracketedPasteState.set(id, false)
 
       // Apply any fast-path state that arrived before the buffer was created
       // (e.g. setVisibility(id, false) sent before terminal:create completed).
@@ -399,6 +458,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       const dataDisposable = ptyProcess.onData((data) => {
         // Parse OSC 9;9 CWD reports from shell integration (Windows)
         ptyManager.detectCwd(id, data)
+        const bracketedPasteMode = terminalBracketedPasteState.get(id) ?? false
+        terminalBracketedPasteState.set(id, updateBracketedPasteMode(bracketedPasteMode, data))
         dataBuffer.push(data)
 
         // Notify git watch on PTY output (throttled) instead of on every keystroke
@@ -458,6 +519,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await ptyManager.writeSplit(id, content, suffix, delayMs)
   })
 
+  ipcMain.handle('terminal:send-input-sequence', async (_, id: string, payload: TerminalInputSequencePayload) => {
+    if (payload.kind === 'raw') {
+      const ok = await ptyManager.write(id, payload.content)
+      return ok ? { ok: true } : { ok: false, phase: 'content' as const, error: 'pty write failed' }
+    }
+
+    const bracketedPasteEnabled = terminalBracketedPasteState.get(id) ?? false
+    const prepared = wrapBracketedPaste(prepareTextForPaste(payload.content), bracketedPasteEnabled)
+    const enterDelayMs = payload.kind === 'pasteThenEnter' ? FALLBACK_PASTE_ENTER_DELAY_MS : undefined
+    return await ptyManager.sendInputSequence(id, prepared, enterDelayMs)
+  })
+
   // Toggle fast-path on the IPC data buffer for a terminal.
   // Called by the renderer when terminal visibility changes so that hidden
   // terminals don't generate high-rate unbatched IPC traffic.
@@ -467,6 +540,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     terminalFastPathState.set(id, enabled)
     const buf = terminalDataBuffers.get(id)
     if (buf) buf.setFastPathEnabled(enabled)
+  })
+
+  ipcMain.on('terminal:notify-interactive-input', (_, id: string) => {
+    const buf = terminalDataBuffers.get(id)
+    if (buf) buf.notifyInteractiveInput()
   })
 
   // Resize terminal
@@ -483,6 +561,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       terminalDataBuffers.delete(id)
     }
     terminalFastPathState.delete(id)
+    terminalBracketedPasteState.delete(id)
     ipcDataCounters.delete(id)
     gitWatchManager?.unsubscribe(id)
     return ptyManager.dispose(id)
@@ -1208,7 +1287,9 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('terminal:create')
   ipcMain.removeHandler('terminal:write')
   ipcMain.removeHandler('terminal:write-split')
+  ipcMain.removeHandler('terminal:send-input-sequence')
   ipcMain.removeAllListeners('terminal:set-buffer-fast-path')
+  ipcMain.removeAllListeners('terminal:notify-interactive-input')
   ipcMain.removeHandler('terminal:resize')
   ipcMain.removeHandler('terminal:dispose')
   ipcMain.removeHandler('prompt:load')
