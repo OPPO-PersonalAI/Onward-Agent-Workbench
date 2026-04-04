@@ -18,6 +18,22 @@ interface BrowserPanelProps {
 }
 
 let browserIdCounter = 0
+let sharedRememberCookies = true
+const rememberCookiesSubscribers = new Set<(rememberCookies: boolean) => void>()
+
+function subscribeRememberCookies(callback: (rememberCookies: boolean) => void): () => void {
+  rememberCookiesSubscribers.add(callback)
+  return () => {
+    rememberCookiesSubscribers.delete(callback)
+  }
+}
+
+function updateSharedRememberCookies(next: boolean): void {
+  sharedRememberCookies = next
+  for (const callback of rememberCookiesSubscribers) {
+    callback(next)
+  }
+}
 
 export function BrowserPanel({
   isOpen,
@@ -36,17 +52,22 @@ export function BrowserPanel({
   const [canGoForward, setCanGoForward] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isViewReady, setIsViewReady] = useState(false)
-  const [cookieMenuOpen, setCookieMenuOpen] = useState(false)
   const [hasVisibleView, setHasVisibleView] = useState(false)
+  const [rememberCookies, setRememberCookies] = useState(sharedRememberCookies)
 
   const placeholderRef = useRef<HTMLDivElement>(null)
+  const urlInputRef = useRef<HTMLInputElement>(null)
   const rafRef = useRef<number>(0)
   const browserIdRef = useRef<string | null>(null)
-  const cookieMenuRef = useRef<HTMLDivElement>(null)
   const forceHiddenRef = useRef(forceHidden)
   const hasVisibleViewRef = useRef(false)
 
   useSubpageEscape({ isOpen: isOpen && !forceHidden, onEscape: onClose })
+
+  useEffect(() => {
+    setRememberCookies(sharedRememberCookies)
+    return subscribeRememberCookies(setRememberCookies)
+  }, [])
 
   const syncBounds = useCallback(() => {
     const id = browserIdRef.current
@@ -110,7 +131,6 @@ export function BrowserPanel({
     setCanGoForward(false)
     setIsFullscreen(false)
     setIsViewReady(false)
-    setCookieMenuOpen(false)
     setHasVisibleView(shouldShowView)
     hasVisibleViewRef.current = shouldShowView
 
@@ -128,7 +148,6 @@ export function BrowserPanel({
       hasVisibleViewRef.current = false
       setIsViewReady(false)
       setHasVisibleView(false)
-      setCookieMenuOpen(false)
       window.electronAPI.browser.destroy(id).catch(() => {
         // Ignore destroy races during teardown.
       })
@@ -209,19 +228,6 @@ export function BrowserPanel({
     }
   }, [isOpen, onClose, onUrlChange, syncBounds])
 
-  useEffect(() => {
-    if (!cookieMenuOpen) return
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (cookieMenuRef.current && !cookieMenuRef.current.contains(event.target as Node)) {
-        setCookieMenuOpen(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [cookieMenuOpen])
-
   const handleNavigate = useCallback(async (targetUrl: string) => {
     const id = browserIdRef.current
     if (!id || !targetUrl.trim()) return
@@ -259,10 +265,30 @@ export function BrowserPanel({
     void window.electronAPI.browser.reload(id)
   }, [isLoading])
 
-  const handleClearCookies = useCallback((maxAge?: number) => {
-    void window.electronAPI.browser.clearCookies(maxAge)
-    setCookieMenuOpen(false)
-  }, [])
+  const handleShowCookieMenu = useCallback(async () => {
+    const result = await window.electronAPI.browser.showCookieMenu({
+      rememberCookies,
+      labels: {
+        remember: t('browserPanel.rememberCookies'),
+        clearDay: t('browserPanel.clearCookiesDay'),
+        clearWeek: t('browserPanel.clearCookiesWeek'),
+        clearAll: t('browserPanel.clearCookiesAll')
+      }
+    })
+    if (!result) return
+
+    if (result.action === 'toggleRemember') {
+      const next = result.rememberCookies ?? false
+      updateSharedRememberCookies(next)
+      void window.electronAPI.browser.setRememberCookies(next)
+    } else if (result.action === 'clear') {
+      void window.electronAPI.browser.clearCookies(86400)
+    } else if (result.action === 'clearWeek') {
+      void window.electronAPI.browser.clearCookies(604800)
+    } else if (result.action === 'clearAll') {
+      void window.electronAPI.browser.clearCookies()
+    }
+  }, [rememberCookies, t])
 
   if (!isOpen) return null
 
@@ -309,6 +335,7 @@ export function BrowserPanel({
         </button>
 
         <input
+          ref={urlInputRef}
           className="browser-panel-url-input"
           type="text"
           value={inputUrl}
@@ -317,6 +344,10 @@ export function BrowserPanel({
             if (event.key === 'Enter') {
               event.preventDefault()
               void handleNavigate(inputUrl)
+              urlInputRef.current?.blur()
+            } else if (event.key === 'Escape') {
+              event.stopPropagation()
+              urlInputRef.current?.blur()
             }
           }}
           onFocus={(event) => event.target.select()}
@@ -325,45 +356,16 @@ export function BrowserPanel({
           title={title || url || ''}
         />
 
-        <div className="browser-panel-cookie-wrap" ref={cookieMenuRef}>
-          <button
-            className="browser-panel-nav-btn"
-            onClick={() => setCookieMenuOpen((open) => !open)}
-            title={t('browserPanel.cookieMenu')}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M6 7.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm4.5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-.5 3a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z" />
-              <path d="M8 0a7.963 7.963 0 0 0-4.075 1.114c-.162.067-.31.175-.437.32A8 8 0 1 0 8 0zm3.25 14.201A6.97 6.97 0 0 1 8 15a6.97 6.97 0 0 1-3.25-.799 7.024 7.024 0 0 1-2.578-2.17A6.96 6.96 0 0 1 1 8c0-1.235.32-2.395.883-3.403A7.018 7.018 0 0 1 8 1a7.018 7.018 0 0 1 6.117 3.597A6.96 6.96 0 0 1 15 8a6.96 6.96 0 0 1-1.172 3.88 7.026 7.026 0 0 1-2.578 2.321z" />
-            </svg>
-          </button>
-
-          {cookieMenuOpen && (
-            <div className="browser-panel-cookie-menu">
-              <button className="browser-panel-cookie-item" onClick={() => handleClearCookies(86400)}>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5z" />
-                  <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
-                </svg>
-                <span>{t('browserPanel.clearCookiesDay')}</span>
-              </button>
-              <button className="browser-panel-cookie-item" onClick={() => handleClearCookies(604800)}>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5z" />
-                  <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
-                </svg>
-                <span>{t('browserPanel.clearCookiesWeek')}</span>
-              </button>
-              <div className="browser-panel-cookie-separator" />
-              <button className="browser-panel-cookie-item danger" onClick={() => handleClearCookies()}>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z" />
-                  <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4L4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z" />
-                </svg>
-                <span>{t('browserPanel.clearCookiesAll')}</span>
-              </button>
-            </div>
-          )}
-        </div>
+        <button
+          className="browser-panel-nav-btn"
+          onClick={handleShowCookieMenu}
+          title={t('browserPanel.cookieMenu')}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M6 7.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm4.5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-.5 3a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z" />
+            <path d="M8 0a7.963 7.963 0 0 0-4.075 1.114c-.162.067-.31.175-.437.32A8 8 0 1 0 8 0zm3.25 14.201A6.97 6.97 0 0 1 8 15a6.97 6.97 0 0 1-3.25-.799 7.024 7.024 0 0 1-2.578-2.17A6.96 6.96 0 0 1 1 8c0-1.235.32-2.395.883-3.403A7.018 7.018 0 0 1 8 1a7.018 7.018 0 0 1 6.117 3.597A6.96 6.96 0 0 1 15 8a6.96 6.96 0 0 1-1.172 3.88 7.026 7.026 0 0 1-2.578 2.321z" />
+          </svg>
+        </button>
 
         <button className="browser-panel-nav-btn close-btn" onClick={onClose} title={t('browserPanel.close')}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">

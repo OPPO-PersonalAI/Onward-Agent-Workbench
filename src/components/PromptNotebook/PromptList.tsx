@@ -23,7 +23,7 @@ interface PromptListProps {
   globalPromptIds?: string[]
   autoCleanupEnabled: boolean
   onExportAllPrompts: () => void
-  onImportAllPrompts: () => void
+  onImportPrompts: () => void
   onRetentionKeepDays: (days: number) => void
   onRetentionKeepCustom: () => void
   onToggleAutoCleanup: (nextEnabled: boolean) => void
@@ -50,7 +50,7 @@ const DRAG_MOVE_TOLERANCE = 6
 interface PromptRetentionDropdownProps {
   autoCleanupEnabled: boolean
   onExportAllPrompts: () => void
-  onImportAllPrompts: () => void
+  onImportPrompts: () => void
   onRetentionKeepDays: (days: number) => void
   onRetentionKeepCustom: () => void
   onToggleAutoCleanup: (nextEnabled: boolean) => void
@@ -59,7 +59,7 @@ interface PromptRetentionDropdownProps {
 function PromptRetentionDropdown({
   autoCleanupEnabled,
   onExportAllPrompts,
-  onImportAllPrompts,
+  onImportPrompts,
   onRetentionKeepDays,
   onRetentionKeepCustom,
   onToggleAutoCleanup
@@ -132,7 +132,7 @@ function PromptRetentionDropdown({
             className="prompt-retention-item"
             onClick={(e) => {
               e.stopPropagation()
-              handleMenuAction(onImportAllPrompts)
+              handleMenuAction(onImportPrompts)
             }}
             role="menuitem"
           >
@@ -227,7 +227,7 @@ export const PromptList = memo(function PromptList({
   globalPromptIds = [],
   autoCleanupEnabled,
   onExportAllPrompts,
-  onImportAllPrompts,
+  onImportPrompts,
   onRetentionKeepDays,
   onRetentionKeepCustom,
   onToggleAutoCleanup,
@@ -547,7 +547,7 @@ export const PromptList = memo(function PromptList({
         <PromptRetentionDropdown
           autoCleanupEnabled={autoCleanupEnabled}
           onExportAllPrompts={onExportAllPrompts}
-          onImportAllPrompts={onImportAllPrompts}
+          onImportPrompts={onImportPrompts}
           onRetentionKeepDays={onRetentionKeepDays}
             onRetentionKeepCustom={onRetentionKeepCustom}
             onToggleAutoCleanup={onToggleAutoCleanup}

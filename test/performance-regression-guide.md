@@ -60,8 +60,8 @@ Verify that the Prompt input area remains responsive when all 6 terminal panes a
    done <<< "$TIDS"
    ```
 
-4. **Type in the Prompt input area** while output is running. Pay attention to:
-   - Keystroke-to-character delay (should feel instant, < 100ms)
+4. **Type in the active terminal and in the Prompt input area** while output is running. Pay attention to:
+   - Keystroke-to-character delay (should feel instant, target < 80ms, never obviously delayed)
    - Cursor movement responsiveness
    - Whether the Prompt area freezes or stutters
 
@@ -90,15 +90,15 @@ Open DevTools (`Ctrl+Shift+I`) and look for `[PerfMon]` lines in the Console tab
 | `ipc` | < 80/s | > 200/s | IPC messages from main process per second |
 | `hidden` | 0 (if all visible) | > 0 when tabs hidden | Data chunks buffered instead of rendered |
 
-### Expected Results (Baseline from 2026-03-26)
+### Expected Results (Current Baseline)
 
-With IPC throttle (100ms) + renderer write throttle (50ms):
+With focused-terminal interactive boost enabled:
 
-| Condition | fps | writes/s | ipc/s | Prompt feel |
+| Condition | fps | writes/s | ipc/s | Typing feel |
 |-----------|-----|----------|-------|-------------|
 | 6 terminals idle | 32 | 0 | 0 | Instant |
-| 6 terminals max output | 31-32 | 40-60 | ~50 | Responsive with minor lag |
-| 6 output + typing | 31-32 | 40-60 | ~50 | Usable, slight delay |
+| 6 terminals max output | 28-32 | 40-80 | bursty on focused terminal | Responsive |
+| 6 output + typing in focused terminal | 28-32 | focused terminal may spike temporarily | focused terminal may spike temporarily | Still feels near-instant |
 
 ## 2. Hidden Terminal Optimization Verification
 
@@ -154,6 +154,7 @@ PTY (node-pty)
 Key optimization points:
 - **Main process**: `TerminalDataBuffer.FLUSH_INTERVAL_MS = 100` (was 16)
 - **Renderer**: `VISIBLE_WRITE_THROTTLE_MS = 50` with rAF scheduling
+- **Focused terminal input**: recent user input enables a short interactive bypass window in both main and renderer
 - **Hidden terminals**: Data buffered in `pendingData[]`, skips `terminal.write()` entirely
 - **WebGL pooling**: Hidden terminals release GPU contexts via `setVisibility(false)`
 
@@ -164,6 +165,7 @@ When making changes to the terminal rendering pipeline, verify:
 - [ ] 6-pane layout opens without hanging at "Initializing"
 - [ ] `fps` stays above 28 under 6-terminal full output
 - [ ] `writes/s` stays below 100 (throttle is working)
+- [ ] Focused terminal typing remains responsive while terminals are outputting
 - [ ] Prompt input area is responsive while terminals are outputting
 - [ ] Switching tabs flushes buffered data correctly
 - [ ] Hidden terminals show `hidden > 0` in PerfMon

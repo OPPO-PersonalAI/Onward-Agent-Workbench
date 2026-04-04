@@ -52,6 +52,11 @@ export interface PromptBridgeSendResult {
   error?: string
 }
 
+export interface TerminalInputSequencePayload {
+  kind: 'raw' | 'paste' | 'pasteThenEnter'
+  content: string
+}
+
 export interface TerminalAPI {
   create: (id: string, options?: TerminalOptions) => Promise<{ success: boolean; id?: string; error?: string }>
   write: (id: string, data: string) => Promise<boolean>
@@ -62,6 +67,12 @@ export interface TerminalAPI {
     delayMs?: number
   ) => Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }>
   resize: (id: string, cols: number, rows: number) => Promise<boolean>
+  sendInputSequence: (
+    id: string,
+    payload: TerminalInputSequencePayload
+  ) => Promise<{ ok: boolean; phase?: 'content' | 'enter'; error?: string }>
+  setBufferFastPath: (id: string, enabled: boolean) => void
+  notifyInteractiveInput: (id: string) => void
   dispose: (id: string) => Promise<boolean>
   onData: (callback: (id: string, data: string) => void) => () => void
   onExit: (callback: (id: string, exitCode: number, signal?: number) => void) => () => void
@@ -804,8 +815,16 @@ const terminalAPI: TerminalAPI = {
     return ipcRenderer.invoke('terminal:resize', id, cols, rows)
   },
 
+  sendInputSequence: (id: string, payload: TerminalInputSequencePayload) => {
+    return ipcRenderer.invoke('terminal:send-input-sequence', id, payload)
+  },
+
   setBufferFastPath: (id: string, enabled: boolean) => {
     ipcRenderer.send('terminal:set-buffer-fast-path', id, enabled)
+  },
+
+  notifyInteractiveInput: (id: string) => {
+    ipcRenderer.send('terminal:notify-interactive-input', id)
   },
 
   dispose: (id: string) => {
@@ -1286,6 +1305,12 @@ const browserAPI: BrowserAPI = {
   },
   clearCookies: (maxAge?: number) => {
     return ipcRenderer.invoke('browser:clear-cookies', maxAge)
+  },
+  setRememberCookies: (rememberCookies: boolean) => {
+    return ipcRenderer.invoke('browser:set-remember-cookies', rememberCookies) as Promise<{ rememberCookies: boolean }>
+  },
+  showCookieMenu: (options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => {
+    return ipcRenderer.invoke('browser:show-cookie-menu', options) as Promise<{ action: string; rememberCookies?: boolean } | null>
   },
   onUrlChanged: (callback: (id: string, url: string) => void) => {
     const listener = (_: Electron.IpcRendererEvent, id: string, url: string) => {
