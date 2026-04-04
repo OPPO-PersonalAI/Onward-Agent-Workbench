@@ -361,7 +361,7 @@ function AppContent({
     setSettingsPanelWidth
   } = useSettings()
 
-  const { registerCloseSettings } = usePromptActions()
+  const { registerCloseSettings, registerTryCloseSettingsOnSwitch } = usePromptActions()
 
   // Automatically create terminals for each Tab (when layout requires more terminals)
   useEffect(() => {
@@ -690,6 +690,14 @@ function AppContent({
 
   // Display state of the Settings panel (independent of Tab state)
   const [showSettings, setShowSettings] = useState(false)
+  // Track the panel state before Settings opened for each tab during the current Settings session.
+  const panelBeforeSettingsByTabRef = useRef<Record<string, 'prompt' | null>>({})
+  const showSettingsRef = useRef(false)
+  showSettingsRef.current = showSettings
+  const activePanelRef = useRef<'prompt' | null>(activeTab?.activePanel ?? null)
+  activePanelRef.current = activeTab?.activePanel ?? null
+  const activeTabIdRef = useRef<string | null>(activeTab?.id ?? null)
+  activeTabIdRef.current = activeTab?.id ?? null
   const [projectEditorOpen, setProjectEditorOpen] = useState(false)
   const [projectEditorTerminalId, setProjectEditorTerminalId] = useState<string | null>(null)
   const [projectEditorCwd, setProjectEditorCwd] = useState<string | null>(null)
@@ -697,21 +705,53 @@ function AppContent({
   const projectEditorDebugOpenedRef = useRef(false)
   const projectEditorProfileScenarioRef = useRef(false)
 
+  const clearPanelBeforeSettings = useCallback(() => {
+    panelBeforeSettingsByTabRef.current = {}
+  }, [])
+
+  const getPanelBeforeSettings = useCallback((tabId: string | null | undefined, fallbackPanel: 'prompt' | null = null) => {
+    if (!tabId) return fallbackPanel
+    const panelByTab = panelBeforeSettingsByTabRef.current
+    return Object.prototype.hasOwnProperty.call(panelByTab, tabId)
+      ? panelByTab[tabId]
+      : fallbackPanel
+  }, [])
+
   // True panel switching handling
   const handlePanelChangeWithSettings = useCallback((panel: 'prompt' | 'settings' | null) => {
     if (panel === 'settings') {
+      const currentTabId = activeTabIdRef.current
+      if (currentTabId) {
+        panelBeforeSettingsByTabRef.current[currentTabId] = activePanelRef.current
+      }
       setShowSettings(true)
       updateActiveTab({ activePanel: null })
     } else {
+      clearPanelBeforeSettings()
       setShowSettings(false)
       updateActiveTab({ activePanel: panel })
     }
-  }, [updateActiveTab])
+  }, [clearPanelBeforeSettings, updateActiveTab])
 
   // Close Settings
   const handleCloseSettings = useCallback(() => {
+    clearPanelBeforeSettings()
     setShowSettings(false)
-  }, [])
+  }, [clearPanelBeforeSettings])
+
+  // Conditionally close Settings on Task/Tab switch
+  // Only closes if the relevant panel state is 'prompt'; otherwise keeps Settings open
+  const handleTryCloseSettingsOnSwitch = useCallback((targetTabId?: string, targetActivePanel?: 'prompt' | null) => {
+    if (!showSettingsRef.current) return
+    const resolvedTabId = targetTabId ?? activeTabIdRef.current
+    // focusTerminal (same tab): use the active tab's saved panel state for this Settings session
+    // switchTab: prefer the target tab's saved panel state, otherwise fall back to targetTab.activePanel
+    const panelToCheck = getPanelBeforeSettings(resolvedTabId, targetActivePanel ?? null)
+    if (panelToCheck === 'prompt') {
+      clearPanelBeforeSettings()
+      setShowSettings(false)
+    }
+  }, [clearPanelBeforeSettings, getPanelBeforeSettings])
 
   const handleOpenProjectEditor = useCallback(async (terminalId: string) => {
     if (
@@ -832,6 +872,14 @@ function AppContent({
       registerCloseSettings(null)
     }
   }, [registerCloseSettings, handleCloseSettings])
+
+  // Register tryCloseSettingsOnSwitch callback to Context
+  useEffect(() => {
+    registerTryCloseSettingsOnSwitch(handleTryCloseSettingsOnSwitch)
+    return () => {
+      registerTryCloseSettingsOnSwitch(null)
+    }
+  }, [registerTryCloseSettingsOnSwitch, handleTryCloseSettingsOnSwitch])
 
   // Restore focus when ProjectEditor or Settings panel closes
   const prevProjectEditorOpenRef = useRef(projectEditorOpen)
@@ -1066,7 +1114,7 @@ function SettingsProviderWithHandler() {
     setLastFocusOwner,
     getLastFocusOwner
   } = useAppState()
-  const { focusEditor, submitEditor, closeSettings } = usePromptActions()
+  const { focusEditor, submitEditor, closeSettings, tryCloseSettingsOnSwitch } = usePromptActions()
   const lastFocusedElementRef = useRef<HTMLElement | null>(null)
   const [terminalShortcutAction, setTerminalShortcutAction] = useState<TerminalShortcutAction | null>(null)
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null)
@@ -1173,8 +1221,7 @@ function SettingsProviderWithHandler() {
           const terminalId = activeTab.terminals[action.index - 1]?.id
           if (terminalId) {
             setLastFocusOwner('terminal')
-            // First close the Settings panel (if it is open)
-            closeSettings()
+            // Keep Settings open while switching Tasks inside the same Tab.
             // Only update activeTerminalId, do not change activePanel (keep Prompt panel state)
             updateActiveTab({ activeTerminalId: terminalId })
             setLastFocusedTerminalId(terminalId)
@@ -1188,7 +1235,8 @@ function SettingsProviderWithHandler() {
         if (action.index <= state.tabs.length) {
           const targetTab = state.tabs[action.index - 1]
           if (targetTab) {
-            closeSettings()
+            // Conditionally close Settings based on the target tab's pre-Settings panel context.
+            tryCloseSettingsOnSwitch(targetTab.id, targetTab.activePanel)
             switchTab(targetTab.id)
             const terminalId = targetTab.activeTerminalId
             if (terminalId) {
@@ -1256,7 +1304,7 @@ function SettingsProviderWithHandler() {
         break
       }
     }
-  }, [activeTab, state.tabs, switchTab, updateActiveTab, getLastFocusedTerminalId, setLastFocusedTerminalId, setLastFocusOwner, closeSettings, focusEditor, submitEditor, requestTerminalFocus])
+  }, [activeTab, state.tabs, switchTab, updateActiveTab, getLastFocusedTerminalId, setLastFocusedTerminalId, setLastFocusOwner, closeSettings, tryCloseSettingsOnSwitch, focusEditor, submitEditor, requestTerminalFocus])
 
   const restoreLastFocus = useCallback((reason: TerminalFocusRestoreReason) => {
     if (!activeTab) return

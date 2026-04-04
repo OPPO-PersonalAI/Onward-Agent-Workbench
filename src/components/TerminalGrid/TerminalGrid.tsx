@@ -86,6 +86,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const hiddenRef = useRef(hidden)
+  const prevHiddenForOverflowRef = useRef(hidden)
   const activeTerminalIdRef = useRef(activeTerminalId)
   const containerRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
   const terminalIdsRef = useRef<string[]>([])
@@ -364,7 +365,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   // can skip xterm.write() and release WebGL contexts.
   // Only reacts to the `hidden` prop (tab switch), NOT to visibleTerminals
   // changes (layout transition), to avoid disposing WebGL during init.
-  useEffect(() => {
+  // Uses useLayoutEffect so WebGL rebuild + data flush + fit complete
+  // BEFORE the browser paints, preventing the visible width "shrink" glitch.
+  useLayoutEffect(() => {
     const ids = terminals.map(term => term.id)
     ids.forEach(id => terminalSessionManager.setVisibility(id, !hidden))
   }, [hidden, terminals])
@@ -543,6 +546,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   const adaptiveCollapseRef = useRef<ResizeObserver | null>(null)
 
   useLayoutEffect(() => {
+    const wasHidden = prevHiddenForOverflowRef.current
+    prevHiddenForOverflowRef.current = hidden
+
     if (hidden) return
     const wrapper = gridWrapperRef.current
     if (!wrapper) return
@@ -579,7 +585,12 @@ export const TerminalGrid = memo(function TerminalGrid({
       })
     }
 
-    checkOverflow()
+    // Skip immediate checkOverflow on hidden→visible transition to avoid
+    // forced synchronous reflows during tab switch; the ResizeObserver
+    // will handle measurement once dimensions stabilize.
+    if (!wasHidden) {
+      checkOverflow()
+    }
 
     const observer = new ResizeObserver(checkOverflow)
     adaptiveCollapseRef.current = observer

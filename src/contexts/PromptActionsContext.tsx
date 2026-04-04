@@ -15,6 +15,9 @@ interface PromptActionsContextValue {
   // Close the Settings panel (called when the shortcut is triggered)
   registerCloseSettings: (callback: (() => void) | null) => void
   closeSettings: () => void
+  // Conditionally close Settings on Task/Tab switch (keeps Settings open when previous panel was not Prompt)
+  registerTryCloseSettingsOnSwitch: (callback: ((targetTabId?: string, targetActivePanel?: 'prompt' | null) => void) | null) => void
+  tryCloseSettingsOnSwitch: (targetTabId?: string, targetActivePanel?: 'prompt' | null) => void
 }
 
 const PromptActionsContext = createContext<PromptActionsContextValue | null>(null)
@@ -23,6 +26,7 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
   const focusEditorRef = useRef<(() => void) | null>(null)
   const submitEditorRef = useRef<(() => void) | null>(null)
   const closeSettingsRef = useRef<(() => void) | null>(null)
+  const tryCloseSettingsOnSwitchRef = useRef<((targetTabId?: string, targetActivePanel?: 'prompt' | null) => void) | null>(null)
 
   // Accept null when registering to support uninstall cleanup
   const registerFocusEditor = useCallback((callback: (() => void) | null) => {
@@ -37,6 +41,10 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
     closeSettingsRef.current = callback
   }, [])
 
+  const registerTryCloseSettingsOnSwitch = useCallback((callback: ((targetTabId?: string, targetActivePanel?: 'prompt' | null) => void) | null) => {
+    tryCloseSettingsOnSwitchRef.current = callback
+  }, [])
+
   const focusEditor = useCallback(() => {
     focusEditorRef.current?.()
   }, [])
@@ -49,14 +57,20 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
     closeSettingsRef.current?.()
   }, [])
 
+  const tryCloseSettingsOnSwitch = useCallback((targetTabId?: string, targetActivePanel?: 'prompt' | null) => {
+    tryCloseSettingsOnSwitchRef.current?.(targetTabId, targetActivePanel)
+  }, [])
+
   return (
     <PromptActionsContext.Provider value={{
       registerFocusEditor,
       registerSubmitEditor,
       registerCloseSettings,
+      registerTryCloseSettingsOnSwitch,
       focusEditor,
       submitEditor,
-      closeSettings
+      closeSettings,
+      tryCloseSettingsOnSwitch
     }}>
       {children}
     </PromptActionsContext.Provider>

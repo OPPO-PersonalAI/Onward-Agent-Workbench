@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
 import { DiffEditor } from '@monaco-editor/react'
 import { parseDiffFromFile, SPLIT_WITH_NEWLINES } from '@pierre/diffs'
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from '@pierre/diffs'
@@ -811,7 +811,14 @@ export function GitDiffViewer({
     }
   }, [resetViewerState])
 
-  // Load data when opening
+  // Synchronously clear stale state before paint to prevent old diff flash
+  useLayoutEffect(() => {
+    if (isOpen) {
+      resetViewerState()
+    }
+  }, [isOpen, resetViewerState])
+
+  // Load data when opening (async, after paint)
   useEffect(() => {
     if (isOpen) {
       loadDiff({ reset: true })

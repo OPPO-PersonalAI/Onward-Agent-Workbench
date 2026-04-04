@@ -53,3 +53,15 @@
 - **Problem**: The first Markdown image fix restored the missing re-render after image caching, but the overall issue still remained because a second independent failure was still active.
 - **Cause**: The debugging process converged too early on a plausible internal cause and treated that as the whole bug. In reality there were two separate regressions: the missing re-render path and the missing CSP `img-src` allowance.
 - **Lesson**: If a user reports that the visible bug still exists after a fix, immediately test for stacked regressions instead of defending the first explanation. Re-check every layer of the pipeline and look for independent blockers that can mask each other.
+
+## 2026-04-02: Settings closing logic must distinguish tab switches from task switches
+
+### 1. Do not apply a tab-switch fix blindly to task switching in the same tab
+- **Problem**: After introducing conditional Settings closing, the implementation also closed Settings during `focusTerminal` task switching inside the same tab. In the user flow `Prompt -> manually open Settings -> use task-switch shortcut`, the Settings button and panel disappeared unexpectedly.
+- **Cause**: The fix correctly identified that cross-tab navigation needed contextual handling, but it overgeneralized that rule to all shortcut-driven focus changes. Task switching and tab switching are different UX operations and should not share the same closing behavior by default.
+- **Lesson**: When a bug report is specifically about cross-tab state, keep the fix scoped to cross-tab transitions unless there is explicit evidence that same-tab task switching should behave the same way. Validate each shortcut path independently.
+
+### 2. Reproduce the exact user interaction sequence before finalizing a state-management fix
+- **Problem**: The first revision looked logically correct against the review comments, but it still broke a real user edge case that combined Prompt, manual Settings opening, and task-switch shortcuts.
+- **Cause**: The implementation was optimized around inferred state transitions instead of replaying the exact UI sequence the user would perform. That missed a behavior regression in a neighboring path.
+- **Lesson**: For UI state fixes, convert the user report into a concrete step-by-step scenario and verify the implementation against that scenario before treating the change as complete. Review comments are useful signals, but they do not replace end-user flow validation.
