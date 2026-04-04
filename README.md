@@ -1,32 +1,16 @@
 <!-- SPDX-FileCopyrightText: 2026 OPPO -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Onward 2
+# Onward
 
-Onward 2 is a terminal-first desktop workspace for developers. It combines multi-terminal workflows, Git inspection, project editing, prompt management, and lightweight task automation in a single Electron application built with React, xterm.js, and node-pty.
+Onward runs an AI engineering team from your laptop
 
-## Overview
+Given a task, you can use Onward to
+1. split your intent into multiple prompts,
+2. send them to multiple agent terminals,
+3. Agents execute in parallel
+where prompts are orchestrated and you can track git diff/logs to monitor your agent team. 
 
-Onward 2 is designed for developers who want to stay in a terminal-centered workflow without losing access to project context. Instead of switching between a terminal emulator, a Git client, a file editor, a prompt notebook, and a scheduling tool, Onward 2 keeps those capabilities inside one desktop workspace.
-
-The product is especially strong when your workflow revolves around multiple tasks running in parallel. Its core value is not just that it includes terminals, diffs, or prompts, but that it keeps those capabilities attached to the task that produced them. That makes common workflows easier to repeat, easier to inspect, and much less dependent on context switching.
-
-Core capabilities include:
-
-- Multi-terminal tabs and task-oriented grid layouts
-- Batch prompt sending and execution tracking across tasks
-- Task-scoped Git Diff, Git History, and project editing flows
-- Built-in project editor and SQLite viewer
-- Prompt notebook, scheduling, and execution history
-- Task-to-task agent coordination through terminal bridge workflows
-- Cross-platform packaging for macOS, Linux, and Windows
-
-## Why Onward 2
-
-- Terminal-first workflow: keep shell interaction at the center
-- Context-rich development: inspect diffs, history, and files without leaving the workspace
-- AI-friendly operation model: keep prompts, execution, inspection, and task-to-task control close together
-- Cross-platform architecture: one desktop codebase across major operating systems
 
 ## Installation
 
