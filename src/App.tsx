@@ -32,6 +32,7 @@ import { useI18n } from './i18n/useI18n'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
 import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/focus-coordinator'
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
+import { buildChangeDirectoryCommand } from './utils/terminal-command'
 import './App.css'
 
 const MAX_SCHEDULE_LOG_ENTRIES = 50
@@ -72,6 +73,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   isActive,
   onTerminalFocus,
   onTerminalRename,
+  onPersistTerminalCwd,
   onOpenProjectEditor,
   focusRequest,
   shortcutAction,
@@ -81,6 +83,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   isActive: boolean
   onTerminalFocus: (tabId: string, terminalId: string) => void
   onTerminalRename: (tabId: string, terminalId: string, newTitle: string) => void
+  onPersistTerminalCwd: (terminalId: string, cwd: string | null) => void
   onOpenProjectEditor: (terminalId: string) => void
   focusRequest: TerminalFocusRequest | null
   shortcutAction: TerminalShortcutAction | null
@@ -92,6 +95,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       id: t.id,
       title: getTerminalDisplayName(index, t.customName),
       customName: t.customName,
+      lastCwd: t.lastCwd,
       isActive: t.id === tab.activeTerminalId
     }))
   }, [tab.terminals, tab.activeTerminalId, getTerminalDisplayName])
@@ -124,6 +128,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       theme="vscode-dark"
       onTerminalFocus={handleTerminalFocus}
       onTerminalRename={handleTerminalRename}
+      onPersistTerminalCwd={onPersistTerminalCwd}
       onOpenProjectEditor={onOpenProjectEditor}
       tabId={tab.id}
       hidden={!isActive}
@@ -193,6 +198,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     getTerminalDisplayName,
     updateTabById,
     updateEditorDraftForTab,
+    updatePromptEditorHeightForTab,
     importPrompts
   } = useAppState()
 
@@ -201,6 +207,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       id: t.id,
       title: getTerminalDisplayName(index, t.customName),
       customName: t.customName,
+      lastCwd: t.lastCwd,
       isActive: t.id === tab.activeTerminalId
     }))
   }, [tab.terminals, tab.layoutMode, tab.activeTerminalId, getTerminalDisplayName])
@@ -231,6 +238,10 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   const handleEditorDraftChange = useCallback((draft: EditorDraft | null) => {
     updateEditorDraftForTab(tab.id, draft)
   }, [tab.id, updateEditorDraftForTab])
+
+  const handlePromptEditorHeightChange = useCallback((height: number) => {
+    updatePromptEditorHeightForTab(tab.id, height)
+  }, [tab.id, updatePromptEditorHeightForTab])
 
   const handleExportAllPrompts = useCallback(async () => {
     const exportNow = Date.now()
@@ -309,6 +320,8 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       onTouchPromptLastUsed={onTouchPromptLastUsed}
       onCleanupPrompts={onCleanupPrompts}
       onUpdatePromptCleanup={onUpdatePromptCleanup}
+      promptEditorHeight={tab.promptEditorHeight}
+      onPromptEditorHeightChange={handlePromptEditorHeightChange}
       editorDraft={editorDraft}
       onEditorDraftChange={handleEditorDraftChange}
       addToHistoryShortcut={addToHistoryShortcut}
@@ -348,6 +361,7 @@ function AppContent({
     cleanupPrompts,
     updatePromptCleanup,
     setLastFocusedTerminalId,
+    setTerminalLastCwd,
     getTerminalDisplayName,
     setLastFocusOwner,
     addSchedule,
@@ -378,7 +392,8 @@ function AppContent({
           for (let i = currentTerminals.length; i < layoutMode; i++) {
             newTerminals.push({
               id: `terminal-${tab.id}-${Date.now()}-${i}`,
-              customName: null
+              customName: null,
+              lastCwd: null
             })
           }
           updateActiveTab({
@@ -404,6 +419,7 @@ function AppContent({
       id: t.id,
       title: getTerminalDisplayName(index, t.customName),
       customName: t.customName,
+      lastCwd: t.lastCwd,
       isActive: t.id === activeTab.activeTerminalId
     }))
   }, [activeTab, getTerminalDisplayName])
@@ -798,9 +814,7 @@ function AppContent({
         }
         projectEditorProfileScenarioRef.current = true
         const platform = window.electronAPI.platform
-        const cdCommand = platform === 'win32'
-          ? `cd /d "${debugCwd}"\r`
-          : `cd "${debugCwd}"\r`
+        const cdCommand = buildChangeDirectoryCommand(platform, debugCwd)
         await window.electronAPI.terminal.write(terminalId, cdCommand)
         await sleep(400)
         openProjectEditorDebug(debugCwd)
@@ -920,18 +934,13 @@ function AppContent({
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalIds: string[], directory: string) => {
     const platform = window.electronAPI.platform
-    let fullCommand: string
-
-    if (platform === 'win32') {
-      fullCommand = `cd /d "${directory}"\r`
-    } else {
-      fullCommand = `cd "${directory}"\r`
-    }
+    const fullCommand = buildChangeDirectoryCommand(platform, directory)
 
     for (const id of terminalIds) {
       await window.electronAPI.terminal.write(id, fullCommand)
+      setTerminalLastCwd(id, directory)
     }
-  }, [])
+  }, [setTerminalLastCwd])
 
   // Globally intercept all link clicks in the page, and unify the main process "open externally after confirmation" process
   useEffect(() => {
@@ -1073,6 +1082,7 @@ function AppContent({
                 isActive={tab.id === state.activeTabId}
                 onTerminalFocus={handleTerminalFocusWithTab}
                 onTerminalRename={handleTerminalRenameWithTab}
+                onPersistTerminalCwd={setTerminalLastCwd}
                 onOpenProjectEditor={handleOpenProjectEditor}
                 focusRequest={terminalFocusRequest}
                 shortcutAction={terminalShortcutAction}
