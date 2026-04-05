@@ -44,6 +44,8 @@ interface PromptNotebookProps {
   onTouchPromptLastUsed: (promptId: string) => void
   onCleanupPrompts: (options: { keepDays: number; deleteColored: boolean }) => void
   onUpdatePromptCleanup: (partial: Partial<PromptCleanupConfig>) => void
+  promptEditorHeight: number
+  onPromptEditorHeightChange: (height: number) => void
   // Draft related
   editorDraft: EditorDraft | null
   onEditorDraftChange: (draft: EditorDraft | null) => void
@@ -108,6 +110,8 @@ export const PromptNotebook = memo(function PromptNotebook({
   onTouchPromptLastUsed,
   onCleanupPrompts,
   onUpdatePromptCleanup,
+  promptEditorHeight,
+  onPromptEditorHeightChange,
   editorDraft,
   onEditorDraftChange,
   addToHistoryShortcut,
@@ -234,7 +238,23 @@ export const PromptNotebook = memo(function PromptNotebook({
         lastAutoCleanupAt: promptCleanup.lastAutoCleanupAt
       }),
       getEditorContent: () => editorContentRef.current,
+      getEditorHeight: () => {
+        const editor = document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor') as HTMLElement | null
+        if (!editor) return null
+        return editor.getBoundingClientRect().height
+      },
+      getPersistedEditorHeight: () => promptEditorHeight,
       setEditorContent: (content: string) => {
+        const textarea = document.querySelector(
+          '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor-content'
+        ) as HTMLTextAreaElement | null
+        if (textarea) {
+          const prototype = Object.getPrototypeOf(textarea) as HTMLTextAreaElement
+          const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+          valueSetter?.call(textarea, content)
+          textarea.dispatchEvent(new Event('input', { bubbles: true }))
+          return
+        }
         setEditorContent(content)
       },
       submitEditor: () => {
@@ -317,7 +337,7 @@ export const PromptNotebook = memo(function PromptNotebook({
         delete (window as any).__onwardPromptNotebookDebug
       }
     }
-  }, [prompts, promptCleanup, onAddPrompt, scheduleMap, tabId, terminals, onAddSchedule, onUpdateSchedule, onDeleteSchedule])
+  }, [prompts, promptCleanup, promptEditorHeight, onAddPrompt, scheduleMap, tabId, terminals, onAddSchedule, onUpdateSchedule, onDeleteSchedule])
 
   // Get the content to be sent: use the editor content first, otherwise use the selected Prompt content
   const contentToSend = useMemo(() => {
@@ -855,6 +875,8 @@ export const PromptNotebook = memo(function PromptNotebook({
           onContentChange={setEditorContent}
           onTitleChange={setEditorTitle}
           clearTrigger={clearEditorTrigger}
+          promptEditorHeight={promptEditorHeight}
+          onPromptEditorHeightChange={onPromptEditorHeightChange}
           editorDraft={editorDraft}
           onEditorDraftChange={onEditorDraftChange}
           addToHistoryShortcut={addToHistoryShortcut}
@@ -1065,6 +1087,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onContentChange,
   onTitleChange,
   clearTrigger,
+  promptEditorHeight,
+  onPromptEditorHeightChange,
   editorDraft,
   onEditorDraftChange,
   addToHistoryShortcut,
@@ -1080,6 +1104,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onContentChange: (content: string) => void
   onTitleChange: (title: string) => void
   clearTrigger: number
+  promptEditorHeight: number
+  onPromptEditorHeightChange: (height: number) => void
   editorDraft: EditorDraft | null
   onEditorDraftChange: (draft: EditorDraft | null) => void
   addToHistoryShortcut: string | null
@@ -1089,8 +1115,9 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   const { t } = useI18n()
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
-  const DEFAULT_EDITOR_HEIGHT = 350
-  const [height, setHeight] = useState(DEFAULT_EDITOR_HEIGHT)
+  const MIN_EDITOR_HEIGHT = 100
+  const [height, setHeight] = useState(() => Math.max(promptEditorHeight, MIN_EDITOR_HEIGHT))
+  const heightRef = useRef(height)
   const isDraggingRef = useRef(false)
   const hasMountedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1113,17 +1140,28 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     return normalize(accelerator) === normalize(expected)
   }, [])
 
+  useEffect(() => {
+    heightRef.current = height
+  }, [height])
+
   // Silently restore drafts on first mount
   useEffect(() => {
     if (!hasMountedRef.current && editorDraft) {
       setTitle(editorDraft.title)
       setContent(editorDraft.content)
-      setHeight(Math.max(editorDraft.height, DEFAULT_EDITOR_HEIGHT))
+      setHeight(Math.max(promptEditorHeight, editorDraft.height, MIN_EDITOR_HEIGHT))
       hasMountedRef.current = true
     } else if (!hasMountedRef.current) {
       hasMountedRef.current = true
     }
-  }, [editorDraft])
+  }, [editorDraft, promptEditorHeight])
+
+  useEffect(() => {
+    if (isDraggingRef.current) return
+    const normalizedHeight = Math.max(promptEditorHeight, MIN_EDITOR_HEIGHT)
+    heightRef.current = normalizedHeight
+    setHeight((prev) => (prev === normalizedHeight ? prev : normalizedHeight))
+  }, [promptEditorHeight])
 
   // Populate content when edit mode is activated
   useEffect(() => {
@@ -1186,12 +1224,14 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDraggingRef.current) return
       const delta = startY - e.clientY
-      const newHeight = Math.max(100, startHeight + delta)
+      const newHeight = Math.max(MIN_EDITOR_HEIGHT, startHeight + delta)
+      heightRef.current = newHeight
       setHeight(newHeight)
     }
 
     const handleMouseUp = () => {
       isDraggingRef.current = false
+      onPromptEditorHeightChange(heightRef.current)
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.classList.remove('resizing-editor-height')
@@ -1200,7 +1240,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     document.body.classList.add('resizing-editor-height')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [height])
+  }, [height, onPromptEditorHeightChange])
 
   // Save processing (two strategies)
   const handleSave = useCallback((saveAsNew: boolean) => {

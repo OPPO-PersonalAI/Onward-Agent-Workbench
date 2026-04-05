@@ -418,6 +418,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   const createTerminalProcess = (id: string, options?: PtyOptions) => {
     try {
+      let restoredPersistedCwd: string | null = null
+
       // If no cwd provided but we have a saved agent cwd, use it
       if (!options?.cwd) {
         const savedCwd = agentRestartCwdMap.get(id)
@@ -425,10 +427,33 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
           options = { ...options, cwd: savedCwd }
         }
       }
+      if (!options?.cwd) {
+        const persistedCwd = appStateStorage.getTerminalLastCwd(id)
+        if (persistedCwd) {
+          restoredPersistedCwd = persistedCwd
+          options = { ...options, cwd: persistedCwd }
+        }
+      }
       // Clear the saved cwd after using it once
       agentRestartCwdMap.delete(id)
 
-      const ptyProcess = ptyManager.create(id, options)
+      let ptyProcess
+      try {
+        ptyProcess = ptyManager.create(id, options)
+      } catch (error) {
+        if (!restoredPersistedCwd) {
+          throw error
+        }
+        console.warn('[PTY] Falling back to default cwd after persisted cwd restore failed:', {
+          id,
+          cwd: restoredPersistedCwd,
+          error: String(error)
+        })
+        appStateStorage.setTerminalLastCwd(id, null)
+        const fallbackOptions = options ? { ...options } : {}
+        delete fallbackOptions.cwd
+        ptyProcess = ptyManager.create(id, fallbackOptions)
+      }
 
       // IPC data buffer: merge high-frequency PTY output into batched sends
       const dataBuffer = new TerminalDataBuffer(id, (tid, mergedData) => {

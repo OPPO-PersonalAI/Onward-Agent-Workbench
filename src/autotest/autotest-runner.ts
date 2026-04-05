@@ -34,6 +34,7 @@ import { testGlobalSearch } from './test-global-search'
 import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
+import { testTerminalStatePersistence } from './test-terminal-state-persistence'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -213,6 +214,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase1:begin')
       const results = await testPromptSender(ctx)
       collectSuiteResults('PromptSender', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('terminal-state-persistence')) {
+      log('phase1.1:begin')
+      const results = await testTerminalStatePersistence(ctx)
+      collectSuiteResults('TerminalStatePersistence', results)
       await sleep(500)
     }
 

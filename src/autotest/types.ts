@@ -116,6 +116,8 @@ export interface PromptNotebookDebugApi {
   getPrompts: () => Array<{ id: string; title: string; pinned: boolean; color?: string; lastUsedAt: number }>
   getCleanupConfig: () => { autoEnabled: boolean; autoKeepDays: number; autoDeleteColored: boolean; lastAutoCleanupAt: number | null }
   getEditorContent: () => string
+  getEditorHeight: () => number | null
+  getPersistedEditorHeight: () => number
   setEditorContent: (content: string) => void
   submitEditor: () => void
   // Scheduled task Debug API

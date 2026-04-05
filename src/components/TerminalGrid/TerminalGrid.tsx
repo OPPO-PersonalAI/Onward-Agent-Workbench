@@ -19,6 +19,7 @@ import { focusCoordinator } from '../../terminal/focus-coordinator'
 import type { TerminalDebugApi } from '../../autotest/types'
 import { perfMonitor } from '../../utils/perf-monitor'
 import { useI18n } from '../../i18n/useI18n'
+import { buildChangeDirectoryCommand } from '../../utils/terminal-command'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
 
@@ -44,6 +45,7 @@ interface TerminalGridProps {
   fontFamily?: string
   onTerminalFocus: (id: string) => void
   onTerminalRename: (id: string, newTitle: string) => void
+  onPersistTerminalCwd: (terminalId: string, cwd: string | null) => void
   onOpenProjectEditor: (terminalId: string) => void
   tabId?: string
   hidden?: boolean
@@ -72,6 +74,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   fontFamily = DEFAULT_TERMINAL_FONT_FAMILY,
   onTerminalFocus,
   onTerminalRename,
+  onPersistTerminalCwd,
   onOpenProjectEditor,
   tabId: _tabId,
   hidden = false,
@@ -340,6 +343,9 @@ export const TerminalGrid = memo(function TerminalGrid({
 
   const applyTerminalInfoUpdate = useCallback((terminalId: string, info: TerminalGitInfo | null) => {
     if (!info) return
+    if (typeof info.cwd === 'string' && info.cwd.trim()) {
+      onPersistTerminalCwd(terminalId, info.cwd)
+    }
     setTerminalInfos(prev => {
       const current = prev[terminalId]
       if (
@@ -352,7 +358,7 @@ export const TerminalGrid = memo(function TerminalGrid({
       }
       return { ...prev, [terminalId]: info }
     })
-  }, [])
+  }, [onPersistTerminalCwd])
 
   const setTerminalStatus = useCallback((terminalId: string, status: TerminalSessionStatus) => {
     setTerminalStatuses(prev => {
@@ -1019,14 +1025,15 @@ export const TerminalGrid = memo(function TerminalGrid({
   const handleChangeWorkDir = useCallback(async (terminalId: string) => {
     const result = await window.electronAPI.dialog.openDirectory()
     if (result.success && result.path) {
-      const cdCommand = `cd "${result.path}"\r`
-      window.electronAPI.terminal.write(terminalId, cdCommand)
+      const cdCommand = buildChangeDirectoryCommand(window.electronAPI.platform, result.path)
+      await window.electronAPI.terminal.write(terminalId, cdCommand)
+      onPersistTerminalCwd(terminalId, result.path)
       onTerminalFocus(terminalId)
       window.setTimeout(() => {
         void window.electronAPI.git.notifyTerminalActivity(terminalId)
       }, 300)
     }
-  }, [onTerminalFocus])
+  }, [onPersistTerminalCwd, onTerminalFocus])
 
   const handleOpenWorkDir = useCallback(async (terminalId: string) => {
     let cwd = terminalInfos[terminalId]?.cwd || null
@@ -1121,6 +1128,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                     onToggleBrowser={() => handleToggleBrowser(termInfo.id)}
                     isBrowserOpen={browserOpenTerminals.has(termInfo.id)}
                     onOpenCodingAgent={(agentType) => handleOpenCodingAgent(termInfo.id, agentType)}
+                    forceClose={hidden || globalOverlayActive}
                   />
                   <div className="terminal-grid-header-left">
                     {editingId === termInfo.id ? (

@@ -46,6 +46,15 @@ interface EditorDraft {
 }
 
 /**
+ * Persisted terminal state
+ */
+interface PersistedTerminalState {
+  id: string
+  customName: string | null
+  lastCwd: string | null
+}
+
+/**
  * Project editor state (persistent by terminal + working directory)
  */
 interface ProjectEditorState {
@@ -78,8 +87,9 @@ interface TabState {
   layoutMode: 1 | 2 | 4 | 6
   activePanel: 'prompt' | null
   promptPanelWidth: number
+  promptEditorHeight: number
   activeTerminalId: string | null
-  terminals: { id: string; customName: string | null }[]
+  terminals: PersistedTerminalState[]
   localPrompts: LocalPrompt[]
   editorDraft?: EditorDraft
 }
@@ -110,6 +120,11 @@ interface LegacyTerminalConfig {
   promptPanelWidth: number
   updatedAt: number
 }
+
+const DEFAULT_PROMPT_PANEL_WIDTH = 280
+const DEFAULT_PROMPT_EDITOR_HEIGHT = 350
+const MIN_PROMPT_PANEL_WIDTH = 150
+const MIN_PROMPT_EDITOR_HEIGHT = 100
 
 /**
  * Scheduled task execution log entries (main process side type)
@@ -177,7 +192,8 @@ function createDefaultTabState(id: string): TabState {
     createdAt: Date.now(),
     layoutMode: 1,
     activePanel: null,
-    promptPanelWidth: 280,
+    promptPanelWidth: DEFAULT_PROMPT_PANEL_WIDTH,
+    promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
     activeTerminalId: null,
     terminals: [],
     localPrompts: []
@@ -294,11 +310,12 @@ class AppStateStorage {
     // Create the first Tab
     const tabId = generateId()
     // Convert legacy terminals format (title → customName)
-    const migratedTerminals: { id: string; customName: string | null }[] =
+    const migratedTerminals: PersistedTerminalState[] =
       (legacyConfig?.terminals ?? []).map(t => ({
         id: t.id,
         // Extract custom name from title (or null if "Agent N" format)
-        customName: /^Agent \d+$/.test(t.title) ? null : t.title
+        customName: /^Agent \d+$/.test(t.title) ? null : t.title,
+        lastCwd: null
       }))
 
     const firstTab: TabState = {
@@ -307,7 +324,8 @@ class AppStateStorage {
       createdAt: Date.now(),
       layoutMode: legacyConfig?.layoutMode ?? 1,
       activePanel: legacyConfig?.activePanel ?? null,
-      promptPanelWidth: legacyConfig?.promptPanelWidth ?? 280,
+      promptPanelWidth: legacyConfig?.promptPanelWidth ?? DEFAULT_PROMPT_PANEL_WIDTH,
+      promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
       activeTerminalId: legacyConfig?.activeTerminalId ?? null,
       terminals: migratedTerminals,
       localPrompts
@@ -431,15 +449,18 @@ class AppStateStorage {
   /**
    * Legacy terminal data (for migration)
    */
-  private migrateTerminalData(rawTerminals: unknown): { id: string; customName: string | null }[] {
+  private migrateTerminalData(rawTerminals: unknown): PersistedTerminalState[] {
     if (!Array.isArray(rawTerminals)) return []
 
-    return rawTerminals.map((t: { id?: string; title?: string; customName?: string | null }) => {
+    return rawTerminals.map((t: { id?: string; title?: string; customName?: string | null; lastCwd?: string | null }) => {
       const id = t.id ?? ''
+      const lastCwd = typeof t.lastCwd === 'string' && t.lastCwd.trim()
+        ? t.lastCwd
+        : null
 
       // If there is already a customName field, use it directly
       if ('customName' in t && t.customName !== undefined) {
-        return { id, customName: t.customName }
+        return { id, customName: t.customName, lastCwd }
       }
 
       // Extract custom name from old format title
@@ -447,17 +468,17 @@ class AppStateStorage {
         // Check if it is in "Agent N: xxx" format
         const match = t.title.match(/^Agent \d+: (.+)$/)
         if (match) {
-          return { id, customName: match[1] }
+          return { id, customName: match[1], lastCwd }
         }
         // Check if it is in "Agent N" format (no custom name)
         if (/^Agent \d+$/.test(t.title)) {
-          return { id, customName: null }
+          return { id, customName: null, lastCwd }
         }
         // Otherwise the entire title is a custom name
-        return { id, customName: t.title }
+        return { id, customName: t.title, lastCwd }
       }
 
-      return { id, customName: null }
+      return { id, customName: null, lastCwd }
     })
   }
 
@@ -466,9 +487,9 @@ class AppStateStorage {
    */
   private validateTab(tab: Partial<TabState> & { name?: string }): TabState {
     const validLayoutModes = [1, 2, 4, 6]
-    const promptPanelWidth = typeof tab.promptPanelWidth === 'number' && tab.promptPanelWidth >= 150
+    const promptPanelWidth = typeof tab.promptPanelWidth === 'number' && tab.promptPanelWidth >= MIN_PROMPT_PANEL_WIDTH
       ? tab.promptPanelWidth
-      : 280
+      : DEFAULT_PROMPT_PANEL_WIDTH
 
     // Handle migration from older versions: if there is a name field but no customName, try to extract the custom name
     let customName: string | null = null
@@ -485,6 +506,12 @@ class AppStateStorage {
       }
     }
 
+    const editorDraft = this.validateEditorDraft(tab.editorDraft)
+
+    const promptEditorHeight = typeof tab.promptEditorHeight === 'number' && tab.promptEditorHeight >= MIN_PROMPT_EDITOR_HEIGHT
+      ? tab.promptEditorHeight
+      : Math.max(editorDraft?.height ?? 0, DEFAULT_PROMPT_EDITOR_HEIGHT)
+
     // Migrate terminal data: convert title to customName
     const terminals = this.migrateTerminalData(tab.terminals)
 
@@ -497,12 +524,13 @@ class AppStateStorage {
         : 1,
       activePanel: tab.activePanel === 'prompt' ? 'prompt' : null,
       promptPanelWidth,
+      promptEditorHeight,
       activeTerminalId: tab.activeTerminalId ?? null,
       terminals,
       localPrompts: Array.isArray(tab.localPrompts)
         ? tab.localPrompts.map(p => ({ ...normalizePromptTimestamp(p), pinned: false } as LocalPrompt))
         : [],
-      editorDraft: this.validateEditorDraft(tab.editorDraft)
+      editorDraft
     }
   }
 
@@ -615,6 +643,66 @@ class AppStateStorage {
     } catch (error) {
       console.error('Failed to save app state:', error)
     }
+  }
+
+  getTerminalLastCwd(terminalId: string): string | null {
+    for (const tab of this.state.tabs) {
+      const terminal = tab.terminals.find((item) => item.id === terminalId)
+      if (terminal) {
+        return terminal.lastCwd
+      }
+    }
+    return null
+  }
+
+  setTerminalLastCwd(terminalId: string, cwd: string | null): boolean {
+    return this.setTerminalLastCwds([{ terminalId, cwd }])
+  }
+
+  setTerminalLastCwds(updates: Array<{ terminalId: string; cwd: string | null }>): boolean {
+    if (updates.length === 0) return false
+
+    const normalizedUpdates = new Map<string, string | null>()
+    updates.forEach(({ terminalId, cwd }) => {
+      if (!terminalId) return
+      const normalizedCwd = typeof cwd === 'string' && cwd.trim()
+        ? cwd
+        : null
+      normalizedUpdates.set(terminalId, normalizedCwd)
+    })
+
+    if (normalizedUpdates.size === 0) return false
+
+    let changed = false
+    const nextTabs = this.state.tabs.map((tab) => {
+      let tabChanged = false
+      const terminals = tab.terminals.map((terminal) => {
+        if (!normalizedUpdates.has(terminal.id)) {
+          return terminal
+        }
+        const nextCwd = normalizedUpdates.get(terminal.id) ?? null
+        if (terminal.lastCwd === nextCwd) {
+          return terminal
+        }
+        changed = true
+        tabChanged = true
+        return {
+          ...terminal,
+          lastCwd: nextCwd
+        }
+      })
+      return tabChanged ? { ...tab, terminals } : tab
+    })
+
+    if (!changed) return false
+
+    this.state = {
+      ...this.state,
+      tabs: nextTabs,
+      updatedAt: Date.now()
+    }
+    this.persist()
+    return true
   }
 
   /**

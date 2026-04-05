@@ -40,6 +40,8 @@ export interface TerminalInfo {
   title: string
   /** Custom name (for editing) */
   customName: string | null
+  /** Persisted working directory */
+  lastCwd?: string | null
   isActive: boolean
 }
 

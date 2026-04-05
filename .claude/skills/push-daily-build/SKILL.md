@@ -1,6 +1,6 @@
 ---
 name: push-daily-build
-description: Push local commits, create a daily build tag, trigger GitHub Actions CI, and verify the entire release pipeline. Use this skill when the user says "push and trigger daily build", "打 tag", "发布 daily build", "触发编译", or wants to push code and create a release tag.
+description: Push local commits, create a daily build tag, trigger GitHub Actions CI, and verify the entire release pipeline. Use this skill when the user says "push and trigger daily build", "create tag", "publish daily build", "trigger build", or wants to push code and create a release tag.
 ---
 
 # Push and Trigger Daily Build

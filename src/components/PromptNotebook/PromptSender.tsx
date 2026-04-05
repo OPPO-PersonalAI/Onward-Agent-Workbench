@@ -115,6 +115,7 @@ export const PromptSender = memo(function PromptSender({
 
   // Keyboard events
   const handleEditKeyDown = (e: React.KeyboardEvent) => {
+    e.stopPropagation()
     if (e.key === 'Enter') {
       handleFinishEdit()
     } else if (e.key === 'Escape') {

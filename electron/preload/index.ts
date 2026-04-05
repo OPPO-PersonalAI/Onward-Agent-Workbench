@@ -177,6 +177,19 @@ export interface PromptCleanupConfig {
   lastAutoCleanupAt: number | null
 }
 
+export interface EditorDraft {
+  title: string
+  content: string
+  height: number
+  savedAt: number
+}
+
+export interface PersistedTerminalState {
+  id: string
+  customName: string | null
+  lastCwd: string | null
+}
+
 export interface TabState {
   id: string
   customName: string | null
@@ -184,9 +197,11 @@ export interface TabState {
   layoutMode: 1 | 2 | 4 | 6
   activePanel: 'prompt' | null
   promptPanelWidth: number
+  promptEditorHeight: number
   activeTerminalId: string | null
-  terminals: { id: string; title: string }[]
+  terminals: PersistedTerminalState[]
   localPrompts: LocalPrompt[]
+  editorDraft?: EditorDraft
 }
 
 export interface AppState {
@@ -195,6 +210,8 @@ export interface AppState {
   globalPrompts: GlobalPrompt[]
   promptCleanup: PromptCleanupConfig
   lastFocusedTerminalId: string | null
+  projectEditorStates?: Record<string, unknown>
+  promptSchedules?: unknown[]
   updatedAt: number
 }
 

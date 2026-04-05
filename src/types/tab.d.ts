@@ -83,6 +83,15 @@ export interface EditorDraft {
 }
 
 /**
+ * Persisted terminal state
+ */
+export interface PersistedTerminalState {
+  id: string
+  customName: string | null
+  lastCwd: string | null
+}
+
+/**
  * Project editor state (persistent by terminal + working directory)
  */
 export interface ProjectEditorState {
@@ -155,10 +164,12 @@ export interface TabState {
   activePanel: 'prompt' | null
   /** Prompt panel width */
   promptPanelWidth: number
+  /** Prompt editor height */
+  promptEditorHeight: number
   /** Current active terminal ID */
   activeTerminalId: string | null
   /** List of terminals for this Tab */
-  terminals: { id: string; customName: string | null }[]
+  terminals: PersistedTerminalState[]
   /** The local Prompt of this Tab (not pinned) */
   localPrompts: LocalPrompt[]
   /** Editor draft (auto-save) */

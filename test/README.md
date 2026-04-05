@@ -13,6 +13,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
 - Prompt cleanup and retention behavior
+- Terminal working-directory and Prompt editor height persistence
 - Markdown preview rendering
 - External file change watching and automatic refresh
 - Preview position restore without top flash
@@ -59,6 +60,7 @@ src/autotest/
 ├── test-preview-position-restore.ts
 ├── test-project-editor-sqlite.ts
 ├── test-prompt-sender.ts
+├── test-terminal-state-persistence.ts
 ├── test-per-agent-font.ts
 ├── test-git-history.ts
 ├── test-git-history-multi-terminal-scope.ts
@@ -193,6 +195,12 @@ Source set: PromptSender UI validation suite
 - `PS-06`: primary actions are disabled when no terminal is selected
 - `PS-07`: repeated rapid selection toggling does not crash
 - `PS-08`: rendered card count matches layout metadata
+
+### Phase 1.1: Terminal State Persistence
+
+Source set: terminal cwd + Prompt height persistence validation suite
+
+- `TSP-01` to `TSP-09`: prompt panel availability, multi-terminal cwd persistence, editor height persistence, and empty-draft height retention
 
 ### Phase 2: Per-Agent Font Size
 
