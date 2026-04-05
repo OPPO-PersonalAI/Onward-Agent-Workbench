@@ -1121,6 +1121,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                     onToggleBrowser={() => handleToggleBrowser(termInfo.id)}
                     isBrowserOpen={browserOpenTerminals.has(termInfo.id)}
                     onOpenCodingAgent={(agentType) => handleOpenCodingAgent(termInfo.id, agentType)}
+                    forceClose={hidden || globalOverlayActive}
                   />
                   <div className="terminal-grid-header-left">
                     {editingId === termInfo.id ? (
