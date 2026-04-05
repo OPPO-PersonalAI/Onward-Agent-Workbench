@@ -32,6 +32,7 @@ import { testTerminalStress } from './test-terminal-stress'
 import { testImageDiff } from './test-image-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 import { testGlobalSearch } from './test-global-search'
+import { testSettingsUpdate } from './test-settings-update'
 import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
@@ -182,6 +183,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testGlobalSearch(ctx)
       collectSuiteResults('GlobalSearch', results)
       await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('settings-update')) {
+      log('phase0.877:begin')
+      const results = await testSettingsUpdate(ctx)
+      collectSuiteResults('SettingsUpdate', results)
+      await sleep(400)
     }
 
     if (!ctx.cancelled() && shouldRun('file-watch')) {

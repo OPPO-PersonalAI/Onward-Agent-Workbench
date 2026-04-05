@@ -10,6 +10,7 @@ This directory contains reusable automation notes and validation procedures for 
 - PromptSender UI behavior
 - Prompt send / execute flow and failure handling
 - Auto-update behavior, including "download only until explicit restart" and GitHub release publishing
+- Settings update controls, including manual check and restart-to-update actions
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
 - Prompt cleanup and retention behavior
@@ -56,6 +57,7 @@ src/autotest/
 ├── test-project-editor-open-position.ts
 ├── test-project-editor-multi-terminal-scope.ts
 ├── test-markdown-latex-preview.ts
+├── test-settings-update.ts
 ├── test-file-watch.ts
 ├── test-preview-position-restore.ts
 ├── test-project-editor-sqlite.ts
@@ -82,6 +84,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 | `window.__onwardPromptSenderDebug` | `PromptSender.tsx` | Terminal cards, selection state, action buttons |
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style, repo-scope state |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
+| `window.__onwardSettingsDebug` | `Settings.tsx` | Update action state, mock updater status injection, and action triggering |
 | `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
 | `window.__onwardProjectEditorDebug` | `ProjectEditor.tsx` | File content, preview restore state, and external file refresh hooks |
 | `window.__onwardTerminalDebug` | `TerminalGrid.tsx` | Terminal viewport state, tail text, fit / remount helpers |
@@ -180,6 +183,24 @@ Run the public GitHub client E2E suite after the repository is public and a newe
 node test/test-auto-update-public-github-e2e.mjs \
   --old-tag v2.1.0-daily.20260402.1602 \
   --target-version 2.1.0-daily.20260402.1701
+```
+
+### Settings Update Suite
+
+- `src/autotest/test-settings-update.ts`
+  - Verifies unsupported environments keep the action disabled
+  - Verifies the smart action enters `checking` and blocks repeated clicks
+  - Verifies `up-to-date`, `error`, `downloading`, and `downloaded` detail rendering
+  - Verifies the restart action locks while pending and surfaces restart errors
+
+Run the Settings update suite:
+
+```bash
+bash test/run-settings-update-autotest.sh
+```
+
+```powershell
+pwsh test/run-settings-update-autotest.ps1
 ```
 
 ### Phase 1: PromptSender UI

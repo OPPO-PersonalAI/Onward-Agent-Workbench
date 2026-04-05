@@ -43,7 +43,7 @@ function joinPlatformPath(separator: string, ...parts: string[]): string {
 function buildMixedPrompt(marker: string): string {
   return [
     `# ${marker}`,
-    '中文段落：多行 Prompt 需要完整保留，不能在中途被回车截断。',
+    'Mixed-language paragraph: multi-line prompts must stay intact and must not be split by Enter mid-stream.',
     '',
     '- bullet item one',
     '- bullet item two',

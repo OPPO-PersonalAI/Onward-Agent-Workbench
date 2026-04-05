@@ -110,6 +110,8 @@ Current update UX:
 Settings behavior:
 
 - The current channel and updater status are shown
+- A single smart action button is available in the `Update status` row
+- The button triggers `Check now` for manual checks and switches to `Restart to update` after a package is ready
 - Channel switching UI is visible but disabled
 - Stable and cross-platform controls are marked as placeholders
 
