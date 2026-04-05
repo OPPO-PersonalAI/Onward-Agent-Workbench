@@ -19,6 +19,8 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
   log('phase1:start', { suite: 'PromptSender' })
 
   const getApi = () => window.__onwardPromptSenderDebug
+  const getPromptNotebookApi = () => window.__onwardPromptNotebookDebug
+  const getTerminalDebugApi = () => window.__onwardTerminalDebug
   const apiReady = await waitFor('prompt-sender-api', () => Boolean(getApi()), 8000)
   if (!apiReady) {
     log('phase1:skip', { reason: 'PromptSender Debug API not available' })
@@ -163,6 +165,67 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
       columns: layout.columns,
       rows: layout.rows
     })
+  }
+
+  // PS-09: Single-line send-and-execute still runs end to end
+  if (!cancelled()) {
+    const notebookApi = getPromptNotebookApi()
+    const terminalApi = getTerminalDebugApi()
+    const cards = getApi()?.getTerminalCards() ?? []
+    if (getApi() && notebookApi && terminalApi && cards.length > 0) {
+      const platform = window.electronAPI.platform
+      const targetId = cards[0].id
+      const marker = `PS09-${Date.now()}`
+      const command = platform === 'win32'
+        ? `Write-Output '${marker}'`
+        : `printf '${marker}\\n'`
+
+      getApi()!.deselectAllTerminals()
+      await sleep(100)
+      getApi()!.selectTerminal(targetId)
+      await sleep(100)
+      notebookApi.setEditorContent(command)
+      const editorSynced = await waitFor('ps09-editor-sync', () => {
+        return getPromptNotebookApi()?.getEditorContent() === command
+      }, 3000, 80)
+      const senderPromptReady = await waitFor('ps09-sender-ready', () => {
+        const buttons = getApi()?.getActionButtons() ?? []
+        return buttons[3]?.disabled === false
+      }, 3000, 80)
+
+      const clicked = await getApi()!.clickAction('sendAndExecute')
+      const idle = await waitFor('ps09-send-and-execute-idle', () => {
+        return Boolean(getApi() && !getApi()!.isSubmitting())
+      }, platform === 'win32' ? 10000 : 6000, 100)
+      const executed = await waitFor('ps09-send-and-execute', () => {
+        const tail = terminalApi.getTailText(targetId, 40) ?? ''
+        return tail.includes(marker)
+      }, platform === 'win32' ? 8000 : 5000, 100)
+
+      _assert('PS-09-send-and-execute-single-line', editorSynced && senderPromptReady && clicked && idle && executed, {
+        targetId,
+        marker,
+        editorSynced,
+        senderPromptReady,
+        clicked,
+        idle,
+        platform,
+        selectedIds: getApi()?.getSelectedTerminalIds() ?? [],
+        notice: getApi()?.getNotice() ?? null,
+        buttonStates: getApi()?.getActionButtons() ?? [],
+        editorContent: getPromptNotebookApi()?.getEditorContent() ?? null,
+        tail: terminalApi.getTailText(targetId, 40)
+      })
+
+      notebookApi.setEditorContent('')
+      await sleep(100)
+    } else {
+      results.push({
+        name: 'PS-09-send-and-execute-single-line',
+        ok: false,
+        detail: { reason: 'debug api unavailable or no terminals' }
+      })
+    }
   }
 
   log('phase1:done', {

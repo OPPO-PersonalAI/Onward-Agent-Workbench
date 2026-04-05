@@ -11,6 +11,7 @@
 import type { AutotestContext, TestResult, TestSuiteResult } from './types'
 import { testTerminalAutofollow } from './test-terminal-autofollow'
 import { testPromptSender } from './test-prompt-sender'
+import { testPromptIntegrity } from './test-prompt-integrity'
 import { testPerAgentFont } from './test-per-agent-font'
 import { testGitHistory } from './test-git-history'
 import { testPromptCleanup } from './test-prompt-cleanup'
@@ -213,6 +214,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase1:begin')
       const results = await testPromptSender(ctx)
       collectSuiteResults('PromptSender', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('prompt-integrity')) {
+      log('phase1.1:begin')
+      const results = await testPromptIntegrity(ctx)
+      collectSuiteResults('PromptIntegrity', results)
       await sleep(500)
     }
 

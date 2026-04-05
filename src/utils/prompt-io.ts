@@ -189,7 +189,8 @@ function isValidSendHistory(value: unknown): boolean {
       typeof record.taskId === 'string' &&
       typeof record.taskName === 'string' &&
       typeof record.sentAt === 'number' &&
-      (action === 'send' || action === 'execute' || action === 'sendAndExecute')
+      (action === 'send' || action === 'execute' || action === 'sendAndExecute') &&
+      (record.result === undefined || record.result === 'executed' || record.result === 'sent-only')
     )
   })
 }

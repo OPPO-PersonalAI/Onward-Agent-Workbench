@@ -48,29 +48,36 @@ export interface PromptBridgeSendRequest {
 export interface PromptBridgeSendResult {
   success: boolean
   successIds: string[]
+  sentOnlyIds: string[]
   failedIds: string[]
+  issues?: Array<{
+    terminalId: string
+    status: 'sent-only' | 'failed'
+    reason: 'unsafe-multiline-send' | 'unsafe-multiline-execute' | 'send-failed' | 'execute-failed'
+    message: string
+    error?: string
+  }>
   error?: string
 }
 
 export interface TerminalInputSequencePayload {
-  kind: 'raw' | 'paste' | 'pasteThenEnter'
+  kind: 'raw' | 'paste'
   content: string
+}
+
+export interface TerminalInputCapabilities {
+  bracketedPasteEnabled: boolean
 }
 
 export interface TerminalAPI {
   create: (id: string, options?: TerminalOptions) => Promise<{ success: boolean; id?: string; error?: string }>
   write: (id: string, data: string) => Promise<boolean>
-  writeSplit: (
-    id: string,
-    content: string,
-    suffix: string,
-    delayMs?: number
-  ) => Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }>
   resize: (id: string, cols: number, rows: number) => Promise<boolean>
   sendInputSequence: (
     id: string,
     payload: TerminalInputSequencePayload
   ) => Promise<{ ok: boolean; phase?: 'content' | 'enter'; error?: string }>
+  getInputCapabilities: (id: string) => Promise<TerminalInputCapabilities>
   setBufferFastPath: (id: string, enabled: boolean) => void
   notifyInteractiveInput: (id: string) => void
   dispose: (id: string) => Promise<boolean>
@@ -807,16 +814,16 @@ const terminalAPI: TerminalAPI = {
     return ipcRenderer.invoke('terminal:write', id, data)
   },
 
-  writeSplit: (id: string, content: string, suffix: string, delayMs?: number) => {
-    return ipcRenderer.invoke('terminal:write-split', id, content, suffix, delayMs)
-  },
-
   resize: (id: string, cols: number, rows: number) => {
     return ipcRenderer.invoke('terminal:resize', id, cols, rows)
   },
 
   sendInputSequence: (id: string, payload: TerminalInputSequencePayload) => {
     return ipcRenderer.invoke('terminal:send-input-sequence', id, payload)
+  },
+
+  getInputCapabilities: (id: string) => {
+    return ipcRenderer.invoke('terminal:get-input-capabilities', id)
   },
 
   setBufferFastPath: (id: string, enabled: boolean) => {

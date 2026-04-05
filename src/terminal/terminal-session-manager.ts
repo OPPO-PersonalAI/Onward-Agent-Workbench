@@ -100,13 +100,6 @@ interface TerminalSession {
   pendingData: string[]
   pendingDataBytes: number
   interactiveBoostUntil: number
-  pendingPasteExecute: PendingPasteExecuteState | null
-}
-
-interface PendingPasteExecuteState {
-  fallbackTimerId: number | null
-  animationFrameIds: number[]
-  allowWriteParsedCommit: boolean
 }
 
 // Maximum bytes to buffer per hidden terminal before discarding old data.
@@ -735,17 +728,13 @@ export class TerminalSessionManager {
       visible: true,
       pendingData: [],
       pendingDataBytes: 0,
-      interactiveBoostUntil: 0,
-      pendingPasteExecute: null
+      interactiveBoostUntil: 0
     }
 
     session.writeParsedDisposable = terminal.onWriteParsed(() => {
       const currentSession = this.sessions.get(id)
       if (!currentSession) return
       this.applyPendingViewportRestore(currentSession, 'output')
-      if (currentSession.pendingPasteExecute?.allowWriteParsedCommit) {
-        this.commitPendingPasteExecute(id)
-      }
     })
 
     this.sessions.set(id, session)
@@ -790,56 +779,10 @@ export class TerminalSessionManager {
     return true
   }
 
-  /**
-   * Send content to a terminal and execute (send Enter).
-   *
-   * Strategy depends on whether the content is single-line or multi-line:
-   *
-   * **Single-line**: `terminal.input(content + '\r', true)` — sends raw data
-   * through the same path as keyboard input (triggerDataEvent → onData → PTY).
-   * No bracketed paste wrapping.  Equivalent to the user typing the content
-   * and pressing Enter.  Works for all programs (shells, TUIs, Ink-based apps).
-   *
-   * **Multi-line**: `terminal.paste(content)` for bracketed paste protection
-   * (prevents ConPTY from splitting multi-line content at each \r), then
-   * release Enter on the earliest safe signal:
-   * - first post-paste writeParsed event when there was no pending renderer backlog
-   * - two animation frames
-   * - platform fallback timeout
-   *
-   * Returns true if the operation was initiated via the xterm session,
-   * false if no session was found (caller should fall back to direct PTY write).
-   */
-  pasteAndExecute(id: string, data: string): boolean {
+  isBracketedPasteEnabled(id: string): boolean | null {
     const session = this.sessions.get(id)
-    if (!session) return false
-
-    const isMultiLine = /\r?\n/.test(data)
-
-    if (!isMultiLine) {
-      // Single-line: send content + Enter as raw input (no bracket wrapping).
-      // This is the same behaviour as before commit 09aa7e9 and is known to
-      // work for all programs including Ink-based TUIs.
-      session.terminal.input(data + '\r', true)
-    } else {
-      // Multi-line: use bracketed paste to protect \r in the content from
-      // being interpreted as Enter by the child program, then release Enter
-      // when the paste has likely been processed.
-      this.clearPendingPasteExecute(session)
-      const pendingState: PendingPasteExecuteState = {
-        fallbackTimerId: null,
-        animationFrameIds: [],
-        allowWriteParsedCommit: session.pendingDataBytes === 0
-      }
-      session.pendingPasteExecute = pendingState
-      session.terminal.paste(data)
-      pendingState.animationFrameIds.push(this.schedulePasteExecuteAnimationFrame(id, pendingState, 2))
-      pendingState.fallbackTimerId = window.setTimeout(() => {
-        this.commitPendingPasteExecute(id)
-      }, this.getPasteExecuteFallbackDelayMs())
-    }
-
-    return true
+    if (!session) return null
+    return session.terminal.modes.bracketedPasteMode
   }
 
   ensureSession(id: string, options: TerminalSessionOptions): TerminalSession {
@@ -1231,7 +1174,6 @@ export class TerminalSessionManager {
     session.readyPromise = null
     session.pendingData = []
     session.pendingDataBytes = 0
-    this.clearPendingPasteExecute(session)
     this.dirtyVisibleSessions.delete(id)
     this.clearPendingRestoreAnimationFrame(session)
 
@@ -1278,43 +1220,6 @@ export class TerminalSessionManager {
       this.activeInteractiveTerminalId === session.id &&
       performance.now() < session.interactiveBoostUntil
     )
-  }
-
-  private getPasteExecuteFallbackDelayMs(): number {
-    return window.electronAPI.platform === 'win32' ? 120 : 40
-  }
-
-  private clearPendingPasteExecute(session: TerminalSession): void {
-    const pending = session.pendingPasteExecute
-    if (!pending) return
-    if (pending.fallbackTimerId !== null) {
-      window.clearTimeout(pending.fallbackTimerId)
-    }
-    pending.animationFrameIds.forEach((id) => cancelAnimationFrame(id))
-    session.pendingPasteExecute = null
-  }
-
-  private commitPendingPasteExecute(id: string): void {
-    const session = this.sessions.get(id)
-    if (!session?.pendingPasteExecute) return
-    this.clearPendingPasteExecute(session)
-    session.terminal.input('\r', true)
-  }
-
-  private schedulePasteExecuteAnimationFrame(
-    id: string,
-    state: PendingPasteExecuteState,
-    remainingFrames: number
-  ): number {
-    return requestAnimationFrame(() => {
-      const session = this.sessions.get(id)
-      if (!session || session.pendingPasteExecute !== state) return
-      if (remainingFrames <= 1) {
-        this.commitPendingPasteExecute(id)
-        return
-      }
-      state.animationFrameIds.push(this.schedulePasteExecuteAnimationFrame(id, state, remainingFrames - 1))
-    })
   }
 }
 

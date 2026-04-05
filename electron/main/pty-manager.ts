@@ -239,24 +239,6 @@ export class PtyManager {
     }
   }
 
-  async writeSplit(
-    id: string,
-    content: string,
-    suffix: string,
-    delayMs: number = 150
-  ): Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }> {
-    const normalizedDelay = suffix === '\r' ? delayMs : undefined
-    const result = await this.sendInputSequence(id, content + (suffix === '\r' ? '' : suffix), normalizedDelay)
-    if (result.ok) {
-      return { ok: true }
-    }
-    return {
-      ok: false,
-      phase: result.phase === 'enter' ? 'suffix' : result.phase,
-      error: result.error
-    }
-  }
-
   private async writeLargeData(record: PtyRecord, data: string): Promise<void> {
     if (data.length === 0) return
     if (data.length <= SMALL_WRITE_THRESHOLD || platform() !== 'win32') {

@@ -236,7 +236,9 @@ export async function startApiServer(mainWindow: BrowserWindow, options: ApiServ
             // Take Prompt Bridge IPC, executed by the rendering process (including split-write and history)
             const action = payload.execute ? 'send-and-execute' : 'send'
             const result = await sendPromptViaBridge(mainWindow, termRoute.id, payload.text, action)
-            sendJson(res, result.success ? 200 : 500, result)
+            const deliveredCount = result.successIds.length + result.sentOnlyIds.length
+            const status = result.success ? 200 : deliveredCount > 0 ? 409 : 500
+            sendJson(res, status, result)
             return
           }
         }

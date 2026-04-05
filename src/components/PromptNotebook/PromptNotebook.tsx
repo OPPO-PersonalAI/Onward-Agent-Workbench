@@ -17,6 +17,7 @@ import { ScheduleConfigModal } from './ScheduleConfigModal'
 import { ScheduleNotificationBar } from './ScheduleNotification'
 import { useI18n } from '../../i18n/useI18n'
 import type { ImportPrepareResult } from '../../utils/prompt-io'
+import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
 import './PromptNotebook.css'
 
 interface PromptNotebookProps {
@@ -614,21 +615,26 @@ export const PromptNotebook = memo(function PromptNotebook({
     }
   }, [scheduleMap, onUpdateSchedule])
 
-  const buildSendRecords = useCallback((successTerminalIds: string[], action: PromptSendRecord['action']): PromptSendRecord[] => {
+  const buildSendRecords = useCallback((
+    terminalIds: string[],
+    action: PromptSendRecord['action'],
+    result?: PromptSendRecord['result']
+  ): PromptSendRecord[] => {
     const now = Date.now()
-    return successTerminalIds.map(tid => {
+    return terminalIds.map(tid => {
       const terminal = terminals.find(t => t.id === tid)
       return {
         taskId: tid,
         taskName: terminal?.title || tid,
         sentAt: now,
-        action
+        action,
+        result
       }
     })
   }, [terminals])
 
   const applySuccessSideEffects = useCallback((result: TerminalBatchResult, sendRecords?: PromptSendRecord[]): TerminalBatchResult => {
-    if (result.successIds.length === 0) {
+    if (!hasDeliveredTerminals(result)) {
       return result
     }
 
@@ -661,7 +667,7 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Send to terminal (wrapper, add save and clear logic)
   const handleSendToTerminal = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
-    const fallback: TerminalBatchResult = { successIds: [], failedIds: [...terminalIds] }
+    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
     try {
       const rawResult = await onSend(terminalIds, content)
       const sendRecords = rawResult.successIds.length > 0
@@ -676,7 +682,7 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Execution (wrapping, adding save and clear logic)
   const handleExecuteTerminal = useCallback(async (terminalIds: string[]): Promise<TerminalBatchResult> => {
-    const fallback: TerminalBatchResult = { successIds: [], failedIds: [...terminalIds] }
+    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
     try {
       return applySuccessSideEffects(await onExecute(terminalIds))
     } catch (error) {
@@ -687,12 +693,13 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Send and execute (wrapper, add save and clear logic)
   const handleSendAndExecute = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
-    const fallback: TerminalBatchResult = { successIds: [], failedIds: [...terminalIds] }
+    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
     try {
       const rawResult = await onSendAndExecute(terminalIds, content)
-      const sendRecords = rawResult.successIds.length > 0
-        ? buildSendRecords(rawResult.successIds, 'sendAndExecute')
-        : undefined
+      const sendRecords = [
+        ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
+        ...buildSendRecords(rawResult.sentOnlyIds, 'sendAndExecute', 'sent-only')
+      ]
       return applySuccessSideEffects(rawResult, sendRecords)
     } catch (error) {
       console.error('Prompt send and execute failed:', error)
@@ -1035,7 +1042,9 @@ export const PromptNotebook = memo(function PromptNotebook({
                         ? t('promptNotebook.sendHistory.action.send')
                         : record.action === 'execute'
                           ? t('promptNotebook.sendHistory.action.execute')
-                          : t('promptNotebook.sendHistory.action.sendAndExecute')}
+                          : record.result === 'sent-only'
+                            ? t('promptNotebook.sendHistory.action.sendAndExecuteSentOnly')
+                            : t('promptNotebook.sendHistory.action.sendAndExecute')}
                     </span>
                     <span className="prompt-send-history-time">
                       {new Date(record.sentAt).toLocaleString(locale === 'zh-CN' ? 'zh-CN' : 'en-US', {

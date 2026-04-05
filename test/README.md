@@ -50,6 +50,7 @@ pnpm dist:dev
 src/autotest/
 ├── autotest-runner.ts
 ├── types.ts
+├── test-prompt-integrity.ts
 ├── test-project-editor-restore-unit.ts
 ├── test-project-editor-restore.ts
 ├── test-project-editor-open-position.ts
@@ -193,6 +194,29 @@ Source set: PromptSender UI validation suite
 - `PS-06`: primary actions are disabled when no terminal is selected
 - `PS-07`: repeated rapid selection toggling does not crash
 - `PS-08`: rendered card count matches layout metadata
+- `PS-09`: single-line Send and execute still runs end to end
+
+### Phase 1.1: Prompt Integrity
+
+Source set: multiline prompt transport integrity suite
+
+- `PI-01`: multi-line `Send` preserves mixed prompt content when bracketed paste is enabled
+- `PI-02`: multi-line `Send and execute` preserves content and appends one execute Enter when bracketed paste is enabled
+- `PI-03`: large 50-line prompt survives `Send` without truncation
+- `PI-04`: multi-line `Send` is blocked cleanly when bracketed paste is unavailable
+- `PI-05`: multi-line `Send and execute` is blocked cleanly when bracketed paste is unavailable
+
+Run the prompt integrity suite:
+
+```bash
+bash test/run-prompt-integrity-autotest.sh
+```
+
+Run the PromptSender suite:
+
+```bash
+bash test/run-prompt-sender-autotest.sh
+```
 
 ### Phase 2: Per-Agent Font Size
 

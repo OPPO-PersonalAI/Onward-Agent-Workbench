@@ -15,12 +15,23 @@ import { Settings } from './components/Settings'
 import { ProjectEditor } from './components/ProjectEditor'
 import { useScheduleEngine } from './hooks/useScheduleEngine'
 import type { ScheduleNotification } from './hooks/useScheduleEngine'
-import { LayoutMode, TerminalBatchResult, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest } from './types/prompt'
+import {
+  LayoutMode,
+  TerminalBatchResult,
+  TerminalInfo,
+  TerminalShortcutAction,
+  TerminalFocusRequest
+} from './types/prompt'
+import type { TerminalBatchIssue, TerminalBatchIssueReason } from './types/prompt'
 import type { Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
 import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { computeNextExecution } from './utils/schedule'
+import {
+  createTerminalBatchResult,
+  getDeliveredTerminalIds
+} from './utils/terminal-batch'
 import {
   buildImportPlan,
   buildPromptExportPayload,
@@ -35,6 +46,7 @@ import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
 import './App.css'
 
 const MAX_SCHEDULE_LOG_ENTRIES = 50
+const SEND_AND_EXECUTE_SETTLE_DELAY_MS = 150
 const DEBUG_TERMINAL_FOCUS = Boolean(window.electronAPI?.debug?.enabled)
 
 function debugTerminalFocus(message: string, data?: unknown) {
@@ -50,6 +62,12 @@ function debugTerminalFocus(message: string, data?: unknown) {
 function appendScheduleLogEntry(schedule: PromptSchedule, entry: ExecutionLogEntry): ExecutionLogEntry[] {
   const log = [...(schedule.executionLog ?? []), entry]
   return log.slice(-MAX_SCHEDULE_LOG_ENTRIES)
+}
+
+async function waitForSendAndExecuteSettle(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, SEND_AND_EXECUTE_SETTLE_DELAY_MS)
+  })
 }
 
 async function resolveProjectEditorDebugCwd(
@@ -363,6 +381,58 @@ function AppContent({
 
   const { registerCloseSettings, registerTryCloseSettingsOnSwitch } = usePromptActions()
 
+  const buildTerminalIssue = useCallback((
+    terminalId: string,
+    status: TerminalBatchIssue['status'],
+    reason: TerminalBatchIssueReason,
+    error?: string
+  ): TerminalBatchIssue => {
+    const messageKey = reason === 'unsafe-multiline-send'
+      ? 'terminalAction.reason.unsafeMultilineSend'
+      : reason === 'unsafe-multiline-execute'
+        ? 'terminalAction.reason.unsafeMultilineExecute'
+        : reason === 'execute-failed'
+          ? 'terminalAction.reason.executeFailed'
+          : 'terminalAction.reason.sendFailed'
+
+    return {
+      terminalId,
+      status,
+      reason,
+      message: t(messageKey),
+      error
+    }
+  }, [t])
+
+  const summarizeScheduleBatchError = useCallback((result: TerminalBatchResult): string => {
+    const sentOnlyCount = result.sentOnlyIds.length
+    const failedCount = result.failedIds.length
+    const unsafeMultiLineFailures = result.issues.filter(
+      (issue) => issue.reason === 'unsafe-multiline-send'
+    ).length
+
+    if (sentOnlyCount > 0 && failedCount === 0) {
+      return t('schedule.sentOnly', { count: sentOnlyCount })
+    }
+
+    if (failedCount > 0 && sentOnlyCount === 0 && unsafeMultiLineFailures === failedCount) {
+      return t('schedule.multilineBlocked', { count: failedCount })
+    }
+
+    if (sentOnlyCount > 0 && failedCount > 0) {
+      return t('schedule.partialMixed', {
+        sentOnlyCount,
+        failedCount
+      })
+    }
+
+    if (failedCount > 0) {
+      return t('schedule.partialFailure', { count: failedCount })
+    }
+
+    return result.issues[0]?.message ?? t('schedule.partialFailure', { count: 1 })
+  }, [t])
+
   // Automatically create terminals for each Tab (when layout requires more terminals)
   useEffect(() => {
     if (!isLoaded) return
@@ -448,8 +518,154 @@ function AppContent({
     setScheduleNotifications(prev => prev.filter(n => !(n.promptId === promptId && n.type === type)))
   }, [])
 
+  const writeToTerminals = useCallback(async (
+    terminalIds: string[],
+    data: string,
+    action: string
+  ): Promise<TerminalBatchResult> => {
+    const result = createTerminalBatchResult()
+
+    for (const id of terminalIds) {
+      try {
+        const ok = await window.electronAPI.terminal.write(id, data)
+        if (ok) {
+          result.successIds.push(id)
+        } else {
+          result.failedIds.push(id)
+          result.issues.push(buildTerminalIssue(id, 'failed', 'execute-failed'))
+        }
+      } catch (error) {
+        result.failedIds.push(id)
+        result.issues.push(buildTerminalIssue(id, 'failed', 'execute-failed', String(error)))
+        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
+      }
+    }
+
+    if (result.failedIds.length > 0) {
+      console.warn('[PromptSender] terminal write failed:', { action, failedIds: result.failedIds })
+    }
+
+    return result
+  }, [buildTerminalIssue])
+
+  // Send content to terminals.
+  //
+  // Strategy (two tiers):
+  //   1. Single-line content: always use the main-process raw input path.
+  //      This avoids relying on renderer-only input injection semantics.
+  //   2. Multi-line content: prefer mounted xterm session paste() so
+  //      bracketed paste mode is applied when supported by the child program.
+  //   3. Session unavailable: use the main-process input sequence API so
+  //      multi-line content still goes through paste semantics instead of the
+  //      old direct PTY write fallback.
+  const sendContentToTerminals = useCallback(async (
+    terminalIds: string[],
+    content: string,
+    action: string
+  ): Promise<TerminalBatchResult> => {
+    const result = createTerminalBatchResult()
+    const isMultiLine = /\r?\n/.test(content)
+
+    for (const id of terminalIds) {
+      if (isMultiLine) {
+        const sessionBracketedPaste = terminalSessionManager.isBracketedPasteEnabled(id)
+        if (sessionBracketedPaste === true && terminalSessionManager.paste(id, content)) {
+          result.successIds.push(id)
+          continue
+        }
+        if (sessionBracketedPaste === false) {
+          result.failedIds.push(id)
+          result.issues.push(buildTerminalIssue(id, 'failed', 'unsafe-multiline-send'))
+          continue
+        }
+      }
+
+      try {
+        if (isMultiLine) {
+          const capabilities = await window.electronAPI.terminal.getInputCapabilities(id)
+          if (!capabilities.bracketedPasteEnabled) {
+            result.failedIds.push(id)
+            result.issues.push(buildTerminalIssue(id, 'failed', 'unsafe-multiline-send'))
+            continue
+          }
+        }
+        const writeResult = await window.electronAPI.terminal.sendInputSequence(id, {
+          kind: isMultiLine ? 'paste' : 'raw',
+          content
+        })
+        if (writeResult.ok) {
+          result.successIds.push(id)
+        } else {
+          result.failedIds.push(id)
+          result.issues.push(buildTerminalIssue(id, 'failed', 'send-failed', writeResult.error))
+        }
+      } catch (error) {
+        result.failedIds.push(id)
+        result.issues.push(buildTerminalIssue(id, 'failed', 'send-failed', String(error)))
+        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
+      }
+    }
+
+    if (result.failedIds.length > 0) {
+      console.warn('[PromptSender] terminal send failed:', { action, failedIds: result.failedIds })
+    }
+
+    return result
+  }, [buildTerminalIssue])
+
+  // Send command to specified terminal
+  const handleSendToTerminals = useCallback(async (terminalIds: string[], content: string) => {
+    return sendContentToTerminals(terminalIds, content, 'send')
+  }, [sendContentToTerminals])
+
+  // Execute command in terminal (send carriage return)
+  const handleExecuteOnTerminals = useCallback(async (terminalIds: string[]) => {
+    return writeToTerminals(terminalIds, '\r', 'execute')
+  }, [writeToTerminals])
+
+  const handleSendAndExecuteOnTerminals = useCallback(async (terminalIds: string[], content: string) => {
+    const sendResult = await sendContentToTerminals(terminalIds, content, 'send-and-execute:send')
+    const deliveredIds = getDeliveredTerminalIds(sendResult)
+    if (deliveredIds.length === 0) {
+      return sendResult
+    }
+
+    await waitForSendAndExecuteSettle()
+
+    const executeResult = await writeToTerminals(deliveredIds, '\r', 'send-and-execute:execute')
+    const result = createTerminalBatchResult({
+      successIds: executeResult.successIds,
+      failedIds: sendResult.failedIds,
+      issues: [...sendResult.issues]
+    })
+
+    if (executeResult.sentOnlyIds.length > 0) {
+      result.sentOnlyIds.push(...executeResult.sentOnlyIds)
+    }
+
+    if (executeResult.failedIds.length > 0) {
+      result.sentOnlyIds.push(...executeResult.failedIds)
+      result.issues.push(
+        ...executeResult.issues.map((issue) => ({
+          ...issue,
+          status: 'sent-only' as const
+        }))
+      )
+    }
+
+    if (result.failedIds.length > 0 || result.sentOnlyIds.length > 0) {
+      console.warn('[PromptSender] sendAndExecute completed with issues:', {
+        successIds: result.successIds,
+        sentOnlyIds: result.sentOnlyIds,
+        failedIds: result.failedIds,
+        issues: result.issues
+      })
+    }
+
+    return result
+  }, [sendContentToTerminals, writeToTerminals])
+
   const handleRetrySchedule = useCallback(async (promptId: string) => {
-    // Find the corresponding prompt and execute it immediately
     const prompt = allPromptsForSchedule.find(p => p.id === promptId)
     const schedule = state.promptSchedules.find(s => s.promptId === promptId)
     if (!prompt || !schedule) return
@@ -461,35 +677,31 @@ function AppContent({
       tab.terminals.some(t => t.id === terminalId)
     )
 
-    for (const terminalId of availableTerminalIds) {
-      const isMultiLine = /\r?\n/.test(prompt.content)
-      const result = isMultiLine
-        ? await window.electronAPI.terminal.sendInputSequence(terminalId, {
-          kind: 'pasteThenEnter',
-          content: prompt.content
-        })
-        : { ok: await window.electronAPI.terminal.write(terminalId, `${prompt.content}\r`) }
-      if (!result.ok) {
-        console.warn('[Schedule] retry send-and-execute failed:', {
-          terminalId,
-          phase: 'phase' in result ? result.phase : 'content',
-          error: 'error' in result ? result.error : 'terminal write failed'
-        })
-      }
-    }
-
+    const result = await handleSendAndExecuteOnTerminals(availableTerminalIds, prompt.content)
     const now = Date.now()
-    const executedCount = schedule.executedCount + 1
     const successLog: ExecutionLogEntry = {
       timestamp: now,
-      success: true,
-      targetTerminalIds: availableTerminalIds
+      success: result.failedIds.length === 0 && result.sentOnlyIds.length === 0,
+      targetTerminalIds: availableTerminalIds,
+      error: result.failedIds.length > 0 || result.sentOnlyIds.length > 0
+        ? summarizeScheduleBatchError(result)
+        : undefined
     }
 
-    // Clear this missed-execution notification and keep other notifications with the same prompt
     setScheduleNotifications(prev => prev.filter(n => !(n.promptId === promptId && n.type === 'missed-execution')))
 
-    // Update the execution count and recalculate the next execution to avoid immediate repeated triggering
+    if (result.failedIds.length > 0 || result.sentOnlyIds.length > 0) {
+      updateSchedule({
+        ...schedule,
+        missedExecutions: 0,
+        lastError: summarizeScheduleBatchError(result),
+        executionLog: appendScheduleLogEntry(schedule, successLog)
+      })
+      return
+    }
+
+    const executedCount = schedule.executedCount + 1
+
     if (schedule.scheduleType === 'recurring') {
       const reachedMax = schedule.maxExecutions !== null && executedCount >= schedule.maxExecutions
       updateSchedule({
@@ -515,153 +727,25 @@ function AppContent({
       executionLog: appendScheduleLogEntry(schedule, successLog),
       lastError: null
     })
-  }, [allPromptsForSchedule, state.promptSchedules, state.tabs, updateSchedule])
+  }, [
+    allPromptsForSchedule,
+    handleSendAndExecuteOnTerminals,
+    state.promptSchedules,
+    state.tabs,
+    summarizeScheduleBatchError,
+    updateSchedule
+  ])
 
-  // Install scheduling engine
   useScheduleEngine({
     isLoaded,
     schedules: state.promptSchedules,
     tabs: tabsForSchedule,
     allPrompts: allPromptsForSchedule,
     updateSchedule,
-    onNotification: handleScheduleNotification
+    onNotification: handleScheduleNotification,
+    onSendAndExecute: handleSendAndExecuteOnTerminals,
+    summarizeBatchError: summarizeScheduleBatchError
   })
-
-  const writeToTerminals = useCallback(async (
-    terminalIds: string[],
-    data: string,
-    action: string
-  ): Promise<TerminalBatchResult> => {
-    const successIds: string[] = []
-    const failedIds: string[] = []
-
-    for (const id of terminalIds) {
-      try {
-        const ok = await window.electronAPI.terminal.write(id, data)
-        if (ok) {
-          successIds.push(id)
-        } else {
-          failedIds.push(id)
-        }
-      } catch (error) {
-        failedIds.push(id)
-        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
-      }
-    }
-
-    if (failedIds.length > 0) {
-      console.warn('[PromptSender] terminal write failed:', { action, failedIds })
-    }
-
-    return { successIds, failedIds }
-  }, [])
-
-  // Send content to terminals.
-  //
-  // Strategy (two tiers):
-  //   1. Mounted xterm session: use terminal.paste() so bracketed paste mode
-  //      is applied when supported by the child program.
-  //   2. Session unavailable: use the main-process input sequence API so
-  //      multi-line content still goes through paste semantics instead of the
-  //      old direct PTY write fallback.
-  const sendContentToTerminals = useCallback(async (
-    terminalIds: string[],
-    content: string,
-    action: string
-  ): Promise<TerminalBatchResult> => {
-    const successIds: string[] = []
-    const failedIds: string[] = []
-
-    for (const id of terminalIds) {
-      // Tier 1: try xterm.js paste via session manager (handles bracketed paste mode)
-      if (terminalSessionManager.paste(id, content)) {
-        successIds.push(id)
-        continue
-      }
-
-      // Tier 2: fallback to direct PTY write (session not found)
-      try {
-        const isMultiLine = /\r?\n/.test(content)
-        const result = isMultiLine
-          ? await window.electronAPI.terminal.sendInputSequence(id, { kind: 'paste', content })
-          : { ok: await window.electronAPI.terminal.write(id, content) }
-        const ok = result.ok
-        if (ok) {
-          successIds.push(id)
-        } else {
-          failedIds.push(id)
-        }
-      } catch (error) {
-        failedIds.push(id)
-        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
-      }
-    }
-
-    if (failedIds.length > 0) {
-      console.warn('[PromptSender] terminal send failed:', { action, failedIds })
-    }
-
-    return { successIds, failedIds }
-  }, [])
-
-  // Send command to specified terminal
-  const handleSendToTerminals = useCallback(async (terminalIds: string[], content: string) => {
-    return sendContentToTerminals(terminalIds, content, 'send')
-  }, [sendContentToTerminals])
-
-  // Execute command in terminal (send carriage return)
-  const handleExecuteOnTerminals = useCallback(async (terminalIds: string[]) => {
-    return writeToTerminals(terminalIds, '\r', 'execute')
-  }, [writeToTerminals])
-
-  const handleSendAndExecuteOnTerminals = useCallback(async (terminalIds: string[], content: string) => {
-    // Send content to terminals and execute (Enter).
-    //
-    // Tier 1 — via session manager (pasteAndExecute):
-    //   Single-line: terminal.input(content + '\r') — raw input, no brackets.
-    //   Multi-line:  terminal.paste(content) + adaptive Enter release.
-    //
-    // Tier 2 — session unavailable:
-    //   Single-line: direct PTY write with trailing Enter.
-    //   Multi-line:  main-process pasteThenEnter sequence with protocol-aware fallback.
-    const successIds: string[] = []
-    const failedIds: string[] = []
-
-    for (const id of terminalIds) {
-      // Tier 1: session manager handles single-line vs multi-line internally
-      if (terminalSessionManager.pasteAndExecute(id, content)) {
-        successIds.push(id)
-        continue
-      }
-
-      // Tier 2: direct PTY write (no session)
-      try {
-        const isMultiLine = /\r?\n/.test(content)
-        const result = isMultiLine
-          ? await window.electronAPI.terminal.sendInputSequence(id, { kind: 'pasteThenEnter', content })
-          : { ok: await window.electronAPI.terminal.write(id, content + '\r') }
-        if (result.ok) {
-          successIds.push(id)
-        } else {
-          failedIds.push(id)
-          console.warn('[PromptSender] send-and-execute fallback failed:', {
-            terminalId: id,
-            phase: 'phase' in result ? result.phase : 'content',
-            error: 'error' in result ? result.error : 'terminal write failed'
-          })
-        }
-      } catch (error) {
-        failedIds.push(id)
-        console.warn('[PromptSender] send-and-execute write threw:', { terminalId: id, error: String(error) })
-      }
-    }
-
-    if (failedIds.length > 0) {
-      console.warn('[PromptSender] send-and-execute failed:', { failedIds })
-    }
-
-    return { successIds, failedIds }
-  }, [])
 
   // Terminal focus processing (with tabId parameter)
   const handleTerminalFocusWithTab = useCallback((tabId: string, terminalId: string) => {
@@ -975,30 +1059,43 @@ function AppContent({
             result = await handleSendAndExecuteOnTerminals([terminalId], content)
             break
           default:
-            result = { successIds: [], failedIds: [terminalId] }
+            result = createTerminalBatchResult({
+              failedIds: [terminalId],
+              issues: [buildTerminalIssue(terminalId, 'failed', 'send-failed')]
+            })
         }
 
         // When sent successfully and there is content, save to Prompt history
-        if (result.successIds.length > 0 && content.trim()) {
+        if (getDeliveredTerminalIds(result).length > 0 && content.trim()) {
           addPrompt({ title: '', content: content.trim(), pinned: false })
         }
 
         window.electronAPI.terminal.sendPromptBridgeResponse(requestId, {
-          success: result.successIds.length > 0,
+          success: result.successIds.length > 0 && result.sentOnlyIds.length === 0 && result.failedIds.length === 0,
           successIds: result.successIds,
-          failedIds: result.failedIds
+          sentOnlyIds: result.sentOnlyIds,
+          failedIds: result.failedIds,
+          issues: result.issues,
+          error: result.issues[0]?.message
         })
       } catch (error) {
         window.electronAPI.terminal.sendPromptBridgeResponse(requestId, {
           success: false,
           successIds: [],
+          sentOnlyIds: [],
           failedIds: [terminalId],
           error: String(error)
         })
       }
     })
     return cleanup
-  }, [handleSendToTerminals, handleExecuteOnTerminals, handleSendAndExecuteOnTerminals, addPrompt])
+  }, [
+    addPrompt,
+    buildTerminalIssue,
+    handleExecuteOnTerminals,
+    handleSendAndExecuteOnTerminals,
+    handleSendToTerminals
+  ])
 
   // Wait for loading to complete
   if (!isLoaded || !activeTab) {
