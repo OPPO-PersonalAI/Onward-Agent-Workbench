@@ -1,0 +1,261 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.git-diff-image-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.git-diff-editor-container {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.git-diff-monaco {
+  height: 100%;
+}
+
+.git-diff-image-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-1);
+  flex-shrink: 0;
+}
+
+.git-diff-image-status {
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
+.git-diff-image-mode-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.git-diff-image-mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.git-diff-image-mode-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.git-diff-image-mode-btn:hover {
+  color: var(--text-1);
+  background-color: var(--bg-2);
+}
+
+.git-diff-image-mode-btn.active {
+  color: var(--text-1);
+  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.git-diff-image-container {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  min-height: 0;
+}
+
+.git-diff-image-container.single {
+  justify-content: center;
+}
+
+.git-diff-image-container.side-by-side {
+  gap: 1px;
+  background-color: var(--border);
+}
+
+.git-diff-image-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background-color: var(--bg-1);
+}
+
+.git-diff-image-container.single .git-diff-image-panel {
+  max-width: 100%;
+}
+
+.git-diff-image-panel-header {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-2);
+  flex-shrink: 0;
+}
+
+.git-diff-image-panel-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.git-diff-image-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 16px;
+  background-color: var(--bg-1);
+  background-image:
+    linear-gradient(45deg, var(--bg-2) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--bg-2) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--bg-2) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--bg-2) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.git-diff-image {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.git-diff-image.fit {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.git-diff-image-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background-color: var(--bg-2);
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  flex-shrink: 0;
+}
+
+.git-diff-image-swipe,
+.git-diff-image-onion {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  min-height: 0;
+  padding: 16px;
+  background-color: var(--bg-1);
+  background-image:
+    linear-gradient(45deg, var(--bg-2) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--bg-2) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--bg-2) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--bg-2) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.git-diff-image-swipe {
+  cursor: ew-resize;
+}
+
+.git-diff-image-swipe-after,
+.git-diff-image-onion-base {
+  position: relative;
+  z-index: 1;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.git-diff-image-swipe-before,
+.git-diff-image-onion-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  pointer-events: none;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.git-diff-image-swipe-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+  background-color: var(--accent);
+  z-index: 10;
+  cursor: ew-resize;
+}
+
+.git-diff-image-swipe-handle::before,
+.git-diff-image-swipe-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+}
+
+.git-diff-image-swipe-handle::before {
+  top: 50%;
+  margin-top: -12px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 8px solid var(--accent);
+}
+
+.git-diff-image-swipe-handle::after {
+  top: 50%;
+  margin-top: 4px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid var(--accent);
+}
+
+.git-diff-image-swipe-handle-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 32px;
+  border-radius: 4px;
+  background-color: var(--accent);
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.git-diff-image-swipe-handle-grip::before {
+  content: '⋮';
+  color: var(--bg-1);
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.git-diff-image-onion-slider {
+  width: 160px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

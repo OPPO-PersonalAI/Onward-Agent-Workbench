@@ -276,6 +276,8 @@ export interface GitHistoryFile {
   status: GitStatusCode
   additions: number
   deletions: number
+  isImage?: boolean
+  isSvg?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -296,6 +298,12 @@ export interface GitHistoryDiffResult {
   patch: string
   files: GitHistoryFile[]
   error?: string
+}
+
+export interface GitHistoryFileContentOptions {
+  base: string
+  head: string
+  file: Pick<GitHistoryFile, 'filename' | 'originalFilename' | 'status'>
 }
 
 export type TerminalGitStatus = 'clean' | 'modified' | 'added' | 'unknown'
@@ -321,6 +329,11 @@ export interface GitFileContentResult {
   originalImageSize?: number
   modifiedImageSize?: number
   error?: string
+}
+
+export interface GitHistoryFileContentResult extends GitFileContentResult {
+  base: string
+  head: string
 }
 
 export interface GitFileSaveResult {
@@ -497,6 +510,7 @@ export interface GitAPI {
   getDiff: (cwd: string) => Promise<GitDiffResult>
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
+  getHistoryFileContent: (cwd: string, options: GitHistoryFileContentOptions) => Promise<GitHistoryFileContentResult>
   getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
   saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
   stageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
@@ -968,6 +982,10 @@ const gitAPI: GitAPI = {
 
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => {
     return ipcRenderer.invoke('git:get-history-diff', cwd, options)
+  },
+
+  getHistoryFileContent: (cwd: string, options: GitHistoryFileContentOptions) => {
+    return ipcRenderer.invoke('git:get-history-file-content', cwd, options)
   },
 
   getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {

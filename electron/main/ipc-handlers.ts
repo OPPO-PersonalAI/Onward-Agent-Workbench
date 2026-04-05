@@ -19,6 +19,7 @@ import {
   getGitDiff,
   getGitHistory,
   getGitHistoryDiff,
+  getGitHistoryFileContent,
   getGitFileContent,
   getGitRepoMeta,
   getTerminalCwd,
@@ -31,7 +32,8 @@ import {
   detectSubmodulesRecursive,
   updateGitIndexContent,
   GitFileStatus,
-  GitHistoryDiffOptions
+  GitHistoryDiffOptions,
+  GitHistoryFileContentOptions
 } from './git-utils'
 import {
   listDirectory,
@@ -963,6 +965,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await getGitHistoryDiff(cwd, options)
   })
 
+  ipcMain.handle('git:get-history-file-content', async (_, cwd: string, options: GitHistoryFileContentOptions) => {
+    return await getGitHistoryFileContent(cwd, options)
+  })
+
   // Get Git file content for diff view
   ipcMain.handle('git:get-file-content', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {
     return await getGitFileContent(cwd, file, repoRoot)
@@ -1358,6 +1364,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('git:get-diff')
   ipcMain.removeHandler('git:get-history')
   ipcMain.removeHandler('git:get-history-diff')
+  ipcMain.removeHandler('git:get-history-file-content')
   ipcMain.removeHandler('git:get-file-content')
   ipcMain.removeHandler('git:save-file-content')
   ipcMain.removeHandler('git:stage-file')

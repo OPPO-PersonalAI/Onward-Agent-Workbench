@@ -65,6 +65,19 @@ export interface GitHistoryDebugApi {
   getSelectedShas: () => string[]
   getFiles: () => Array<{ filename: string; status: string }>
   getSelectedFile: () => { filename: string } | null
+  getImagePreviewState?: () => {
+    isImage: boolean
+    isSvg: boolean
+    hasOriginalUrl: boolean
+    hasModifiedUrl: boolean
+    compareMode: '2up' | 'swipe' | 'onion'
+    displayMode: 'original' | 'fit'
+    svgViewMode: 'visual' | 'text'
+    loading: boolean
+  } | null
+  setImageCompareMode?: (mode: '2up' | 'swipe' | 'onion') => void
+  setImageDisplayMode?: (mode: 'original' | 'fit') => void
+  setSvgViewMode?: (mode: 'visual' | 'text') => void
   isLoading: () => boolean
   getActiveCwd: () => string | null
   getRepoState: () => {
@@ -73,6 +86,7 @@ export interface GitHistoryDebugApi {
     repoSearch: string
     cachedRepoCount: number
   }
+  switchRepo?: (repoRoot: string | null) => void
   injectRepoState: (state: {
     selectedRepoRoot: string | null
     cachedParentCwd: string | null
@@ -142,6 +156,12 @@ export interface ProjectEditorDebugApi {
   triggerEditorSaveCommand: () => boolean
   triggerToolbarSave: () => Promise<boolean>
   isSqliteViewerVisible: () => boolean
+  getImageFilePreviewState?: () => {
+    visible: boolean
+    loaded: boolean
+    broken: boolean
+    src: string
+  } | null
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean

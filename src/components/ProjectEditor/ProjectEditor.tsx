@@ -609,6 +609,7 @@ export function ProjectEditor({
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const previewLayoutRef = useRef<HTMLDivElement>(null)
+  const imagePreviewRef = useRef<HTMLImageElement | null>(null)
 
   const [dialog, setDialog] = useState<DialogState | null>(null)
   const [dialogInput, setDialogInput] = useState('')
@@ -1416,6 +1417,17 @@ export function ProjectEditor({
   useEffect(() => {
     isSqliteRef.current = isSqlite
   }, [isSqlite])
+
+  const getImageFilePreviewState = useCallback(() => {
+    if (!activeFilePathRef.current || !isImageRef.current) return null
+    const image = imagePreviewRef.current
+    return {
+      visible: Boolean(imagePreviewUrl),
+      loaded: Boolean(image && image.complete && image.naturalWidth > 0),
+      broken: Boolean(image && image.complete && image.naturalWidth === 0),
+      src: image?.currentSrc || image?.src || imagePreviewUrl || ''
+    }
+  }, [imagePreviewUrl])
 
   useEffect(() => {
     if (!isMarkdownRenderAllowed) {
@@ -3420,6 +3432,7 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      getImageFilePreviewState,
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
         setIsMarkdownEditorVisible(visible)
@@ -3595,6 +3608,7 @@ export function ProjectEditor({
     }
   }, [
     capturePreviewScrollMemory,
+    getImageFilePreviewState,
     isPreviewContentVisibleNow,
     scanPreviewNearestSlug,
     scheduleProjectStateSave,
@@ -3694,6 +3708,7 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      getImageFilePreviewState,
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
         setIsMarkdownEditorVisible(visible)
@@ -3799,6 +3814,7 @@ export function ProjectEditor({
     }
   }, [
     capturePreviewScrollMemory,
+    getImageFilePreviewState,
     isPreviewContentVisibleNow,
     scanPreviewNearestSlug,
     scheduleProjectStateSave,
@@ -4962,7 +4978,7 @@ export function ProjectEditor({
               )}
               {activeFilePath && isImage && imagePreviewUrl ? (
                 <div className="project-editor-image-preview">
-                  <img src={imagePreviewUrl} alt={activeFilePath} />
+                  <img ref={imagePreviewRef} src={imagePreviewUrl} alt={activeFilePath} />
                 </div>
               ) : activeFilePath && isSqlite && (rootRef.current ?? rootPath) ? (
                 <SqliteViewer

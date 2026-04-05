@@ -45,6 +45,12 @@ const EXTRA_TEXT_FILES = new Set([
   'pnpm-lock.yaml'
 ])
 
+function isAllowlistedPath(relPath) {
+  if (ALLOWLIST.has(relPath)) return true
+  // Local skill definitions are project documentation, not product copy.
+  return relPath.startsWith('.claude/skills/')
+}
+
 function getTrackedFiles() {
   return execFileSync('git', ['ls-files'], {
     cwd: ROOT,
@@ -67,7 +73,7 @@ function isBinaryText(content) {
 }
 
 function scanText(relPath) {
-  if (ALLOWLIST.has(relPath)) {
+  if (isAllowlistedPath(relPath)) {
     return []
   }
 

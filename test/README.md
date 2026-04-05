@@ -12,6 +12,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Auto-update behavior, including "download only until explicit restart" and GitHub release publishing
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
+- Image rendering across Git Diff, Git History, and Project Editor
 - Prompt cleanup and retention behavior
 - Markdown preview rendering
 - External file change watching and automatic refresh
@@ -222,6 +223,15 @@ Source set: Git History validation suite
 Source set: Git History terminal-switch isolation regression suite
 
 - `GHMS-01` to `GHMS-11`: dual-terminal layout setup, stale repo-state injection, terminal switch reload, and stale state cleanup
+
+### Image Rendering Suite
+
+Source set: image rendering validation suite
+
+- `ID-01` to `ID-12`: Git Diff raster and SVG image preview behavior
+- `ID-13` to `ID-18`: Git History image commit preview behavior
+- `ID-19`: Project Editor direct image file preview behavior
+- `ID-20` to `ID-21`: suite cleanup and closeout
 
 ### Phase 4: Prompt Cleanup
 

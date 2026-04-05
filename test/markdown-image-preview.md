@@ -6,3 +6,5 @@
 AUTOTEST_IMAGE_ORIGINAL
 
 ![SVG Preview Dot](fixtures/markdown-preview-dot.svg)
+
+![PNG Preview Dot](../resources/test-preview.png)

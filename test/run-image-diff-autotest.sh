@@ -41,6 +41,12 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   exit 1
 fi
 
+if grep -Eq "totalFailed: [1-9]" "$LOG_FILE"; then
+  echo "Image diff autotest reported failed cases in the summary" >&2
+  grep -E "totalFailed: [1-9]" "$LOG_FILE" >&2
+  exit 1
+fi
+
 if ! grep -q "ID-21-cleanup" "$LOG_FILE"; then
   echo "Missing ID-21 result; the test may not have executed correctly" >&2
   tail -n 40 "$LOG_FILE" >&2
