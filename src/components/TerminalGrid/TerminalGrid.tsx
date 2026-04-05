@@ -287,6 +287,12 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [])
 
+  const getPersistedTerminalCwd = useCallback((terminalId: string): string | null => {
+    const terminal = terminals.find((item) => item.id === terminalId)
+    const lastCwd = terminal?.lastCwd
+    return typeof lastCwd === 'string' && lastCwd.trim() ? lastCwd : null
+  }, [terminals])
+
   const handleCopyText = useCallback(async (terminalId: string, label: string, text: string | null) => {
     if (!text) return
     const success = await copyTextToClipboard(text)
@@ -897,12 +903,14 @@ export const TerminalGrid = memo(function TerminalGrid({
     const currentToken = ++gitDiffOpenTokenRef.current
     const requestedAt = performance.now()
     const terminalInfo = terminalInfos[terminalId]
-    const initialCwd = terminalInfo?.repoRoot || terminalInfo?.cwd || null
+    const persistedCwd = getPersistedTerminalCwd(terminalId)
+    const initialCwd = terminalInfo?.repoRoot || terminalInfo?.cwd || persistedCwd
     debugLog('gitdiff:view:start', {
       terminalId,
       initialCwd,
       repoRoot: terminalInfo?.repoRoot || null,
-      terminalCwd: terminalInfo?.cwd || null
+      terminalCwd: terminalInfo?.cwd || null,
+      persistedCwd
     })
     setGitDiffTerminalId(terminalId)
     setGitDiffOpenRequestedAt(requestedAt)
@@ -918,22 +926,26 @@ export const TerminalGrid = memo(function TerminalGrid({
       if (gitDiffOpenTokenRef.current !== currentToken) return
       const readyAt = performance.now()
       debugLog('gitdiff:view:cwd-ready', { terminalId, terminalCwd, readyAt })
-      setGitDiffCwd(terminalCwd)
+      setGitDiffCwd(terminalCwd || persistedCwd)
       setGitDiffCwdReadyAt(readyAt)
     } catch (error) {
       if (gitDiffOpenTokenRef.current !== currentToken) return
       debugLog('gitdiff:view:cwd-error', { terminalId, error: String(error) })
-      setGitDiffCwd(null)
+      setGitDiffCwd(persistedCwd)
       setGitDiffCwdReadyAt(performance.now())
     } finally {
       if (gitDiffOpenTokenRef.current === currentToken) {
         setGitDiffCwdPending(false)
       }
     }
-  }, [terminalInfos])
+  }, [getPersistedTerminalCwd, terminalInfos])
 
   const handleViewGitHistory = useCallback(async (terminalId: string) => {
-    const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+    const persistedCwd = getPersistedTerminalCwd(terminalId)
+    let terminalCwd = terminalInfos[terminalId]?.cwd || persistedCwd
+    if (!terminalCwd) {
+      terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+    }
     // Resolve to git repo root so the path format matches what getHistory returns
     // (git uses forward slashes; raw terminal CWD on Windows uses backslashes)
     const cwd = terminalCwd
@@ -943,7 +955,7 @@ export const TerminalGrid = memo(function TerminalGrid({
     setGitHistoryCwd(cwd)
     setGitHistoryOpen(true)
     setGitDiffOpen(false)
-  }, [])
+  }, [getPersistedTerminalCwd, terminalInfos])
 
   // Close the Git Diff viewer
   const handleCloseGitDiff = useCallback(() => {
@@ -1072,7 +1084,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   }, [onPersistTerminalCwd, onTerminalFocus])
 
   const handleOpenWorkDir = useCallback(async (terminalId: string) => {
-    let cwd = terminalInfos[terminalId]?.cwd || null
+    let cwd = terminalInfos[terminalId]?.cwd || getPersistedTerminalCwd(terminalId)
     if (!cwd) {
       try {
         cwd = await window.electronAPI.git.getTerminalCwd(terminalId)
@@ -1086,7 +1098,7 @@ export const TerminalGrid = memo(function TerminalGrid({
     if (!result.success && result.error) {
       console.error('Failed to open work directory:', result.error)
     }
-  }, [terminalInfos])
+  }, [getPersistedTerminalCwd, terminalInfos])
 
   useEffect(() => {
     if (hidden || !shortcutAction) return

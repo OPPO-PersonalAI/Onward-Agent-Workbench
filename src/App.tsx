@@ -864,11 +864,19 @@ function AppContent({
       if (!confirmed) return
     }
 
-    const cwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+    const persistedCwd = state.tabs
+      .flatMap((tab) => tab.terminals)
+      .find((terminal) => terminal.id === terminalId)?.lastCwd ?? null
+    let cwd = persistedCwd
+    try {
+      cwd = await window.electronAPI.git.getTerminalCwd(terminalId) || persistedCwd
+    } catch {
+      cwd = persistedCwd
+    }
     setProjectEditorTerminalId(terminalId)
     setProjectEditorCwd(cwd)
     setProjectEditorOpen(true)
-  }, [projectEditorOpen, projectEditorTerminalId, projectEditorDirty, t])
+  }, [projectEditorOpen, projectEditorTerminalId, projectEditorDirty, state.tabs, t])
 
   // Debug profile: Automatically execute ProjectEditor <-> Git Diff loop to facilitate CPU sampling
   useEffect(() => {
