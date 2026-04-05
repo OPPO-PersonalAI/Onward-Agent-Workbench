@@ -22,6 +22,8 @@ import { testProjectEditorRestore } from './test-project-editor-restore'
 import { testProjectEditorRestoreUnit } from './test-project-editor-restore-unit'
 import { testProjectEditorOpenPosition } from './test-project-editor-open-position'
 import { testGitDiffSubdir } from './test-git-diff-subdir'
+import { testGitDiffSubmodules } from './test-git-diff-submodules'
+import { testGitDiffRecursiveSubmodules } from './test-git-diff-recursive-submodules'
 import { testGitCrossPlatform } from './test-git-cross-platform'
 import { testProjectEditorMultiTerminalScope } from './test-project-editor-multi-terminal-scope'
 import { testMarkdownLatexPreview } from './test-markdown-latex-preview'
@@ -307,6 +309,26 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testGitCrossPlatform(ctx)
       collectSuiteResults('GitCrossPlatform', results)
       await ctx.reopenProjectEditor('phase5.4-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('git-diff-submodules')) {
+      log('phase5.45:begin')
+      await ctx.reopenProjectEditor('phase5.45-setup')
+      await sleep(300)
+      const results = await testGitDiffSubmodules(ctx)
+      collectSuiteResults('GitDiffSubmodules', results)
+      await ctx.reopenProjectEditor('phase5.45-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('git-diff-recursive-submodules')) {
+      log('phase5.47:begin')
+      await ctx.reopenProjectEditor('phase5.47-setup')
+      await sleep(300)
+      const results = await testGitDiffRecursiveSubmodules(ctx)
+      collectSuiteResults('GitDiffRecursiveSubmodules', results)
+      await ctx.reopenProjectEditor('phase5.47-cleanup')
       await sleep(500)
     }
 

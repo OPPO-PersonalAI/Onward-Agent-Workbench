@@ -8,7 +8,7 @@ import { DiffEditor } from '@monaco-editor/react'
 import { parseDiffFromFile, SPLIT_WITH_NEWLINES } from '@pierre/diffs'
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from '@pierre/diffs'
 import type * as monacoTypes from 'monaco-editor'
-import type { GitDiffResult, GitFileStatus, GitFileContentResult, GitFileActionResult } from '../../types/electron'
+import type { GitDiffResult, GitFileStatus, GitFileContentResult, GitFileActionResult, GitRepoContext } from '../../types/electron'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
@@ -31,11 +31,17 @@ function debugLog(...args: unknown[]) {
 // local storage key name
 const STORAGE_KEY_FILE_LIST_WIDTH = 'git-diff-file-list-width'
 const STORAGE_KEY_MODAL_SIZE = 'git-diff-modal-size'
+const STORAGE_KEY_DIFF_SPLIT_RATIO = 'git-diff-split-view-ratio'
 
 // File list width limit
 const DEFAULT_FILE_LIST_WIDTH = 280
 const MIN_FILE_LIST_WIDTH = 150
 const MAX_FILE_LIST_WIDTH = 600
+
+const DEFAULT_DIFF_SPLIT_RATIO = 0.5
+const MIN_DIFF_SPLIT_RATIO = 0.1
+const MAX_DIFF_SPLIT_RATIO = 0.9
+const DIFF_SPLIT_RATIO_EPSILON = 0.002
 
 // Pop-up window size limit
 const DEFAULT_MODAL_WIDTH = 1200
@@ -50,7 +56,26 @@ interface GitDiffViewerProps {
   onClose: () => void
   terminalId: string
   cwd: string | null
+  cwdPending?: boolean
+  openRequestedAt?: number | null
+  cwdReadyAt?: number | null
   displayMode?: 'modal' | 'panel'
+}
+
+type GitDiffTimingSnapshot = {
+  openRequestedAt: number | null
+  shellShownAt: number | null
+  cwdReadyAt: number | null
+  diffLoadedAt: number | null
+}
+
+type DiffSplitLayout = {
+  ratio: number
+  originalWidth: number
+  modifiedWidth: number
+  originalLeft: number
+  modifiedLeft: number
+  gap: number
 }
 
 // Status color map
@@ -113,6 +138,7 @@ type RestoredAnchor = {
 type GitDiffDebugApi = {
   isOpen: () => boolean
   getFileList: () => GitFileStatus[]
+  getRepoList: () => GitRepoContext[]
   getSelectedFile: () => {
     filename: string
     originalFilename?: string
@@ -130,6 +156,24 @@ type GitDiffDebugApi = {
   getDiffFontSize: () => number
   getCwd: () => string | null
   getRepoRoot: () => string | null
+  isSubmodulesLoading: () => boolean
+  getTiming: () => {
+    openRequestedAt: number | null
+    shellShownAt: number | null
+    cwdReadyAt: number | null
+    diffLoadedAt: number | null
+    openToShellMs: number | null
+    openToCwdReadyMs: number | null
+    openToDiffLoadedMs: number | null
+    cwdReadyToDiffLoadedMs: number | null
+  }
+  getSplitViewState: () => {
+    ratio: number | null
+    originalWidth: number
+    modifiedWidth: number
+  } | null
+  setSplitViewRatio: (ratio: number) => boolean
+  dragSplitViewRatio: (ratio: number) => Promise<boolean>
   getImagePreviewState: () => {
     isImage: boolean
     isSvg: boolean
@@ -150,6 +194,18 @@ type GitDiffDebugApi = {
   triggerFileAction: (action: 'keep' | 'deny') => Promise<boolean>
 }
 
+function clampDiffSplitRatio(value: number): number {
+  return Math.max(MIN_DIFF_SPLIT_RATIO, Math.min(MAX_DIFF_SPLIT_RATIO, value))
+}
+
+function readStoredDiffSplitRatio(): number {
+  const saved = localStorage.getItem(STORAGE_KEY_DIFF_SPLIT_RATIO)
+  if (!saved) return DEFAULT_DIFF_SPLIT_RATIO
+  const parsed = Number(saved)
+  if (!Number.isFinite(parsed)) return DEFAULT_DIFF_SPLIT_RATIO
+  return clampDiffSplitRatio(parsed)
+}
+
 type LineSelectionInfo =
   | {
     valid: false
@@ -168,6 +224,41 @@ type LineSelectionInfo =
 function buildFileKey(repoRoot: string, file: GitFileStatus): string {
   const original = file.originalFilename ?? ''
   return `${repoRoot}::${file.changeType}::${file.status}::${original}::${file.filename}`
+}
+
+function sortRepoContexts(a: GitRepoContext, b: GitRepoContext): number {
+  if (a.isSubmodule !== b.isSubmodule) {
+    return a.isSubmodule ? 1 : -1
+  }
+  if (a.depth !== b.depth) {
+    return a.depth - b.depth
+  }
+  return a.label.localeCompare(b.label)
+}
+
+function getDiffPaneElement(
+  editor: monacoTypes.editor.IStandaloneDiffEditor,
+  side: 'original' | 'modified'
+): HTMLElement | null {
+  const privateElements = (editor as monacoTypes.editor.IStandaloneDiffEditor & {
+    elements?: Partial<Record<'root' | 'original' | 'modified', HTMLElement>>
+  }).elements
+  const privatePane = privateElements?.[side]
+  if (privatePane instanceof HTMLElement) {
+    return privatePane
+  }
+  const container = editor.getContainerDomNode()
+  const diffRoot = container.classList.contains('monaco-diff-editor')
+    ? container
+    : container.querySelector<HTMLElement>('.monaco-diff-editor')
+  if (!diffRoot) return null
+  for (const child of Array.from(diffRoot.children)) {
+    if (!(child instanceof HTMLElement)) continue
+    if (!child.classList.contains('editor')) continue
+    if (!child.classList.contains(side)) continue
+    return child
+  }
+  return null
 }
 
 const SIGNATURE_SAMPLE_SIZE = 256
@@ -267,6 +358,9 @@ export function GitDiffViewer({
   onClose,
   terminalId,
   cwd,
+  cwdPending = false,
+  openRequestedAt = null,
+  cwdReadyAt = null,
   displayMode = 'modal'
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
@@ -278,6 +372,12 @@ export function GitDiffViewer({
     diffViewBuild: 0
   })
   const perfIntervalRef = useRef<number | null>(null)
+  const timingRef = useRef<GitDiffTimingSnapshot>({
+    openRequestedAt: null,
+    shellShownAt: null,
+    cwdReadyAt: null,
+    diffLoadedAt: null
+  })
   const diffMemoryRef = useRef<Record<string, DiffViewMemory>>({})
   const diffRestoreCycleRef = useRef(0)
   const diffRestoreAppliedRef = useRef<{ cycle: number; fileKey: string | null }>({ cycle: 0, fileKey: null })
@@ -320,6 +420,8 @@ export function GitDiffViewer({
     const saved = localStorage.getItem(STORAGE_KEY_IMAGE_COMPARE_MODE)
     return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
   })
+  const [diffSplitRatio, setDiffSplitRatio] = useState(() => readStoredDiffSplitRatio())
+  const [diffEditorResetNonce] = useState(0)
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
   const [swipePercent, setSwipePercent] = useState(50)
   const swipeContainerRef = useRef<HTMLDivElement | null>(null)
@@ -327,6 +429,8 @@ export function GitDiffViewer({
   const [onionOpacity, setOnionOpacity] = useState(50)
   const diffEditorRef = useRef<monacoTypes.editor.IStandaloneDiffEditor | null>(null)
   const monacoRef = useRef<typeof monacoTypes | null>(null)
+  const diffEditorBindingDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
+  const diffSplitMeasureFrameRef = useRef<number | null>(null)
   const isDraftDirtyRef = useRef(false)
   const originalDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const modifiedDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
@@ -374,6 +478,12 @@ export function GitDiffViewer({
   const canEditFile = editDisabledReason.length === 0
   const canSaveDraft = canEditFile && isDraftDirty && !isSavingEdit
   const hasMultipleRepos = Boolean(diffResult?.repos && diffResult.repos.length > 1)
+  const repoFilterItems = useMemo(() => {
+    const repos = diffResult?.repos ?? []
+    return [...repos]
+      .filter((repo) => repo.changeCount > 0 || repo.loading)
+      .sort(sortRepoContexts)
+  }, [diffResult?.repos])
   const confirmCloseWithDraft = useCallback(() => {
     if (!hasAnyUnsavedDraft) return true
     return window.confirm(t('gitDiff.confirm.closeWithDraft'))
@@ -385,6 +495,15 @@ export function GitDiffViewer({
   const toggleImageCompareMode = useCallback((mode: ImageCompareMode) => {
     setImageCompareMode(mode)
     localStorage.setItem(STORAGE_KEY_IMAGE_COMPARE_MODE, mode)
+  }, [])
+
+  const persistDiffSplitRatio = useCallback((nextRatio: number) => {
+    const normalized = clampDiffSplitRatio(nextRatio)
+    setDiffSplitRatio((prev) => (
+      Math.abs(prev - normalized) <= DIFF_SPLIT_RATIO_EPSILON ? prev : normalized
+    ))
+    localStorage.setItem(STORAGE_KEY_DIFF_SPLIT_RATIO, String(normalized))
+    return normalized
   }, [])
 
   // ---Copy function ---
@@ -560,7 +679,186 @@ export function GitDiffViewer({
     editor.getModifiedEditor().setScrollTop(0)
   }, [])
 
+  const disposeDiffEditorBindings = useCallback(() => {
+    if (diffSplitMeasureFrameRef.current !== null) {
+      window.cancelAnimationFrame(diffSplitMeasureFrameRef.current)
+      diffSplitMeasureFrameRef.current = null
+    }
+    for (const disposable of diffEditorBindingDisposablesRef.current) {
+      try {
+        disposable.dispose()
+      } catch (error) {
+        debugLog('editor:dispose-binding:error', { error: String(error) })
+      }
+    }
+    diffEditorBindingDisposablesRef.current = []
+  }, [])
+
+  const measureDiffSplitState = useCallback((
+    editorOverride?: monacoTypes.editor.IStandaloneDiffEditor | null
+  ): { ratio: number; originalWidth: number; modifiedWidth: number } | null => {
+    const editor = editorOverride ?? diffEditorRef.current
+    if (!editor) return null
+    const originalLayoutWidth = editor.getOriginalEditor().getLayoutInfo().width
+    const modifiedLayoutWidth = editor.getModifiedEditor().getLayoutInfo().width
+    const layoutWidth = originalLayoutWidth + modifiedLayoutWidth
+    if (layoutWidth > 0) {
+      return {
+        ratio: clampDiffSplitRatio(originalLayoutWidth / layoutWidth),
+        originalWidth: Math.max(0, Math.round(originalLayoutWidth)),
+        modifiedWidth: Math.max(0, Math.round(modifiedLayoutWidth))
+      }
+    }
+    const layout = (() => {
+      const privateElements = (editor as monacoTypes.editor.IStandaloneDiffEditor & {
+        elements?: Partial<Record<'root' | 'original' | 'modified', HTMLElement>>
+      }).elements
+      const container = editor.getContainerDomNode()
+      const diffRoot = privateElements?.root ?? (
+        container.classList.contains('monaco-diff-editor')
+          ? container
+          : container.querySelector<HTMLElement>('.monaco-diff-editor')
+      )
+      const originalPane = getDiffPaneElement(editor, 'original')
+      const modifiedPane = getDiffPaneElement(editor, 'modified')
+      if (!diffRoot || !originalPane || !modifiedPane) return null
+      const rootRect = diffRoot.getBoundingClientRect()
+      const originalRect = originalPane.getBoundingClientRect()
+      const modifiedRect = modifiedPane.getBoundingClientRect()
+      const originalWidth = originalRect.width
+      const modifiedWidth = modifiedRect.width
+      const gap = Math.max(0, modifiedRect.left - originalRect.right)
+      const splitLeft = originalWidth + gap
+      const contentWidth = splitLeft + modifiedWidth
+      if (contentWidth <= 0) return null
+      return {
+        ratio: clampDiffSplitRatio(splitLeft / contentWidth),
+        originalWidth,
+        modifiedWidth,
+        originalLeft: Math.max(0, originalRect.left - rootRect.left),
+        modifiedLeft: Math.max(0, modifiedRect.left - rootRect.left),
+        gap
+      } satisfies DiffSplitLayout
+    })()
+    if (!layout) return null
+    return {
+      ratio: layout.ratio,
+      originalWidth: Math.max(0, Math.round(layout.originalWidth)),
+      modifiedWidth: Math.max(0, Math.round(layout.modifiedWidth))
+    }
+  }, [])
+
+  const scheduleDiffSplitMeasurement = useCallback((
+    editorOverride?: monacoTypes.editor.IStandaloneDiffEditor | null
+  ) => {
+    if (diffSplitMeasureFrameRef.current !== null) {
+      window.cancelAnimationFrame(diffSplitMeasureFrameRef.current)
+    }
+    diffSplitMeasureFrameRef.current = window.requestAnimationFrame(() => {
+      diffSplitMeasureFrameRef.current = null
+      const measurement = measureDiffSplitState(editorOverride)
+      if (!measurement) return
+      persistDiffSplitRatio(measurement.ratio)
+    })
+  }, [measureDiffSplitState, persistDiffSplitRatio])
+
+  const persistCurrentDiffSplitRatio = useCallback((
+    editorOverride?: monacoTypes.editor.IStandaloneDiffEditor | null
+  ) => {
+    const measurement = measureDiffSplitState(editorOverride)
+    if (!measurement) return null
+    return persistDiffSplitRatio(measurement.ratio)
+  }, [measureDiffSplitState, persistDiffSplitRatio])
+
+  const dragDiffSplitRatio = useCallback(async (nextRatio: number) => {
+    const editor = diffEditorRef.current
+    if (!editor) return false
+    const container = editor.getContainerDomNode()
+    const diffRoot = container.classList.contains('monaco-diff-editor')
+      ? container
+      : container.querySelector<HTMLElement>('.monaco-diff-editor')
+    const sash = diffRoot?.querySelector<HTMLElement>('.monaco-sash') ?? null
+    const originalPane = getDiffPaneElement(editor, 'original')
+    const modifiedPane = getDiffPaneElement(editor, 'modified')
+    if (!diffRoot || !sash || !originalPane || !modifiedPane) return false
+
+    const originalRect = originalPane.getBoundingClientRect()
+    const modifiedRect = modifiedPane.getBoundingClientRect()
+    const sashRect = sash.getBoundingClientRect()
+    const contentLeft = originalRect.left
+    const contentWidth = modifiedRect.right - originalRect.left
+    if (contentWidth <= 0) return false
+
+    const targetRatio = clampDiffSplitRatio(nextRatio)
+    const startX = sashRect.left + (sashRect.width / 2)
+    const targetX = contentLeft + (contentWidth * targetRatio)
+    const clientY = sashRect.top + (sashRect.height / 2)
+    const waitForFrame = () => new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 16)
+    })
+    const dispatchMouseEvent = (
+      target: EventTarget,
+      type: 'mousedown' | 'mousemove' | 'mouseup',
+      clientX: number
+    ) => {
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        screenX: clientX,
+        screenY: clientY,
+        button: 0,
+        buttons: type === 'mouseup' ? 0 : 1
+      }))
+    }
+    const dispatchPointerEvent = (
+      target: EventTarget,
+      type: 'pointerdown' | 'pointermove' | 'pointerup',
+      clientX: number
+    ) => {
+      if (typeof window.PointerEvent !== 'function') return
+      target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        screenX: clientX,
+        screenY: clientY,
+        button: 0,
+        buttons: type === 'pointerup' ? 0 : 1,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true
+      }))
+    }
+
+    const steps = 8
+    dispatchPointerEvent(sash, 'pointerdown', startX)
+    dispatchMouseEvent(sash, 'mousedown', startX)
+    await waitForFrame()
+
+    for (let step = 1; step <= steps; step += 1) {
+      const nextX = startX + (((targetX - startX) * step) / steps)
+      dispatchPointerEvent(document, 'pointermove', nextX)
+      dispatchMouseEvent(document, 'mousemove', nextX)
+      await waitForFrame()
+    }
+
+    dispatchPointerEvent(document, 'pointerup', targetX)
+    dispatchMouseEvent(document, 'mouseup', targetX)
+    dispatchPointerEvent(window, 'pointerup', targetX)
+    dispatchMouseEvent(window, 'mouseup', targetX)
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 150)
+    })
+
+    const measurement = measureDiffSplitState(editor)
+    return Boolean(measurement && Math.abs(measurement.ratio - targetRatio) <= 0.08)
+  }, [measureDiffSplitState])
+
   const detachDiffEditor = useCallback(() => {
+    disposeDiffEditorBindings()
     const editor = diffEditorRef.current
     if (editor) {
       try {
@@ -588,7 +886,7 @@ export function GitDiffViewer({
     modifiedDecorationsRef.current = null
     diffEditorRef.current = null
     monacoRef.current = null
-  }, [])
+  }, [disposeDiffEditorBindings])
 
   // Load Git Diff data
   const resetViewerState = useCallback(() => {
@@ -605,12 +903,120 @@ export function GitDiffViewer({
     detachDiffEditor()
   }, [detachDiffEditor])
 
+  const applyLoadedDiffResult = useCallback((
+    result: GitDiffResult,
+    sourceCwd: string,
+    previousSelection: GitFileStatus | null
+  ) => {
+    setDiffResult(result)
+    lastDiffRef.current = {
+      cwd: result.cwd || sourceCwd,
+      originalCwd: sourceCwd,
+      at: Date.now(),
+      result
+    }
+
+    const repoRoot = result.cwd || sourceCwd
+    const nextKeys = new Set(result.files.map((file) => buildFileKey(file.repoRoot || repoRoot, file)))
+    const memoryKey = getMemoryKey(repoRoot)
+    const memoryStore = memoryKey
+      ? (diffMemoryRef.current[memoryKey] || {
+        selectedFileKey: null,
+        entries: {}
+      })
+      : {
+        selectedFileKey: null,
+        entries: {}
+      }
+    if (memoryKey) {
+      diffMemoryRef.current[memoryKey] = memoryStore
+    }
+
+    setFileContents((prev) => {
+      const next: Record<string, FileContentState> = {}
+      for (const key of nextKeys) {
+        if (prev[key]) {
+          next[key] = prev[key]
+        }
+      }
+      return next
+    })
+
+    if (result.success && result.files.length > 0) {
+      const memorySelectedKey = memoryStore.selectedFileKey
+      const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
+      const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
+      const memoryMatched = memoryEntry
+        ? result.files.find((file) =>
+          file.filename === memoryEntry.filePath &&
+          (file.originalFilename ?? '') === (memoryEntry.originalFilename ?? '')
+        )
+        : (memorySelectedKey
+          ? result.files.find((file) => buildFileKey(file.repoRoot || repoRoot, file) === memorySelectedKey)
+          : null)
+      const previous = previousSelection
+      const matched = memoryMatched || (previous
+        ? result.files.find((file) => file.filename === previous.filename && file.changeType === previous.changeType)
+        : null)
+      const fallback = (!matched && previous)
+        ? result.files.find((file) => file.filename === previous.filename &&
+          (file.originalFilename ?? '') === (previous.originalFilename ?? ''))
+        : null
+      if ((memorySelectedKey || memoryEntry) && !memoryMatched) {
+        const headerTitle = memoryEntry
+          ? (memoryEntry.originalFilename
+            ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
+            : memoryEntry.filePath)
+          : (previous?.originalFilename && (previous.status === 'R' || previous.status === 'C')
+            ? `${previous.originalFilename} → ${previous.filename}`
+            : (previous?.filename || t('gitDiff.unknownFile')))
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+      } else if (previous && !matched && !fallback) {
+        const headerTitle = previous.originalFilename && (previous.status === 'R' || previous.status === 'C')
+          ? `${previous.originalFilename} → ${previous.filename}`
+          : previous.filename
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+      }
+      setSelectedFile(matched || fallback || result.files[0])
+    } else {
+      setSelectedFile(null)
+      const memorySelectedKey = memoryStore.selectedFileKey
+      const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
+      const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
+      if (!result.submodulesLoading && memoryEntry) {
+        const headerTitle = memoryEntry.originalFilename
+          ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
+          : memoryEntry.filePath
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+      }
+    }
+    if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
+      setRepoFilter(null)
+    }
+  }, [getMemoryKey, repoFilter, t])
+
   const loadDiff = useCallback(async (options?: { reset?: boolean; silent?: boolean; force?: boolean }) => {
     if (DEBUG_GIT_DIFF) {
       perfCountersRef.current.loadDiff += 1
     }
     const previousSelection = lastSelectedFileRef.current || selectedFileRef.current
     if (!cwd) {
+      if (cwdPending) {
+        setDiffResult(null)
+        return
+      }
       setDiffResult({
         success: false,
         cwd: '',
@@ -626,7 +1032,7 @@ export function GitDiffViewer({
       const cached = lastDiffRef.current
       if (cached && (cached.originalCwd === cwd || cached.cwd === cwd)) {
         const age = Date.now() - cached.at
-        if (age < 800) {
+        if (age < 800 && !cached.result.submodulesLoading) {
           debugLog('diff:load:cache', { cwd, age })
           setDiffResult(cached.result)
           return
@@ -661,114 +1067,46 @@ export function GitDiffViewer({
       force: Boolean(options?.force)
     })
     try {
-      const result = await window.electronAPI.git.getDiff(cwd)
+      const stagedLoad = Boolean(options?.reset)
+      const initialScope = stagedLoad ? 'root-only' : 'full'
+      const initialResult = await window.electronAPI.git.getDiff(cwd, { scope: initialScope })
       if (loadTokenRef.current !== currentToken) return
-      setDiffResult(result)
-      lastDiffRef.current = {
-        cwd: result.cwd || cwd,
-        originalCwd: cwd,
-        at: Date.now(),
-        result
-      }
-
-      const repoRoot = result.cwd || cwd
-      const nextKeys = new Set(result.files.map((file) => buildFileKey(file.repoRoot || repoRoot, file)))
-      const memoryKey = getMemoryKey(repoRoot)
-      const memoryStore = memoryKey
-        ? (diffMemoryRef.current[memoryKey] || {
-          selectedFileKey: null,
-          entries: {}
-        })
-        : {
-          selectedFileKey: null,
-          entries: {}
-        }
-      if (memoryKey) {
-        diffMemoryRef.current[memoryKey] = memoryStore
-      }
-
-      // Clean cache that no longer exists
-      setFileContents((prev) => {
-        const next: Record<string, FileContentState> = {}
-        for (const key of nextKeys) {
-          if (prev[key]) {
-            next[key] = prev[key]
-          }
-        }
-        return next
-      })
-
-      // Keep the last selected file (use memory first, then try the last selected file)
-      if (result.success && result.files.length > 0) {
-        const memorySelectedKey = memoryStore.selectedFileKey
-        const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
-        const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
-        const memoryMatched = memoryEntry
-          ? result.files.find((file) =>
-            file.filename === memoryEntry.filePath &&
-            (file.originalFilename ?? '') === (memoryEntry.originalFilename ?? '')
-          )
-          : (memorySelectedKey
-            ? result.files.find((file) => buildFileKey(file.repoRoot || repoRoot, file) === memorySelectedKey)
-            : null)
-        const previous = previousSelection
-        const matched = memoryMatched || (previous
-          ? result.files.find((file) => file.filename === previous.filename && file.changeType === previous.changeType)
-          : null)
-        const fallback = (!matched && previous)
-          ? result.files.find((file) => file.filename === previous.filename &&
-            (file.originalFilename ?? '') === (previous.originalFilename ?? ''))
-          : null
-        if ((memorySelectedKey || memoryEntry) && !memoryMatched) {
-          const headerTitle = memoryEntry
-            ? (memoryEntry.originalFilename
-              ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-              : memoryEntry.filePath)
-            : (previous?.originalFilename && (previous.status === 'R' || previous.status === 'C')
-              ? `${previous.originalFilename} → ${previous.filename}`
-              : (previous?.filename || t('gitDiff.unknownFile')))
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-        } else if (previous && !matched && !fallback) {
-          const headerTitle = previous.originalFilename && (previous.status === 'R' || previous.status === 'C')
-            ? `${previous.originalFilename} → ${previous.filename}`
-            : previous.filename
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-        }
-        setSelectedFile(matched || fallback || result.files[0])
-      } else {
-        setSelectedFile(null)
-        const memorySelectedKey = memoryStore.selectedFileKey
-        const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
-        const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
-        if (memoryEntry) {
-          const headerTitle = memoryEntry.originalFilename
-            ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-            : memoryEntry.filePath
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-        }
-      }
-      if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
-        setRepoFilter(null)
-      }
+      applyLoadedDiffResult(initialResult, cwd, previousSelection)
       debugLog('diff:load:done', {
-        cwd: result.cwd || cwd,
+        cwd: initialResult.cwd || cwd,
         token: currentToken,
-        success: result.success,
-        fileCount: result.files?.length ?? 0,
-        duration: Math.round(performance.now() - start)
+        stage: initialScope,
+        success: initialResult.success,
+        fileCount: initialResult.files?.length ?? 0,
+        duration: Math.round(performance.now() - start),
+        submodulesLoading: Boolean(initialResult.submodulesLoading)
       })
+
+      if (timingRef.current.diffLoadedAt === null) {
+        timingRef.current = {
+          ...timingRef.current,
+          diffLoadedAt: performance.now()
+        }
+      }
+
+      if (stagedLoad && initialResult.success && initialResult.submodulesLoading) {
+        const fullResult = await window.electronAPI.git.getDiff(cwd, { scope: 'full' })
+        if (loadTokenRef.current !== currentToken) return
+        applyLoadedDiffResult(
+          fullResult,
+          cwd,
+          lastSelectedFileRef.current || selectedFileRef.current || previousSelection
+        )
+        debugLog('diff:load:done', {
+          cwd: fullResult.cwd || cwd,
+          token: currentToken,
+          stage: 'full',
+          success: fullResult.success,
+          fileCount: fullResult.files?.length ?? 0,
+          duration: Math.round(performance.now() - start),
+          submodulesLoading: Boolean(fullResult.submodulesLoading)
+        })
+      }
     } catch (error) {
       if (loadTokenRef.current !== currentToken) return
       setDiffResult({
@@ -790,7 +1128,7 @@ export function GitDiffViewer({
         }, 0)
       }
     }
-  }, [cwd, getMemoryKey, resetViewerState, t])
+  }, [applyLoadedDiffResult, cwd, cwdPending, resetViewerState, t])
 
   const loadDiffFromRoot = useCallback(async (rootPath: string) => {
     if (!rootPath) return
@@ -814,9 +1152,24 @@ export function GitDiffViewer({
   // Synchronously clear stale state before paint to prevent old diff flash
   useLayoutEffect(() => {
     if (isOpen) {
+      timingRef.current = {
+        openRequestedAt,
+        shellShownAt: performance.now(),
+        cwdReadyAt,
+        diffLoadedAt: null
+      }
       resetViewerState()
     }
-  }, [isOpen, resetViewerState])
+  }, [cwdReadyAt, isOpen, openRequestedAt, resetViewerState])
+
+  useEffect(() => {
+    if (!isOpen) return
+    timingRef.current = {
+      ...timingRef.current,
+      openRequestedAt,
+      cwdReadyAt
+    }
+  }, [cwdReadyAt, isOpen, openRequestedAt])
 
   // Load data when opening (async, after paint)
   useEffect(() => {
@@ -1101,6 +1454,7 @@ export function GitDiffViewer({
     const nextKey = getFileKey(file)
     const memory = getMemoryStore()
     if (selectedFileKey && nextKey !== selectedFileKey) {
+      persistCurrentDiffSplitRatio()
       captureDiffView(selectedFileKey)
       setDiffRestoreNotice(null)
     }
@@ -1133,7 +1487,7 @@ export function GitDiffViewer({
       memory.selectedFileKey = nextKey
     }
     setSelectedFile(file)
-  }, [captureDiffView, getFileKey, getMemoryStore, isDraftDirty, selectedFileKey, t])
+  }, [captureDiffView, getFileKey, getMemoryStore, isDraftDirty, persistCurrentDiffSplitRatio, selectedFileKey, t])
 
   const clearLineSelection = useCallback(() => {
     setSelectedLineRange(null)
@@ -1291,6 +1645,7 @@ export function GitDiffViewer({
 
   const handleEditorDidMount = useCallback(
     (editor: monacoTypes.editor.IStandaloneDiffEditor, monaco: typeof monacoTypes) => {
+      disposeDiffEditorBindings()
       diffEditorRef.current = editor
       monacoRef.current = monaco
       // Reset decoration refs (the old editor was destroyed, the old collection is no longer valid)
@@ -1301,10 +1656,10 @@ export function GitDiffViewer({
       const modifiedEditor = editor.getModifiedEditor()
 
       // Monitor content changes in the editor on the right (direct editing, automatic draft maintenance)
-      modifiedEditor.onDidChangeModelContent(() => {
+      diffEditorBindingDisposablesRef.current.push(modifiedEditor.onDidChangeModelContent(() => {
         const value = modifiedEditor.getValue()
         handleDraftChange(value)
-      })
+      }))
 
       // Auxiliary: Convert editor selection to row selection range
       const handleCursorSelection = (
@@ -1376,19 +1731,19 @@ export function GitDiffViewer({
       }
 
       // Register selection changes for the original editor (left = deletions)
-      originalEditor.onDidChangeCursorSelection((e) => {
+      diffEditorBindingDisposablesRef.current.push(originalEditor.onDidChangeCursorSelection((e) => {
         if (e.reason === monaco.editor.CursorChangeReason.RecoverFromMarkers) return
         handleCursorSelection('deletions', e.selection)
-      })
+      }))
 
       // Register selection changes in the modification editor (right = additions)
-      modifiedEditor.onDidChangeCursorSelection((e) => {
+      diffEditorBindingDisposablesRef.current.push(modifiedEditor.onDidChangeCursorSelection((e) => {
         if (e.reason === monaco.editor.CursorChangeReason.RecoverFromMarkers) return
         handleCursorSelection('additions', e.selection)
-      })
+      }))
 
       // Scroll capture (replacing DOM scroll monitoring)
-      modifiedEditor.onDidScrollChange(() => {
+      diffEditorBindingDisposablesRef.current.push(modifiedEditor.onDidScrollChange(() => {
         if (suppressScrollCaptureRef.current) return
         if (diffScrollCaptureTimerRef.current) {
           window.clearTimeout(diffScrollCaptureTimerRef.current)
@@ -1428,10 +1783,23 @@ export function GitDiffViewer({
             debugLog('capture:scroll', { fileKey: currentFileKey, line: firstLine, scrollTop: st })
           }
         }, 120)
+      }))
+
+      const handlePointerRelease = () => {
+        scheduleDiffSplitMeasurement(editor)
+      }
+      window.addEventListener('mouseup', handlePointerRelease)
+      window.addEventListener('pointerup', handlePointerRelease)
+      diffEditorBindingDisposablesRef.current.push({
+        dispose: () => {
+          window.removeEventListener('mouseup', handlePointerRelease)
+          window.removeEventListener('pointerup', handlePointerRelease)
+        }
       })
+
       scheduleDiffRestore(editor)
     },
-    [handleDraftChange, scheduleDiffRestore]
+    [disposeDiffEditorBindings, handleDraftChange, scheduleDiffRestore, scheduleDiffSplitMeasurement]
   )
 
   useEffect(() => {
@@ -1441,6 +1809,12 @@ export function GitDiffViewer({
     if (!editor) return
     scheduleDiffRestore(editor)
   }, [isOpen, scheduleDiffRestore, selectedFileKey, selectedFileState])
+
+  useEffect(() => {
+    return () => {
+      disposeDiffEditorBindings()
+    }
+  }, [disposeDiffEditorBindings])
 
   const showEditMessage = useCallback((msg: { type: 'success' | 'error'; text: string }) => {
     setEditMessage(msg)
@@ -1580,11 +1954,12 @@ export function GitDiffViewer({
   const requestClose = useCallback(() => {
     if (!isOpen) return
     if (!confirmCloseWithDraft()) return
+    persistCurrentDiffSplitRatio()
     captureDiffView()
     detachDiffEditor()
     setDiffRestoreNotice(null)
     onClose()
-  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, isOpen, onClose])
+  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, isOpen, onClose, persistCurrentDiffSplitRatio])
 
   useEffect(() => {
     const handleCloseEvent = (event: Event) => {
@@ -1603,12 +1978,13 @@ export function GitDiffViewer({
   const handleOpenHistory = useCallback(() => {
     if (!terminalId) return
     if (!confirmCloseWithDraft()) return
+    persistCurrentDiffSplitRatio()
     captureDiffView()
     detachDiffEditor()
     setDiffRestoreNotice(null)
     onClose()
     window.dispatchEvent(new CustomEvent('git-history:open', { detail: { terminalId } }))
-  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, onClose, terminalId])
+  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, onClose, persistCurrentDiffSplitRatio, terminalId])
 
   useSubpageEscape({ isOpen, onEscape: requestClose })
   const lineSelectionInfo = useMemo<LineSelectionInfo | null>(() => {
@@ -1789,6 +2165,9 @@ export function GitDiffViewer({
   const diffFontSize = getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
   const diffEditorOptions = useMemo(() => ({
     renderSideBySide: true,
+    useInlineViewWhenSpaceIsLimited: false,
+    enableSplitViewResizing: true,
+    splitViewDefaultRatio: diffSplitRatio,
     readOnly: !canEditFile,
     originalEditable: false,
     minimap: { enabled: false },
@@ -1804,13 +2183,14 @@ export function GitDiffViewer({
       contextLineCount: 3,
       revealLineCount: 20
     }
-  }), [diffFontSize, canEditFile])
+  }), [diffFontSize, canEditFile, diffSplitRatio])
 
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
     const api: GitDiffDebugApi = {
       isOpen: () => isOpen,
       getFileList: () => diffResult?.files ?? [],
+      getRepoList: () => diffResult?.repos ?? [],
       getSelectedFile: () => (selectedFile ? {
         filename: selectedFile.filename,
         originalFilename: selectedFile.originalFilename,
@@ -1886,8 +2266,40 @@ export function GitDiffViewer({
         return true
       },
       getDiffFontSize: () => getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE,
-      getCwd: () => cwd,
+      getCwd: () => activeCwd || null,
       getRepoRoot: () => diffResult?.cwd || null,
+      isSubmodulesLoading: () => Boolean(diffResult?.submodulesLoading),
+      getTiming: () => {
+        const timing = timingRef.current
+        return {
+          openRequestedAt: timing.openRequestedAt,
+          shellShownAt: timing.shellShownAt,
+          cwdReadyAt: timing.cwdReadyAt,
+          diffLoadedAt: timing.diffLoadedAt,
+          openToShellMs: timing.openRequestedAt !== null && timing.shellShownAt !== null
+            ? Math.round(timing.shellShownAt - timing.openRequestedAt)
+            : null,
+          openToCwdReadyMs: timing.openRequestedAt !== null && timing.cwdReadyAt !== null
+            ? Math.round(timing.cwdReadyAt - timing.openRequestedAt)
+            : null,
+          openToDiffLoadedMs: timing.openRequestedAt !== null && timing.diffLoadedAt !== null
+            ? Math.round(timing.diffLoadedAt - timing.openRequestedAt)
+            : null,
+          cwdReadyToDiffLoadedMs: timing.cwdReadyAt !== null && timing.diffLoadedAt !== null
+            ? Math.round(timing.diffLoadedAt - timing.cwdReadyAt)
+            : null
+        }
+      },
+      getSplitViewState: () => measureDiffSplitState(),
+      setSplitViewRatio: (ratio: number) => {
+        if (!Number.isFinite(ratio)) return false
+        const editor = diffEditorRef.current
+        if (!editor) return false
+        const normalized = persistDiffSplitRatio(ratio)
+        editor.updateOptions({ splitViewDefaultRatio: normalized })
+        return true
+      },
+      dragSplitViewRatio: async (ratio: number) => dragDiffSplitRatio(ratio),
       getImagePreviewState: () => {
         const key = selectedFileKey
         if (!key) return null
@@ -1931,10 +2343,11 @@ export function GitDiffViewer({
       }
     }
   }, [
-    captureDiffView,
-    cwd,
+    activeCwd,
     diffRestoreNotice,
     diffResult,
+    dragDiffSplitRatio,
+    measureDiffSplitState,
     handleDeny,
     handleFileSelect,
     handleKeep,
@@ -1945,6 +2358,7 @@ export function GitDiffViewer({
     isOpen,
     canShowFileActionPanel,
     canShowLineActionPanel,
+    persistDiffSplitRatio,
     selectedFile,
     selectedFileKey,
     selectedFileState,
@@ -2033,11 +2447,11 @@ export function GitDiffViewer({
         options={diffEditorOptions}
         onMount={handleEditorDidMount}
         className="git-diff-monaco"
-        key={selectedFileKey || 'empty'}
+        key={`${selectedFileKey || 'empty'}::${diffEditorResetNonce}`}
         height="100%"
       />
     )
-  }, [selectedFile, selectedFileState, language, diffEditorOptions, effectiveModifiedContent, handleEditorDidMount, modifiedModelPath, originalModelPath])
+  }, [selectedFile, selectedFileState, language, diffEditorOptions, effectiveModifiedContent, handleEditorDidMount, modifiedModelPath, originalModelPath, selectedFileKey, diffEditorResetNonce])
 
   const fileGroups = useMemo(() => {
     const groups: Record<GitFileStatus['changeType'], GitFileStatus[]> = {
@@ -2295,7 +2709,7 @@ export function GitDiffViewer({
     return (
       <div className="git-diff-editor-container">
         <DiffEditor
-          key={`svg-text-${selectedFileKey || 'empty'}`}
+          key={`svg-text-${selectedFileKey || 'empty'}::${diffEditorResetNonce}`}
           original={fileState.originalContent}
           modified={effectiveModifiedContent}
           language="xml"
@@ -2307,7 +2721,7 @@ export function GitDiffViewer({
         />
       </div>
     )
-  }, [diffEditorOptions, effectiveModifiedContent, handleEditorDidMount, selectedFileKey])
+  }, [diffEditorOptions, effectiveModifiedContent, handleEditorDidMount, selectedFileKey, diffEditorResetNonce])
 
   const renderImagePreview = useCallback((fileState: FileContentState, file: GitFileStatus) => {
     const isAdded = file.status === 'A' || file.status === '?'
@@ -2331,7 +2745,7 @@ export function GitDiffViewer({
             </span>
             <div className="git-diff-image-mode-toggle">
               <button
-                className={`git-diff-image-mode-btn ${svgViewMode === 'visual' ? 'active' : ''}`}
+                className="git-diff-image-mode-btn"
                 onClick={() => setSvgViewMode('visual')}
               >
                 {t('gitDiff.image.view.visual')}
@@ -2704,15 +3118,64 @@ export function GitDiffViewer({
     )
   }
 
+  const renderLoadingShell = (message: string, repoContexts?: GitRepoContext[]) => {
+    const loadingRepos = [...(repoContexts ?? [])]
+      .filter((repo) => repo.isSubmodule || repo.loading)
+      .sort(sortRepoContexts)
+
+    return (
+      <div className="git-diff-main git-diff-main-loading">
+        <div className="git-diff-file-list" style={{ width: fileListWidth }}>
+          {loadingRepos.length > 0 && (
+            <div className="git-diff-repo-filter">
+              <div className="git-diff-repo-filter-item active loading">
+                <span className="git-diff-repo-filter-label">{t('gitDiff.repo.all')}</span>
+                <span className="git-diff-repo-filter-count loading">...</span>
+              </div>
+              {loadingRepos.map((repo) => (
+                <div
+                  key={repo.root}
+                  className="git-diff-repo-filter-item loading"
+                  title={repo.root}
+                >
+                  <span className="git-diff-repo-filter-label">{repo.label}</span>
+                  <span className="git-diff-repo-filter-count loading">...</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="git-diff-file-list-header">
+            {t('gitDiff.fileList', { count: 0 })}
+          </div>
+          <div className="git-diff-file-list-content git-diff-file-list-content-loading">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div
+                key={`git-diff-skeleton-${index}`}
+                className={`git-diff-file-skeleton${index % 3 === 0 ? ' short' : index % 3 === 1 ? ' medium' : ''}`}
+              >
+                <span className="git-diff-file-skeleton-status" />
+                <span className="git-diff-file-skeleton-line" />
+                <span className="git-diff-file-skeleton-stats" />
+              </div>
+            ))}
+          </div>
+          <div className="git-diff-resizer" />
+        </div>
+
+        <div className="git-diff-detail git-diff-detail-loading">
+          <div className="git-diff-loading">
+            <div className="git-diff-spinner" />
+            <span>{message}</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // Main content rendering
   const renderContent = () => {
     if (!diffResult) {
-      return (
-        <div className="git-diff-loading">
-          <div className="git-diff-spinner" />
-          <span>{t('gitDiff.loading')}</span>
-        </div>
-      )
+      return renderLoadingShell(t('gitDiff.loading'))
     }
 
     if (!diffResult.gitInstalled) {
@@ -2721,6 +3184,10 @@ export function GitDiffViewer({
 
     if (!diffResult.isGitRepo) {
       return renderNotGitRepo()
+    }
+
+    if (diffResult.success && diffResult.files.length === 0 && diffResult.submodulesLoading) {
+      return renderLoadingShell(t('gitDiff.loadingSubmodules'), diffResult.repos)
     }
 
     if (!diffResult.success || diffResult.files.length === 0) {
@@ -2745,6 +3212,12 @@ export function GitDiffViewer({
               <span style={{ color: 'var(--accent)', cursor: 'pointer' }}>{t('gitDiff.repo.viewParent')}</span>
             </div>
           )}
+          {diffResult.submodulesLoading && (
+            <div className="git-diff-loading" style={{ minHeight: 'auto', justifyContent: 'flex-start', padding: '8px 12px', gap: '8px' }}>
+              <div className="git-diff-spinner" />
+              <span>{t('gitDiff.loadingSubmodules')}</span>
+            </div>
+          )}
           {hasMultipleRepos && diffResult.repos && (
             <div className="git-diff-repo-filter">
               <div
@@ -2754,20 +3227,26 @@ export function GitDiffViewer({
                 <span className="git-diff-repo-filter-label">{t('gitDiff.repo.all')}</span>
                 <span className="git-diff-repo-filter-count">{diffResult.files.length}</span>
               </div>
-              {diffResult.repos
-                .filter((repo) => repo.changeCount > 0)
-                .sort((a, b) => a.label.localeCompare(b.label))
-                .map((repo) => (
+              {repoFilterItems.map((repo) => {
+                const canSelectRepo = !repo.loading && repo.changeCount > 0
+                return (
                   <div
                     key={repo.root}
-                    className={`git-diff-repo-filter-item${repoFilter === repo.root ? ' active' : ''}`}
-                    onClick={() => setRepoFilter(repo.root)}
+                    className={`git-diff-repo-filter-item${repoFilter === repo.root ? ' active' : ''}${repo.loading ? ' loading' : ''}`}
+                    onClick={() => {
+                      if (canSelectRepo) {
+                        setRepoFilter(repo.root)
+                      }
+                    }}
                     title={repo.root}
                   >
                     <span className="git-diff-repo-filter-label">{repo.label}</span>
-                    <span className="git-diff-repo-filter-count">{repo.changeCount}</span>
+                    <span className={`git-diff-repo-filter-count${repo.loading ? ' loading' : ''}`}>
+                      {repo.loading ? '...' : repo.changeCount}
+                    </span>
                   </div>
-                ))}
+                )
+              })}
             </div>
           )}
           <div className="git-diff-file-list-header">
@@ -2848,6 +3327,7 @@ export function GitDiffViewer({
   const overlayClassName = `git-diff-overlay ${isPanel ? 'panel' : ''}`
   const modalClassName = `git-diff-modal ${isPanel ? 'panel' : ''}`
   const modalStyle = isPanel ? { width: '100%', height: '100%' } : { width: modalSize.width, height: modalSize.height }
+  const displayedCwd = diffResult?.cwd || (!cwdPending ? cwd : null)
 
   if (!isOpen) return null
 
@@ -2886,10 +3366,10 @@ export function GitDiffViewer({
         </div>
 
         {/* working directory */}
-        {diffResult?.cwd && diffResult.isGitRepo && (
+        {displayedCwd && (!diffResult || diffResult.isGitRepo) && (
           <div className="git-diff-cwd-bar">
             <span className="git-diff-cwd-label">{t('gitDiff.workingDirectory')}</span>
-            <span className="git-diff-cwd-path">{diffResult.cwd}</span>
+            <span className="git-diff-cwd-path">{displayedCwd}</span>
           </div>
         )}
 

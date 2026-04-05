@@ -65,3 +65,20 @@
 - **Problem**: The first revision looked logically correct against the review comments, but it still broke a real user edge case that combined Prompt, manual Settings opening, and task-switch shortcuts.
 - **Cause**: The implementation was optimized around inferred state transitions instead of replaying the exact UI sequence the user would perform. That missed a behavior regression in a neighboring path.
 - **Lesson**: For UI state fixes, convert the user report into a concrete step-by-step scenario and verify the implementation against that scenario before treating the change as complete. Review comments are useful signals, but they do not replace end-user flow validation.
+
+## 2026-04-05: Git Diff split-view persistence must follow the real drag path
+
+### 1. Do not treat preference writes as proof that the UI interaction works
+- **Problem**: The first attempt claimed the Git Diff split width was "remembered" because the code wrote a ratio into `localStorage`, but the user could still drag the sash manually and see no persistence after re-entering Git Diff.
+- **Cause**: The validation path only proved that a stored value existed. It did not prove that the manual sash drag path updated that value, nor that reopening Git Diff restored the same visual ratio.
+- **Lesson**: For UI persistence bugs, test the exact user path end to end: drag the real control, leave the page, reopen it, and compare the restored layout against the stored value. A stored preference alone is not an acceptance signal.
+
+### 2. Prefer editor layout APIs over DOM guessing for third-party UI state
+- **Problem**: Split-width measurement sometimes returned obviously wrong values such as `5px / 5px`, which made the stored ratio meaningless and caused false confidence during debugging.
+- **Cause**: The implementation relied on DOM structure and private editor elements that were unstable across render states. Hidden or not-yet-laid-out editors could still satisfy the selector but report garbage geometry.
+- **Lesson**: When reading layout state from Monaco or similar editors, prefer public APIs such as `getLayoutInfo()` first, and use DOM probing only as a fallback. The persistence pipeline is only as good as the measurement source.
+
+### 3. Remove experimental self-healing logic before trusting packaged validation
+- **Problem**: The intermediate implementation mixed real persistence with simulated drag-on-mount behavior and dangling references from earlier experiments. That made the code harder to reason about and increased the chance of renderer regressions.
+- **Cause**: The debugging flow tried to "force" the UI into the desired state instead of first fixing the measurement and persistence chain. Experimental scaffolding remained in the packaged app path for too long.
+- **Lesson**: When a UI fix starts accumulating simulated interactions or recovery hacks, stop and simplify. Fix the state source, delete experimental code paths, then rebuild and rerun the packaged end-to-end suite before reporting success.

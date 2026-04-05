@@ -983,8 +983,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
 
   // Get Git diff for a directory
-  ipcMain.handle('git:get-diff', async (_, cwd: string) => {
-    return await getGitDiff(cwd)
+  ipcMain.handle('git:get-diff', async (_, cwd: string, options?: { scope?: 'root-only' | 'full' }) => {
+    return await getGitDiff(cwd, options)
   })
 
   // Get Git history list

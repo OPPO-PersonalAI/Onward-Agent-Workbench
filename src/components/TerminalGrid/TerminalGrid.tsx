@@ -56,6 +56,7 @@ interface TerminalGridProps {
 
 interface TerminalGitInfo {
   cwd: string | null
+  repoRoot: string | null
   branch: string | null
   repoName: string | null
   status: 'clean' | 'modified' | 'added' | 'unknown' | null
@@ -121,6 +122,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [gitDiffOpen, setGitDiffOpen] = useState(false)
   const [gitDiffTerminalId, setGitDiffTerminalId] = useState<string | null>(null)
   const [gitDiffCwd, setGitDiffCwd] = useState<string | null>(null)
+  const [gitDiffCwdPending, setGitDiffCwdPending] = useState(false)
+  const [gitDiffOpenRequestedAt, setGitDiffOpenRequestedAt] = useState<number | null>(null)
+  const [gitDiffCwdReadyAt, setGitDiffCwdReadyAt] = useState<number | null>(null)
   const [gitHistoryOpen, setGitHistoryOpen] = useState(false)
   const [gitHistoryTerminalId, setGitHistoryTerminalId] = useState<string | null>(null)
   const [gitHistoryCwd, setGitHistoryCwd] = useState<string | null>(null)
@@ -133,6 +137,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [copyNotice, setCopyNotice] = useState<{ terminalId: string; message: string } | null>(null)
   const copyNoticeTimerRef = useRef<number | null>(null)
   const lastShortcutTokenRef = useRef<number | null>(null)
+  const gitDiffOpenTokenRef = useRef(0)
   const [terminalStatuses, setTerminalStatuses] = useState<Record<string, TerminalSessionStatus>>({})
   const globalOverlayActive = gitDiffOpen || gitHistoryOpen || projectEditorOpen
   const [browserOpenTerminals, setBrowserOpenTerminals] = useState<Set<string>>(new Set())
@@ -350,6 +355,7 @@ export const TerminalGrid = memo(function TerminalGrid({
       const current = prev[terminalId]
       if (
         current?.cwd === info.cwd &&
+        current?.repoRoot === info.repoRoot &&
         current?.branch === info.branch &&
         current?.repoName === info.repoName &&
         current?.status === info.status
@@ -886,19 +892,45 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [editingId])
 
-  // View Git Diff — always opens from the Git repository root
+  // View Git Diff — open the shell immediately, then resolve the best cwd for diff loading
   const handleViewGitDiff = useCallback(async (terminalId: string) => {
-    const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
-    // Resolve to the root directory of the Git repository to ensure that diff is always executed in the root directory
-    const cwd = terminalCwd
-      ? await window.electronAPI.git.resolveRepoRoot(terminalCwd)
-      : terminalCwd
-    debugLog('gitdiff:view', { terminalId, terminalCwd, cwd })
+    const currentToken = ++gitDiffOpenTokenRef.current
+    const requestedAt = performance.now()
+    const terminalInfo = terminalInfos[terminalId]
+    const initialCwd = terminalInfo?.repoRoot || terminalInfo?.cwd || null
+    debugLog('gitdiff:view:start', {
+      terminalId,
+      initialCwd,
+      repoRoot: terminalInfo?.repoRoot || null,
+      terminalCwd: terminalInfo?.cwd || null
+    })
     setGitDiffTerminalId(terminalId)
-    setGitDiffCwd(cwd)
+    setGitDiffOpenRequestedAt(requestedAt)
+    setGitDiffCwdReadyAt(initialCwd ? requestedAt : null)
+    setGitDiffCwd(initialCwd)
+    setGitDiffCwdPending(!initialCwd)
     setGitDiffOpen(true)
     setGitHistoryOpen(false)
-  }, [])
+    if (initialCwd) return
+
+    try {
+      const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+      if (gitDiffOpenTokenRef.current !== currentToken) return
+      const readyAt = performance.now()
+      debugLog('gitdiff:view:cwd-ready', { terminalId, terminalCwd, readyAt })
+      setGitDiffCwd(terminalCwd)
+      setGitDiffCwdReadyAt(readyAt)
+    } catch (error) {
+      if (gitDiffOpenTokenRef.current !== currentToken) return
+      debugLog('gitdiff:view:cwd-error', { terminalId, error: String(error) })
+      setGitDiffCwd(null)
+      setGitDiffCwdReadyAt(performance.now())
+    } finally {
+      if (gitDiffOpenTokenRef.current === currentToken) {
+        setGitDiffCwdPending(false)
+      }
+    }
+  }, [terminalInfos])
 
   const handleViewGitHistory = useCallback(async (terminalId: string) => {
     const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
@@ -916,10 +948,14 @@ export const TerminalGrid = memo(function TerminalGrid({
   // Close the Git Diff viewer
   const handleCloseGitDiff = useCallback(() => {
     debugLog('gitdiff:close')
+    gitDiffOpenTokenRef.current += 1
     const openedFrom = gitDiffTerminalId
     setGitDiffOpen(false)
     setGitDiffTerminalId(null)
     setGitDiffCwd(null)
+    setGitDiffCwdPending(false)
+    setGitDiffOpenRequestedAt(null)
+    setGitDiffCwdReadyAt(null)
     // Restore focus to the terminal that opened the diff viewer
     requestAnimationFrame(() => {
       const tid = openedFrom ?? activeTerminalIdRef.current
@@ -1271,6 +1307,9 @@ export const TerminalGrid = memo(function TerminalGrid({
           onClose={handleCloseGitDiff}
           terminalId={gitDiffTerminalId || ''}
           cwd={gitDiffCwd}
+          cwdPending={gitDiffCwdPending}
+          openRequestedAt={gitDiffOpenRequestedAt}
+          cwdReadyAt={gitDiffCwdReadyAt}
           displayMode="panel"
         />
       )}
