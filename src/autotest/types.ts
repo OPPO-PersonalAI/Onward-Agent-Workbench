@@ -38,6 +38,13 @@ export interface GitDiffDebugApi {
     openToDiffLoadedMs: number | null
     cwdReadyToDiffLoadedMs: number | null
   }
+  getSplitViewState?: () => {
+    ratio: number | null
+    originalWidth: number
+    modifiedWidth: number
+  } | null
+  setSplitViewRatio?: (ratio: number) => boolean
+  dragSplitViewRatio?: (ratio: number) => Promise<boolean>
   getImagePreviewState?: () => {
     isImage: boolean
     isSvg: boolean
