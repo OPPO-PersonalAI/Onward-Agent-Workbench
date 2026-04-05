@@ -12,8 +12,9 @@ import { NumberInput } from './NumberInput'
 import { ThemeSelector } from './ThemeSelector'
 import { DEFAULT_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE } from '../../constants/terminal'
 import { DEFAULT_GIT_DIFF_FONT_SIZE, MIN_GIT_DIFF_FONT_SIZE, MAX_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
+import type { SettingsDebugApi } from '../../autotest/types'
 import type { ShortcutConfig, TerminalStyleConfig, GlobalTerminalStyle } from '../../types/settings'
-import type { AppInfo, UpdaterStatus } from '../../types/electron.d.ts'
+import type { AppInfo, UpdatePhase, UpdaterStatus } from '../../types/electron.d.ts'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
 import './Settings.css'
@@ -84,6 +85,60 @@ const SHORTCUT_GROUPS: { titleKey: TranslationKey; descriptionKey?: TranslationK
   }
 ]
 
+interface UpdaterDebugPatch extends Partial<UpdaterStatus> {
+  phase: UpdatePhase
+}
+
+interface MockCheckResult {
+  delayMs: number
+  patch: UpdaterDebugPatch
+}
+
+interface MockRestartResult {
+  delayMs: number
+  success: boolean
+  error?: string
+}
+
+const DEFAULT_MOCK_ACTION_DELAY_MS = 180
+
+function resolveFallbackReleaseOs(platform: string): AppInfo['releaseOs'] {
+  switch (platform) {
+    case 'darwin':
+      return 'macos'
+    case 'win32':
+      return 'windows'
+    case 'linux':
+      return 'linux'
+    default:
+      return 'unknown'
+  }
+}
+
+function createFallbackUpdaterStatus(appInfo: AppInfo | null, platform: string): UpdaterStatus {
+  return {
+    phase: appInfo?.isPackaged ? 'idle' : 'unsupported',
+    supported: false,
+    currentVersion: appInfo?.version ?? '0.0.0',
+    currentTag: appInfo?.tag ?? null,
+    currentChannel: appInfo?.releaseChannel ?? 'unknown',
+    currentReleaseOs: appInfo?.releaseOs ?? resolveFallbackReleaseOs(platform),
+    targetVersion: null,
+    targetTag: null,
+    downloadedFileName: null,
+    lastCheckedAt: null,
+    error: null,
+    bannerDismissed: false
+  }
+}
+
+function summarizeUpdateError(error: string | null | undefined): string | null {
+  if (!error) return null
+  const normalized = error.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= 120) return normalized
+  return `${normalized.slice(0, 117)}...`
+}
+
 export function Settings({ terminals, onClose, width, onWidthChange }: SettingsProps) {
   const {
     settings,
@@ -93,25 +148,27 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     applyStyleGlobally
   } = useSettings()
   const { t, locale, locales, updateLanguage } = useI18n()
+  const isAutotest = window.electronAPI.debug.autotest
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null)
+  const [debugUpdaterStatus, setDebugUpdaterStatus] = useState<UpdaterStatus | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false)
+  const [isRestartingForUpdate, setIsRestartingForUpdate] = useState(false)
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(
     terminals[0]?.id || ''
   )
   const [isDragging, setIsDragging] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
-  const currentChannelKey: TranslationKey = (() => {
-    switch (appInfo?.releaseChannel) {
-      case 'stable':
-        return 'settings.update.channel.stable'
-      case 'daily':
-        return 'settings.update.channel.daily'
-      default:
-        return 'settings.update.channel.unavailable'
-    }
-  })()
+  const updateActionButtonRef = useRef<HTMLButtonElement>(null)
+  const debugActionCountsRef = useRef({ checkNow: 0, restartToUpdate: 0 })
+  const debugNextCheckResultRef = useRef<MockCheckResult | null>(null)
+  const debugNextRestartResultRef = useRef<MockRestartResult | null>(null)
+  const debugCheckTimerRef = useRef<number | null>(null)
+  const debugRestartTimerRef = useRef<number | null>(null)
+  const effectiveUpdaterStatus = debugUpdaterStatus ?? updaterStatus
   const updateStatusKey: TranslationKey = (() => {
-    switch (updaterStatus?.phase) {
+    switch (effectiveUpdaterStatus?.phase) {
       case 'checking':
         return 'settings.update.statusValue.checking'
       case 'downloading':
@@ -128,9 +185,29 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         return 'settings.update.statusValue.idle'
     }
   })()
-  const autoUpdateEnabledKey: TranslationKey = updaterStatus?.supported
-    ? 'settings.update.enabled'
-    : 'settings.update.disabled'
+  const updateActionKey: TranslationKey = (() => {
+    if (isRestartingForUpdate) {
+      return 'settings.update.action.restarting'
+    }
+    if (isCheckingForUpdate || effectiveUpdaterStatus?.phase === 'checking') {
+      return 'settings.update.action.checking'
+    }
+    switch (effectiveUpdaterStatus?.phase) {
+      case 'downloading':
+        return 'settings.update.action.downloading'
+      case 'downloaded':
+        return 'settings.update.action.restart'
+      default:
+        return 'settings.update.action.checkNow'
+    }
+  })()
+  const isUpdateActionDisabled =
+    !effectiveUpdaterStatus ||
+    effectiveUpdaterStatus.phase === 'unsupported' ||
+    effectiveUpdaterStatus.phase === 'checking' ||
+    effectiveUpdaterStatus.phase === 'downloading' ||
+    isCheckingForUpdate ||
+    isRestartingForUpdate
 
   // Get the style of the currently selected terminal
   const currentTerminalStyle = useMemo(() => {
@@ -174,6 +251,179 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     updateLanguage(e.target.value as typeof locale)
   }, [updateLanguage])
 
+  const formatUpdateTimestamp = useCallback((value: number) => {
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(value)
+  }, [locale])
+
+  const updateDetailText = useMemo(() => {
+    const summarizedActionError = summarizeUpdateError(actionError)
+    if (summarizedActionError) {
+      return t('settings.update.detail.error', { error: summarizedActionError })
+    }
+    if (!effectiveUpdaterStatus) return null
+
+    const summarizedStatusError = summarizeUpdateError(effectiveUpdaterStatus.error)
+    if (effectiveUpdaterStatus.phase === 'error' && summarizedStatusError) {
+      return t('settings.update.detail.error', { error: summarizedStatusError })
+    }
+    if (
+      (effectiveUpdaterStatus.phase === 'downloading' || effectiveUpdaterStatus.phase === 'downloaded') &&
+      effectiveUpdaterStatus.targetVersion
+    ) {
+      return t('settings.update.detail.targetVersion', { version: effectiveUpdaterStatus.targetVersion })
+    }
+    if (effectiveUpdaterStatus.phase === 'unsupported') {
+      return t('settings.update.detail.unsupported')
+    }
+    if (effectiveUpdaterStatus.lastCheckedAt) {
+      return t('settings.update.detail.lastChecked', {
+        time: formatUpdateTimestamp(effectiveUpdaterStatus.lastCheckedAt)
+      })
+    }
+    return null
+  }, [actionError, effectiveUpdaterStatus, formatUpdateTimestamp, t])
+  const targetChannelValue = appInfo?.releaseChannel === 'stable' ? 'stable' : 'daily'
+  const isUpdateDetailError = Boolean(actionError) || effectiveUpdaterStatus?.phase === 'error'
+  const updateStatusLabel = t(updateStatusKey)
+  const updateActionLabel = t(updateActionKey)
+
+  const clearPendingTimer = (timerRef: React.MutableRefObject<number | null>) => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }
+
+  const buildUpdaterStatus = useCallback((patch: UpdaterDebugPatch): UpdaterStatus => {
+    const base =
+      debugUpdaterStatus ??
+      updaterStatus ??
+      createFallbackUpdaterStatus(appInfo, window.electronAPI.platform)
+    return {
+      ...base,
+      ...patch
+    }
+  }, [appInfo, debugUpdaterStatus, updaterStatus])
+
+  const resetMockUpdater = useCallback(() => {
+    clearPendingTimer(debugCheckTimerRef)
+    clearPendingTimer(debugRestartTimerRef)
+    debugActionCountsRef.current = { checkNow: 0, restartToUpdate: 0 }
+    debugNextCheckResultRef.current = null
+    debugNextRestartResultRef.current = null
+    setDebugUpdaterStatus(null)
+    setActionError(null)
+    setIsCheckingForUpdate(false)
+    setIsRestartingForUpdate(false)
+    return true
+  }, [])
+
+  const handleCheckNow = useCallback(async () => {
+    if (!effectiveUpdaterStatus || isUpdateActionDisabled || effectiveUpdaterStatus.phase === 'downloaded') {
+      return
+    }
+
+    setActionError(null)
+
+    if (isAutotest && debugUpdaterStatus) {
+      debugActionCountsRef.current.checkNow += 1
+      setIsCheckingForUpdate(true)
+      setDebugUpdaterStatus(buildUpdaterStatus({
+        phase: 'checking',
+        supported: effectiveUpdaterStatus.supported,
+        error: null
+      }))
+
+      const nextCheckResult = debugNextCheckResultRef.current
+      const nextStatus = buildUpdaterStatus(
+        nextCheckResult?.patch ?? {
+          phase: 'up-to-date',
+          supported: effectiveUpdaterStatus.supported,
+          targetVersion: null,
+          targetTag: null,
+          downloadedFileName: null,
+          lastCheckedAt: Date.now(),
+          error: null,
+          bannerDismissed: false
+        }
+      )
+
+      clearPendingTimer(debugCheckTimerRef)
+      debugCheckTimerRef.current = window.setTimeout(() => {
+        setDebugUpdaterStatus(nextStatus)
+        setIsCheckingForUpdate(false)
+        debugNextCheckResultRef.current = null
+        debugCheckTimerRef.current = null
+      }, nextCheckResult?.delayMs ?? DEFAULT_MOCK_ACTION_DELAY_MS)
+      return
+    }
+
+    setIsCheckingForUpdate(true)
+    try {
+      const status = await window.electronAPI.updater.checkNow()
+      setUpdaterStatus(status)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsCheckingForUpdate(false)
+    }
+  }, [buildUpdaterStatus, debugUpdaterStatus, effectiveUpdaterStatus, isAutotest, isUpdateActionDisabled])
+
+  const handleRestartToUpdate = useCallback(async () => {
+    if (!effectiveUpdaterStatus || isUpdateActionDisabled || effectiveUpdaterStatus.phase !== 'downloaded') {
+      return
+    }
+
+    setActionError(null)
+
+    if (isAutotest && debugUpdaterStatus) {
+      debugActionCountsRef.current.restartToUpdate += 1
+      setIsRestartingForUpdate(true)
+
+      const nextRestartResult = debugNextRestartResultRef.current ?? {
+        delayMs: DEFAULT_MOCK_ACTION_DELAY_MS,
+        success: true
+      }
+
+      clearPendingTimer(debugRestartTimerRef)
+      debugRestartTimerRef.current = window.setTimeout(() => {
+        setIsRestartingForUpdate(false)
+        if (!nextRestartResult.success) {
+          setActionError(nextRestartResult.error ?? 'Mock restart failed.')
+        }
+        debugNextRestartResultRef.current = null
+        debugRestartTimerRef.current = null
+      }, nextRestartResult.delayMs)
+      return
+    }
+
+    setIsRestartingForUpdate(true)
+    try {
+      const result = await window.electronAPI.updater.restartToUpdate()
+      if (!result.success) {
+        setActionError(result.error || 'Restart action is unavailable.')
+        setIsRestartingForUpdate(false)
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error))
+      setIsRestartingForUpdate(false)
+    }
+  }, [debugUpdaterStatus, effectiveUpdaterStatus, isAutotest, isUpdateActionDisabled])
+
+  const handleUpdateAction = useCallback(async () => {
+    if (!effectiveUpdaterStatus || isUpdateActionDisabled) {
+      return
+    }
+    if (effectiveUpdaterStatus.phase === 'downloaded') {
+      await handleRestartToUpdate()
+      return
+    }
+    await handleCheckNow()
+  }, [effectiveUpdaterStatus, handleCheckNow, handleRestartToUpdate, isUpdateActionDisabled])
+
   // Handle drag start
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -208,6 +458,88 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       unsubscribe()
     }
   }, [])
+
+  useEffect(() => {
+    if (debugUpdaterStatus || updaterStatus?.phase === 'downloaded') return
+    if (!actionError) return
+    setActionError(null)
+  }, [actionError, debugUpdaterStatus, updaterStatus?.phase])
+
+  useEffect(() => {
+    return () => {
+      clearPendingTimer(debugCheckTimerRef)
+      clearPendingTimer(debugRestartTimerRef)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isAutotest) return
+
+    const debugWindow = window as Window & { __onwardSettingsDebug?: SettingsDebugApi }
+    const api: SettingsDebugApi = {
+      isOpen: () => true,
+      getUpdaterState: () => ({
+        phase: effectiveUpdaterStatus?.phase ?? 'idle',
+        supported: Boolean(effectiveUpdaterStatus?.supported),
+        statusLabel: updateStatusLabel,
+        actionLabel: updateActionLabel,
+        actionDisabled: isUpdateActionDisabled,
+        detailText: updateDetailText,
+        actionCounts: { ...debugActionCountsRef.current },
+        targetVersion: effectiveUpdaterStatus?.targetVersion ?? null,
+        lastCheckedAt: effectiveUpdaterStatus?.lastCheckedAt ?? null,
+        actionError
+      }),
+      setMockUpdaterStatus: (patch) => {
+        clearPendingTimer(debugCheckTimerRef)
+        clearPendingTimer(debugRestartTimerRef)
+        setDebugUpdaterStatus(buildUpdaterStatus(patch))
+        setActionError(null)
+        setIsCheckingForUpdate(false)
+        setIsRestartingForUpdate(false)
+        return true
+      },
+      setMockNextCheckResult: (patch, delayMs = DEFAULT_MOCK_ACTION_DELAY_MS) => {
+        debugNextCheckResultRef.current = { delayMs, patch }
+        return true
+      },
+      setMockRestartResult: (result) => {
+        debugNextRestartResultRef.current = {
+          delayMs: result.delayMs ?? DEFAULT_MOCK_ACTION_DELAY_MS,
+          success: result.success,
+          error: result.error
+        }
+        return true
+      },
+      clickUpdateAction: async () => {
+        const button = updateActionButtonRef.current
+        if (!button || button.disabled) {
+          return false
+        }
+        button.click()
+        await Promise.resolve()
+        return true
+      },
+      resetMockUpdater
+    }
+
+    debugWindow.__onwardSettingsDebug = api
+    return () => {
+      if (debugWindow.__onwardSettingsDebug === api) {
+        delete debugWindow.__onwardSettingsDebug
+      }
+    }
+  }, [
+    actionError,
+    buildUpdaterStatus,
+    effectiveUpdaterStatus,
+    isAutotest,
+    isUpdateActionDisabled,
+    resetMockUpdater,
+    updateActionLabel,
+    updateDetailText,
+    updateStatusLabel
+  ])
 
   useEffect(() => {
     if (!isDragging) return
@@ -269,34 +601,46 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         <div className="settings-section">
           <div className="settings-section-title">{t('settings.section.updates')}</div>
           <div className="settings-section-content">
-            <div className="settings-group">
-              <div className="settings-row">
-                <span className="settings-row-label">{t('settings.update.currentChannel')}</span>
-                <div className="settings-row-input">
-                  <span className="settings-row-value">{t(currentChannelKey)}</span>
+            <div className="settings-group settings-group-updates">
+              <div className="settings-update-action-row">
+                <div className="settings-update-action-copy">
+                  <div className="settings-update-action-label">{t('settings.update.checkLabel')}</div>
+                  {updateDetailText && (
+                    <div
+                      className={`settings-update-action-detail${isUpdateDetailError ? ' is-error' : ''}`}
+                      data-testid="settings-update-detail"
+                    >
+                      {updateDetailText}
+                    </div>
+                  )}
+                </div>
+                <button
+                  ref={updateActionButtonRef}
+                  className="reset-btn settings-update-action-btn"
+                  type="button"
+                  onClick={() => {
+                    void handleUpdateAction()
+                  }}
+                  disabled={isUpdateActionDisabled}
+                  title={updateActionLabel}
+                  data-testid="settings-update-action"
+                >
+                  {updateActionLabel}
+                </button>
+              </div>
+
+              <div className="settings-update-row">
+                <div className="settings-row">
+                  <span className="settings-row-label">{t('settings.update.targetChannel')}</span>
+                  <div className="settings-row-input">
+                    <select className="font-selector" value={targetChannelValue} disabled aria-label={t('settings.update.targetChannel')}>
+                      <option value="daily">{t('settings.update.channel.daily')}</option>
+                      <option value="stable">{t('settings.update.channel.stable')}</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-              <div className="settings-row">
-                <span className="settings-row-label">{t('settings.update.targetChannel')}</span>
-                <div className="settings-row-input">
-                  <select className="font-selector" value="daily" disabled aria-label={t('settings.update.targetChannel')}>
-                    <option value="daily">{t('settings.update.channel.daily')}</option>
-                    <option value="stable">{t('settings.update.channel.stable')}</option>
-                  </select>
-                </div>
-              </div>
-              <div className="settings-row">
-                <span className="settings-row-label">{t('settings.update.autoCheck')}</span>
-                <div className="settings-row-input">
-                  <button className="reset-btn" type="button" disabled>{t(autoUpdateEnabledKey)}</button>
-                </div>
-              </div>
-              <div className="settings-row">
-                <span className="settings-row-label">{t('settings.update.status')}</span>
-                <div className="settings-row-input">
-                  <span className="settings-row-value">{t(updateStatusKey)}</span>
-                </div>
-              </div>
+
               <div className="settings-placeholder-note">
                 <div className="settings-placeholder-title">{t('settings.update.placeholderTitle')}</div>
                 <div className="settings-placeholder-text">{t('settings.update.placeholderBody')}</div>

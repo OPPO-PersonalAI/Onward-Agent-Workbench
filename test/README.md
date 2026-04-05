@@ -10,6 +10,7 @@ This directory contains reusable automation notes and validation procedures for 
 - PromptSender UI behavior
 - Prompt send / execute flow and failure handling
 - Auto-update behavior, including "download only until explicit restart" and GitHub release publishing
+- Settings update controls, including manual check and restart-to-update actions
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
 - Prompt cleanup and retention behavior
@@ -51,11 +52,13 @@ pnpm dist:dev
 src/autotest/
 ├── autotest-runner.ts
 ├── types.ts
+├── test-prompt-integrity.ts
 ├── test-project-editor-restore-unit.ts
 ├── test-project-editor-restore.ts
 ├── test-project-editor-open-position.ts
 ├── test-project-editor-multi-terminal-scope.ts
 ├── test-markdown-latex-preview.ts
+├── test-settings-update.ts
 ├── test-file-watch.ts
 ├── test-preview-position-restore.ts
 ├── test-project-editor-sqlite.ts
@@ -83,6 +86,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 | `window.__onwardPromptSenderDebug` | `PromptSender.tsx` | Terminal cards, selection state, action buttons |
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style, repo-scope state |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
+| `window.__onwardSettingsDebug` | `Settings.tsx` | Update action state, mock updater status injection, and action triggering |
 | `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
 | `window.__onwardProjectEditorDebug` | `ProjectEditor.tsx` | File content, preview restore state, and external file refresh hooks |
 | `window.__onwardTerminalDebug` | `TerminalGrid.tsx` | Terminal viewport state, tail text, fit / remount helpers |
@@ -183,6 +187,24 @@ node test/test-auto-update-public-github-e2e.mjs \
   --target-version 2.1.0-daily.20260402.1701
 ```
 
+### Settings Update Suite
+
+- `src/autotest/test-settings-update.ts`
+  - Verifies unsupported environments keep the action disabled
+  - Verifies the smart action enters `checking` and blocks repeated clicks
+  - Verifies `up-to-date`, `error`, `downloading`, and `downloaded` detail rendering
+  - Verifies the restart action locks while pending and surfaces restart errors
+
+Run the Settings update suite:
+
+```bash
+bash test/run-settings-update-autotest.sh
+```
+
+```powershell
+pwsh test/run-settings-update-autotest.ps1
+```
+
 ### Phase 1: PromptSender UI
 
 Source set: PromptSender UI validation suite
@@ -195,6 +217,29 @@ Source set: PromptSender UI validation suite
 - `PS-06`: primary actions are disabled when no terminal is selected
 - `PS-07`: repeated rapid selection toggling does not crash
 - `PS-08`: rendered card count matches layout metadata
+- `PS-09`: single-line Send and execute still runs end to end
+
+### Phase 1.1: Prompt Integrity
+
+Source set: multiline prompt transport integrity suite
+
+- `PI-01`: multi-line `Send` preserves mixed prompt content when bracketed paste is enabled
+- `PI-02`: multi-line `Send and execute` preserves content and appends one execute Enter when bracketed paste is enabled
+- `PI-03`: large 50-line prompt survives `Send` without truncation
+- `PI-04`: multi-line `Send` is blocked cleanly when bracketed paste is unavailable
+- `PI-05`: multi-line `Send and execute` is blocked cleanly when bracketed paste is unavailable
+
+Run the prompt integrity suite:
+
+```bash
+bash test/run-prompt-integrity-autotest.sh
+```
+
+Run the PromptSender suite:
+
+```bash
+bash test/run-prompt-sender-autotest.sh
+```
 
 ### Phase 1.1: Terminal State Persistence
 

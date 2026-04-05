@@ -64,7 +64,7 @@ let ripgrepSearchManager: RipgrepSearchManager | null = null
 let fileWatchManager: FileWatchManager | null = null
 
 type TerminalInputSequencePayload = {
-  kind: 'raw' | 'paste' | 'pasteThenEnter'
+  kind: 'raw' | 'paste'
   content: string
 }
 
@@ -73,7 +73,6 @@ const BRACKETED_PASTE_DISABLE_RE = /\x1b\[\?2004l/g
 const BRACKETED_PASTE_START = '\x1b[200~'
 const BRACKETED_PASTE_END = '\x1b[201~'
 const INTERACTIVE_BOOST_WINDOW_MS = 250
-const FALLBACK_PASTE_ENTER_DELAY_MS = process.platform === 'win32' ? 120 : 40
 
 function prepareTextForPaste(text: string): string {
   return text.replace(/\r?\n/g, '\r')
@@ -292,7 +291,15 @@ export type PromptBridgeAction = 'send' | 'execute' | 'send-and-execute'
 export interface PromptBridgeSendResult {
   success: boolean
   successIds: string[]
+  sentOnlyIds: string[]
   failedIds: string[]
+  issues?: Array<{
+    terminalId: string
+    status: 'sent-only' | 'failed'
+    reason: 'unsafe-multiline-send' | 'unsafe-multiline-execute' | 'send-failed' | 'execute-failed'
+    message: string
+    error?: string
+  }>
   error?: string
 }
 
@@ -308,16 +315,16 @@ export function sendPromptViaBridge(
 ): Promise<PromptBridgeSendResult> {
   return new Promise((resolve) => {
     if (mainWindow.isDestroyed()) {
-      resolve({ success: false, successIds: [], failedIds: [terminalId], error: 'Window was destroyed' })
+      resolve({ success: false, successIds: [], sentOnlyIds: [], failedIds: [terminalId], error: 'Window was destroyed' })
       return
     }
 
     const requestId = `prompt-bridge-${++promptBridgeCounter}-${Date.now()}`
 
-    // 10 second timeout (send-and-execute includes 50ms delay)
+    // 10 second timeout to cover prompt delivery plus any renderer-side coordination.
     const timer = setTimeout(() => {
       promptBridgeCallbacks.delete(requestId)
-      resolve({ success: false, successIds: [], failedIds: [terminalId], error: 'Request timed out (10 seconds)' })
+      resolve({ success: false, successIds: [], sentOnlyIds: [], failedIds: [terminalId], error: 'Request timed out (10 seconds)' })
     }, 10000)
 
     promptBridgeCallbacks.set(requestId, { resolve, timer })
@@ -561,20 +568,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await ptyManager.write(id, data)
   })
 
-  ipcMain.handle('terminal:write-split', async (_, id: string, content: string, suffix: string, delayMs?: number) => {
-    return await ptyManager.writeSplit(id, content, suffix, delayMs)
-  })
-
   ipcMain.handle('terminal:send-input-sequence', async (_, id: string, payload: TerminalInputSequencePayload) => {
     if (payload.kind === 'raw') {
       const ok = await ptyManager.write(id, payload.content)
       return ok ? { ok: true } : { ok: false, phase: 'content' as const, error: 'pty write failed' }
     }
 
+    // 'paste' kind — send content without Enter
     const bracketedPasteEnabled = terminalBracketedPasteState.get(id) ?? false
     const prepared = wrapBracketedPaste(prepareTextForPaste(payload.content), bracketedPasteEnabled)
-    const enterDelayMs = payload.kind === 'pasteThenEnter' ? FALLBACK_PASTE_ENTER_DELAY_MS : undefined
-    return await ptyManager.sendInputSequence(id, prepared, enterDelayMs)
+    return await ptyManager.sendInputSequence(id, prepared)
+  })
+
+  ipcMain.handle('terminal:get-input-capabilities', (_, id: string) => {
+    return {
+      bracketedPasteEnabled: terminalBracketedPasteState.get(id) ?? false
+    }
   })
 
   // Toggle fast-path on the IPC data buffer for a terminal.
@@ -1336,8 +1345,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('updater:dismiss-banner')
   ipcMain.removeHandler('terminal:create')
   ipcMain.removeHandler('terminal:write')
-  ipcMain.removeHandler('terminal:write-split')
   ipcMain.removeHandler('terminal:send-input-sequence')
+  ipcMain.removeHandler('terminal:get-input-capabilities')
   ipcMain.removeAllListeners('terminal:set-buffer-fast-path')
   ipcMain.removeAllListeners('terminal:notify-interactive-input')
   ipcMain.removeHandler('terminal:resize')

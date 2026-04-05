@@ -146,6 +146,10 @@
   border-bottom: none;
 }
 
+.settings-group-updates {
+  padding: 14px 16px;
+}
+
 .settings-group-title {
   font-size: var(--font-sm);
   font-weight: 500;
@@ -245,22 +249,117 @@
   color: var(--text-3);
 }
 
+.settings-update-action-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 0 14px;
+}
+
+.settings-update-action-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-update-action-label {
+  font-size: var(--font-md);
+  color: var(--text-2);
+}
+
+.settings-update-action-detail {
+  margin-top: 6px;
+  max-width: 34ch;
+  font-size: var(--font-xs);
+  color: var(--text-3);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings-update-action-detail.is-error {
+  color: var(--danger);
+}
+
+.settings-update-action-btn {
+  min-width: 132px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  border-color: var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.settings-update-action-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-update-action-btn:disabled {
+  color: var(--text-3);
+}
+
+.settings-update-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-update-row .font-selector {
+  width: min(220px, 100%);
+  min-width: 0;
+}
+
+@media (max-width: 460px) {
+  .settings-group-updates {
+    padding: 14px;
+  }
+
+  .settings-update-action-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .settings-update-action-btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .settings-update-row {
+    padding-top: 10px;
+  }
+
+  .settings-update-row .settings-row {
+    align-items: flex-start;
+  }
+
+  .settings-update-row .settings-row-input {
+    justify-content: stretch;
+  }
+
+  .settings-update-row .font-selector {
+    width: 100%;
+  }
+}
+
 .settings-placeholder-note {
   margin-top: 12px;
-  padding: 12px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-1) 82%, transparent);
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
 }
 
 .settings-placeholder-title {
   font-size: var(--font-sm);
   font-weight: 600;
   color: var(--text-2);
-  margin-bottom: 4px;
 }
 
 .settings-placeholder-text {
+  margin-top: 4px;
   font-size: var(--font-xs);
   color: var(--text-3);
   line-height: 1.5;

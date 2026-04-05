@@ -252,6 +252,43 @@ export interface TerminalDebugApi {
   remountTerminal: (terminalId?: string) => boolean
 }
 
+export interface SettingsDebugApi {
+  isOpen: () => boolean
+  getUpdaterState: () => {
+    phase: string
+    supported: boolean
+    statusLabel: string
+    actionLabel: string
+    actionDisabled: boolean
+    detailText: string | null
+    actionCounts: {
+      checkNow: number
+      restartToUpdate: number
+    }
+    targetVersion: string | null
+    lastCheckedAt: number | null
+    actionError: string | null
+  }
+  setMockUpdaterStatus: (
+    patch: Partial<import('../types/electron.d.ts').UpdaterStatus> & {
+      phase: import('../types/electron.d.ts').UpdatePhase
+    }
+  ) => boolean
+  setMockNextCheckResult: (
+    patch: Partial<import('../types/electron.d.ts').UpdaterStatus> & {
+      phase: import('../types/electron.d.ts').UpdatePhase
+    },
+    delayMs?: number
+  ) => boolean
+  setMockRestartResult: (result: {
+    success: boolean
+    error?: string
+    delayMs?: number
+  }) => boolean
+  clickUpdateAction: () => Promise<boolean>
+  resetMockUpdater: () => boolean
+}
+
 // ============================================================
 // Test run environment
 // ============================================================
@@ -308,6 +345,7 @@ declare global {
     __onwardGitHistoryDebug?: GitHistoryDebugApi
     __onwardPromptNotebookDebug?: PromptNotebookDebugApi
     __onwardProjectEditorDebug?: ProjectEditorDebugApi
+    __onwardSettingsDebug?: SettingsDebugApi
     __onwardTerminalFocusDebug?: TerminalFocusDebugApi
     __onwardTerminalDebug?: TerminalDebugApi
   }

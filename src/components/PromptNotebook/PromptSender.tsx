@@ -36,8 +36,22 @@ export const PromptSender = memo(function PromptSender({
   const selectClickTimerRef = useRef<number | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const submittingRef = useRef(false)
+  // Keep debug automation on the latest state without recreating the API object.
+  const terminalsRef = useRef(terminals)
+  const selectedTerminalsRef = useRef(selectedTerminals)
+  const selectionNoticeRef = useRef(selectionNotice)
+  const isSubmittingRef = useRef(isSubmitting)
+  const handleSendToSelectedRef = useRef<() => Promise<void>>(async () => {})
+  const handleExecuteRef = useRef<() => Promise<void>>(async () => {})
+  const handleSendAndExecuteRef = useRef<() => Promise<void>>(async () => {})
+  const handleSendAllAndExecuteRef = useRef<() => Promise<void>>(async () => {})
   const terminalRows = Math.max(1, Math.ceil(terminals.length / 2))
-  const terminalGridStyle: CSSProperties = { '--terminal-rows': terminalRows }
+  const terminalGridStyle = { '--terminal-rows': terminalRows } as CSSProperties
+
+  terminalsRef.current = terminals
+  selectedTerminalsRef.current = selectedTerminals
+  selectionNoticeRef.current = selectionNotice
+  isSubmittingRef.current = isSubmitting
 
   // When the terminal list changes, update the selected status (remove non-existing terminals)
   useEffect(() => {
@@ -149,9 +163,24 @@ export const PromptSender = memo(function PromptSender({
 
     try {
       const result = await runner()
-      if (result.failedIds.length > 0) {
+      const sentOnlyCount = result.sentOnlyIds.length
+      const failedCount = result.failedIds.length
+      const unsafeMultilineCount = result.issues.filter(
+        (issue) => issue.reason === 'unsafe-multiline-send'
+      ).length
+
+      if (sentOnlyCount > 0 && failedCount === 0) {
+        showNotice(t('promptSender.sentOnly', { count: sentOnlyCount }))
+      } else if (failedCount > 0 && sentOnlyCount === 0 && unsafeMultilineCount === failedCount) {
+        showNotice(t('promptSender.multilineBlocked', { count: failedCount }))
+      } else if (sentOnlyCount > 0 && failedCount > 0) {
+        showNotice(t('promptSender.mixedResult', {
+          sentOnlyCount,
+          failedCount
+        }))
+      } else if (failedCount > 0) {
         showNotice(t('promptSender.partialFailure', {
-          count: result.failedIds.length,
+          count: failedCount,
           action: t(actionName)
         }))
       } else {
@@ -195,6 +224,11 @@ export const PromptSender = memo(function PromptSender({
     await runTerminalAction('promptSender.action.sendAndExecute', () => onSendAndExecute(terminalIds, promptContent))
   }
 
+  handleSendToSelectedRef.current = handleSendToSelected
+  handleExecuteRef.current = handleExecute
+  handleSendAndExecuteRef.current = handleSendAndExecute
+  handleSendAllAndExecuteRef.current = handleSendAllAndExecute
+
   useEffect(() => {
     return () => {
       if (noticeTimerRef.current) {
@@ -210,12 +244,12 @@ export const PromptSender = memo(function PromptSender({
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
     const api = {
-      getTerminalCards: () => terminals.map(t => ({
+      getTerminalCards: () => terminalsRef.current.map(t => ({
         id: t.id,
         title: t.title || `Task`,
-        isSelected: selectedTerminals.has(t.id)
+        isSelected: selectedTerminalsRef.current.has(t.id)
       })),
-      getSelectedTerminalIds: () => Array.from(selectedTerminals),
+      getSelectedTerminalIds: () => Array.from(selectedTerminalsRef.current),
       getActionButtons: () => {
         const btns = document.querySelectorAll('.prompt-sender-btn')
         return Array.from(btns).map(btn => ({
@@ -225,32 +259,32 @@ export const PromptSender = memo(function PromptSender({
       },
       getGridLayout: () => ({
         columns: 2,
-        rows: Math.max(1, Math.ceil(terminals.length / 2)),
-        totalCards: terminals.length
+        rows: Math.max(1, Math.ceil(terminalsRef.current.length / 2)),
+        totalCards: terminalsRef.current.length
       }),
-      getNotice: () => selectionNotice || null,
-      isSubmitting: () => isSubmitting,
+      getNotice: () => selectionNoticeRef.current || null,
+      isSubmitting: () => submittingRef.current || isSubmittingRef.current,
       clickAction: async (action: 'sendAndExecute' | 'execute' | 'send' | 'sendAllAndExecute') => {
         if (action === 'sendAndExecute') {
-          await handleSendAndExecute()
+          await handleSendAndExecuteRef.current()
           return true
         }
         if (action === 'execute') {
-          await handleExecute()
+          await handleExecuteRef.current()
           return true
         }
         if (action === 'send') {
-          await handleSendToSelected()
+          await handleSendToSelectedRef.current()
           return true
         }
         if (action === 'sendAllAndExecute') {
-          await handleSendAllAndExecute()
+          await handleSendAllAndExecuteRef.current()
           return true
         }
         return false
       },
       selectTerminal: (id: string) => {
-        if (!terminals.some(t => t.id === id)) return false
+        if (!terminalsRef.current.some(t => t.id === id)) return false
         setSelectedTerminals(prev => {
           const next = new Set(prev)
           next.add(id)
@@ -276,7 +310,7 @@ export const PromptSender = memo(function PromptSender({
         delete (window as any).__onwardPromptSenderDebug
       }
     }
-  }, [terminals, selectedTerminals, selectionNotice, isSubmitting, promptContent])
+  }, [])
 
   return (
     <div className="prompt-sender">
