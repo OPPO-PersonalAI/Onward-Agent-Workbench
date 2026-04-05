@@ -384,6 +384,10 @@ body.git-diff-resizing * {
   overflow: hidden;
 }
 
+.git-diff-detail-loading {
+  background-color: var(--bg-1);
+}
+
 .git-diff-restore-banner {
   display: flex;
   align-items: center;
@@ -768,6 +772,63 @@ body.git-diff-resizing * {
   color: var(--text-3);
 }
 
+.git-diff-file-list-content-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.git-diff-file-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  opacity: 0.9;
+}
+
+.git-diff-file-skeleton.short .git-diff-file-skeleton-line {
+  width: 42%;
+}
+
+.git-diff-file-skeleton.medium .git-diff-file-skeleton-line {
+  width: 58%;
+}
+
+.git-diff-file-skeleton-status,
+.git-diff-file-skeleton-line,
+.git-diff-file-skeleton-stats {
+  display: inline-flex;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text-3) 8%, transparent) 0%,
+    color-mix(in srgb, var(--text-2) 16%, transparent) 50%,
+    color-mix(in srgb, var(--text-3) 8%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: git-diff-skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.git-diff-file-skeleton-status {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.git-diff-file-skeleton-line {
+  width: 72%;
+  height: 12px;
+}
+
+.git-diff-file-skeleton-stats {
+  width: 36px;
+  height: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .git-diff-spinner {
   width: 32px;
   height: 32px;
@@ -780,6 +841,15 @@ body.git-diff-resizing * {
 @keyframes git-diff-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes git-diff-skeleton-pulse {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
   }
 }
 
@@ -1230,6 +1300,16 @@ body.git-diff-resizing * {
   color: var(--text-1);
 }
 
+.git-diff-repo-filter-item.loading {
+  cursor: default;
+  color: var(--text-3);
+}
+
+.git-diff-repo-filter-item.loading:hover {
+  background: transparent;
+  color: var(--text-3);
+}
+
 .git-diff-repo-filter-item.active {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
@@ -1255,6 +1335,12 @@ body.git-diff-resizing * {
   background: color-mix(in srgb, var(--text-3) 15%, transparent);
   color: var(--text-3);
   line-height: 16px;
+}
+
+.git-diff-repo-filter-count.loading {
+  min-width: 28px;
+  text-align: center;
+  letter-spacing: 0.12em;
 }
 
 .git-diff-repo-filter-item.active .git-diff-repo-filter-count {

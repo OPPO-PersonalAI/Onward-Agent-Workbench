@@ -31,6 +31,7 @@ export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestRe
   log('git-xplat:start', { suite: 'GitCrossPlatform', rootPath })
 
   const platform = window.electronAPI.platform
+  const shellThresholdMs = platform === 'win32' ? 700 : 300
   const getHistoryApi = () => window.__onwardGitHistoryDebug
   const getDiffApi = () => window.__onwardGitDiffDebug
 
@@ -182,23 +183,33 @@ export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestRe
   // XP-08: Git Diff opens and loads file list
   if (!cancelled()) {
     window.dispatchEvent(new CustomEvent('git-diff:open', { detail: { terminalId, source: 'debug' } }))
-    const opened = await waitFor('XP-08-diff-open', () => {
+    const shellVisible = await waitFor('XP-08-diff-open', () => {
       const a = getDiffApi()
-      return Boolean(a?.isOpen())
+      return Boolean(a?.isOpen() && a.getTiming().shellShownAt !== null)
     }, QUICK_TIMEOUT_MS)
 
-    if (opened) {
-      // Wait for loading to complete (may show 0 files if working tree is clean)
+    const shellTiming = getDiffApi()?.getTiming() ?? null
+    _assert('XP-08-diff-shell-visible-fast', shellVisible && (shellTiming?.openToShellMs ?? Number.MAX_SAFE_INTEGER) < shellThresholdMs, {
+      shellVisible,
+      openToShellMs: shellTiming?.openToShellMs ?? null,
+      thresholdMs: shellThresholdMs,
+      platform
+    })
+
+    if (shellVisible) {
       const loadDone = await waitFor('XP-08-diff-loaded', () => {
         const a = getDiffApi()
         if (!a) return false
-        // isSelectedReady may not apply; check if getFileList returns without error
-        try { a.getFileList(); return true } catch { return false }
+        return a.getTiming().diffLoadedAt !== null
       }, LOAD_TIMEOUT_MS)
+      const timing = getDiffApi()?.getTiming() ?? null
       const fileCount = getDiffApi()?.getFileList()?.length ?? -1
       _assert('XP-08-diff-loads', loadDone, {
         loadDone,
         fileCount,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null,
+        openToCwdReadyMs: timing?.openToCwdReadyMs ?? null,
+        cwdReadyToDiffLoadedMs: timing?.cwdReadyToDiffLoadedMs ?? null,
         platform
       })
     } else {

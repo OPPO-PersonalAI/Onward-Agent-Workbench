@@ -17,6 +17,7 @@ This directory contains reusable automation notes and validation procedures for 
 - External file change watching and automatic refresh
 - Preview position restore without top flash
 - Git state inspection and Git Diff behavior
+- Multi-submodule Git Diff staged loading
 - Terminal autofollow and viewport preservation
 - CPU and performance regression checks
 - Terminal focus restore and activation behavior
@@ -63,6 +64,8 @@ src/autotest/
 ├── test-git-history.ts
 ├── test-git-history-multi-terminal-scope.ts
 ├── test-git-cross-platform.ts
+├── test-git-diff-submodules.ts
+├── test-git-diff-recursive-submodules.ts
 ├── test-terminal-autofollow.ts
 ├── test-prompt-cleanup.ts
 ├── test-regression.ts
@@ -77,7 +80,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 
 | API | Component | Purpose |
 |-----|-----------|---------|
-| `window.__onwardGitDiffDebug` | `GitDiffViewer.tsx` | Diff state, scroll state, font size |
+| `window.__onwardGitDiffDebug` | `GitDiffViewer.tsx` | Diff state, scroll state, font size, and open/load timing |
 | `window.__onwardPromptSenderDebug` | `PromptSender.tsx` | Terminal cards, selection state, action buttons |
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style, repo-scope state |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
@@ -222,6 +225,26 @@ Source set: Git History validation suite
 Source set: Git History terminal-switch isolation regression suite
 
 - `GHMS-01` to `GHMS-11`: dual-terminal layout setup, stale repo-state injection, terminal switch reload, and stale state cleanup
+
+### Phase 3.75: Git Diff Multi-Submodule
+
+Source set: staged-loading validation for repositories with multiple submodules
+
+- `DSM-01`: root-only diff returns repo outline with submodules marked as loading
+- `DSM-02`: Git Diff shell becomes visible quickly
+- `DSM-03`: repo outline is visible before full submodule aggregation finishes
+- `DSM-04`: full submodule load completes and clears loading markers
+- `DSM-05`: Git Diff still closes cleanly
+
+### Phase 3.8: Git Diff Recursive Submodule
+
+Source set: staged-loading validation for nested submodule trees created from a temporary fixture
+
+- `RSM-01`: root-only diff discovers nested submodules and marks them as loading
+- `RSM-02`: Git Diff shell becomes visible quickly
+- `RSM-03`: nested repo outline is visible before full aggregation finishes
+- `RSM-04`: full load completes and nested repo changes are attached
+- `RSM-05`: Git Diff still closes cleanly
 
 ### Phase 4: Prompt Cleanup
 

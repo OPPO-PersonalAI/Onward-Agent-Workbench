@@ -14,6 +14,7 @@
 export interface GitDiffDebugApi {
   isOpen: () => boolean
   getFileList: () => Array<{ filename: string; originalFilename?: string; status?: string; changeType?: string }>
+  getRepoList: () => Array<{ root: string; label: string; isSubmodule: boolean; depth: number; changeCount: number; loading?: boolean }>
   getSelectedFile: () => { filename: string; originalFilename?: string; status?: string; changeType?: string } | null
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
@@ -26,6 +27,17 @@ export interface GitDiffDebugApi {
   getDiffFontSize: () => number
   getCwd: () => string | null
   getRepoRoot: () => string | null
+  isSubmodulesLoading: () => boolean
+  getTiming: () => {
+    openRequestedAt: number | null
+    shellShownAt: number | null
+    cwdReadyAt: number | null
+    diffLoadedAt: number | null
+    openToShellMs: number | null
+    openToCwdReadyMs: number | null
+    openToDiffLoadedMs: number | null
+    cwdReadyToDiffLoadedMs: number | null
+  }
   getImagePreviewState?: () => {
     isImage: boolean
     isSvg: boolean

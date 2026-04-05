@@ -8,7 +8,7 @@ import { DiffEditor } from '@monaco-editor/react'
 import { parseDiffFromFile, SPLIT_WITH_NEWLINES } from '@pierre/diffs'
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from '@pierre/diffs'
 import type * as monacoTypes from 'monaco-editor'
-import type { GitDiffResult, GitFileStatus, GitFileContentResult, GitFileActionResult } from '../../types/electron'
+import type { GitDiffResult, GitFileStatus, GitFileContentResult, GitFileActionResult, GitRepoContext } from '../../types/electron'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
@@ -50,7 +50,17 @@ interface GitDiffViewerProps {
   onClose: () => void
   terminalId: string
   cwd: string | null
+  cwdPending?: boolean
+  openRequestedAt?: number | null
+  cwdReadyAt?: number | null
   displayMode?: 'modal' | 'panel'
+}
+
+type GitDiffTimingSnapshot = {
+  openRequestedAt: number | null
+  shellShownAt: number | null
+  cwdReadyAt: number | null
+  diffLoadedAt: number | null
 }
 
 // Status color map
@@ -113,6 +123,7 @@ type RestoredAnchor = {
 type GitDiffDebugApi = {
   isOpen: () => boolean
   getFileList: () => GitFileStatus[]
+  getRepoList: () => GitRepoContext[]
   getSelectedFile: () => {
     filename: string
     originalFilename?: string
@@ -130,6 +141,17 @@ type GitDiffDebugApi = {
   getDiffFontSize: () => number
   getCwd: () => string | null
   getRepoRoot: () => string | null
+  isSubmodulesLoading: () => boolean
+  getTiming: () => {
+    openRequestedAt: number | null
+    shellShownAt: number | null
+    cwdReadyAt: number | null
+    diffLoadedAt: number | null
+    openToShellMs: number | null
+    openToCwdReadyMs: number | null
+    openToDiffLoadedMs: number | null
+    cwdReadyToDiffLoadedMs: number | null
+  }
   getImagePreviewState: () => {
     isImage: boolean
     isSvg: boolean
@@ -168,6 +190,16 @@ type LineSelectionInfo =
 function buildFileKey(repoRoot: string, file: GitFileStatus): string {
   const original = file.originalFilename ?? ''
   return `${repoRoot}::${file.changeType}::${file.status}::${original}::${file.filename}`
+}
+
+function sortRepoContexts(a: GitRepoContext, b: GitRepoContext): number {
+  if (a.isSubmodule !== b.isSubmodule) {
+    return a.isSubmodule ? 1 : -1
+  }
+  if (a.depth !== b.depth) {
+    return a.depth - b.depth
+  }
+  return a.label.localeCompare(b.label)
 }
 
 const SIGNATURE_SAMPLE_SIZE = 256
@@ -267,6 +299,9 @@ export function GitDiffViewer({
   onClose,
   terminalId,
   cwd,
+  cwdPending = false,
+  openRequestedAt = null,
+  cwdReadyAt = null,
   displayMode = 'modal'
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
@@ -278,6 +313,12 @@ export function GitDiffViewer({
     diffViewBuild: 0
   })
   const perfIntervalRef = useRef<number | null>(null)
+  const timingRef = useRef<GitDiffTimingSnapshot>({
+    openRequestedAt: null,
+    shellShownAt: null,
+    cwdReadyAt: null,
+    diffLoadedAt: null
+  })
   const diffMemoryRef = useRef<Record<string, DiffViewMemory>>({})
   const diffRestoreCycleRef = useRef(0)
   const diffRestoreAppliedRef = useRef<{ cycle: number; fileKey: string | null }>({ cycle: 0, fileKey: null })
@@ -374,6 +415,12 @@ export function GitDiffViewer({
   const canEditFile = editDisabledReason.length === 0
   const canSaveDraft = canEditFile && isDraftDirty && !isSavingEdit
   const hasMultipleRepos = Boolean(diffResult?.repos && diffResult.repos.length > 1)
+  const repoFilterItems = useMemo(() => {
+    const repos = diffResult?.repos ?? []
+    return [...repos]
+      .filter((repo) => repo.changeCount > 0 || repo.loading)
+      .sort(sortRepoContexts)
+  }, [diffResult?.repos])
   const confirmCloseWithDraft = useCallback(() => {
     if (!hasAnyUnsavedDraft) return true
     return window.confirm(t('gitDiff.confirm.closeWithDraft'))
@@ -605,12 +652,120 @@ export function GitDiffViewer({
     detachDiffEditor()
   }, [detachDiffEditor])
 
+  const applyLoadedDiffResult = useCallback((
+    result: GitDiffResult,
+    sourceCwd: string,
+    previousSelection: GitFileStatus | null
+  ) => {
+    setDiffResult(result)
+    lastDiffRef.current = {
+      cwd: result.cwd || sourceCwd,
+      originalCwd: sourceCwd,
+      at: Date.now(),
+      result
+    }
+
+    const repoRoot = result.cwd || sourceCwd
+    const nextKeys = new Set(result.files.map((file) => buildFileKey(file.repoRoot || repoRoot, file)))
+    const memoryKey = getMemoryKey(repoRoot)
+    const memoryStore = memoryKey
+      ? (diffMemoryRef.current[memoryKey] || {
+        selectedFileKey: null,
+        entries: {}
+      })
+      : {
+        selectedFileKey: null,
+        entries: {}
+      }
+    if (memoryKey) {
+      diffMemoryRef.current[memoryKey] = memoryStore
+    }
+
+    setFileContents((prev) => {
+      const next: Record<string, FileContentState> = {}
+      for (const key of nextKeys) {
+        if (prev[key]) {
+          next[key] = prev[key]
+        }
+      }
+      return next
+    })
+
+    if (result.success && result.files.length > 0) {
+      const memorySelectedKey = memoryStore.selectedFileKey
+      const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
+      const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
+      const memoryMatched = memoryEntry
+        ? result.files.find((file) =>
+          file.filename === memoryEntry.filePath &&
+          (file.originalFilename ?? '') === (memoryEntry.originalFilename ?? '')
+        )
+        : (memorySelectedKey
+          ? result.files.find((file) => buildFileKey(file.repoRoot || repoRoot, file) === memorySelectedKey)
+          : null)
+      const previous = previousSelection
+      const matched = memoryMatched || (previous
+        ? result.files.find((file) => file.filename === previous.filename && file.changeType === previous.changeType)
+        : null)
+      const fallback = (!matched && previous)
+        ? result.files.find((file) => file.filename === previous.filename &&
+          (file.originalFilename ?? '') === (previous.originalFilename ?? ''))
+        : null
+      if ((memorySelectedKey || memoryEntry) && !memoryMatched) {
+        const headerTitle = memoryEntry
+          ? (memoryEntry.originalFilename
+            ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
+            : memoryEntry.filePath)
+          : (previous?.originalFilename && (previous.status === 'R' || previous.status === 'C')
+            ? `${previous.originalFilename} → ${previous.filename}`
+            : (previous?.filename || t('gitDiff.unknownFile')))
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+      } else if (previous && !matched && !fallback) {
+        const headerTitle = previous.originalFilename && (previous.status === 'R' || previous.status === 'C')
+          ? `${previous.originalFilename} → ${previous.filename}`
+          : previous.filename
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+      }
+      setSelectedFile(matched || fallback || result.files[0])
+    } else {
+      setSelectedFile(null)
+      const memorySelectedKey = memoryStore.selectedFileKey
+      const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
+      const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
+      if (!result.submodulesLoading && memoryEntry) {
+        const headerTitle = memoryEntry.originalFilename
+          ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
+          : memoryEntry.filePath
+        setDiffRestoreNotice({
+          type: 'missing',
+          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
+          fileName: headerTitle
+        })
+      }
+    }
+    if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
+      setRepoFilter(null)
+    }
+  }, [getMemoryKey, repoFilter, t])
+
   const loadDiff = useCallback(async (options?: { reset?: boolean; silent?: boolean; force?: boolean }) => {
     if (DEBUG_GIT_DIFF) {
       perfCountersRef.current.loadDiff += 1
     }
     const previousSelection = lastSelectedFileRef.current || selectedFileRef.current
     if (!cwd) {
+      if (cwdPending) {
+        setDiffResult(null)
+        return
+      }
       setDiffResult({
         success: false,
         cwd: '',
@@ -626,7 +781,7 @@ export function GitDiffViewer({
       const cached = lastDiffRef.current
       if (cached && (cached.originalCwd === cwd || cached.cwd === cwd)) {
         const age = Date.now() - cached.at
-        if (age < 800) {
+        if (age < 800 && !cached.result.submodulesLoading) {
           debugLog('diff:load:cache', { cwd, age })
           setDiffResult(cached.result)
           return
@@ -661,114 +816,46 @@ export function GitDiffViewer({
       force: Boolean(options?.force)
     })
     try {
-      const result = await window.electronAPI.git.getDiff(cwd)
+      const stagedLoad = Boolean(options?.reset)
+      const initialScope = stagedLoad ? 'root-only' : 'full'
+      const initialResult = await window.electronAPI.git.getDiff(cwd, { scope: initialScope })
       if (loadTokenRef.current !== currentToken) return
-      setDiffResult(result)
-      lastDiffRef.current = {
-        cwd: result.cwd || cwd,
-        originalCwd: cwd,
-        at: Date.now(),
-        result
-      }
-
-      const repoRoot = result.cwd || cwd
-      const nextKeys = new Set(result.files.map((file) => buildFileKey(file.repoRoot || repoRoot, file)))
-      const memoryKey = getMemoryKey(repoRoot)
-      const memoryStore = memoryKey
-        ? (diffMemoryRef.current[memoryKey] || {
-          selectedFileKey: null,
-          entries: {}
-        })
-        : {
-          selectedFileKey: null,
-          entries: {}
-        }
-      if (memoryKey) {
-        diffMemoryRef.current[memoryKey] = memoryStore
-      }
-
-      // Clean cache that no longer exists
-      setFileContents((prev) => {
-        const next: Record<string, FileContentState> = {}
-        for (const key of nextKeys) {
-          if (prev[key]) {
-            next[key] = prev[key]
-          }
-        }
-        return next
-      })
-
-      // Keep the last selected file (use memory first, then try the last selected file)
-      if (result.success && result.files.length > 0) {
-        const memorySelectedKey = memoryStore.selectedFileKey
-        const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
-        const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
-        const memoryMatched = memoryEntry
-          ? result.files.find((file) =>
-            file.filename === memoryEntry.filePath &&
-            (file.originalFilename ?? '') === (memoryEntry.originalFilename ?? '')
-          )
-          : (memorySelectedKey
-            ? result.files.find((file) => buildFileKey(file.repoRoot || repoRoot, file) === memorySelectedKey)
-            : null)
-        const previous = previousSelection
-        const matched = memoryMatched || (previous
-          ? result.files.find((file) => file.filename === previous.filename && file.changeType === previous.changeType)
-          : null)
-        const fallback = (!matched && previous)
-          ? result.files.find((file) => file.filename === previous.filename &&
-            (file.originalFilename ?? '') === (previous.originalFilename ?? ''))
-          : null
-        if ((memorySelectedKey || memoryEntry) && !memoryMatched) {
-          const headerTitle = memoryEntry
-            ? (memoryEntry.originalFilename
-              ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-              : memoryEntry.filePath)
-            : (previous?.originalFilename && (previous.status === 'R' || previous.status === 'C')
-              ? `${previous.originalFilename} → ${previous.filename}`
-              : (previous?.filename || t('gitDiff.unknownFile')))
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-        } else if (previous && !matched && !fallback) {
-          const headerTitle = previous.originalFilename && (previous.status === 'R' || previous.status === 'C')
-            ? `${previous.originalFilename} → ${previous.filename}`
-            : previous.filename
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-        }
-        setSelectedFile(matched || fallback || result.files[0])
-      } else {
-        setSelectedFile(null)
-        const memorySelectedKey = memoryStore.selectedFileKey
-        const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
-        const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
-        if (memoryEntry) {
-          const headerTitle = memoryEntry.originalFilename
-            ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-            : memoryEntry.filePath
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
-        }
-      }
-      if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
-        setRepoFilter(null)
-      }
+      applyLoadedDiffResult(initialResult, cwd, previousSelection)
       debugLog('diff:load:done', {
-        cwd: result.cwd || cwd,
+        cwd: initialResult.cwd || cwd,
         token: currentToken,
-        success: result.success,
-        fileCount: result.files?.length ?? 0,
-        duration: Math.round(performance.now() - start)
+        stage: initialScope,
+        success: initialResult.success,
+        fileCount: initialResult.files?.length ?? 0,
+        duration: Math.round(performance.now() - start),
+        submodulesLoading: Boolean(initialResult.submodulesLoading)
       })
+
+      if (timingRef.current.diffLoadedAt === null) {
+        timingRef.current = {
+          ...timingRef.current,
+          diffLoadedAt: performance.now()
+        }
+      }
+
+      if (stagedLoad && initialResult.success && initialResult.submodulesLoading) {
+        const fullResult = await window.electronAPI.git.getDiff(cwd, { scope: 'full' })
+        if (loadTokenRef.current !== currentToken) return
+        applyLoadedDiffResult(
+          fullResult,
+          cwd,
+          lastSelectedFileRef.current || selectedFileRef.current || previousSelection
+        )
+        debugLog('diff:load:done', {
+          cwd: fullResult.cwd || cwd,
+          token: currentToken,
+          stage: 'full',
+          success: fullResult.success,
+          fileCount: fullResult.files?.length ?? 0,
+          duration: Math.round(performance.now() - start),
+          submodulesLoading: Boolean(fullResult.submodulesLoading)
+        })
+      }
     } catch (error) {
       if (loadTokenRef.current !== currentToken) return
       setDiffResult({
@@ -790,7 +877,7 @@ export function GitDiffViewer({
         }, 0)
       }
     }
-  }, [cwd, getMemoryKey, resetViewerState, t])
+  }, [applyLoadedDiffResult, cwd, cwdPending, resetViewerState, t])
 
   const loadDiffFromRoot = useCallback(async (rootPath: string) => {
     if (!rootPath) return
@@ -814,9 +901,24 @@ export function GitDiffViewer({
   // Synchronously clear stale state before paint to prevent old diff flash
   useLayoutEffect(() => {
     if (isOpen) {
+      timingRef.current = {
+        openRequestedAt,
+        shellShownAt: performance.now(),
+        cwdReadyAt,
+        diffLoadedAt: null
+      }
       resetViewerState()
     }
-  }, [isOpen, resetViewerState])
+  }, [cwdReadyAt, isOpen, openRequestedAt, resetViewerState])
+
+  useEffect(() => {
+    if (!isOpen) return
+    timingRef.current = {
+      ...timingRef.current,
+      openRequestedAt,
+      cwdReadyAt
+    }
+  }, [cwdReadyAt, isOpen, openRequestedAt])
 
   // Load data when opening (async, after paint)
   useEffect(() => {
@@ -1811,6 +1913,7 @@ export function GitDiffViewer({
     const api: GitDiffDebugApi = {
       isOpen: () => isOpen,
       getFileList: () => diffResult?.files ?? [],
+      getRepoList: () => diffResult?.repos ?? [],
       getSelectedFile: () => (selectedFile ? {
         filename: selectedFile.filename,
         originalFilename: selectedFile.originalFilename,
@@ -1886,8 +1989,30 @@ export function GitDiffViewer({
         return true
       },
       getDiffFontSize: () => getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE,
-      getCwd: () => cwd,
+      getCwd: () => activeCwd || null,
       getRepoRoot: () => diffResult?.cwd || null,
+      isSubmodulesLoading: () => Boolean(diffResult?.submodulesLoading),
+      getTiming: () => {
+        const timing = timingRef.current
+        return {
+          openRequestedAt: timing.openRequestedAt,
+          shellShownAt: timing.shellShownAt,
+          cwdReadyAt: timing.cwdReadyAt,
+          diffLoadedAt: timing.diffLoadedAt,
+          openToShellMs: timing.openRequestedAt !== null && timing.shellShownAt !== null
+            ? Math.round(timing.shellShownAt - timing.openRequestedAt)
+            : null,
+          openToCwdReadyMs: timing.openRequestedAt !== null && timing.cwdReadyAt !== null
+            ? Math.round(timing.cwdReadyAt - timing.openRequestedAt)
+            : null,
+          openToDiffLoadedMs: timing.openRequestedAt !== null && timing.diffLoadedAt !== null
+            ? Math.round(timing.diffLoadedAt - timing.openRequestedAt)
+            : null,
+          cwdReadyToDiffLoadedMs: timing.cwdReadyAt !== null && timing.diffLoadedAt !== null
+            ? Math.round(timing.diffLoadedAt - timing.cwdReadyAt)
+            : null
+        }
+      },
       getImagePreviewState: () => {
         const key = selectedFileKey
         if (!key) return null
@@ -1931,8 +2056,8 @@ export function GitDiffViewer({
       }
     }
   }, [
+    activeCwd,
     captureDiffView,
-    cwd,
     diffRestoreNotice,
     diffResult,
     handleDeny,
@@ -2331,7 +2456,7 @@ export function GitDiffViewer({
             </span>
             <div className="git-diff-image-mode-toggle">
               <button
-                className={`git-diff-image-mode-btn ${svgViewMode === 'visual' ? 'active' : ''}`}
+                className="git-diff-image-mode-btn"
                 onClick={() => setSvgViewMode('visual')}
               >
                 {t('gitDiff.image.view.visual')}
@@ -2704,15 +2829,64 @@ export function GitDiffViewer({
     )
   }
 
+  const renderLoadingShell = (message: string, repoContexts?: GitRepoContext[]) => {
+    const loadingRepos = [...(repoContexts ?? [])]
+      .filter((repo) => repo.isSubmodule || repo.loading)
+      .sort(sortRepoContexts)
+
+    return (
+      <div className="git-diff-main git-diff-main-loading">
+        <div className="git-diff-file-list" style={{ width: fileListWidth }}>
+          {loadingRepos.length > 0 && (
+            <div className="git-diff-repo-filter">
+              <div className="git-diff-repo-filter-item active loading">
+                <span className="git-diff-repo-filter-label">{t('gitDiff.repo.all')}</span>
+                <span className="git-diff-repo-filter-count loading">...</span>
+              </div>
+              {loadingRepos.map((repo) => (
+                <div
+                  key={repo.root}
+                  className="git-diff-repo-filter-item loading"
+                  title={repo.root}
+                >
+                  <span className="git-diff-repo-filter-label">{repo.label}</span>
+                  <span className="git-diff-repo-filter-count loading">...</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="git-diff-file-list-header">
+            {t('gitDiff.fileList', { count: 0 })}
+          </div>
+          <div className="git-diff-file-list-content git-diff-file-list-content-loading">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div
+                key={`git-diff-skeleton-${index}`}
+                className={`git-diff-file-skeleton${index % 3 === 0 ? ' short' : index % 3 === 1 ? ' medium' : ''}`}
+              >
+                <span className="git-diff-file-skeleton-status" />
+                <span className="git-diff-file-skeleton-line" />
+                <span className="git-diff-file-skeleton-stats" />
+              </div>
+            ))}
+          </div>
+          <div className="git-diff-resizer" />
+        </div>
+
+        <div className="git-diff-detail git-diff-detail-loading">
+          <div className="git-diff-loading">
+            <div className="git-diff-spinner" />
+            <span>{message}</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // Main content rendering
   const renderContent = () => {
     if (!diffResult) {
-      return (
-        <div className="git-diff-loading">
-          <div className="git-diff-spinner" />
-          <span>{t('gitDiff.loading')}</span>
-        </div>
-      )
+      return renderLoadingShell(t('gitDiff.loading'))
     }
 
     if (!diffResult.gitInstalled) {
@@ -2721,6 +2895,10 @@ export function GitDiffViewer({
 
     if (!diffResult.isGitRepo) {
       return renderNotGitRepo()
+    }
+
+    if (diffResult.success && diffResult.files.length === 0 && diffResult.submodulesLoading) {
+      return renderLoadingShell(t('gitDiff.loadingSubmodules'), diffResult.repos)
     }
 
     if (!diffResult.success || diffResult.files.length === 0) {
@@ -2745,6 +2923,12 @@ export function GitDiffViewer({
               <span style={{ color: 'var(--accent)', cursor: 'pointer' }}>{t('gitDiff.repo.viewParent')}</span>
             </div>
           )}
+          {diffResult.submodulesLoading && (
+            <div className="git-diff-loading" style={{ minHeight: 'auto', justifyContent: 'flex-start', padding: '8px 12px', gap: '8px' }}>
+              <div className="git-diff-spinner" />
+              <span>{t('gitDiff.loadingSubmodules')}</span>
+            </div>
+          )}
           {hasMultipleRepos && diffResult.repos && (
             <div className="git-diff-repo-filter">
               <div
@@ -2754,20 +2938,26 @@ export function GitDiffViewer({
                 <span className="git-diff-repo-filter-label">{t('gitDiff.repo.all')}</span>
                 <span className="git-diff-repo-filter-count">{diffResult.files.length}</span>
               </div>
-              {diffResult.repos
-                .filter((repo) => repo.changeCount > 0)
-                .sort((a, b) => a.label.localeCompare(b.label))
-                .map((repo) => (
+              {repoFilterItems.map((repo) => {
+                const canSelectRepo = !repo.loading && repo.changeCount > 0
+                return (
                   <div
                     key={repo.root}
-                    className={`git-diff-repo-filter-item${repoFilter === repo.root ? ' active' : ''}`}
-                    onClick={() => setRepoFilter(repo.root)}
+                    className={`git-diff-repo-filter-item${repoFilter === repo.root ? ' active' : ''}${repo.loading ? ' loading' : ''}`}
+                    onClick={() => {
+                      if (canSelectRepo) {
+                        setRepoFilter(repo.root)
+                      }
+                    }}
                     title={repo.root}
                   >
                     <span className="git-diff-repo-filter-label">{repo.label}</span>
-                    <span className="git-diff-repo-filter-count">{repo.changeCount}</span>
+                    <span className={`git-diff-repo-filter-count${repo.loading ? ' loading' : ''}`}>
+                      {repo.loading ? '...' : repo.changeCount}
+                    </span>
                   </div>
-                ))}
+                )
+              })}
             </div>
           )}
           <div className="git-diff-file-list-header">
@@ -2848,6 +3038,7 @@ export function GitDiffViewer({
   const overlayClassName = `git-diff-overlay ${isPanel ? 'panel' : ''}`
   const modalClassName = `git-diff-modal ${isPanel ? 'panel' : ''}`
   const modalStyle = isPanel ? { width: '100%', height: '100%' } : { width: modalSize.width, height: modalSize.height }
+  const displayedCwd = diffResult?.cwd || (!cwdPending ? cwd : null)
 
   if (!isOpen) return null
 
@@ -2886,10 +3077,10 @@ export function GitDiffViewer({
         </div>
 
         {/* working directory */}
-        {diffResult?.cwd && diffResult.isGitRepo && (
+        {displayedCwd && (!diffResult || diffResult.isGitRepo) && (
           <div className="git-diff-cwd-bar">
             <span className="git-diff-cwd-label">{t('gitDiff.workingDirectory')}</span>
-            <span className="git-diff-cwd-path">{diffResult.cwd}</span>
+            <span className="git-diff-cwd-path">{displayedCwd}</span>
           </div>
         )}
 

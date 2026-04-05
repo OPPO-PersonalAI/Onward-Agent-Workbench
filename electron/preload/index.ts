@@ -220,6 +220,7 @@ export interface GitRepoContext {
   isSubmodule: boolean
   depth: number
   changeCount: number
+  loading?: boolean
 }
 
 // Git file status
@@ -243,7 +244,12 @@ export interface GitDiffResult {
   files: GitFileStatus[]
   repos?: GitRepoContext[]
   superprojectRoot?: string
+  submodulesLoading?: boolean
   error?: string
+}
+
+export interface GitDiffLoadOptions {
+  scope?: 'root-only' | 'full'
 }
 
 export interface GitCommitInfo {
@@ -302,6 +308,7 @@ export type TerminalGitStatus = 'clean' | 'modified' | 'added' | 'unknown'
 
 export interface TerminalGitInfo {
   cwd: string | null
+  repoRoot: string | null
   branch: string | null
   repoName: string | null
   status: TerminalGitStatus | null
@@ -494,7 +501,7 @@ export interface ProjectSearchStats {
 // Git API
 export interface GitAPI {
   resolveRepoRoot: (cwd: string) => Promise<string>
-  getDiff: (cwd: string) => Promise<GitDiffResult>
+  getDiff: (cwd: string, options?: GitDiffLoadOptions) => Promise<GitDiffResult>
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
   getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
@@ -958,8 +965,8 @@ const gitAPI: GitAPI = {
     return ipcRenderer.invoke('git:resolve-repo-root', cwd)
   },
 
-  getDiff: (cwd: string) => {
-    return ipcRenderer.invoke('git:get-diff', cwd)
+  getDiff: (cwd: string, options?: GitDiffLoadOptions) => {
+    return ipcRenderer.invoke('git:get-diff', cwd, options)
   },
 
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => {

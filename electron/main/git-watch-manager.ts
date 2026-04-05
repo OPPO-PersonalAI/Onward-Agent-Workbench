@@ -297,6 +297,7 @@ export class GitWatchManager {
       entry.lastStatusAt = 0
       this.emitInfo(entry, {
         cwd: null,
+        repoRoot: null,
         branch: null,
         repoName: null,
         status: null
@@ -313,6 +314,7 @@ export class GitWatchManager {
       entry.lastStatusAt = 0
       this.emitInfo(entry, {
         cwd,
+        repoRoot: null,
         branch: null,
         repoName: null,
         status: null
@@ -344,6 +346,7 @@ export class GitWatchManager {
 
     this.emitInfo(entry, {
       cwd,
+      repoRoot: meta.repoRoot,
       branch: snapshot.branch,
       repoName,
       status: snapshot.status
@@ -387,6 +390,7 @@ export class GitWatchManager {
     if (!prev || !next) return false
     return (
       prev.cwd === next.cwd &&
+      prev.repoRoot === next.repoRoot &&
       prev.branch === next.branch &&
       prev.repoName === next.repoName &&
       prev.status === next.status
