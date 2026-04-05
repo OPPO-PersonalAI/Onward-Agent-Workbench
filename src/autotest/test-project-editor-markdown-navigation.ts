@@ -9,6 +9,7 @@ const SAMPLE_MARKDOWN_PATH = 'test/dl_math_foundations.md'
 const HIGHLIGHT_FIXTURE_PATH = 'docs/api-reference.md'
 const IMAGE_FIXTURE_PATH = 'test/markdown-image-preview.md'
 const SVG_DATA_URL_PREFIX = 'data:image/svg+xml;base64,'
+const PNG_DATA_URL_PREFIX = 'data:image/png;base64,'
 
 export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext): Promise<TestResult[]> {
   const { assert, cancelled, openFileInEditor, sleep, waitFor } = ctx
@@ -124,9 +125,12 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
         html.includes('AUTOTEST_IMAGE_ORIGINAL') &&
         html.includes('<img') &&
         html.includes(`src="${SVG_DATA_URL_PREFIX}`) &&
+        html.includes(`src="${PNG_DATA_URL_PREFIX}`) &&
+        (imageState?.count ?? 0) >= 2 &&
         (imageState?.loadedCount ?? 0) > 0 &&
         (imageState?.brokenCount ?? 0) === 0 &&
-        (imageState?.sources ?? []).some((source) => source.startsWith(SVG_DATA_URL_PREFIX))
+        (imageState?.sources ?? []).some((source) => source.startsWith(SVG_DATA_URL_PREFIX)) &&
+        (imageState?.sources ?? []).some((source) => source.startsWith(PNG_DATA_URL_PREFIX))
       )
     },
     15000,
@@ -137,6 +141,7 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
     htmlLength: getApi()?.getMarkdownRenderedHtml?.().length ?? 0,
     hasImageTag: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes('<img'),
     hasSvgDataImage: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes(`src="${SVG_DATA_URL_PREFIX}`),
+    hasPngDataImage: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes(`src="${PNG_DATA_URL_PREFIX}`),
     imageState: getApi()?.getMarkdownPreviewImageState?.() ?? null
   })
   if (!imageRendered || cancelled()) return results
@@ -160,9 +165,12 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
         html.includes('AUTOTEST_IMAGE_EDITED') &&
         html.includes('<img') &&
         html.includes(`src="${SVG_DATA_URL_PREFIX}`) &&
+        html.includes(`src="${PNG_DATA_URL_PREFIX}`) &&
+        (imageState?.count ?? 0) >= 2 &&
         (imageState?.loadedCount ?? 0) > 0 &&
         (imageState?.brokenCount ?? 0) === 0 &&
-        (imageState?.sources ?? []).some((source) => source.startsWith(SVG_DATA_URL_PREFIX))
+        (imageState?.sources ?? []).some((source) => source.startsWith(SVG_DATA_URL_PREFIX)) &&
+        (imageState?.sources ?? []).some((source) => source.startsWith(PNG_DATA_URL_PREFIX))
       )
     },
     15000,
@@ -174,6 +182,7 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
     hasEditedMarker: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes('AUTOTEST_IMAGE_EDITED'),
     hasImageTag: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes('<img'),
     hasSvgDataImage: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes(`src="${SVG_DATA_URL_PREFIX}`),
+    hasPngDataImage: (getApi()?.getMarkdownRenderedHtml?.() ?? '').includes(`src="${PNG_DATA_URL_PREFIX}`),
     imageState: getApi()?.getMarkdownPreviewImageState?.() ?? null
   })
   if (!imageStillRenderedAfterEdit || cancelled()) return results

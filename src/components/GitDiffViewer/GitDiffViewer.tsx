@@ -13,6 +13,15 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { useI18n } from '../../i18n/useI18n'
+import {
+  GitImagePreview,
+  IMAGE_COMPARE_MODE_STORAGE_KEY,
+  IMAGE_DISPLAY_MODE_STORAGE_KEY,
+  type GitImagePreviewFileState,
+  type ImageCompareMode,
+  type ImageDisplayMode,
+  type SvgViewMode
+} from '../GitImagePreview/GitImagePreview'
 import './GitDiffViewer.css'
 
 const DEBUG_GIT_DIFF = Boolean(window.electronAPI?.debug?.enabled)
@@ -102,13 +111,6 @@ interface FileContentState {
   modifiedImageSize?: number
   error?: string
 }
-
-type ImageDisplayMode = 'original' | 'fit'
-type ImageCompareMode = '2up' | 'swipe' | 'onion'
-type SvgViewMode = 'visual' | 'text'
-
-const STORAGE_KEY_IMAGE_DISPLAY_MODE = 'git-diff-image-display-mode'
-const STORAGE_KEY_IMAGE_COMPARE_MODE = 'git-diff-image-compare-mode'
 
 type DiffViewAnchor = {
   line: number | null        // Modify the first visible line number in the editor
@@ -412,21 +414,16 @@ export function GitDiffViewer({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetFile: GitFileStatus } | null>(null)
   const [copyMessage, setCopyMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [imageDisplayMode, setImageDisplayMode] = useState<ImageDisplayMode>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_IMAGE_DISPLAY_MODE)
+    const saved = localStorage.getItem(IMAGE_DISPLAY_MODE_STORAGE_KEY)
     return saved === 'original' || saved === 'fit' ? saved : 'fit'
   })
-  const [imageMetadata, setImageMetadata] = useState<Record<string, { width: number; height: number }>>({})
   const [imageCompareMode, setImageCompareMode] = useState<ImageCompareMode>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_IMAGE_COMPARE_MODE)
+    const saved = localStorage.getItem(IMAGE_COMPARE_MODE_STORAGE_KEY)
     return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
   })
   const [diffSplitRatio, setDiffSplitRatio] = useState(() => readStoredDiffSplitRatio())
   const [diffEditorResetNonce] = useState(0)
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
-  const [swipePercent, setSwipePercent] = useState(50)
-  const swipeContainerRef = useRef<HTMLDivElement | null>(null)
-  const swipeDraggingRef = useRef(false)
-  const [onionOpacity, setOnionOpacity] = useState(50)
   const diffEditorRef = useRef<monacoTypes.editor.IStandaloneDiffEditor | null>(null)
   const monacoRef = useRef<typeof monacoTypes | null>(null)
   const diffEditorBindingDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
@@ -490,11 +487,11 @@ export function GitDiffViewer({
   }, [hasAnyUnsavedDraft, t])
   const toggleImageDisplayMode = useCallback((mode: ImageDisplayMode) => {
     setImageDisplayMode(mode)
-    localStorage.setItem(STORAGE_KEY_IMAGE_DISPLAY_MODE, mode)
+    localStorage.setItem(IMAGE_DISPLAY_MODE_STORAGE_KEY, mode)
   }, [])
   const toggleImageCompareMode = useCallback((mode: ImageCompareMode) => {
     setImageCompareMode(mode)
-    localStorage.setItem(STORAGE_KEY_IMAGE_COMPARE_MODE, mode)
+    localStorage.setItem(IMAGE_COMPARE_MODE_STORAGE_KEY, mode)
   }, [])
 
   const persistDiffSplitRatio = useCallback((nextRatio: number) => {
@@ -2540,171 +2537,6 @@ export function GitDiffViewer({
     </div>
   )
 
-  const handleImageLoad = useCallback((key: string, event: React.SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget
-    setImageMetadata((prev) => {
-      const current = prev[key]
-      if (current?.width === image.naturalWidth && current?.height === image.naturalHeight) {
-        return prev
-      }
-      return {
-        ...prev,
-        [key]: {
-          width: image.naturalWidth,
-          height: image.naturalHeight
-        }
-      }
-    })
-  }, [])
-
-  const formatFileSize = useCallback((dataUrl: string, sizeBytes?: number): string => {
-    let bytes: number
-    if (sizeBytes !== undefined) {
-      bytes = sizeBytes
-    } else if (dataUrl.startsWith('data:')) {
-      const base64Part = dataUrl.split(',')[1] || ''
-      bytes = Math.ceil(base64Part.length * 3 / 4)
-    } else {
-      return ''
-    }
-
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }, [])
-
-  const renderImagePanel = useCallback((
-    label: string,
-    imageUrl: string | undefined,
-    panelKey: string,
-    labelColor: string,
-    sizeBytes?: number
-  ) => {
-    if (!imageUrl) return null
-    const meta = imageMetadata[panelKey]
-    const sizeText = formatFileSize(imageUrl, sizeBytes)
-    return (
-      <div className="git-diff-image-panel">
-        <div className="git-diff-image-panel-header">
-          <span className="git-diff-image-panel-label" style={{ color: labelColor }}>{label}</span>
-        </div>
-        <div className="git-diff-image-wrapper">
-          <img
-            src={imageUrl}
-            alt={label}
-            className={`git-diff-image ${imageDisplayMode}`}
-            onLoad={(event) => handleImageLoad(panelKey, event)}
-          />
-        </div>
-        {meta && (
-          <div className="git-diff-image-meta">
-            <span>{meta.width} × {meta.height}</span>
-            {sizeText && <span>{sizeText}</span>}
-          </div>
-        )}
-      </div>
-    )
-  }, [formatFileSize, handleImageLoad, imageDisplayMode, imageMetadata])
-
-  const handleSwipeMouseDown = useCallback((event: React.MouseEvent) => {
-    event.preventDefault()
-    swipeDraggingRef.current = true
-
-    const updatePercent = (clientX: number) => {
-      const container = swipeContainerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      const x = clientX - rect.left
-      const percent = Math.max(0, Math.min(100, (x / rect.width) * 100))
-      setSwipePercent(percent)
-    }
-
-    const onMouseMove = (mouseEvent: MouseEvent) => {
-      if (!swipeDraggingRef.current) return
-      updatePercent(mouseEvent.clientX)
-    }
-
-    const onMouseUp = () => {
-      swipeDraggingRef.current = false
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [])
-
-  const renderSwipeCompare = useCallback((fileState: FileContentState) => {
-    return (
-      <div className="git-diff-image-container single">
-        <div className="git-diff-image-panel" style={{ position: 'relative' }}>
-          <div className="git-diff-image-swipe" ref={swipeContainerRef}>
-            <img
-              src={fileState.modifiedImageUrl}
-              alt={t('gitDiff.image.label.modified')}
-              className="git-diff-image fit git-diff-image-swipe-after"
-              onLoad={(event) => handleImageLoad('modified', event)}
-            />
-            <img
-              src={fileState.originalImageUrl}
-              alt={t('gitDiff.image.label.original')}
-              className="git-diff-image fit git-diff-image-swipe-before"
-              style={{ clipPath: `inset(0 ${100 - swipePercent}% 0 0)` }}
-              onLoad={(event) => handleImageLoad('original', event)}
-            />
-            <div
-              className="git-diff-image-swipe-handle"
-              style={{ left: `${swipePercent}%` }}
-              onMouseDown={handleSwipeMouseDown}
-            >
-              <div className="git-diff-image-swipe-handle-grip" />
-            </div>
-          </div>
-          <div className="git-diff-image-meta">
-            <span style={{ color: '#f14c4c' }}>{t('gitDiff.image.label.original')}: {swipePercent.toFixed(0)}%</span>
-            <span style={{ color: '#89d185' }}>{t('gitDiff.image.label.modified')}: {(100 - swipePercent).toFixed(0)}%</span>
-          </div>
-        </div>
-      </div>
-    )
-  }, [handleImageLoad, handleSwipeMouseDown, swipePercent, t])
-
-  const renderOnionSkinCompare = useCallback((fileState: FileContentState) => {
-    return (
-      <div className="git-diff-image-container single">
-        <div className="git-diff-image-panel">
-          <div className="git-diff-image-onion">
-            <img
-              src={fileState.originalImageUrl}
-              alt={t('gitDiff.image.label.original')}
-              className="git-diff-image fit git-diff-image-onion-base"
-              onLoad={(event) => handleImageLoad('original', event)}
-            />
-            <img
-              src={fileState.modifiedImageUrl}
-              alt={t('gitDiff.image.label.modified')}
-              className="git-diff-image fit git-diff-image-onion-overlay"
-              style={{ opacity: onionOpacity / 100 }}
-              onLoad={(event) => handleImageLoad('modified', event)}
-            />
-          </div>
-          <div className="git-diff-image-meta">
-            <span>{t('gitDiff.image.opacity')}</span>
-            <input
-              type="range"
-              className="git-diff-image-onion-slider"
-              min={0}
-              max={100}
-              value={onionOpacity}
-              onChange={(event) => setOnionOpacity(Number(event.target.value))}
-            />
-            <span>{onionOpacity}%</span>
-          </div>
-        </div>
-      </div>
-    )
-  }, [handleImageLoad, onionOpacity, t])
-
   const renderSvgDiffEditor = useCallback((fileState: FileContentState) => {
     return (
       <div className="git-diff-editor-container">
@@ -2724,131 +2556,45 @@ export function GitDiffViewer({
   }, [diffEditorOptions, effectiveModifiedContent, handleEditorDidMount, selectedFileKey, diffEditorResetNonce])
 
   const renderImagePreview = useCallback((fileState: FileContentState, file: GitFileStatus) => {
-    const isAdded = file.status === 'A' || file.status === '?'
-    const isDeleted = file.status === 'D'
-    const isModified = !isAdded && !isDeleted
-    const showSvgToggle = Boolean(fileState.isSvg)
-
-    const statusLabel = isAdded
-      ? t('gitDiff.image.status.added')
-      : isDeleted
-        ? t('gitDiff.image.status.deleted')
-        : t('gitDiff.image.status.modified')
-    const statusColor = isAdded ? '#89d185' : isDeleted ? '#f14c4c' : '#e2c08d'
-
-    if (showSvgToggle && svgViewMode === 'text') {
-      return (
-        <div className="git-diff-image-preview">
-          <div className="git-diff-image-toolbar">
-            <span className="git-diff-image-status" style={{ color: statusColor }}>
-              {statusLabel} ({t('gitDiff.image.svg')})
-            </span>
-            <div className="git-diff-image-mode-toggle">
-              <button
-                className="git-diff-image-mode-btn"
-                onClick={() => setSvgViewMode('visual')}
-              >
-                {t('gitDiff.image.view.visual')}
-              </button>
-              <button
-                className={`git-diff-image-mode-btn ${svgViewMode === 'text' ? 'active' : ''}`}
-                onClick={() => setSvgViewMode('text')}
-              >
-                {t('gitDiff.image.view.text')}
-              </button>
-            </div>
-          </div>
-          {renderSvgDiffEditor(fileState)}
-        </div>
-      )
-    }
-
+    const status = file.status === 'A' || file.status === '?'
+      ? 'added'
+      : file.status === 'D'
+        ? 'deleted'
+        : 'modified'
     return (
-      <div className="git-diff-image-preview">
-        <div className="git-diff-image-toolbar">
-          <span className="git-diff-image-status" style={{ color: statusColor }}>
-            {statusLabel}{showSvgToggle ? ` (${t('gitDiff.image.svg')})` : ''}
-          </span>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {showSvgToggle && (
-              <div className="git-diff-image-mode-toggle">
-                <button
-                  className={`git-diff-image-mode-btn ${svgViewMode === 'visual' ? 'active' : ''}`}
-                  onClick={() => setSvgViewMode('visual')}
-                >
-                  {t('gitDiff.image.view.visual')}
-                </button>
-                <button
-                  className={`git-diff-image-mode-btn ${svgViewMode === 'text' ? 'active' : ''}`}
-                  onClick={() => setSvgViewMode('text')}
-                >
-                  {t('gitDiff.image.view.text')}
-                </button>
-              </div>
-            )}
-            {isModified && (
-              <div className="git-diff-image-mode-toggle">
-                <button
-                  className={`git-diff-image-mode-btn ${imageCompareMode === '2up' ? 'active' : ''}`}
-                  onClick={() => toggleImageCompareMode('2up')}
-                >
-                  {t('gitDiff.image.compare.twoUp')}
-                </button>
-                <button
-                  className={`git-diff-image-mode-btn ${imageCompareMode === 'swipe' ? 'active' : ''}`}
-                  onClick={() => toggleImageCompareMode('swipe')}
-                >
-                  {t('gitDiff.image.compare.swipe')}
-                </button>
-                <button
-                  className={`git-diff-image-mode-btn ${imageCompareMode === 'onion' ? 'active' : ''}`}
-                  onClick={() => toggleImageCompareMode('onion')}
-                >
-                  {t('gitDiff.image.compare.onion')}
-                </button>
-              </div>
-            )}
-            <div className="git-diff-image-mode-toggle">
-              <button
-                className={`git-diff-image-mode-btn ${imageDisplayMode === 'original' ? 'active' : ''}`}
-                onClick={() => toggleImageDisplayMode('original')}
-              >
-                {t('gitDiff.image.display.original')}
-              </button>
-              <button
-                className={`git-diff-image-mode-btn ${imageDisplayMode === 'fit' ? 'active' : ''}`}
-                onClick={() => toggleImageDisplayMode('fit')}
-              >
-                {t('gitDiff.image.display.fit')}
-              </button>
-            </div>
-          </div>
-        </div>
-        {isModified && imageCompareMode === 'swipe' && fileState.originalImageUrl && fileState.modifiedImageUrl
-          ? renderSwipeCompare(fileState)
-          : isModified && imageCompareMode === 'onion' && fileState.originalImageUrl && fileState.modifiedImageUrl
-            ? renderOnionSkinCompare(fileState)
-            : (
-              <div className={`git-diff-image-container ${isModified ? 'side-by-side' : 'single'}`}>
-                {isDeleted && renderImagePanel(t('gitDiff.image.label.original'), fileState.originalImageUrl, 'original', '#f14c4c', fileState.originalImageSize)}
-                {isAdded && renderImagePanel(t('gitDiff.image.label.added'), fileState.modifiedImageUrl, 'modified', '#89d185', fileState.modifiedImageSize)}
-                {isModified && (
-                  <>
-                    {renderImagePanel(t('gitDiff.image.label.original'), fileState.originalImageUrl, 'original', '#f14c4c', fileState.originalImageSize)}
-                    {renderImagePanel(t('gitDiff.image.label.modified'), fileState.modifiedImageUrl, 'modified', '#89d185', fileState.modifiedImageSize)}
-                  </>
-                )}
-              </div>
-            )}
-      </div>
+      <GitImagePreview
+        fileState={fileState as GitImagePreviewFileState}
+        status={status}
+        labels={{
+          statusAdded: t('gitDiff.image.status.added'),
+          statusDeleted: t('gitDiff.image.status.deleted'),
+          statusModified: t('gitDiff.image.status.modified'),
+          svg: t('gitDiff.image.svg'),
+          viewVisual: t('gitDiff.image.view.visual'),
+          viewText: t('gitDiff.image.view.text'),
+          compareTwoUp: t('gitDiff.image.compare.twoUp'),
+          compareSwipe: t('gitDiff.image.compare.swipe'),
+          compareOnion: t('gitDiff.image.compare.onion'),
+          displayOriginal: t('gitDiff.image.display.original'),
+          displayFit: t('gitDiff.image.display.fit'),
+          labelOriginal: t('gitDiff.image.label.original'),
+          labelAdded: t('gitDiff.image.label.added'),
+          labelModified: t('gitDiff.image.label.modified'),
+          opacity: t('gitDiff.image.opacity')
+        }}
+        imageDisplayMode={imageDisplayMode}
+        imageCompareMode={imageCompareMode}
+        svgViewMode={svgViewMode}
+        onImageDisplayModeChange={toggleImageDisplayMode}
+        onImageCompareModeChange={toggleImageCompareMode}
+        onSvgViewModeChange={setSvgViewMode}
+        renderSvgDiffEditor={(state) => renderSvgDiffEditor(state as FileContentState)}
+      />
     )
   }, [
     imageCompareMode,
     imageDisplayMode,
-    renderImagePanel,
-    renderOnionSkinCompare,
     renderSvgDiffEditor,
-    renderSwipeCompare,
     t,
     toggleImageCompareMode,
     toggleImageDisplayMode,

@@ -9,9 +9,10 @@ import { promisify } from 'util'
 import { platform, tmpdir } from 'os'
 import { readFile, stat, writeFile, mkdir, access, mkdtemp, rm } from 'fs/promises'
 import { constants } from 'fs'
-import { resolve, relative, sep, isAbsolute, dirname, delimiter, basename, join, extname } from 'path'
+import { resolve, relative, sep, isAbsolute, dirname, delimiter, basename, join } from 'path'
 import { ptyManager } from './pty-manager'
 import { gitRuntimeManager, type GitTaskKind, type GitTaskPriority } from './git-runtime-manager'
+import { MAX_IMAGE_FILE_SIZE, bufferToImageDataUrl, isSupportedImageFile } from './image-utils'
 
 const rawExecAsync = promisify(exec)
 const rawExecFileAsync = promisify(execFile)
@@ -150,6 +151,8 @@ export interface GitHistoryFile {
   status: GitStatusCode
   additions: number
   deletions: number
+  isImage?: boolean
+  isSvg?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -170,6 +173,17 @@ export interface GitHistoryDiffResult {
   patch: string
   files: GitHistoryFile[]
   error?: string
+}
+
+export interface GitHistoryFileContentOptions {
+  base: string
+  head: string
+  file: Pick<GitHistoryFile, 'filename' | 'originalFilename' | 'status'>
+}
+
+export interface GitHistoryFileContentResult extends GitFileContentResult {
+  base: string
+  head: string
 }
 
 export interface TerminalGitInfo {
@@ -215,46 +229,7 @@ export interface GitFileActionResult {
 // Timeout for command execution (milliseconds)
 const EXEC_TIMEOUT = 10000
 const MAX_FILE_SIZE = 1024 * 1024  // 1MB
-const MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 const MAX_DIFF_OUTPUT = 10 * 1024 * 1024 // 10MB
-const IMAGE_EXTENSIONS = new Set([
-  '.png', '.apng', '.jpg', '.jpeg', '.jfif', '.pjpeg', '.pjp', '.gif', '.webp', '.avif', '.bmp', '.ico', '.cur', '.tif', '.tiff', '.svg'
-])
-
-const IMAGE_MIME_TYPES: Record<string, string> = {
-  '.png': 'image/png',
-  '.apng': 'image/apng',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.jfif': 'image/jpeg',
-  '.pjpeg': 'image/jpeg',
-  '.pjp': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.avif': 'image/avif',
-  '.bmp': 'image/bmp',
-  '.ico': 'image/x-icon',
-  '.cur': 'image/x-icon',
-  '.tif': 'image/tiff',
-  '.tiff': 'image/tiff',
-  '.svg': 'image/svg+xml'
-}
-
-function getNormalizedImageExtension(filename: string): string {
-  return extname(filename).toLowerCase()
-}
-
-function isImageFile(filename: string): boolean {
-  return IMAGE_EXTENSIONS.has(getNormalizedImageExtension(filename))
-}
-
-function getImageMime(filename: string): string {
-  return IMAGE_MIME_TYPES[getNormalizedImageExtension(filename)] || 'application/octet-stream'
-}
-
-function bufferToImageDataUrl(buffer: Buffer, filename: string): string {
-  return `data:${getImageMime(filename)};base64,${buffer.toString('base64')}`
-}
 
 // Short TTL + in-flight reuse: avoid frequent forks (lsof/git) causing CPU spikes and cwd read failures.
 const TERMINAL_CWD_CACHE_TTL = 1200
@@ -1933,12 +1908,16 @@ export async function getGitHistoryDiff(
       const stats = parseNumstatZ(numstatOutput)
       files = entries.map((entry) => {
         const stat = stats.get(entry.filename)
+        const isImage = isSupportedImageFile(entry.filename) || Boolean(entry.originalFilename && isSupportedImageFile(entry.originalFilename))
+        const isSvg = entry.filename.toLowerCase().endsWith('.svg') || Boolean(entry.originalFilename && entry.originalFilename.toLowerCase().endsWith('.svg'))
         return {
           filename: entry.filename,
           originalFilename: entry.originalFilename,
           status: entry.status,
           additions: stat?.additions ?? 0,
-          deletions: stat?.deletions ?? 0
+          deletions: stat?.deletions ?? 0,
+          ...(isImage ? { isImage: true } : {}),
+          ...(isSvg ? { isSvg: true } : {})
         }
       })
     }
@@ -1977,7 +1956,7 @@ async function readWorkingFile(
   fullPath: string,
   filename?: string
 ): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
-  const isImage = filename ? isImageFile(filename) : false
+  const isImage = filename ? isSupportedImageFile(filename) : false
   const isSvg = filename ? filename.toLowerCase().endsWith('.svg') : false
   const sizeLimit = isImage ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
   const fileStat = await stat(fullPath)
@@ -2008,7 +1987,7 @@ async function readGitFileByRef(
   ref: string,
   filename?: string
 ): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
-  const isImage = filename ? isImageFile(filename) : false
+  const isImage = filename ? isSupportedImageFile(filename) : false
   const isSvg = filename ? filename.toLowerCase().endsWith('.svg') : false
   const sizeLimit = isImage ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
 
@@ -2091,6 +2070,173 @@ async function readGitIndexFile(
   return readGitFileByRef(cwd, gitExecutable, `:${gitPath}`, filename)
 }
 
+async function readGitRevisionFile(
+  cwd: string,
+  gitExecutable: string,
+  revision: string,
+  gitPath: string,
+  filename?: string
+): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+  return readGitFileByRef(cwd, gitExecutable, `${revision}:${gitPath}`, filename)
+}
+
+export async function getGitHistoryFileContent(
+  cwd: string,
+  options: GitHistoryFileContentOptions
+): Promise<GitHistoryFileContentResult> {
+  const gitInstalled = await checkGitInstalled()
+  const gitExecutable = await resolveGitExecutable()
+  const filename = options.file.filename
+  if (!gitInstalled || !gitExecutable) {
+    return {
+      success: false,
+      cwd,
+      base: options.base,
+      head: options.head,
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary: false,
+      error: 'Git is not installed. Install Git first.'
+    }
+  }
+
+  const repoCheck = await checkGitRepository(cwd, gitExecutable)
+  if (!repoCheck.isRepo) {
+    return {
+      success: false,
+      cwd,
+      base: options.base,
+      head: options.head,
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary: false,
+      error: repoCheck.error || 'The current directory is not a Git repository.'
+    }
+  }
+
+  const { base, head, file } = options
+  if (!base || !head) {
+    return {
+      success: false,
+      cwd,
+      base: base || '',
+      head: head || '',
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary: false,
+      error: 'Missing commit range.'
+    }
+  }
+
+  const repoRoot = (await getGitRoot(cwd, gitExecutable)) || cwd
+  const originalTarget = file.originalFilename || filename
+  const isImage = isSupportedImageFile(filename) || isSupportedImageFile(originalTarget)
+  let originalContent = ''
+  let modifiedContent = ''
+  let isBinary = false
+  let isSvg = false
+  let originalImageUrl: string | undefined
+  let modifiedImageUrl: string | undefined
+  let originalImageSize: number | undefined
+  let modifiedImageSize: number | undefined
+
+  try {
+    if (file.status !== 'A' && file.status !== '?') {
+      const gitPath = toGitPath(repoRoot, originalTarget)
+      if (!gitPath) {
+        return {
+          success: false,
+          cwd: repoRoot,
+          base,
+          head,
+          filename,
+          originalContent: '',
+          modifiedContent: '',
+          isBinary: false,
+          error: 'Invalid file path.'
+        }
+      }
+      const originalResult = await readGitRevisionFile(repoRoot, gitExecutable, base, gitPath, originalTarget)
+      originalContent = originalResult.content
+      if (originalResult.isBinary) {
+        isBinary = true
+      }
+      if (originalResult.isSvg) {
+        isSvg = true
+      }
+      if (originalResult.imageDataUrl) {
+        originalImageUrl = originalResult.imageDataUrl
+      }
+      if (originalResult.imageSize !== undefined) {
+        originalImageSize = originalResult.imageSize
+      }
+    }
+
+    if (file.status !== 'D') {
+      const gitPath = toGitPath(repoRoot, filename)
+      if (!gitPath) {
+        return {
+          success: false,
+          cwd: repoRoot,
+          base,
+          head,
+          filename,
+          originalContent,
+          modifiedContent: '',
+          isBinary,
+          error: 'Invalid file path.'
+        }
+      }
+      const modifiedResult = await readGitRevisionFile(repoRoot, gitExecutable, head, gitPath, filename)
+      modifiedContent = modifiedResult.content
+      if (modifiedResult.isBinary) {
+        isBinary = true
+      }
+      if (modifiedResult.isSvg) {
+        isSvg = true
+      }
+      if (modifiedResult.imageDataUrl) {
+        modifiedImageUrl = modifiedResult.imageDataUrl
+      }
+      if (modifiedResult.imageSize !== undefined) {
+        modifiedImageSize = modifiedResult.imageSize
+      }
+    }
+
+    return {
+      success: true,
+      cwd: repoRoot,
+      base,
+      head,
+      filename,
+      originalContent,
+      modifiedContent,
+      isBinary,
+      ...(isImage ? { isImage: true } : {}),
+      ...(isSvg ? { isSvg: true } : {}),
+      ...(originalImageUrl ? { originalImageUrl } : {}),
+      ...(modifiedImageUrl ? { modifiedImageUrl } : {}),
+      ...(originalImageSize !== undefined ? { originalImageSize } : {}),
+      ...(modifiedImageSize !== undefined ? { modifiedImageSize } : {})
+    }
+  } catch (error) {
+    return {
+      success: false,
+      cwd: repoRoot,
+      base,
+      head,
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary,
+      error: `Failed to read file: ${String(error)}`
+    }
+  }
+}
+
 export async function getGitFileContent(
   cwd: string,
   file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>,
@@ -2132,7 +2278,7 @@ export async function getGitFileContent(
   let originalContent = ''
   let modifiedContent = ''
   let isBinary = false
-  const isImage = isImageFile(filename)
+  const isImage = isSupportedImageFile(filename)
   const isSvg = filename.toLowerCase().endsWith('.svg')
   let originalImageUrl: string | undefined
   let modifiedImageUrl: string | undefined

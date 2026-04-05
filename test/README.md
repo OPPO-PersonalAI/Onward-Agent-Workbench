@@ -13,6 +13,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Settings update controls, including manual check and restart-to-update actions
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
+- Image rendering across Git Diff, Git History, and Project Editor
 - Prompt cleanup and retention behavior
 - Terminal working-directory and Prompt editor height persistence
 - Markdown preview rendering
@@ -298,6 +299,15 @@ Source set: staged-loading validation for nested submodule trees created from a 
 - `RSM-03`: nested repo outline is visible before full aggregation finishes
 - `RSM-04`: full load completes and nested repo changes are attached
 - `RSM-05`: Git Diff still closes cleanly
+
+### Image Rendering Suite
+
+Source set: image rendering validation suite
+
+- `ID-01` to `ID-12`: Git Diff raster and SVG image preview behavior
+- `ID-13` to `ID-18`: Git History image commit preview behavior
+- `ID-19`: Project Editor direct image file preview behavior
+- `ID-20` to `ID-21`: suite cleanup and closeout
 
 ### Phase 4: Prompt Cleanup
 
