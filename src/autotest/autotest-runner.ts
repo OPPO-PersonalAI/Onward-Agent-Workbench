@@ -39,6 +39,7 @@ import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-termi
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
 import { testTerminalStatePersistence } from './test-terminal-state-persistence'
+import { testChangeLog } from './test-change-log'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -193,6 +194,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testSettingsUpdate(ctx)
       collectSuiteResults('SettingsUpdate', results)
       await sleep(400)
+    }
+
+    if (!ctx.cancelled() && shouldRun('change-log')) {
+      log('phase0.878:begin')
+      const results = await testChangeLog(ctx)
+      collectSuiteResults('ChangeLog', results)
+      await sleep(300)
     }
 
     if (!ctx.cancelled() && shouldRun('file-watch')) {

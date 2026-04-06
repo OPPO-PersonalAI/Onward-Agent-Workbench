@@ -1,0 +1,234 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.change-log-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background-color: color-mix(in srgb, var(--bg-1) 82%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.change-log-modal {
+  width: min(780px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: var(--bg-1);
+  box-shadow: var(--shadow-1);
+  outline: none;
+}
+
+.change-log-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-2);
+}
+
+.change-log-modal-heading {
+  min-width: 0;
+}
+
+.change-log-modal-title {
+  color: var(--text-1);
+  font-size: var(--font-lg);
+  font-weight: 600;
+}
+
+.change-log-modal-subtitle {
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: var(--font-sm);
+}
+
+.change-log-modal-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.change-log-modal-close:hover {
+  color: var(--text-1);
+  background-color: var(--bg-1);
+}
+
+.change-log-modal-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.change-log-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  background-color: var(--bg-1);
+}
+
+.change-log-modal-state {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: var(--font-md);
+  text-align: center;
+}
+
+.change-log-modal-state.is-error {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.change-log-modal-state-title {
+  color: var(--text-2);
+  font-size: var(--font-md);
+}
+
+.change-log-modal-state-detail {
+  max-width: 560px;
+  color: var(--text-3);
+  font-size: var(--font-sm);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.change-log-markdown {
+  padding: 16px 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--panel);
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.65;
+  box-shadow: var(--shadow-1);
+}
+
+.change-log-markdown > :first-child {
+  margin-top: 0;
+}
+
+.change-log-markdown h1,
+.change-log-markdown h2,
+.change-log-markdown h3 {
+  color: var(--text-1);
+}
+
+.change-log-markdown h1 {
+  margin: 0 0 16px;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.change-log-markdown h2 {
+  margin: 24px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 18px;
+}
+
+.change-log-markdown h3 {
+  margin: 20px 0 10px;
+  font-size: 15px;
+}
+
+.change-log-markdown p {
+  margin: 10px 0;
+}
+
+.change-log-markdown ul,
+.change-log-markdown ol {
+  margin: 10px 0 10px 20px;
+}
+
+.change-log-markdown li {
+  margin: 8px 0;
+}
+
+.change-log-markdown strong {
+  color: var(--text-1);
+}
+
+.change-log-markdown code {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-1);
+  color: var(--text-1);
+  font-size: 0.92em;
+}
+
+.change-log-markdown pre {
+  margin: 14px 0;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: var(--bg-1);
+}
+
+.change-log-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.change-log-markdown a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.change-log-markdown a:hover {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+
+.change-log-markdown blockquote {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background-color: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  color: var(--text-2);
+}
+
+@media (max-width: 768px) {
+  .change-log-modal-overlay {
+    padding: 12px;
+  }
+
+  .change-log-modal {
+    max-height: calc(100vh - 24px);
+  }
+
+  .change-log-modal-header {
+    padding: 16px 16px 12px;
+  }
+
+  .change-log-modal-body {
+    padding: 10px 16px 20px;
+  }
+
+  .change-log-markdown h1 {
+    font-size: 22px;
+  }
+}

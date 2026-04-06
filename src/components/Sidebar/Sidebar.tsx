@@ -10,15 +10,19 @@ import './Sidebar.css'
 interface SidebarProps {
   activePanel: 'prompt' | 'settings' | null
   layoutMode: LayoutMode
+  isChangeLogOpen: boolean
   onPanelChange: (panel: 'prompt' | 'settings' | null) => void
   onLayoutChange: (mode: LayoutMode) => void
+  onChangeLogToggle: () => void
 }
 
 export function Sidebar({
   activePanel,
   layoutMode,
+  isChangeLogOpen,
   onPanelChange,
-  onLayoutChange
+  onLayoutChange,
+  onChangeLogToggle
 }: SidebarProps) {
   const { t } = useI18n()
 
@@ -98,6 +102,22 @@ export function Sidebar({
 
       {/* Spacer Push the Settings button to the bottom */}
       <div className="sidebar-spacer" />
+
+      {/* Change Log button */}
+      <button
+        className={`sidebar-btn ${isChangeLogOpen ? 'active' : ''}`}
+        onClick={onChangeLogToggle}
+        title={t('sidebar.changeLog')}
+        data-testid="sidebar-change-log-button"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <path d="M14 3v5h5" />
+          <path d="M9 12h6" />
+          <path d="M9 16h6" />
+          <path d="M9 8.5h1" />
+        </svg>
+      </button>
 
       {/* Settings button */}
       <button

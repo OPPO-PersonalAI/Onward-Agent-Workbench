@@ -683,6 +683,41 @@ export interface AppInfoAPI {
   readNotice: () => Promise<string | null>
 }
 
+export type ChangelogLocale = 'en' | 'zh-CN'
+export type ChangelogChannel = 'daily' | 'stable'
+export type ChangelogReadReason = 'no-tag' | 'index-missing' | 'entry-missing' | 'file-missing' | 'invalid-index' | 'read-failed'
+
+export interface ChangelogEntry {
+  tag: string
+  version: string
+  channel: ChangelogChannel
+  previousTag: string | null
+  publishedAt: string | null
+  markdown: {
+    en: string
+    'zh-CN'?: string
+  }
+  html?: {
+    en: string
+    'zh-CN'?: string
+  }
+}
+
+export interface CurrentChangelogResult {
+  success: boolean
+  locale: ChangelogLocale
+  tag: string | null
+  entry?: ChangelogEntry
+  html?: string
+  content?: string
+  reason?: ChangelogReadReason
+  error?: string
+}
+
+export interface ChangelogAPI {
+  getCurrent: (locale?: string) => Promise<CurrentChangelogResult>
+}
+
 export interface UpdaterStatus {
   phase: UpdatePhase
   supported: boolean
@@ -841,6 +876,27 @@ export interface BrowserAPI {
   onNavStateChanged: (callback: (id: string, state: { canGoBack: boolean; canGoForward: boolean }) => void) => () => void
   onFullscreenChanged: (callback: (id: string, isFullscreen: boolean) => void) => () => void
   onEscapePressed: (callback: (id: string) => void) => () => void
+}
+
+export interface ElectronAPI {
+  terminal: TerminalAPI
+  prompt: PromptAPI
+  terminalConfig: TerminalConfigAPI
+  dialog: DialogAPI
+  shell: ShellAPI
+  commandPreset: CommandPresetAPI
+  appState: AppStateAPI
+  git: GitAPI
+  project: ProjectAPI
+  settings: SettingsAPI
+  appInfo: AppInfoAPI
+  changelog: ChangelogAPI
+  updater: UpdaterAPI
+  browser: BrowserAPI
+  codingAgentConfig: CodingAgentConfigAPI
+  codingAgent: CodingAgentAPI
+  debug: DebugAPI
+  platform: 'darwin' | 'win32' | 'linux'
 }
 
 const terminalAPI: TerminalAPI = {
@@ -1260,6 +1316,12 @@ const appInfoAPI: AppInfoAPI = {
   }
 }
 
+const changelogAPI: ChangelogAPI = {
+  getCurrent: (locale?: string) => {
+    return ipcRenderer.invoke('changelog:get-current', locale)
+  }
+}
+
 const updaterAPI: UpdaterAPI = {
   getStatus: () => {
     return ipcRenderer.invoke('updater:get-status')
@@ -1440,6 +1502,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   project: projectAPI,
   settings: settingsAPI,
   appInfo: appInfoAPI,
+  changelog: changelogAPI,
   updater: updaterAPI,
   browser: browserAPI,
   codingAgentConfig: codingAgentConfigAPI,
