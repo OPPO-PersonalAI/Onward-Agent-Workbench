@@ -20,6 +20,7 @@ import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import type { TerminalGitStatus } from '../../types/electron'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { useI18n } from '../../i18n/useI18n'
+import { useAppState } from '../../hooks/useAppState'
 import {
   GitImagePreview,
   IMAGE_COMPARE_MODE_STORAGE_KEY,
@@ -157,6 +158,7 @@ export function GitHistoryViewer({
   const isPanel = displayMode === 'panel'
   const { settings } = useSettings()
   const { locale, t } = useI18n()
+  const { getUIPreferences, updateUIPreferences } = useAppState()
 
   const [loading, setLoading] = useState(false)
   const [historyResult, setHistoryResult] = useState<GitHistoryResult | null>(null)
@@ -174,18 +176,28 @@ export function GitHistoryViewer({
   const [worktreeStatus, setWorktreeStatus] = useState<TerminalGitStatus | null>(null)
 
   const [hideWhitespace, setHideWhitespace] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.gitHistoryHideWhitespace !== undefined) return prefs.gitHistoryHideWhitespace
     const saved = localStorage.getItem(STORAGE_KEY_HIDE_WHITESPACE)
     return saved === 'true'
   })
   const [diffStyle, setDiffStyle] = useState<'split' | 'unified'>(() => {
+    const prefs = getUIPreferences()
+    if (prefs.gitHistoryDiffStyle === 'unified' || prefs.gitHistoryDiffStyle === 'split') return prefs.gitHistoryDiffStyle
     const saved = localStorage.getItem(STORAGE_KEY_DIFF_STYLE)
     return saved === 'unified' ? 'unified' : 'split'
   })
   const [imageDisplayMode, setImageDisplayMode] = useState<ImageDisplayMode>(() => {
+    const prefs = getUIPreferences()
+    const p = prefs.gitDiffImageDisplayMode
+    if (p === 'original' || p === 'fit') return p
     const saved = localStorage.getItem(IMAGE_DISPLAY_MODE_STORAGE_KEY)
     return saved === 'original' || saved === 'fit' ? saved : 'fit'
   })
   const [imageCompareMode, setImageCompareMode] = useState<ImageCompareMode>(() => {
+    const prefs = getUIPreferences()
+    const p = prefs.gitDiffImageCompareMode
+    if (p === '2up' || p === 'swipe' || p === 'onion') return p
     const saved = localStorage.getItem(IMAGE_COMPARE_MODE_STORAGE_KEY)
     return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
   })
@@ -194,6 +206,8 @@ export function GitHistoryViewer({
   const diffOptionsRef = useRef<HTMLDivElement | null>(null)
 
   const [fileListWidth, setFileListWidth] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.gitHistoryFileListWidth !== undefined) return prefs.gitHistoryFileListWidth
     const saved = localStorage.getItem(STORAGE_KEY_FILE_LIST_WIDTH)
     return saved ? parseInt(saved, 10) : DEFAULT_FILE_LIST_WIDTH
   })
@@ -204,6 +218,8 @@ export function GitHistoryViewer({
 
   // Summary / detail-body vertical resizer
   const [summaryHeight, setSummaryHeight] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.gitHistorySummaryHeight !== undefined) return prefs.gitHistorySummaryHeight
     const saved = localStorage.getItem(STORAGE_KEY_SUMMARY_HEIGHT)
     return saved ? parseInt(saved, 10) : DEFAULT_SUMMARY_HEIGHT
   })
@@ -365,10 +381,12 @@ export function GitHistoryViewer({
   const toggleImageDisplayMode = useCallback((mode: ImageDisplayMode) => {
     setImageDisplayMode(mode)
     localStorage.setItem(IMAGE_DISPLAY_MODE_STORAGE_KEY, mode)
-  }, [])
+    updateUIPreferences({ gitDiffImageDisplayMode: mode })
+  }, [updateUIPreferences])
   const toggleImageCompareMode = useCallback((mode: ImageCompareMode) => {
     setImageCompareMode(mode)
     localStorage.setItem(IMAGE_COMPARE_MODE_STORAGE_KEY, mode)
+    updateUIPreferences({ gitDiffImageCompareMode: mode })
   }, [])
 
   const resetState = useCallback(() => {
@@ -584,7 +602,10 @@ export function GitHistoryViewer({
       diffScrollTop: diffScrollTopRef.current
     }
     localStorage.setItem(historyStateKey, JSON.stringify(payload))
-  }, [historyStateKey])
+    updateUIPreferences({
+      gitHistoryStates: { ...(getUIPreferences().gitHistoryStates ?? {}), [historyStateKey]: payload }
+    })
+  }, [historyStateKey, getUIPreferences, updateUIPreferences])
 
   const persistStateRef = useRef(persistState)
   useEffect(() => {
@@ -670,7 +691,9 @@ export function GitHistoryViewer({
     if (commits.length === 0) return
 
     didRestoreRef.current = true
+    const prefs = getUIPreferences()
     const raw = localStorage.getItem(historyStateKey)
+      || (prefs.gitHistoryStates?.[historyStateKey] ? JSON.stringify(prefs.gitHistoryStates[historyStateKey]) : null)
     if (!raw) return
     try {
       const stored = JSON.parse(raw) as {
@@ -892,11 +915,13 @@ export function GitHistoryViewer({
       setDiffStyle: (style: 'split' | 'unified') => {
         setDiffStyle(style)
         localStorage.setItem(STORAGE_KEY_DIFF_STYLE, style)
+        updateUIPreferences({ gitHistoryDiffStyle: style })
       },
       getHideWhitespace: () => hideWhitespace,
       setHideWhitespace: (value: boolean) => {
         setHideWhitespace(value)
         localStorage.setItem(STORAGE_KEY_HIDE_WHITESPACE, String(value))
+        updateUIPreferences({ gitHistoryHideWhitespace: value })
       }
     }
     ;(window as any).__onwardGitHistoryDebug = api
@@ -987,13 +1012,14 @@ export function GitHistoryViewer({
       isVDraggingRef.current = false
       document.body.classList.remove('git-history-v-resizing')
       localStorage.setItem(STORAGE_KEY_SUMMARY_HEIGHT, `${summaryHeightRef.current}`)
+      updateUIPreferences({ gitHistorySummaryHeight: summaryHeightRef.current })
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
 
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [])
+  }, [updateUIPreferences])
 
   const handleFileResizerMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -1013,6 +1039,7 @@ export function GitHistoryViewer({
       isDraggingRef.current = false
       document.body.classList.remove('git-history-resizing')
       localStorage.setItem(STORAGE_KEY_FILE_LIST_WIDTH, `${fileListWidthRef.current}`)
+      updateUIPreferences({ gitHistoryFileListWidth: fileListWidthRef.current })
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
@@ -1024,12 +1051,14 @@ export function GitHistoryViewer({
   const handleToggleWhitespace = useCallback((value: boolean) => {
     setHideWhitespace(value)
     localStorage.setItem(STORAGE_KEY_HIDE_WHITESPACE, value ? 'true' : 'false')
-  }, [])
+    updateUIPreferences({ gitHistoryHideWhitespace: value })
+  }, [updateUIPreferences])
 
   const handleDiffStyleChange = useCallback((style: 'split' | 'unified') => {
     setDiffStyle(style)
     localStorage.setItem(STORAGE_KEY_DIFF_STYLE, style)
-  }, [])
+    updateUIPreferences({ gitHistoryDiffStyle: style })
+  }, [updateUIPreferences])
 
   const handleJumpToDiff = useCallback(() => {
     if (!terminalId) return

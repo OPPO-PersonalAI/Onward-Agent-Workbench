@@ -11,7 +11,7 @@ for (const stream of [process.stdout, process.stderr]) {
   })
 }
 
-import { app, BrowserWindow, nativeImage, Menu, dialog } from 'electron'
+import { app, BrowserWindow, nativeImage, Menu, dialog, ipcMain } from 'electron'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { registerIpcHandlers, cleanupIpcHandlers, setupWindowShortcuts } from './ipc-handlers'
@@ -28,6 +28,25 @@ import { getTerminalCwd } from './git-utils'
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 let installUpdateOnQuit = false
+
+// Ask the renderer to flush all pending debounced state saves (prompt height,
+// editor drafts, etc.) before the app quits. Without this, changes made within
+// the last 300-500ms debounce window would be lost on quit/update-restart.
+async function flushRendererState(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 2000)
+      ipcMain.once('app-state:flush-done', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+      mainWindow!.webContents.send('app-state:flush-pending')
+    })
+  } catch {
+    // Renderer may already be gone; proceed with quit
+  }
+}
 
 async function persistTerminalCwdSnapshot(): Promise<void> {
   const appStateStorage = getAppStateStorage()
@@ -82,6 +101,7 @@ export async function requestQuit(): Promise<void> {
   if (await confirmQuit()) {
     isQuitting = true
     installUpdateOnQuit = false
+    await flushRendererState()
     await persistTerminalCwdSnapshot()
     const shutdownResult = await ptyManager.shutdownAll()
     if (shutdownResult.timedOut > 0) {
@@ -106,6 +126,7 @@ export async function requestRestartToApplyUpdate(): Promise<{ success: boolean;
   isQuitting = true
   installUpdateOnQuit = true
 
+  await flushRendererState()
   await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {

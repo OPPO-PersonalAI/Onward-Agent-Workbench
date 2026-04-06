@@ -177,6 +177,33 @@ export interface TabState {
 }
 
 /**
+ * Global UI preferences persisted across restarts and upgrades.
+ * Migrated from localStorage to ensure reliable state recovery.
+ */
+export interface UIPreferences {
+  // Project Editor
+  projectEditorFileTreeWidth?: number
+  projectEditorModalSize?: { width: number; height: number }
+  projectEditorMarkdownPreviewWidth?: number
+  projectEditorMarkdownEditorVisible?: boolean
+  projectEditorOutlineVisible?: boolean
+  projectEditorOutlineWidth?: number
+  projectEditorOutlineTarget?: 'editor' | 'preview'
+  // Git Diff Viewer
+  gitDiffFileListWidth?: number
+  gitDiffModalSize?: { width: number; height: number }
+  gitDiffSplitViewRatio?: number
+  gitDiffImageDisplayMode?: string
+  gitDiffImageCompareMode?: string
+  // Git History Viewer
+  gitHistoryFileListWidth?: number
+  gitHistoryHideWhitespace?: boolean
+  gitHistoryDiffStyle?: string
+  gitHistorySummaryHeight?: number
+  gitHistoryStates?: Record<string, unknown>
+}
+
+/**
  * Application state
  */
 export interface AppState {
@@ -194,6 +221,8 @@ export interface AppState {
   projectEditorStates: Record<string, ProjectEditorState>
   /** Prompt scheduled task list */
   promptSchedules: PromptSchedule[]
+  /** Global UI preferences (panel widths, viewer settings, etc.) */
+  uiPreferences: UIPreferences
   /** Last updated timestamp */
   updatedAt: number
 }
