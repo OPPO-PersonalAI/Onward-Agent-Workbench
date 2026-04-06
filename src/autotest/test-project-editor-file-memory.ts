@@ -44,6 +44,7 @@ type SavedProjectState = {
     headingOffsetY?: number
     scrollTop?: number
   }
+  fileTreeScrollTop?: number
   outlineScrollTop?: number
   fileStates?: Record<string, SavedFileViewMemory>
 }
@@ -72,7 +73,16 @@ export async function testProjectEditorFileMemory(ctx: AutotestContext): Promise
   }
 
   const api = () => window.__onwardProjectEditorDebug
-  if (!api()?.openFileByPathAsUser || !api()?.setMarkdownPreviewOpen) {
+  if (
+    !api()?.openFileByPathAsUser ||
+    !api()?.setMarkdownPreviewOpen ||
+    !api()?.scrollFileBrowserToFraction ||
+    !api()?.getFileBrowserScrollTop ||
+    !api()?.scrollOutlineToFraction ||
+    !api()?.getOutlineScrollTop ||
+    !api()?.setOutlineVisible ||
+    !api()?.setSidebarMode
+  ) {
     record('PFM-00-debug-api-available', false, { error: 'project editor file-memory debug hooks unavailable' })
     return results
   }
@@ -86,10 +96,13 @@ export async function testProjectEditorFileMemory(ctx: AutotestContext): Promise
     }))
   }
 
-  const anchorFile = `onward-autotest-file-memory-anchor-${Date.now()}.md`
-  const fillerFiles = Array.from({ length: 5 }, (_, index) => `onward-autotest-file-memory-filler-${Date.now()}-${index + 1}.txt`)
-  const anchorContent = buildMarkdownContent('anchor', 14, 14)
+  const runId = Date.now()
+  const anchorFile = `onward-autotest-file-memory-anchor-${runId}.md`
+  const fillerFiles = Array.from({ length: 5 }, (_, index) => `onward-autotest-file-memory-filler-${runId}-${index + 1}.txt`)
+  const browserFiles = Array.from({ length: 32 }, (_, index) => `onward-autotest-file-memory-browser-${runId}-${index + 1}.txt`)
+  const anchorContent = buildMarkdownContent('anchor', 30, 12)
   const fillerContent = buildTextContent('filler', 80)
+  const browserContent = buildTextContent('browser', 12)
   const normalizedRoot = normalizePath(rootPath)
   const recentTolerance = 60
   const restoreTolerance = 80
@@ -143,6 +156,25 @@ export async function testProjectEditorFileMemory(ctx: AutotestContext): Promise
     return false
   }
 
+  const waitForOutlineReady = async (label: string) => {
+    const startedAt = performance.now()
+    while (performance.now() - startedAt < 10000) {
+      const currentApi = api()
+      const ready = currentApi?.isOutlineVisible?.() === true
+        && (currentApi?.getOutlineSymbolCount?.() ?? 0) > 10
+        && (currentApi?.getOutlineScrollHeight?.() ?? 0) > 0
+      if (ready) return true
+      await sleep(60)
+    }
+    log('file-memory-outline-timeout', {
+      label,
+      activeFilePath: api()?.getActiveFilePath?.() ?? null,
+      outlineVisible: api()?.isOutlineVisible?.() ?? null,
+      outlineSymbolCount: api()?.getOutlineSymbolCount?.() ?? null
+    })
+    return false
+  }
+
   try {
     const anchorCreated = await window.electronAPI.project.createFile(rootPath, anchorFile, anchorContent)
     if (!anchorCreated.success) {
@@ -154,6 +186,14 @@ export async function testProjectEditorFileMemory(ctx: AutotestContext): Promise
       const fillerCreated = await window.electronAPI.project.createFile(rootPath, fillerFile, fillerContent)
       if (!fillerCreated.success) {
         record('PFM-00-setup-filler', false, { fillerFile, error: fillerCreated.error })
+        return results
+      }
+    }
+
+    for (const browserFile of browserFiles) {
+      const browserCreated = await window.electronAPI.project.createFile(rootPath, browserFile, browserContent)
+      if (!browserCreated.success) {
+        record('PFM-00-setup-browser', false, { browserFile, error: browserCreated.error })
         return results
       }
     }
@@ -378,6 +418,223 @@ export async function testProjectEditorFileMemory(ctx: AutotestContext): Promise
         afterAnchorMemory
       }
     )
+
+    api()?.setSidebarMode?.('files')
+    await sleep(250)
+    const fileBrowserScrolled = Boolean(api()?.scrollFileBrowserToFraction?.(0.92))
+    await sleep(350)
+    const savedFileBrowserScrollTop = api()?.getFileBrowserScrollTop?.() ?? 0
+    record('PFM-30-file-browser-scroll-captured', fileBrowserScrolled && savedFileBrowserScrollTop > 100, {
+      fileBrowserScrolled,
+      savedFileBrowserScrollTop: Math.round(savedFileBrowserScrollTop),
+      fileBrowserScrollHeight: api()?.getFileBrowserScrollHeight?.() ?? null
+    })
+    if (cancelled()) return results
+
+    const savedFileBrowserState = await waitForSavedState(
+      'file-browser-scroll-persisted',
+      (state) => Math.abs((state.fileTreeScrollTop ?? -1) - savedFileBrowserScrollTop) <= restoreTolerance
+    )
+    record('PFM-31-file-browser-scroll-persisted', Boolean(savedFileBrowserState), {
+      fileTreeScrollTop: savedFileBrowserState?.fileTreeScrollTop ?? null,
+      savedFileBrowserScrollTop: Math.round(savedFileBrowserScrollTop)
+    })
+    if (!savedFileBrowserState || cancelled()) return results
+
+    const pagehideFileBrowserScrolled = Boolean(api()?.scrollFileBrowserToFraction?.(0.61))
+    const pagehideFileBrowserScrollTop = api()?.getFileBrowserScrollTop?.() ?? 0
+    window.dispatchEvent(new Event('pagehide'))
+    const pagehideFileBrowserState = await waitForSavedState(
+      'file-browser-pagehide-flush',
+      (state) => Math.abs((state.fileTreeScrollTop ?? -1) - pagehideFileBrowserScrollTop) <= restoreTolerance
+    )
+    record('PFM-31b-file-browser-pagehide-flush-persists-latest-scroll', pagehideFileBrowserScrolled && Boolean(pagehideFileBrowserState), {
+      pagehideFileBrowserScrollTop: Math.round(pagehideFileBrowserScrollTop),
+      persistedFileTreeScrollTop: pagehideFileBrowserState?.fileTreeScrollTop ?? null
+    })
+    if (!pagehideFileBrowserState || cancelled()) return results
+    const expectedFileBrowserScrollTop = pagehideFileBrowserState.fileTreeScrollTop ?? pagehideFileBrowserScrollTop
+
+    dispatchEscape()
+    const closedForFileBrowserRestore = await waitFor('file-browser-close-before-restore', () => !isOpenRef.current, 8000)
+    record('PFM-32-close-before-file-browser-restore', closedForFileBrowserRestore, { closedForFileBrowserRestore })
+    if (!closedForFileBrowserRestore || cancelled()) return results
+
+    const reopenedForFileBrowserRestore = await reopenProjectEditor('project-editor-file-browser-scroll')
+    record('PFM-33-reopen-for-file-browser-restore', reopenedForFileBrowserRestore, { reopenedForFileBrowserRestore })
+    if (!reopenedForFileBrowserRestore || cancelled()) return results
+
+    const activeAfterFileBrowserRestore = await waitForActiveFile('file-browser-active-anchor-after-reopen', anchorFile)
+    record('PFM-34-active-anchor-restored-before-file-browser-check', activeAfterFileBrowserRestore, {
+      expected: anchorFile,
+      actual: api()?.getActiveFilePath?.() ?? null
+    })
+    if (!activeAfterFileBrowserRestore || cancelled()) return results
+
+    await waitFor(
+      'file-browser-scroll-restored',
+      () => Math.abs((api()?.getFileBrowserScrollTop?.() ?? 0) - expectedFileBrowserScrollTop) <= restoreTolerance,
+      4000
+    )
+    const restoredFileBrowserScrollTop = api()?.getFileBrowserScrollTop?.() ?? 0
+    record(
+      'PFM-35-file-browser-scroll-restored-after-reopen',
+      Math.abs(restoredFileBrowserScrollTop - expectedFileBrowserScrollTop) <= restoreTolerance,
+      {
+        savedFileBrowserScrollTop: Math.round(expectedFileBrowserScrollTop),
+        restoredFileBrowserScrollTop: Math.round(restoredFileBrowserScrollTop),
+        diff: Math.round(Math.abs(restoredFileBrowserScrollTop - expectedFileBrowserScrollTop)),
+        tolerance: restoreTolerance
+      }
+    )
+    if (cancelled()) return results
+
+    api()?.setOutlineVisible?.(true)
+    const outlineReady = await waitForOutlineReady('outline-scroll-capture')
+    record('PFM-36-outline-ready-before-scroll-restore', outlineReady, {
+      outlineVisible: api()?.isOutlineVisible?.() ?? null,
+      outlineSymbolCount: api()?.getOutlineSymbolCount?.() ?? null
+    })
+    if (!outlineReady || cancelled()) return results
+
+    const outlineScrolled = Boolean(api()?.scrollOutlineToFraction?.(0.72))
+    await sleep(300)
+    const savedOutlineScrollTop = api()?.getOutlineScrollTop?.() ?? 0
+    record('PFM-37-outline-scroll-captured', outlineScrolled && savedOutlineScrollTop > 40, {
+      outlineScrolled,
+      savedOutlineScrollTop: Math.round(savedOutlineScrollTop),
+      outlineScrollHeight: api()?.getOutlineScrollHeight?.() ?? null
+    })
+    if (cancelled()) return results
+
+    const savedOutlineState = await waitForSavedState(
+      'outline-scroll-persisted',
+      (state) => {
+        const outlineScrollTop = state.fileStates?.[anchorFile]?.outlineScrollTop
+        return typeof outlineScrollTop === 'number'
+          && Math.abs(outlineScrollTop - savedOutlineScrollTop) <= restoreTolerance
+      }
+    )
+    record('PFM-38-outline-scroll-persisted', Boolean(savedOutlineState), {
+      outlineScrollTop: savedOutlineState?.fileStates?.[anchorFile]?.outlineScrollTop ?? null,
+      savedOutlineScrollTop: Math.round(savedOutlineScrollTop)
+    })
+    if (!savedOutlineState || cancelled()) return results
+
+    const pagehideOutlineScrolled = Boolean(api()?.scrollOutlineToFraction?.(0.46))
+    const pagehideOutlineScrollTop = api()?.getOutlineScrollTop?.() ?? 0
+    window.dispatchEvent(new Event('pagehide'))
+    const pagehideOutlineState = await waitForSavedState(
+      'outline-pagehide-flush',
+      (state) => {
+        const outlineScrollTop = state.fileStates?.[anchorFile]?.outlineScrollTop
+        return typeof outlineScrollTop === 'number'
+          && Math.abs(outlineScrollTop - pagehideOutlineScrollTop) <= restoreTolerance
+      }
+    )
+    record('PFM-38b-outline-pagehide-flush-persists-latest-scroll', pagehideOutlineScrolled && Boolean(pagehideOutlineState), {
+      pagehideOutlineScrollTop: Math.round(pagehideOutlineScrollTop),
+      persistedOutlineScrollTop: pagehideOutlineState?.fileStates?.[anchorFile]?.outlineScrollTop ?? null
+    })
+    if (!pagehideOutlineState || cancelled()) return results
+    const expectedOutlineScrollTop = pagehideOutlineState.fileStates?.[anchorFile]?.outlineScrollTop ?? pagehideOutlineScrollTop
+
+    await api()?.openFileByPathAsUser?.(fillerFiles[0], { trackRecent: true })
+    const switchedAwayForOutlineRestore = await waitForActiveFile('outline-switch-away', fillerFiles[0])
+    record('PFM-39-switch-away-before-outline-restore', switchedAwayForOutlineRestore, {
+      expected: fillerFiles[0],
+      actual: api()?.getActiveFilePath?.() ?? null
+    })
+    if (!switchedAwayForOutlineRestore || cancelled()) return results
+
+    await api()?.openFileByPathAsUser?.(anchorFile, { trackRecent: true })
+    const switchedBackForOutlineRestore = await waitForActiveFile('outline-switch-back', anchorFile)
+    record('PFM-40-switch-back-before-outline-restore', switchedBackForOutlineRestore, {
+      expected: anchorFile,
+      actual: api()?.getActiveFilePath?.() ?? null
+    })
+    if (!switchedBackForOutlineRestore || cancelled()) return results
+
+    const outlineReadyAfterSwitch = await waitForOutlineReady('outline-scroll-after-switch')
+    record('PFM-41-outline-ready-after-switch', outlineReadyAfterSwitch, {
+      outlineVisible: api()?.isOutlineVisible?.() ?? null,
+      outlineSymbolCount: api()?.getOutlineSymbolCount?.() ?? null
+    })
+    if (!outlineReadyAfterSwitch || cancelled()) return results
+
+    await sleep(250)
+    const restoredOutlineAfterSwitch = api()?.getOutlineScrollTop?.() ?? 0
+    record(
+      'PFM-42-outline-scroll-restored-on-switch',
+      Math.abs(restoredOutlineAfterSwitch - expectedOutlineScrollTop) <= restoreTolerance,
+      {
+        savedOutlineScrollTop: Math.round(expectedOutlineScrollTop),
+        restoredOutlineAfterSwitch: Math.round(restoredOutlineAfterSwitch),
+        diff: Math.round(Math.abs(restoredOutlineAfterSwitch - expectedOutlineScrollTop)),
+        tolerance: restoreTolerance
+      }
+    )
+    if (cancelled()) return results
+
+    dispatchEscape()
+    const closedForOutlineRestore = await waitFor('outline-close-before-reopen', () => !isOpenRef.current, 8000)
+    record('PFM-43-close-before-outline-reopen', closedForOutlineRestore, { closedForOutlineRestore })
+    if (!closedForOutlineRestore || cancelled()) return results
+
+    const reopenedForOutlineRestore = await reopenProjectEditor('project-editor-outline-scroll')
+    record('PFM-44-reopen-for-outline-restore', reopenedForOutlineRestore, { reopenedForOutlineRestore })
+    if (!reopenedForOutlineRestore || cancelled()) return results
+
+    const activeAfterOutlineRestore = await waitForActiveFile('outline-active-anchor-after-reopen', anchorFile)
+    record('PFM-45-active-anchor-restored-before-outline-check', activeAfterOutlineRestore, {
+      expected: anchorFile,
+      actual: api()?.getActiveFilePath?.() ?? null
+    })
+    if (!activeAfterOutlineRestore || cancelled()) return results
+
+    const outlineReadyAfterReopen = await waitForOutlineReady('outline-scroll-after-reopen')
+    record('PFM-46-outline-ready-after-reopen', outlineReadyAfterReopen, {
+      outlineVisible: api()?.isOutlineVisible?.() ?? null,
+      outlineSymbolCount: api()?.getOutlineSymbolCount?.() ?? null
+    })
+    if (!outlineReadyAfterReopen || cancelled()) return results
+
+    await sleep(250)
+    const restoredOutlineAfterReopen = api()?.getOutlineScrollTop?.() ?? 0
+    record(
+      'PFM-47-outline-scroll-restored-after-reopen',
+      Math.abs(restoredOutlineAfterReopen - expectedOutlineScrollTop) <= restoreTolerance,
+      {
+        savedOutlineScrollTop: Math.round(expectedOutlineScrollTop),
+        restoredOutlineAfterReopen: Math.round(restoredOutlineAfterReopen),
+        diff: Math.round(Math.abs(restoredOutlineAfterReopen - expectedOutlineScrollTop)),
+        tolerance: restoreTolerance
+      }
+    )
+    if (cancelled()) return results
+
+    const finalRoundTripStateBefore = await getLatestProjectState()
+    const finalRoundTripSaved = await window.electronAPI.appState.save(await window.electronAPI.appState.load())
+    const finalRoundTripStateAfter = finalRoundTripSaved ? await getLatestProjectState() : null
+    const finalBeforeAnchorMemory = finalRoundTripStateBefore?.fileStates?.[anchorFile] ?? null
+    const finalAfterAnchorMemory = finalRoundTripStateAfter?.fileStates?.[anchorFile] ?? null
+    record('PFM-48-app-state-round-trip-after-scroll-save-succeeds', finalRoundTripSaved, {
+      finalRoundTripSaved
+    })
+    record(
+      'PFM-49-app-state-round-trip-retains-tree-and-outline-scroll',
+      Boolean(
+        Math.abs((finalRoundTripStateAfter?.fileTreeScrollTop ?? -1) - (finalRoundTripStateBefore?.fileTreeScrollTop ?? -9999)) <= restoreTolerance
+          && Math.abs((finalAfterAnchorMemory?.outlineScrollTop ?? -1) - (finalBeforeAnchorMemory?.outlineScrollTop ?? -9999)) <= restoreTolerance
+          && finalAfterAnchorMemory?.outlineTarget === 'preview'
+      ),
+      {
+        beforeFileTreeScrollTop: finalRoundTripStateBefore?.fileTreeScrollTop ?? null,
+        afterFileTreeScrollTop: finalRoundTripStateAfter?.fileTreeScrollTop ?? null,
+        beforeAnchorMemory: finalBeforeAnchorMemory,
+        afterAnchorMemory: finalAfterAnchorMemory
+      }
+    )
   } finally {
     const deletedAnchor = await window.electronAPI.project.deletePath(rootPath, anchorFile)
     const deletedFillers = await Promise.all(
@@ -385,11 +642,18 @@ export async function testProjectEditorFileMemory(ctx: AutotestContext): Promise
         return await window.electronAPI.project.deletePath(rootPath, fillerFile)
       })
     )
+    const deletedBrowserFiles = await Promise.all(
+      browserFiles.map(async (browserFile) => {
+        return await window.electronAPI.project.deletePath(rootPath, browserFile)
+      })
+    )
     log('project-editor-file-memory:cleanup', {
       anchorFile,
       fillerFiles,
+      browserFiles,
       deletedAnchor: deletedAnchor.success,
-      deletedFillers: deletedFillers.map((entry) => entry.success)
+      deletedFillers: deletedFillers.map((entry) => entry.success),
+      deletedBrowserFiles: deletedBrowserFiles.map((entry) => entry.success)
     })
   }
 

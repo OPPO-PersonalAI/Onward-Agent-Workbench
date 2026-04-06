@@ -29,8 +29,8 @@ if (Select-String -Path $LogFile -Pattern "\[AutoTest\] FAIL" -Quiet) {
   Write-Error "ProjectEditor file-memory autotest failed. Log: $LogFile"
 }
 
-if (-not (Select-String -Path $LogFile -Pattern "PFM-29-app-state-round-trip-retains-file-memory-fields" -Quiet)) {
-  Write-Error "Missing PFM-29-app-state-round-trip-retains-file-memory-fields result. Log: $LogFile"
+if (-not (Select-String -Path $LogFile -Pattern "PFM-49-app-state-round-trip-retains-tree-and-outline-scroll" -Quiet)) {
+  Write-Error "Missing PFM-49-app-state-round-trip-retains-tree-and-outline-scroll result. Log: $LogFile"
 }
 
 Write-Output "ProjectEditor file-memory autotest passed. Log: $LogFile"

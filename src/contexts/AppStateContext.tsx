@@ -171,6 +171,32 @@ function isProjectEditorStateEqual(
   return true
 }
 
+function applyProjectEditorStateUpdate(
+  prev: AppState,
+  scope: ProjectEditorScope,
+  normalizedState: ProjectEditorState | null
+): AppState {
+  const stateKey = buildProjectEditorStateKey(scope)
+  if (!stateKey) return prev
+  const nextStates = { ...(prev.projectEditorStates ?? {}) }
+  const previousState = nextStates[stateKey] ?? null
+  if (normalizedState) {
+    if (isProjectEditorStateEqual(previousState, normalizedState)) {
+      return prev
+    }
+    nextStates[stateKey] = normalizedState
+  } else {
+    if (!previousState) {
+      return prev
+    }
+    delete nextStates[stateKey]
+  }
+  return {
+    ...prev,
+    projectEditorStates: nextStates
+  }
+}
+
 const DEBUG_APP_STATE = Boolean(window.electronAPI?.debug?.enabled)
 
 function normalizePromptEditorHeight(value: number | null | undefined): number {
@@ -277,6 +303,7 @@ interface AppStateContextValue {
   // Project editor state
   getProjectEditorState: (scope: ProjectEditorScope) => ProjectEditorState | null
   setProjectEditorState: (scope: ProjectEditorScope, state: ProjectEditorState | null) => void
+  flushProjectEditorState: (scope: ProjectEditorScope, state: ProjectEditorState | null) => void
 
   // Scheduled task operations
   addSchedule: (schedule: Omit<PromptSchedule, 'executedCount' | 'createdAt' | 'lastExecutedAt' | 'missedExecutions'>) => void
@@ -288,6 +315,7 @@ const AppStateContext = createContext<AppStateContextValue | null>(null)
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(createDefaultAppState())
+  const stateRef = useRef(state)
   const [isLoaded, setIsLoaded] = useState(false)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -343,6 +371,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           ),
           promptSchedules: Array.isArray(loadedState.promptSchedules) ? loadedState.promptSchedules : []
         }
+        stateRef.current = normalizedState
         setState(normalizedState)
         const shouldSave = normalizedState.tabs.some((tab, index) => {
           const original = loadedState.tabs[index]
@@ -384,6 +413,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(saveTimeoutRef.current)
     }
     saveTimeoutRef.current = setTimeout(() => {
+      saveTimeoutRef.current = null
       window.electronAPI.appState.save(newState)
     }, 500)
   }, [])
@@ -398,6 +428,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         ...updater(prev),
         updatedAt: Date.now()
       }
+      stateRef.current = newState
       saveState(newState)
       return newState
     })
@@ -502,6 +533,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         promptSchedules: newSchedules,
         updatedAt: Date.now()
       }
+      stateRef.current = newState
       saveState(newState)
       return newState
     })
@@ -893,6 +925,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           ),
           updatedAt: Date.now()
         }
+        stateRef.current = newState
         // Save directly without ordinary anti-shake
         window.electronAPI.appState.save(newState)
         return newState
@@ -918,6 +951,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           ),
           updatedAt: Date.now()
         }
+        stateRef.current = newState
         window.electronAPI.appState.save(newState)
         return newState
       })
@@ -950,6 +984,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           ),
           updatedAt: Date.now()
         }
+        stateRef.current = newState
         window.electronAPI.appState.save(newState)
         return newState
       })
@@ -1032,26 +1067,31 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
     const normalizedState = projectState ? normalizeProjectEditorState(projectState) : null
     updateState(prev => {
-      const nextStates = { ...(prev.projectEditorStates ?? {}) }
-      const previousState = nextStates[stateKey] ?? null
-      if (normalizedState) {
-        if (isProjectEditorStateEqual(previousState, normalizedState)) {
-          return prev
-        }
-      } else if (!previousState) {
-        return prev
-      }
-      if (normalizedState) {
-        nextStates[stateKey] = normalizedState
-      } else {
-        delete nextStates[stateKey]
-      }
-      return {
-        ...prev,
-        projectEditorStates: nextStates
-      }
+      return applyProjectEditorStateUpdate(prev, scope, normalizedState)
     })
   }, [updateState])
+
+  const flushProjectEditorState = useCallback((scope: ProjectEditorScope, projectState: ProjectEditorState | null) => {
+    if (DEBUG_APP_STATE) {
+      perfCountersRef.current.setProjectEditorState += 1
+    }
+    const normalizedState = projectState ? normalizeProjectEditorState(projectState) : null
+    const currentState = stateRef.current
+    const nextBaseState = applyProjectEditorStateUpdate(currentState, scope, normalizedState)
+    const nextState = nextBaseState === currentState
+      ? currentState
+      : {
+          ...nextBaseState,
+          updatedAt: Date.now()
+        }
+    stateRef.current = nextState
+    setState(nextState)
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    window.electronAPI.appState.save(nextState)
+  }, [])
 
   // Add a scheduled task
   const addSchedule = useCallback((schedule: Omit<PromptSchedule, 'executedCount' | 'createdAt' | 'lastExecutedAt' | 'missedExecutions'>) => {
@@ -1135,6 +1175,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     getLastFocusOwner,
     getProjectEditorState,
     setProjectEditorState,
+    flushProjectEditorState,
     addSchedule,
     updateSchedule,
     deleteSchedule: deleteScheduleByPromptId
@@ -1150,7 +1191,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     updateEditorDraft, getEditorDraft,
     setLastFocusedTerminalId, getLastFocusedTerminalId,
     setLastFocusOwner, getLastFocusOwner,
-    getProjectEditorState, setProjectEditorState,
+    getProjectEditorState, setProjectEditorState, flushProjectEditorState,
     addSchedule, updateSchedule, deleteScheduleByPromptId
   ])
 

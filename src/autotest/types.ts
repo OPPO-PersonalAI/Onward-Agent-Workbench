@@ -170,6 +170,8 @@ export interface ProjectEditorDebugApi {
   isOpen: () => boolean
   getRootPath: () => string | null
   getActiveFilePath: () => string | null
+  getSidebarMode?: () => 'files' | 'search'
+  setSidebarMode?: (mode: 'files' | 'search') => void
   getEditorContent: () => string
   setEditorContent?: (content: string) => boolean
   getEditorLineCount: () => number
@@ -184,6 +186,9 @@ export interface ProjectEditorDebugApi {
     broken: boolean
     src: string
   } | null
+  getFileBrowserScrollTop?: () => number
+  getFileBrowserScrollHeight?: () => number
+  scrollFileBrowserToFraction?: (fraction: number) => boolean
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean
@@ -201,8 +206,12 @@ export interface ProjectEditorDebugApi {
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
   isOutlineVisible?: () => boolean
+  setOutlineVisible?: (visible: boolean) => void
   getOutlineSymbolCount?: () => number
   getOutlineActiveItemName?: () => string | null
+  getOutlineScrollTop?: () => number
+  getOutlineScrollHeight?: () => number
+  scrollOutlineToFraction?: (fraction: number) => boolean
   getPreviewActiveSlug?: () => string | null
   scrollPreviewToFraction?: (fraction: number) => boolean
   getPreviewScrollTop?: () => number

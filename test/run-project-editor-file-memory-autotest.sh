@@ -30,8 +30,8 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   exit 1
 fi
 
-if ! grep -q "PFM-29-app-state-round-trip-retains-file-memory-fields" "$LOG_FILE"; then
-  echo "Missing PFM-29-app-state-round-trip-retains-file-memory-fields result. Log: $LOG_FILE" >&2
+if ! grep -q "PFM-49-app-state-round-trip-retains-tree-and-outline-scroll" "$LOG_FILE"; then
+  echo "Missing PFM-49-app-state-round-trip-retains-tree-and-outline-scroll result. Log: $LOG_FILE" >&2
   tail -n 160 "$LOG_FILE" >&2
   exit 1
 fi

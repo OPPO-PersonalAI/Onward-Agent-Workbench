@@ -260,6 +260,8 @@ Source set: terminal cwd + Prompt height persistence validation suite
   - Verifies closing the Markdown preview does not discard the last preview anchor before switching files
   - Verifies opened files keep per-file memory after they fall out of the Recent list
   - Verifies cold-start restore uses persisted `fileStates` for preview position and Markdown view mode
+  - Verifies File Browser scroll position persists and restores after reopening the Project Editor
+  - Verifies Outline scroll position restores on file switch and after reopening the Project Editor
   - Verifies main-process `app-state` save/load round-trips `fileStates` without dropping fields
 
 Run the Project Editor file-memory suite:
