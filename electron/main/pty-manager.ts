@@ -4,7 +4,8 @@
  */
 
 import * as pty from 'node-pty'
-import { platform } from 'os'
+import { platform, homedir } from 'os'
+import { join, delimiter } from 'path'
 import { execFileSync } from 'child_process'
 import { app } from 'electron'
 import { getApiPort } from './api-server'
@@ -81,6 +82,15 @@ export class PtyManager {
     const execCommand = command || shell
     let execArgs = command ? (args || []) : []
 
+    // On macOS/Linux, launch the default shell as a login shell so that
+    // profile files (.zprofile, .bash_profile, .profile) are sourced.
+    // This matches Terminal.app / iTerm2 behavior and ensures PATH includes
+    // Homebrew, nvm, pyenv, rbenv, etc. — critical when Electron is launched
+    // from Finder/Dock where process.env.PATH is minimal (/usr/bin:/bin).
+    if (!command && platform() !== 'win32') {
+      execArgs = ['-l']
+    }
+
     // On Windows, inject shell integration for CWD tracking via OSC 9;9
     if (platform() === 'win32' && !command) {
       execArgs = this.getWindowsShellArgs(shell)
@@ -113,7 +123,7 @@ export class PtyManager {
       rows,
       cwd: initialCwd,
       env: {
-        ...(env || process.env),
+        ...this.getAugmentedEnv(env || process.env),
         // Ensure correct UTF-8 locale (if not set on the system)
         LANG: process.env.LANG || 'en_US.UTF-8',
         LC_ALL: process.env.LC_ALL || '',
@@ -306,6 +316,35 @@ export class PtyManager {
     }
     record.externalDisposables.push(...disposables)
     return true
+  }
+
+  // Augment PATH with common tool directories that may be missing when
+  // Electron is launched from Finder/Dock on macOS (where process.env.PATH
+  // typically only contains /usr/bin:/bin). Deduplicates via Set.
+  private getAugmentedEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const env = { ...baseEnv }
+    const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path') || 'PATH'
+    const current = env[pathKey] || ''
+    const extras: string[] = []
+
+    if (platform() === 'win32') {
+      const appData = process.env.APPDATA || ''
+      if (appData) extras.push(join(appData, 'npm'))
+      extras.push('C:\\Program Files\\nodejs')
+    } else {
+      extras.push(
+        join(homedir(), '.local', 'bin'),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        '/opt/homebrew/sbin',
+        '/opt/local/bin',
+        '/usr/local/sbin'
+      )
+    }
+
+    const merged = [...current.split(delimiter).filter(Boolean), ...extras]
+    env[pathKey] = Array.from(new Set(merged)).join(delimiter)
+    return env
   }
 
   // Build PowerShell args that set up a CWD-reporting prompt via OSC 9;9.

@@ -13,6 +13,7 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { useI18n } from '../../i18n/useI18n'
+import { useAppState } from '../../hooks/useAppState'
 import {
   GitImagePreview,
   IMAGE_COMPARE_MODE_STORAGE_KEY,
@@ -368,6 +369,7 @@ export function GitDiffViewer({
   const isPanel = displayMode === 'panel'
   const { getTerminalStyle } = useSettings()
   const { t } = useI18n()
+  const { getUIPreferences, updateUIPreferences } = useAppState()
   const perfCountersRef = useRef({
     renders: 0,
     loadDiff: 0,
@@ -414,14 +416,24 @@ export function GitDiffViewer({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetFile: GitFileStatus } | null>(null)
   const [copyMessage, setCopyMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [imageDisplayMode, setImageDisplayMode] = useState<ImageDisplayMode>(() => {
+    const prefs = getUIPreferences()
+    const p = prefs.gitDiffImageDisplayMode
+    if (p === 'original' || p === 'fit') return p
     const saved = localStorage.getItem(IMAGE_DISPLAY_MODE_STORAGE_KEY)
     return saved === 'original' || saved === 'fit' ? saved : 'fit'
   })
   const [imageCompareMode, setImageCompareMode] = useState<ImageCompareMode>(() => {
+    const prefs = getUIPreferences()
+    const p = prefs.gitDiffImageCompareMode
+    if (p === '2up' || p === 'swipe' || p === 'onion') return p
     const saved = localStorage.getItem(IMAGE_COMPARE_MODE_STORAGE_KEY)
     return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
   })
-  const [diffSplitRatio, setDiffSplitRatio] = useState(() => readStoredDiffSplitRatio())
+  const [diffSplitRatio, setDiffSplitRatio] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.gitDiffSplitViewRatio !== undefined) return prefs.gitDiffSplitViewRatio
+    return readStoredDiffSplitRatio()
+  })
   const [diffEditorResetNonce] = useState(0)
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
   const diffEditorRef = useRef<monacoTypes.editor.IStandaloneDiffEditor | null>(null)
@@ -488,11 +500,13 @@ export function GitDiffViewer({
   const toggleImageDisplayMode = useCallback((mode: ImageDisplayMode) => {
     setImageDisplayMode(mode)
     localStorage.setItem(IMAGE_DISPLAY_MODE_STORAGE_KEY, mode)
-  }, [])
+    updateUIPreferences({ gitDiffImageDisplayMode: mode })
+  }, [updateUIPreferences])
   const toggleImageCompareMode = useCallback((mode: ImageCompareMode) => {
     setImageCompareMode(mode)
     localStorage.setItem(IMAGE_COMPARE_MODE_STORAGE_KEY, mode)
-  }, [])
+    updateUIPreferences({ gitDiffImageCompareMode: mode })
+  }, [updateUIPreferences])
 
   const persistDiffSplitRatio = useCallback((nextRatio: number) => {
     const normalized = clampDiffSplitRatio(nextRatio)
@@ -500,8 +514,9 @@ export function GitDiffViewer({
       Math.abs(prev - normalized) <= DIFF_SPLIT_RATIO_EPSILON ? prev : normalized
     ))
     localStorage.setItem(STORAGE_KEY_DIFF_SPLIT_RATIO, String(normalized))
+    updateUIPreferences({ gitDiffSplitViewRatio: normalized })
     return normalized
-  }, [])
+  }, [updateUIPreferences])
 
   // ---Copy function ---
   const copyToClipboard = useCallback(async (text: string, label: string) => {
@@ -559,17 +574,23 @@ export function GitDiffViewer({
     return () => document.removeEventListener('mousedown', handleMouseDown)
   }, [contextMenu])
 
-  // File list width (read from localStorage)
+  // File list width (read from uiPreferences, fallback to localStorage)
   const [fileListWidth, setFileListWidth] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.gitDiffFileListWidth !== undefined) return prefs.gitDiffFileListWidth
     const saved = localStorage.getItem(STORAGE_KEY_FILE_LIST_WIDTH)
     return saved ? parseInt(saved, 10) : DEFAULT_FILE_LIST_WIDTH
   })
   const isDraggingRef = useRef(false)
 
-  // Pop-up window size (read from localStorage)
+  // Pop-up window size (read from uiPreferences, fallback to localStorage)
   const [modalSize, setModalSize] = useState(() => {
     if (isPanel) {
       return { width: DEFAULT_MODAL_WIDTH, height: DEFAULT_MODAL_HEIGHT }
+    }
+    const prefs = getUIPreferences()
+    if (prefs.gitDiffModalSize) {
+      return { width: prefs.gitDiffModalSize.width || DEFAULT_MODAL_WIDTH, height: prefs.gitDiffModalSize.height || DEFAULT_MODAL_HEIGHT }
     }
     const saved = localStorage.getItem(STORAGE_KEY_MODAL_SIZE)
     if (saved) {
@@ -1233,6 +1254,7 @@ export function GitDiffViewer({
         isDraggingRef.current = false
         // Save to localStorage
         localStorage.setItem(STORAGE_KEY_FILE_LIST_WIDTH, String(fileListWidth))
+        updateUIPreferences({ gitDiffFileListWidth: fileListWidth })
       }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
@@ -1298,6 +1320,7 @@ export function GitDiffViewer({
         resizeDirectionRef.current = ''
         // Save to localStorage
         localStorage.setItem(STORAGE_KEY_MODAL_SIZE, JSON.stringify(modalSizeRef.current))
+        updateUIPreferences({ gitDiffModalSize: modalSizeRef.current })
       }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
@@ -1314,8 +1337,9 @@ export function GitDiffViewer({
     if (isPanel) return
     if (!isResizingModalRef.current) {
       localStorage.setItem(STORAGE_KEY_MODAL_SIZE, JSON.stringify(modalSize))
+      updateUIPreferences({ gitDiffModalSize: modalSize })
     }
-  }, [isPanel, modalSize])
+  }, [isPanel, modalSize, updateUIPreferences])
 
   useEffect(() => {
     modalSizeRef.current = modalSize

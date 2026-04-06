@@ -512,7 +512,7 @@ export function ProjectEditor({
   const isPanel = displayMode === 'panel'
   const { getTerminalStyle } = useSettings()
   const { locale, t } = useI18n()
-  const { getProjectEditorState, setProjectEditorState } = useAppState()
+  const { getProjectEditorState, setProjectEditorState, getUIPreferences, updateUIPreferences } = useAppState()
   const perfCountersRef = useRef({
     renders: 0,
     editorChange: 0,
@@ -555,6 +555,8 @@ export function ProjectEditor({
   const [isMarkdownPreviewOpen, setIsMarkdownPreviewOpen] = useState(true)
   const isMarkdownPreviewOpenRef = useRef(true)
   const [isMarkdownEditorVisible, setIsMarkdownEditorVisible] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorMarkdownEditorVisible !== undefined) return prefs.projectEditorMarkdownEditorVisible
     const saved = localStorage.getItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE)
     return saved === null ? true : saved === 'true'
   })
@@ -661,6 +663,8 @@ export function ProjectEditor({
   const previewRevealSettleFrameRef = useRef<number | null>(null)
 
   const [fileTreeWidth, setFileTreeWidth] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorFileTreeWidth !== undefined) return prefs.projectEditorFileTreeWidth
     const saved = localStorage.getItem(STORAGE_KEY_FILE_TREE_WIDTH)
     return saved ? parseInt(saved, 10) : DEFAULT_FILE_TREE_WIDTH
   })
@@ -671,6 +675,10 @@ export function ProjectEditor({
   const isDraggingRef = useRef(false)
 
   const [modalSize, setModalSize] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorModalSize) {
+      return { width: prefs.projectEditorModalSize.width || DEFAULT_MODAL_WIDTH, height: prefs.projectEditorModalSize.height || DEFAULT_MODAL_HEIGHT }
+    }
     const saved = localStorage.getItem(STORAGE_KEY_MODAL_SIZE)
     if (saved) {
       try {
@@ -690,6 +698,11 @@ export function ProjectEditor({
   const resizeDirectionRef = useRef<string>('')
 
   const [markdownPreviewWidth, setMarkdownPreviewWidth] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorMarkdownPreviewWidth !== undefined) {
+      const w = prefs.projectEditorMarkdownPreviewWidth
+      if (Number.isFinite(w)) return Math.min(MAX_MARKDOWN_PREVIEW_WIDTH, Math.max(MIN_MARKDOWN_PREVIEW_WIDTH, w))
+    }
     const savedWidth = localStorage.getItem(STORAGE_KEY_MARKDOWN_PREVIEW_WIDTH)
     if (savedWidth) {
       const w = parseInt(savedWidth, 10)
@@ -712,11 +725,18 @@ export function ProjectEditor({
   const isPreviewDraggingRef = useRef(false)
 
   const [isOutlineVisible, setIsOutlineVisible] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorOutlineVisible !== undefined) return prefs.projectEditorOutlineVisible
     const saved = localStorage.getItem(STORAGE_KEY_OUTLINE_VISIBLE)
     return saved === null ? true : saved === 'true'
   })
   const isOutlineVisibleRef = useRef(isOutlineVisible)
   const [outlineWidth, setOutlineWidth] = useState(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorOutlineWidth !== undefined) {
+      const w = prefs.projectEditorOutlineWidth
+      if (Number.isFinite(w)) return Math.min(MAX_OUTLINE_WIDTH, Math.max(MIN_OUTLINE_WIDTH, w))
+    }
     const saved = localStorage.getItem(STORAGE_KEY_OUTLINE_WIDTH)
     const w = saved ? parseInt(saved, 10) : DEFAULT_OUTLINE_WIDTH
     if (!Number.isFinite(w)) return DEFAULT_OUTLINE_WIDTH
@@ -725,6 +745,8 @@ export function ProjectEditor({
   const outlineWidthRef = useRef(outlineWidth)
   const isOutlineDraggingRef = useRef(false)
   const [outlineTarget, setOutlineTarget] = useState<OutlineTarget>(() => {
+    const prefs = getUIPreferences()
+    if (prefs.projectEditorOutlineTarget) return prefs.projectEditorOutlineTarget
     const saved = localStorage.getItem(STORAGE_KEY_OUTLINE_TARGET)
     return saved === 'preview' ? 'preview' : 'editor'
   })
@@ -1338,12 +1360,14 @@ export function ProjectEditor({
   useEffect(() => {
     if (!isDraggingRef.current) {
       localStorage.setItem(STORAGE_KEY_FILE_TREE_WIDTH, String(fileTreeWidth))
+      updateUIPreferences({ projectEditorFileTreeWidth: fileTreeWidth })
     }
   }, [fileTreeWidth])
 
   useEffect(() => {
     if (!isResizingModalRef.current) {
       localStorage.setItem(STORAGE_KEY_MODAL_SIZE, JSON.stringify(modalSize))
+      updateUIPreferences({ projectEditorModalSize: modalSize })
     }
   }, [modalSize])
 
@@ -3438,6 +3462,7 @@ export function ProjectEditor({
         setIsMarkdownEditorVisible(visible)
         isMarkdownEditorVisibleRef.current = visible
         localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
+        updateUIPreferences({ projectEditorMarkdownEditorVisible: visible })
         if (!visible && !isMarkdownPreviewOpenRef.current) {
           setIsMarkdownPreviewOpen(true)
           isMarkdownPreviewOpenRef.current = true
@@ -3478,6 +3503,7 @@ export function ProjectEditor({
         setOutlineTarget(target)
         outlineTargetRef.current = target
         localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+        updateUIPreferences({ projectEditorOutlineTarget: target })
       },
       isOutlineVisible: () => outlineShowInSplitRef.current,
       getOutlineSymbolCount: () => countSymbols(outlineSymbolsRef.current),
@@ -3714,6 +3740,7 @@ export function ProjectEditor({
         setIsMarkdownEditorVisible(visible)
         isMarkdownEditorVisibleRef.current = visible
         localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
+        updateUIPreferences({ projectEditorMarkdownEditorVisible: visible })
         if (!visible && !isMarkdownPreviewOpenRef.current) {
           setIsMarkdownPreviewOpen(true)
           isMarkdownPreviewOpenRef.current = true
@@ -3754,6 +3781,7 @@ export function ProjectEditor({
         setOutlineTarget(target)
         outlineTargetRef.current = target
         localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+        updateUIPreferences({ projectEditorOutlineTarget: target })
       },
       isOutlineVisible: () => outlineShowInSplitRef.current,
       getOutlineSymbolCount: () => countSymbols(outlineSymbolsRef.current),
@@ -4362,6 +4390,7 @@ export function ProjectEditor({
       if (isDraggingRef.current) {
         isDraggingRef.current = false
         localStorage.setItem(STORAGE_KEY_FILE_TREE_WIDTH, String(fileTreeWidth))
+      updateUIPreferences({ projectEditorFileTreeWidth: fileTreeWidth })
       }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
@@ -4400,6 +4429,7 @@ export function ProjectEditor({
           STORAGE_KEY_MARKDOWN_PREVIEW_WIDTH,
           String(markdownPreviewWidthRef.current)
         )
+        updateUIPreferences({ projectEditorMarkdownPreviewWidth: markdownPreviewWidthRef.current })
       }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
@@ -4439,6 +4469,7 @@ export function ProjectEditor({
       if (isOutlineDraggingRef.current) {
         isOutlineDraggingRef.current = false
         localStorage.setItem(STORAGE_KEY_OUTLINE_WIDTH, String(outlineWidthRef.current))
+        updateUIPreferences({ projectEditorOutlineWidth: outlineWidthRef.current })
       }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
@@ -4492,6 +4523,7 @@ export function ProjectEditor({
         isResizingModalRef.current = false
         resizeDirectionRef.current = ''
         localStorage.setItem(STORAGE_KEY_MODAL_SIZE, JSON.stringify(modalSizeRef.current))
+        updateUIPreferences({ projectEditorModalSize: modalSizeRef.current })
       }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
@@ -4501,7 +4533,7 @@ export function ProjectEditor({
     document.body.classList.add('project-editor-modal-resizing')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [isPanel, modalSize])
+  }, [isPanel, modalSize, updateUIPreferences])
 
   const editorPath = useMemo(() => {
     if (!activeFilePath) return undefined
@@ -4892,6 +4924,7 @@ export function ProjectEditor({
                             setIsMarkdownEditorVisible(true)
                             isMarkdownEditorVisibleRef.current = true
                             localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, 'true')
+                            updateUIPreferences({ projectEditorMarkdownEditorVisible: true })
                           }
                         }
                         isMarkdownPreviewOpenRef.current = next
@@ -4910,6 +4943,7 @@ export function ProjectEditor({
                         const next = !prev
                         isMarkdownEditorVisibleRef.current = next
                         localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(next))
+                        updateUIPreferences({ projectEditorMarkdownEditorVisible: next })
 	                        if (!next && !isMarkdownPreviewOpenRef.current) {
 	                          setIsMarkdownPreviewOpen(true)
 	                          beginPreviewRestore()
@@ -4931,6 +4965,7 @@ export function ProjectEditor({
                         const next = !prev
                         isOutlineVisibleRef.current = next
                         localStorage.setItem(STORAGE_KEY_OUTLINE_VISIBLE, String(next))
+                        updateUIPreferences({ projectEditorOutlineVisible: next })
                         return next
                       })
                     }}
@@ -5142,6 +5177,7 @@ export function ProjectEditor({
                             setOutlineTarget(target)
                             outlineTargetRef.current = target
                             localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+        updateUIPreferences({ projectEditorOutlineTarget: target })
                           }}
                         />
                       </div>

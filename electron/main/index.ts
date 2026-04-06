@@ -11,7 +11,7 @@ for (const stream of [process.stdout, process.stderr]) {
   })
 }
 
-import { app, BrowserWindow, nativeImage, Menu, dialog } from 'electron'
+import { app, BrowserWindow, nativeImage, Menu, dialog, ipcMain } from 'electron'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { registerIpcHandlers, cleanupIpcHandlers, setupWindowShortcuts } from './ipc-handlers'
@@ -24,10 +24,32 @@ import { tMain } from './localization'
 import { getUpdateService } from './update-service'
 import { getAppStateStorage } from './app-state-storage'
 import { getTerminalCwd } from './git-utils'
+import { getWindowStateStorage } from './window-state-storage'
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 let installUpdateOnQuit = false
+let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null
+let lastNormalBounds: { x: number; y: number; width: number; height: number } | null = null
+
+// Ask the renderer to flush all pending debounced state saves (prompt height,
+// editor drafts, etc.) before the app quits. Without this, changes made within
+// the last 300-500ms debounce window would be lost on quit/update-restart.
+async function flushRendererState(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 2000)
+      ipcMain.once('app-state:flush-done', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+      mainWindow!.webContents.send('app-state:flush-pending')
+    })
+  } catch {
+    // Renderer may already be gone; proceed with quit
+  }
+}
 
 async function persistTerminalCwdSnapshot(): Promise<void> {
   const appStateStorage = getAppStateStorage()
@@ -56,6 +78,20 @@ async function persistTerminalCwdSnapshot(): Promise<void> {
   }
 }
 
+function persistWindowState(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  const isMaximized = mainWindow.isMaximized()
+  const isFullScreen = mainWindow.isFullScreen()
+  // Use live bounds when in normal state; fall back to last tracked normal bounds
+  // when maximized/fullscreen (those bounds reflect the expanded display, not user intent)
+  const bounds = (!isMaximized && !isFullScreen)
+    ? mainWindow.getBounds()
+    : (lastNormalBounds ?? mainWindow.getBounds())
+
+  getWindowStateStorage().save(bounds, isMaximized, isFullScreen)
+}
+
 if (process.env.ONWARD_DISABLE_GPU === '1') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
@@ -82,6 +118,8 @@ export async function requestQuit(): Promise<void> {
   if (await confirmQuit()) {
     isQuitting = true
     installUpdateOnQuit = false
+    await flushRendererState()
+    persistWindowState()
     await persistTerminalCwdSnapshot()
     const shutdownResult = await ptyManager.shutdownAll()
     if (shutdownResult.timedOut > 0) {
@@ -106,6 +144,8 @@ export async function requestRestartToApplyUpdate(): Promise<{ success: boolean;
   isQuitting = true
   installUpdateOnQuit = true
 
+  await flushRendererState()
+  persistWindowState()
   await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {
@@ -126,6 +166,7 @@ export async function requestQuitForDebug(): Promise<{ success: boolean; error?:
   isQuitting = true
   installUpdateOnQuit = false
 
+  persistWindowState()
   await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {
@@ -195,9 +236,11 @@ function createWindow(displayName: string): void {
     }
   }
 
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+  // Restore saved window state
+  const savedWindowState = getWindowStateStorage().get()
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
+    width: savedWindowState.width,
+    height: savedWindowState.height,
     minWidth: 600,
     minHeight: 400,
     show: false,
@@ -213,10 +256,38 @@ function createWindow(displayName: string): void {
       contextIsolation: true,
       sandbox: false // Required for node-pty
     }
-  })
+  }
+  if (savedWindowState.x !== undefined && savedWindowState.y !== undefined) {
+    windowOptions.x = savedWindowState.x
+    windowOptions.y = savedWindowState.y
+  }
+
+  mainWindow = new BrowserWindow(windowOptions)
+
+  // Track normal (non-maximized, non-fullscreen) bounds for accurate restoration
+  lastNormalBounds = mainWindow.getBounds()
+
+  const debouncedSaveBounds = () => {
+    if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer)
+    windowStateSaveTimer = setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (!mainWindow.isMaximized() && !mainWindow.isFullScreen()) {
+        lastNormalBounds = mainWindow.getBounds()
+      }
+    }, 500)
+  }
+
+  mainWindow.on('resize', debouncedSaveBounds)
+  mainWindow.on('move', debouncedSaveBounds)
 
   mainWindow.on('ready-to-show', () => {
     log('[Window] ready-to-show')
+    if (savedWindowState.isMaximized) {
+      mainWindow?.maximize()
+    }
+    if (savedWindowState.isFullScreen) {
+      mainWindow?.setFullScreen(true)
+    }
     mainWindow?.show()
   })
 
