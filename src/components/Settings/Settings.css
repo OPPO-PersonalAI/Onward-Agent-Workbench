@@ -280,6 +280,10 @@
   color: var(--danger);
 }
 
+.settings-update-action-detail.is-success {
+  color: var(--success);
+}
+
 .settings-update-action-btn {
   min-width: 132px;
   height: 34px;
