@@ -19,6 +19,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Markdown preview rendering
 - External file change watching and automatic refresh
 - Preview position restore without top flash
+- Project Editor per-file memory persistence, including recent tracking and Markdown preview restore
 - Git state inspection and Git Diff behavior
 - Multi-submodule Git Diff staged loading
 - Terminal autofollow and viewport preservation
@@ -57,6 +58,7 @@ src/autotest/
 ├── test-prompt-integrity.ts
 ├── test-project-editor-restore-unit.ts
 ├── test-project-editor-restore.ts
+├── test-project-editor-file-memory.ts
 ├── test-project-editor-open-position.ts
 ├── test-project-editor-multi-terminal-scope.ts
 ├── test-markdown-latex-preview.ts
@@ -250,6 +252,25 @@ bash test/run-prompt-sender-autotest.sh
 Source set: terminal cwd + Prompt height persistence validation suite
 
 - `TSP-01` to `TSP-09`: prompt panel availability, multi-terminal cwd persistence, editor height persistence, and empty-draft height retention
+
+### Project Editor File Memory Suite
+
+- `src/autotest/test-project-editor-file-memory.ts`
+  - Verifies reopening the current file through the user path adds it to `recentFiles`
+  - Verifies closing the Markdown preview does not discard the last preview anchor before switching files
+  - Verifies opened files keep per-file memory after they fall out of the Recent list
+  - Verifies cold-start restore uses persisted `fileStates` for preview position and Markdown view mode
+  - Verifies main-process `app-state` save/load round-trips `fileStates` without dropping fields
+
+Run the Project Editor file-memory suite:
+
+```bash
+bash test/run-project-editor-file-memory-autotest.sh
+```
+
+```powershell
+pwsh test/run-project-editor-file-memory-autotest.ps1
+```
 
 ### Phase 2: Per-Agent Font Size
 

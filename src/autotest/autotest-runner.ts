@@ -39,6 +39,7 @@ import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-termi
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
 import { testTerminalStatePersistence } from './test-terminal-state-persistence'
+import { testProjectEditorFileMemory } from './test-project-editor-file-memory'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -147,6 +148,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.5:begin')
       const results = await testProjectEditorRestore(ctx)
       collectSuiteResults('ProjectEditorRestore', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('project-editor-file-memory')) {
+      log('phase0.55:begin')
+      const results = await testProjectEditorFileMemory(ctx)
+      collectSuiteResults('ProjectEditorFileMemory', results)
       await sleep(500)
     }
 

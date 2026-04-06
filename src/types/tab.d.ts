@@ -92,6 +92,21 @@ export interface PersistedTerminalState {
 }
 
 /**
+ * Per-file view state memory (persisted inside ProjectEditorState.fileStates)
+ */
+export interface FileViewMemory {
+  editorViewState?: unknown
+  cursorLine?: number
+  cursorColumn?: number
+  previewScrollAnchor?: { slug: string | null; ratio: number; headingOffsetY?: number; scrollTop?: number }
+  outlineScrollTop?: number
+  // Markdown-specific per-file view mode
+  isPreviewOpen?: boolean
+  isEditorVisible?: boolean
+  outlineTarget?: 'editor' | 'preview'
+}
+
+/**
  * Project editor state (persistent by terminal + working directory)
  */
 export interface ProjectEditorState {
@@ -115,9 +130,11 @@ export interface ProjectEditorState {
   modalWidth?: number
   modalHeight?: number
   // Scroll position memory
-  previewScrollAnchor?: { slug: string | null; ratio: number }
+  previewScrollAnchor?: { slug: string | null; ratio: number; headingOffsetY?: number; scrollTop?: number }
   fileTreeScrollTop?: number
   outlineScrollTop?: number
+  // Per-file state memory (keyed by normalized file path)
+  fileStates?: Record<string, FileViewMemory>
 }
 
 /**

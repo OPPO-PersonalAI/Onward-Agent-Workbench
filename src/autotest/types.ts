@@ -174,6 +174,7 @@ export interface ProjectEditorDebugApi {
   setEditorContent?: (content: string) => boolean
   getEditorLineCount: () => number
   openFileByPath: (filePath: string) => Promise<void>
+  openFileByPathAsUser?: (filePath: string, options?: { trackRecent?: boolean }) => Promise<void>
   triggerEditorSaveCommand: () => boolean
   triggerToolbarSave: () => Promise<boolean>
   isSqliteViewerVisible: () => boolean
@@ -186,6 +187,7 @@ export interface ProjectEditorDebugApi {
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean
+  setMarkdownPreviewOpen?: (open: boolean) => void
   setPreviewSearchOpen?: (open: boolean) => void
   isPreviewSearchOpen?: () => boolean
   isMarkdownRenderPending: () => boolean

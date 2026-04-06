@@ -61,10 +61,28 @@ interface ProjectEditorState {
   rootPath: string | null
   activeFilePath: string | null
   expandedDirs: string[]
+  pinnedFiles?: string[]
+  recentFiles?: string[]
   editorViewState?: unknown
   cursorLine?: number
   cursorColumn?: number
   savedAt: number
+  // UI layout state
+  isPreviewOpen?: boolean
+  isEditorVisible?: boolean
+  isOutlineVisible?: boolean
+  outlineTarget?: 'editor' | 'preview'
+  fileTreeWidth?: number
+  previewWidth?: number
+  outlineWidth?: number
+  modalWidth?: number
+  modalHeight?: number
+  // Scroll position memory
+  previewScrollAnchor?: { slug: string | null; ratio: number; headingOffsetY?: number; scrollTop?: number }
+  fileTreeScrollTop?: number
+  outlineScrollTop?: number
+  // Per-file state memory
+  fileStates?: Record<string, import('../../src/types/tab').FileViewMemory>
 }
 
 /**
@@ -375,6 +393,55 @@ class AppStateStorage {
   }
 
   /**
+   * Validate a preview scroll anchor from persisted state.
+   */
+  private validatePreviewScrollAnchor(
+    anchor: unknown
+  ): { slug: string | null; ratio: number; headingOffsetY?: number; scrollTop?: number } | undefined {
+    if (!anchor || typeof anchor !== 'object') return undefined
+    const a = anchor as Record<string, unknown>
+    const slug = typeof a.slug === 'string' ? a.slug : null
+    const ratio = typeof a.ratio === 'number' ? a.ratio : 0
+    const headingOffsetY = typeof a.headingOffsetY === 'number' ? a.headingOffsetY : undefined
+    const scrollTop = typeof a.scrollTop === 'number' ? a.scrollTop : undefined
+    return { slug, ratio, headingOffsetY, scrollTop }
+  }
+
+  /**
+   * Validate per-file state memory map from persisted state.
+   */
+  private validateFileStates(
+    raw: unknown
+  ): Record<string, import('../../src/types/tab').FileViewMemory> | undefined {
+    if (!raw || typeof raw !== 'object') return undefined
+    const result: Record<string, import('../../src/types/tab').FileViewMemory> = {}
+    let count = 0
+    for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+      if (!key || typeof key !== 'string' || !val || typeof val !== 'object') continue
+      if (count >= 20) break // Cap persisted file states to prevent unbounded growth
+      const v = val as Record<string, unknown>
+      const entry: import('../../src/types/tab').FileViewMemory = {}
+      if (v.editorViewState !== undefined) entry.editorViewState = v.editorViewState
+      if (typeof v.cursorLine === 'number') entry.cursorLine = v.cursorLine
+      if (typeof v.cursorColumn === 'number') entry.cursorColumn = v.cursorColumn
+      if (v.previewScrollAnchor && typeof v.previewScrollAnchor === 'object') {
+        entry.previewScrollAnchor = this.validatePreviewScrollAnchor(v.previewScrollAnchor)
+      }
+      if (typeof v.outlineScrollTop === 'number') entry.outlineScrollTop = v.outlineScrollTop
+      if (typeof v.isPreviewOpen === 'boolean') entry.isPreviewOpen = v.isPreviewOpen
+      if (typeof v.isEditorVisible === 'boolean') entry.isEditorVisible = v.isEditorVisible
+      if (v.outlineTarget === 'editor' || v.outlineTarget === 'preview') {
+        entry.outlineTarget = v.outlineTarget
+      }
+      if (Object.keys(entry).length > 0) {
+        result[key] = entry
+        count += 1
+      }
+    }
+    return count > 0 ? result : undefined
+  }
+
+  /**
    * Validate state data to ensure all fields are present and valid
    */
   private validateState(state: Partial<AppState>): AppState {
@@ -422,7 +489,31 @@ class AppStateStorage {
           editorViewState: value?.editorViewState,
           cursorLine,
           cursorColumn,
-          savedAt
+          savedAt,
+          // Quick file lists
+          pinnedFiles: Array.isArray(value?.pinnedFiles)
+            ? (value.pinnedFiles as unknown[]).filter((s): s is string => typeof s === 'string')
+            : undefined,
+          recentFiles: Array.isArray(value?.recentFiles)
+            ? (value.recentFiles as unknown[]).filter((s): s is string => typeof s === 'string')
+            : undefined,
+          // UI layout state
+          isPreviewOpen: typeof value?.isPreviewOpen === 'boolean' ? value.isPreviewOpen : undefined,
+          isEditorVisible: typeof value?.isEditorVisible === 'boolean' ? value.isEditorVisible : undefined,
+          isOutlineVisible: typeof value?.isOutlineVisible === 'boolean' ? value.isOutlineVisible : undefined,
+          outlineTarget: value?.outlineTarget === 'editor' || value?.outlineTarget === 'preview'
+            ? value.outlineTarget : undefined,
+          fileTreeWidth: typeof value?.fileTreeWidth === 'number' ? value.fileTreeWidth : undefined,
+          previewWidth: typeof value?.previewWidth === 'number' ? value.previewWidth : undefined,
+          outlineWidth: typeof value?.outlineWidth === 'number' ? value.outlineWidth : undefined,
+          modalWidth: typeof value?.modalWidth === 'number' ? value.modalWidth : undefined,
+          modalHeight: typeof value?.modalHeight === 'number' ? value.modalHeight : undefined,
+          // Scroll position memory
+          previewScrollAnchor: this.validatePreviewScrollAnchor(value?.previewScrollAnchor),
+          fileTreeScrollTop: typeof value?.fileTreeScrollTop === 'number' ? value.fileTreeScrollTop : undefined,
+          outlineScrollTop: typeof value?.outlineScrollTop === 'number' ? value.outlineScrollTop : undefined,
+          // Per-file state memory
+          fileStates: this.validateFileStates(value?.fileStates)
         }
       })
     }

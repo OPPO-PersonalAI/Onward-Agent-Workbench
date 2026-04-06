@@ -163,6 +163,11 @@ function isProjectEditorStateEqual(
   if (prev.cursorLine !== next.cursorLine) return false
   if (prev.cursorColumn !== next.cursorColumn) return false
   if (prev.savedAt !== next.savedAt) return false
+  // Per-file state comparison (shallow: check key count difference)
+  const prevFileKeys = Object.keys(prev.fileStates ?? {})
+  const nextFileKeys = Object.keys(next.fileStates ?? {})
+  if (prevFileKeys.length !== nextFileKeys.length) return false
+  if (prev.fileStates !== next.fileStates) return false
   return true
 }
 

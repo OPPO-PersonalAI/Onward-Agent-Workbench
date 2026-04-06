@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ProjectEditorState } from '../../types/tab.d.ts'
+import type { FileViewMemory, ProjectEditorState } from '../../types/tab.d.ts'
 import { DEFAULT_LOCALE, translate, type AppLocale } from '../../i18n/core'
 
 export function normalizeProjectEditorRootPath(value: string): string {
@@ -35,6 +35,24 @@ export function buildPendingCursor(
     lineNumber: cursorLine,
     column: typeof cursorColumn === 'number' ? cursorColumn : 1
   }
+}
+
+export function buildLegacyFileMemoryEntry(state: ProjectEditorState | null): FileViewMemory | null {
+  if (!state?.activeFilePath) return null
+
+  const entry: FileViewMemory = {}
+  if (state.editorViewState !== undefined) entry.editorViewState = state.editorViewState
+  if (typeof state.cursorLine === 'number') entry.cursorLine = state.cursorLine
+  if (typeof state.cursorColumn === 'number') entry.cursorColumn = state.cursorColumn
+  if (state.previewScrollAnchor) entry.previewScrollAnchor = state.previewScrollAnchor
+  if (typeof state.outlineScrollTop === 'number') entry.outlineScrollTop = state.outlineScrollTop
+  if (typeof state.isPreviewOpen === 'boolean') entry.isPreviewOpen = state.isPreviewOpen
+  if (typeof state.isEditorVisible === 'boolean') entry.isEditorVisible = state.isEditorVisible
+  if (state.outlineTarget === 'editor' || state.outlineTarget === 'preview') {
+    entry.outlineTarget = state.outlineTarget
+  }
+
+  return Object.keys(entry).length > 0 ? entry : null
 }
 
 export function shouldKeepPendingRestoreState(options: {
