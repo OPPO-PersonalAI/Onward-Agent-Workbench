@@ -591,6 +591,7 @@ export function ProjectEditor({
   const markdownRootPathRef = useRef('')
   const markdownBaseDirRef = useRef('')
   const markdownImageMapRef = useRef<Record<string, string>>({})
+  const watchedImagePathsRef = useRef<Set<string>>(new Set())
   const markdownRenderAllowedRef = useRef(false)
   const markdownWorkerLogCountRef = useRef(0)
   const markdownPurifyLogCountRef = useRef(0)
@@ -1195,11 +1196,14 @@ export function ProjectEditor({
     setIsLoadingFile(false)
     setIsMarkdownRenderEnabled(false)
     setMarkdownImageMap({})
+    markdownImageMapRef.current = {}
     setMarkdownImagePaths([])
     setMarkdownRenderedHtml('')
     setMarkdownRenderPending(false)
     setMarkdownRenderSource('')
     setMissingFileNotice(null)
+    void window.electronAPI.project.unwatchAllImageFiles()
+    watchedImagePathsRef.current = new Set()
     if (DEBUG_PROJECT_EDITOR) {
       debugLog('reset:done', { activeFilePath: null })
     }
@@ -1558,8 +1562,11 @@ export function ProjectEditor({
   useEffect(() => {
     resetPreviewRestoreState()
     setMarkdownImageMap({})
+    markdownImageMapRef.current = {}
     setMarkdownImagePaths([])
     setMarkdownRenderedHtml('')
+    void window.electronAPI.project.unwatchAllImageFiles()
+    watchedImagePathsRef.current = new Set()
   }, [resetPreviewRestoreState, rootPath])
 
   useEffect(() => {
@@ -1622,6 +1629,39 @@ export function ProjectEditor({
     }
   }, [isMarkdownRenderAllowed, markdownImageMap, markdownImagePaths, rootPath, sendMarkdownRenderRequest])
 
+  // Watch referenced image files for changes and invalidate cache on modification
+  useEffect(() => {
+    if (!isMarkdownRenderAllowed || !rootPath) return
+
+    const currentPaths = new Set(markdownImagePaths)
+    const watched = watchedImagePathsRef.current
+
+    // Determine paths to watch/unwatch
+    const toWatch = markdownImagePaths.filter((p) => !watched.has(p))
+    const toUnwatch = Array.from(watched).filter((p) => !currentPaths.has(p))
+
+    if (toWatch.length > 0) {
+      void window.electronAPI.project.watchImageFiles(rootPath, toWatch)
+      for (const p of toWatch) watched.add(p)
+    }
+    if (toUnwatch.length > 0) {
+      void window.electronAPI.project.unwatchImageFiles(rootPath, toUnwatch)
+      for (const p of toUnwatch) watched.delete(p)
+    }
+
+    // Listen for image file changes and invalidate the specific cache entry
+    const unsubscribe = window.electronAPI.project.onImageFileChanged((relativePath) => {
+      const currentMap = markdownImageMapRef.current
+      if (!currentMap[relativePath]) return
+      const { [relativePath]: _, ...rest } = currentMap
+      markdownImageMapRef.current = rest
+      setMarkdownImageMap(rest)
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [isMarkdownRenderAllowed, markdownImagePaths, rootPath])
 
   const showStatus = useCallback((type: 'success' | 'error', text: string) => {
     setStatusMessage({ type, text })
@@ -2500,6 +2540,9 @@ export function ProjectEditor({
       setDialog(null)
       setDialogInput('')
       setMarkdownImageMap({})
+      markdownImageMapRef.current = {}
+      void window.electronAPI.project.unwatchAllImageFiles()
+      watchedImagePathsRef.current = new Set()
       rootRef.current = null
       fileIndexRef.current = []
       editorSaveCommandIdRef.current = null
@@ -5090,6 +5133,21 @@ export function ProjectEditor({
                           {t('projectEditor.livePreview')}
                           {markdownRenderPending && (
                             <span className="project-editor-preview-pending">{t('projectEditor.rendering')}</span>
+                          )}
+                          {isMarkdownEditorVisible && (
+                            <button
+                              className="project-editor-preview-refresh-btn"
+                              title={t('projectEditor.refreshPreview')}
+                              onClick={() => {
+                                markdownImageMapRef.current = {}
+                                setMarkdownImageMap({})
+                                scheduleMarkdownRender()
+                              }}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M13.65 2.35a8 8 0 1 0 1.77 5.15.75.75 0 0 0-1.5-.1 6.5 6.5 0 1 1-1.45-4.15H10.5a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 0-1.5 0v2.15l-.1.1Z" />
+                              </svg>
+                            </button>
                           )}
                         </div>
                         <PreviewSearchBar

@@ -582,6 +582,10 @@ export interface ProjectAPI {
   watchFile: (root: string, path: string) => Promise<{ success: boolean; error?: string }>
   unwatchFile: (root: string, path: string) => Promise<{ success: boolean }>
   onFileChanged: (callback: (fullPath: string, changeType: 'changed' | 'deleted', content?: string) => void) => () => void
+  watchImageFiles: (root: string, paths: string[]) => Promise<{ success: boolean }>
+  unwatchImageFiles: (root: string, paths: string[]) => Promise<{ success: boolean }>
+  unwatchAllImageFiles: () => Promise<{ success: boolean }>
+  onImageFileChanged: (callback: (relativePath: string) => void) => () => void
 }
 
 // Shortcut configuration
@@ -1191,6 +1195,28 @@ const projectAPI: ProjectAPI = {
     ipcRenderer.on('project:file-changed', listener)
     return () => {
       ipcRenderer.removeListener('project:file-changed', listener)
+    }
+  },
+
+  watchImageFiles: (root: string, paths: string[]) => {
+    return ipcRenderer.invoke('project:watch-image-files', root, paths)
+  },
+
+  unwatchImageFiles: (root: string, paths: string[]) => {
+    return ipcRenderer.invoke('project:unwatch-image-files', root, paths)
+  },
+
+  unwatchAllImageFiles: () => {
+    return ipcRenderer.invoke('project:unwatch-all-image-files')
+  },
+
+  onImageFileChanged: (callback: (relativePath: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, relativePath: string) => {
+      callback(relativePath)
+    }
+    ipcRenderer.on('project:image-file-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('project:image-file-changed', listener)
     }
   }
 }

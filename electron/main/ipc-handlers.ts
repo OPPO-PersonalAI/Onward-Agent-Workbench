@@ -59,11 +59,13 @@ import { openExternalUrlWithConfirm } from './external-link-guard'
 import { RipgrepSearchManager } from './ripgrep-search'
 import { browserViewManager } from './browser-view-manager'
 import { FileWatchManager } from './file-watch-manager'
+import { ImageWatchManager } from './image-watch-manager'
 import { getUpdateService } from './update-service'
 
 let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
 let fileWatchManager: FileWatchManager | null = null
+let imageWatchManager: ImageWatchManager | null = null
 
 type TerminalInputSequencePayload = {
   kind: 'raw' | 'paste'
@@ -368,6 +370,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     mainWindow.webContents.send('git:terminal-info', terminalId, info)
   })
   fileWatchManager = new FileWatchManager(mainWindow)
+  imageWatchManager = new ImageWatchManager(mainWindow)
 
   ipcMain.on('debug:log', (_event, payload: { message?: string; data?: unknown }) => {
     log('[RendererDebug]', payload?.message ?? '', payload?.data ?? '')
@@ -1103,6 +1106,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return { success: true }
   })
 
+  ipcMain.handle('project:watch-image-files', async (_, root: string, relativePaths: string[]) => {
+    if (!root || !Array.isArray(relativePaths)) return { success: false }
+    imageWatchManager?.watchImages(root, relativePaths)
+    return { success: true }
+  })
+
+  ipcMain.handle('project:unwatch-image-files', async (_, root: string, relativePaths: string[]) => {
+    if (!root || !Array.isArray(relativePaths)) return { success: false }
+    imageWatchManager?.unwatchImages(root, relativePaths)
+    return { success: true }
+  })
+
+  ipcMain.handle('project:unwatch-all-image-files', async () => {
+    imageWatchManager?.unwatchAll()
+    return { success: true }
+  })
+
   ipcMain.handle('project:create-file', async (_, root: string, path: string, content: string) => {
     return await createProjectFile(root, path, content)
   })
@@ -1343,6 +1363,8 @@ export function cleanupIpcHandlers(): void {
   ripgrepSearchManager = null
   fileWatchManager?.dispose()
   fileWatchManager = null
+  imageWatchManager?.dispose()
+  imageWatchManager = null
   ipcMain.removeHandler('app:get-info')
   ipcMain.removeHandler('app:read-notice')
   ipcMain.removeHandler('updater:get-status')
@@ -1423,6 +1445,9 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('project:search-cancel')
   ipcMain.removeHandler('project:watch-file')
   ipcMain.removeHandler('project:unwatch-file')
+  ipcMain.removeHandler('project:watch-image-files')
+  ipcMain.removeHandler('project:unwatch-image-files')
+  ipcMain.removeHandler('project:unwatch-all-image-files')
   ipcMain.removeHandler('settings:load')
   ipcMain.removeHandler('settings:save')
   ipcMain.removeHandler('settings:update')
