@@ -9,6 +9,7 @@ import { SettingsProvider, useSettings } from './contexts/SettingsContext'
 import { PromptActionsProvider, usePromptActions } from './contexts/PromptActionsContext'
 import { TabBar } from './components/TabBar'
 import { Sidebar } from './components/Sidebar/Sidebar'
+import { FeedbackModal } from './components/FeedbackModal'
 import { PromptNotebook } from './components/PromptNotebook/PromptNotebook'
 import { TerminalGrid } from './components/TerminalGrid/TerminalGrid'
 import { Settings } from './components/Settings'
@@ -790,6 +791,7 @@ function AppContent({
 
   // Display state of the Settings panel (independent of Tab state)
   const [showSettings, setShowSettings] = useState(false)
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false)
   // Track the panel state before Settings opened for each tab during the current Settings session.
   const panelBeforeSettingsByTabRef = useRef<Record<string, 'prompt' | null>>({})
   const showSettingsRef = useRef(false)
@@ -838,6 +840,14 @@ function AppContent({
     clearPanelBeforeSettings()
     setShowSettings(false)
   }, [clearPanelBeforeSettings])
+
+  const handleFeedbackToggle = useCallback(() => {
+    setShowFeedbackModal((previous) => !previous)
+  }, [])
+
+  const handleCloseFeedbackModal = useCallback(() => {
+    setShowFeedbackModal(false)
+  }, [])
 
   // Conditionally close Settings on Task/Tab switch
   // Only closes if the relevant panel state is 'prompt'; otherwise keeps Settings open
@@ -991,6 +1001,7 @@ function AppContent({
   const prevProjectEditorOpenRef = useRef(projectEditorOpen)
   const projectEditorTerminalIdRef = useRef(projectEditorTerminalId)
   const prevShowSettingsRef = useRef(showSettings)
+  const prevShowFeedbackModalRef = useRef(showFeedbackModal)
 
   useEffect(() => {
     projectEditorTerminalIdRef.current = projectEditorTerminalId
@@ -1022,6 +1033,19 @@ function AppContent({
       }
     }
   }, [showSettings, activeTab?.activeTerminalId])
+
+  useEffect(() => {
+    const wasOpen = prevShowFeedbackModalRef.current
+    prevShowFeedbackModalRef.current = showFeedbackModal
+    if (wasOpen && !showFeedbackModal) {
+      const terminalId = activeTab?.activeTerminalId
+      if (terminalId) {
+        requestAnimationFrame(() => {
+          terminalSessionManager.focusIfNeeded(terminalId)
+        })
+      }
+    }
+  }, [showFeedbackModal, activeTab?.activeTerminalId])
 
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalIds: string[], directory: string) => {
@@ -1135,8 +1159,10 @@ function AppContent({
       <div className="app-body">
         <Sidebar
           activePanel={displayActivePanel}
+          isFeedbackOpen={showFeedbackModal}
           layoutMode={layoutMode}
           onPanelChange={handlePanelChangeWithSettings}
+          onFeedbackToggle={handleFeedbackToggle}
           onLayoutChange={handleLayoutChange}
         />
         <main className="main-content">
@@ -1205,6 +1231,7 @@ function AppContent({
           </div>
         </main>
       </div>
+      <FeedbackModal isOpen={showFeedbackModal} onClose={handleCloseFeedbackModal} />
     </div>
   )
 }

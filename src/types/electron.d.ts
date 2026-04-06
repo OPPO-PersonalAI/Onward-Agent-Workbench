@@ -169,6 +169,13 @@ export interface CommandPresetAPI {
 }
 
 import type { AppState } from './tab.d.ts'
+import type {
+  FeedbackActionResult,
+  FeedbackCreateSubmissionResult,
+  FeedbackDebugRemoteIssue,
+  FeedbackState,
+  FeedbackSubmissionInput
+} from './feedback'
 
 export interface AppStateAPI {
   load: () => Promise<AppState>
@@ -625,6 +632,9 @@ export interface DebugAPI {
   focusWindow: () => Promise<boolean>
   getAppMetrics: () => Promise<Record<string, unknown>[]>
   getGitRuntimeMetrics: () => Promise<GitRuntimeMetrics>
+  feedbackReset: () => Promise<void>
+  feedbackSetMockIssues: (issues: FeedbackDebugRemoteIssue[]) => Promise<void>
+  feedbackGetLastOpenedUrl: () => Promise<string | null>
   quit: () => Promise<void>
 }
 
@@ -657,6 +667,15 @@ export interface BrowserAPI {
   onNavStateChanged: (callback: (id: string, state: { canGoBack: boolean; canGoForward: boolean }) => void) => () => void
   onFullscreenChanged: (callback: (id: string, isFullscreen: boolean) => void) => () => void
   onEscapePressed: (callback: (id: string) => void) => () => void
+}
+
+export interface FeedbackAPI {
+  load: () => Promise<FeedbackState>
+  createSubmission: (payload: FeedbackSubmissionInput) => Promise<FeedbackCreateSubmissionResult>
+  sync: (recordId?: string, force?: boolean) => Promise<FeedbackState>
+  reopenInBrowser: (recordId: string) => Promise<FeedbackActionResult>
+  updatePreferences: (payload: Partial<FeedbackState['preferences']>) => Promise<FeedbackState>
+  removeRecord: (recordId: string) => Promise<FeedbackState>
 }
 
 // Coding Agent integration types
@@ -733,6 +752,7 @@ export interface ElectronAPI {
   appInfo: AppInfoAPI
   updater: UpdaterAPI
   browser: BrowserAPI
+  feedback: FeedbackAPI
   codingAgentConfig: CodingAgentConfigAPI
   codingAgent: CodingAgentAPI
   debug: DebugAPI
