@@ -16,7 +16,8 @@ import { PromptSender } from './PromptSender'
 import { ScheduleConfigModal } from './ScheduleConfigModal'
 import { ScheduleNotificationBar } from './ScheduleNotification'
 import { useI18n } from '../../i18n/useI18n'
-import type { PromptImportResult } from '../../utils/prompt-io'
+import type { ImportPrepareResult } from '../../utils/prompt-io'
+import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
 import './PromptNotebook.css'
 
 interface PromptNotebookProps {
@@ -39,10 +40,13 @@ interface PromptNotebookProps {
   globalPromptIds: string[]
   promptCleanup: PromptCleanupConfig
   onExportAllPrompts: () => Promise<void> | void
-  onImportAllPrompts: () => Promise<PromptImportResult>
+  onPrepareImport: () => Promise<ImportPrepareResult>
+  onExecuteImport: (globals: Prompt[], locals: Prompt[]) => void
   onTouchPromptLastUsed: (promptId: string) => void
   onCleanupPrompts: (options: { keepDays: number; deleteColored: boolean }) => void
   onUpdatePromptCleanup: (partial: Partial<PromptCleanupConfig>) => void
+  promptEditorHeight: number
+  onPromptEditorHeightChange: (height: number) => void
   // Draft related
   editorDraft: EditorDraft | null
   onEditorDraftChange: (draft: EditorDraft | null) => void
@@ -65,6 +69,13 @@ interface DeleteConfirmState {
   isOpen: boolean
   promptId: string
   promptTitle: string
+}
+
+interface ImportConfirmState {
+  isOpen: boolean
+  globals: Prompt[]
+  locals: Prompt[]
+  duplicateCount: number
 }
 
 interface RetentionConfirmState {
@@ -95,10 +106,13 @@ export const PromptNotebook = memo(function PromptNotebook({
   globalPromptIds,
   promptCleanup,
   onExportAllPrompts,
-  onImportAllPrompts,
+  onPrepareImport,
+  onExecuteImport,
   onTouchPromptLastUsed,
   onCleanupPrompts,
   onUpdatePromptCleanup,
+  promptEditorHeight,
+  onPromptEditorHeightChange,
   editorDraft,
   onEditorDraftChange,
   addToHistoryShortcut,
@@ -150,6 +164,12 @@ export const PromptNotebook = memo(function PromptNotebook({
     isOpen: false,
     promptId: '',
     promptTitle: ''
+  })
+  const [importConfirm, setImportConfirm] = useState<ImportConfirmState>({
+    isOpen: false,
+    globals: [],
+    locals: [],
+    duplicateCount: 0
   })
   const [retentionConfirm, setRetentionConfirm] = useState<RetentionConfirmState>({
     isOpen: false,
@@ -219,7 +239,23 @@ export const PromptNotebook = memo(function PromptNotebook({
         lastAutoCleanupAt: promptCleanup.lastAutoCleanupAt
       }),
       getEditorContent: () => editorContentRef.current,
+      getEditorHeight: () => {
+        const editor = document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor') as HTMLElement | null
+        if (!editor) return null
+        return editor.getBoundingClientRect().height
+      },
+      getPersistedEditorHeight: () => promptEditorHeight,
       setEditorContent: (content: string) => {
+        const textarea = document.querySelector(
+          '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor-content'
+        ) as HTMLTextAreaElement | null
+        if (textarea) {
+          const prototype = Object.getPrototypeOf(textarea) as HTMLTextAreaElement
+          const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+          valueSetter?.call(textarea, content)
+          textarea.dispatchEvent(new Event('input', { bubbles: true }))
+          return
+        }
         setEditorContent(content)
       },
       submitEditor: () => {
@@ -302,7 +338,7 @@ export const PromptNotebook = memo(function PromptNotebook({
         delete (window as any).__onwardPromptNotebookDebug
       }
     }
-  }, [prompts, promptCleanup, onAddPrompt, scheduleMap, tabId, terminals, onAddSchedule, onUpdateSchedule, onDeleteSchedule])
+  }, [prompts, promptCleanup, promptEditorHeight, onAddPrompt, scheduleMap, tabId, terminals, onAddSchedule, onUpdateSchedule, onDeleteSchedule])
 
   // Get the content to be sent: use the editor content first, otherwise use the selected Prompt content
   const contentToSend = useMemo(() => {
@@ -414,39 +450,52 @@ export const PromptNotebook = memo(function PromptNotebook({
     void onExportAllPrompts()
   }, [onExportAllPrompts])
 
-  const handleImportAllPrompts = useCallback(() => {
-    void onImportAllPrompts().then((result) => {
-      if (result.canceled) return
-      if (!result.success) {
-        showSaveMessage({
-          type: 'error',
-          text: t('promptNotebook.import.failed')
-        })
-        return
-      }
+  const handleImportPrompts = useCallback(async () => {
+    const result = await onPrepareImport()
+    // User canceled file selection — show nothing
+    if (!result.success && !result.error) return
+    if (!result.success) {
+      showSaveMessage({ type: 'error', text: result.error || t('promptNotebook.import.failed') })
+      return
+    }
+    const total = result.globals.length + result.locals.length
+    if (total === 0 && result.duplicateCount === 0) {
+      showSaveMessage({ type: 'success', text: t('promptNotebook.import.emptyFile') })
+      return
+    }
+    if (total === 0 && result.duplicateCount > 0) {
+      showSaveMessage({ type: 'success', text: t('promptNotebook.import.allDuplicates', { count: result.duplicateCount }) })
+      return
+    }
+    // Has importable content — open confirmation dialog
+    setImportConfirm({
+      isOpen: true,
+      globals: result.globals,
+      locals: result.locals,
+      duplicateCount: result.duplicateCount
+    })
+  }, [onPrepareImport, showSaveMessage, t])
 
-      const importedCount = result.globalImported + result.localImported
-      if (importedCount === 0) {
-        showSaveMessage({
-          type: 'success',
-          text: t('promptNotebook.import.noNewItems', { skipped: result.skippedDuplicate })
-        })
-        return
-      }
-
-      const translationKey = result.skippedDuplicate > 0
-        ? 'promptNotebook.import.successWithSkipped'
-        : 'promptNotebook.import.success'
-      showSaveMessage({
-        type: 'success',
-        text: t(translationKey, {
-          global: result.globalImported,
-          local: result.localImported,
-          skipped: result.skippedDuplicate
-        })
+  const handleConfirmImport = useCallback(() => {
+    const { globals, locals, duplicateCount } = importConfirm
+    onExecuteImport(globals, locals)
+    setImportConfirm({ isOpen: false, globals: [], locals: [], duplicateCount: 0 })
+    const translationKey = duplicateCount > 0
+      ? 'promptNotebook.import.successWithSkipped'
+      : 'promptNotebook.import.success'
+    showSaveMessage({
+      type: 'success',
+      text: t(translationKey, {
+        global: globals.length,
+        local: locals.length,
+        skipped: duplicateCount
       })
     })
-  }, [onImportAllPrompts, showSaveMessage, t])
+  }, [importConfirm, onExecuteImport, showSaveMessage, t])
+
+  const handleCancelImport = useCallback(() => {
+    setImportConfirm({ isOpen: false, globals: [], locals: [], duplicateCount: 0 })
+  }, [])
 
   const handleConfirmRetention = useCallback(() => {
     const resolvedKeepDays = retentionConfirm.isCustomDays
@@ -586,21 +635,26 @@ export const PromptNotebook = memo(function PromptNotebook({
     }
   }, [scheduleMap, onUpdateSchedule])
 
-  const buildSendRecords = useCallback((successTerminalIds: string[], action: PromptSendRecord['action']): PromptSendRecord[] => {
+  const buildSendRecords = useCallback((
+    terminalIds: string[],
+    action: PromptSendRecord['action'],
+    result?: PromptSendRecord['result']
+  ): PromptSendRecord[] => {
     const now = Date.now()
-    return successTerminalIds.map(tid => {
+    return terminalIds.map(tid => {
       const terminal = terminals.find(t => t.id === tid)
       return {
         taskId: tid,
         taskName: terminal?.title || tid,
         sentAt: now,
-        action
+        action,
+        result
       }
     })
   }, [terminals])
 
   const applySuccessSideEffects = useCallback((result: TerminalBatchResult, sendRecords?: PromptSendRecord[]): TerminalBatchResult => {
-    if (result.successIds.length === 0) {
+    if (!hasDeliveredTerminals(result)) {
       return result
     }
 
@@ -633,7 +687,7 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Send to terminal (wrapper, add save and clear logic)
   const handleSendToTerminal = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
-    const fallback: TerminalBatchResult = { successIds: [], failedIds: [...terminalIds] }
+    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
     try {
       const rawResult = await onSend(terminalIds, content)
       const sendRecords = rawResult.successIds.length > 0
@@ -648,7 +702,7 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Execution (wrapping, adding save and clear logic)
   const handleExecuteTerminal = useCallback(async (terminalIds: string[]): Promise<TerminalBatchResult> => {
-    const fallback: TerminalBatchResult = { successIds: [], failedIds: [...terminalIds] }
+    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
     try {
       return applySuccessSideEffects(await onExecute(terminalIds))
     } catch (error) {
@@ -659,12 +713,13 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Send and execute (wrapper, add save and clear logic)
   const handleSendAndExecute = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
-    const fallback: TerminalBatchResult = { successIds: [], failedIds: [...terminalIds] }
+    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
     try {
       const rawResult = await onSendAndExecute(terminalIds, content)
-      const sendRecords = rawResult.successIds.length > 0
-        ? buildSendRecords(rawResult.successIds, 'sendAndExecute')
-        : undefined
+      const sendRecords = [
+        ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
+        ...buildSendRecords(rawResult.sentOnlyIds, 'sendAndExecute', 'sent-only')
+      ]
       return applySuccessSideEffects(rawResult, sendRecords)
     } catch (error) {
       console.error('Prompt send and execute failed:', error)
@@ -712,6 +767,22 @@ export const PromptNotebook = memo(function PromptNotebook({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [hidden, deleteConfirm.isOpen, handleConfirmDelete, handleCancelDelete])
+
+  // Import confirmation dialog shortcut
+  useEffect(() => {
+    if (hidden || !importConfirm.isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleCancelImport()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        handleConfirmImport()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [hidden, importConfirm.isOpen, handleConfirmImport, handleCancelImport])
 
   const retentionKeepDays = useMemo(() => {
     if (!retentionConfirm.isCustomDays) {
@@ -787,7 +858,7 @@ export const PromptNotebook = memo(function PromptNotebook({
           onReorderPinned={onReorderPinnedPrompts}
           autoCleanupEnabled={promptCleanup.autoEnabled}
           onExportAllPrompts={handleExportAllPrompts}
-          onImportAllPrompts={handleImportAllPrompts}
+          onImportPrompts={handleImportPrompts}
           onRetentionKeepDays={handleRetentionKeepDays}
           onRetentionKeepCustom={handleRetentionKeepCustom}
           onToggleAutoCleanup={handleToggleAutoCleanup}
@@ -811,6 +882,8 @@ export const PromptNotebook = memo(function PromptNotebook({
           onContentChange={setEditorContent}
           onTitleChange={setEditorTitle}
           clearTrigger={clearEditorTrigger}
+          promptEditorHeight={promptEditorHeight}
+          onPromptEditorHeightChange={onPromptEditorHeightChange}
           editorDraft={editorDraft}
           onEditorDraftChange={onEditorDraftChange}
           addToHistoryShortcut={addToHistoryShortcut}
@@ -844,6 +917,37 @@ export const PromptNotebook = memo(function PromptNotebook({
               </button>
               <button className="confirm-dialog-btn confirm" onClick={handleConfirmDelete} autoFocus>
                 {t('promptNotebook.confirmY')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import confirmation dialog */}
+      {!hidden && importConfirm.isOpen && (
+        <div className="confirm-dialog-overlay" onClick={handleCancelImport}>
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-dialog-title">{t('promptNotebook.importConfirm.title')}</div>
+            <div className="confirm-dialog-message">
+              <div style={{ marginBottom: 8 }}>{t('promptNotebook.importConfirm.aboutToImport')}</div>
+              <div style={{ lineHeight: 1.8 }}>
+                {importConfirm.globals.length > 0 && (
+                  <div>• {t('promptNotebook.importConfirm.globalCount', { count: importConfirm.globals.length })}</div>
+                )}
+                {importConfirm.locals.length > 0 && (
+                  <div>• {t('promptNotebook.importConfirm.localCount', { count: importConfirm.locals.length })}</div>
+                )}
+                {importConfirm.duplicateCount > 0 && (
+                  <div style={{ opacity: 0.7 }}>• {t('promptNotebook.importConfirm.skippedDuplicates', { count: importConfirm.duplicateCount })}</div>
+                )}
+              </div>
+            </div>
+            <div className="confirm-dialog-actions">
+              <button className="confirm-dialog-btn cancel" onClick={handleCancelImport}>
+                {t('promptNotebook.importConfirm.cancel')}
+              </button>
+              <button className="confirm-dialog-btn confirm" onClick={handleConfirmImport} autoFocus>
+                {t('promptNotebook.importConfirm.confirm')}
               </button>
             </div>
           </div>
@@ -960,7 +1064,9 @@ export const PromptNotebook = memo(function PromptNotebook({
                         ? t('promptNotebook.sendHistory.action.send')
                         : record.action === 'execute'
                           ? t('promptNotebook.sendHistory.action.execute')
-                          : t('promptNotebook.sendHistory.action.sendAndExecute')}
+                          : record.result === 'sent-only'
+                            ? t('promptNotebook.sendHistory.action.sendAndExecuteSentOnly')
+                            : t('promptNotebook.sendHistory.action.sendAndExecute')}
                     </span>
                     <span className="prompt-send-history-time">
                       {new Date(record.sentAt).toLocaleString(locale === 'zh-CN' ? 'zh-CN' : 'en-US', {
@@ -990,6 +1096,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onContentChange,
   onTitleChange,
   clearTrigger,
+  promptEditorHeight,
+  onPromptEditorHeightChange,
   editorDraft,
   onEditorDraftChange,
   addToHistoryShortcut,
@@ -1005,6 +1113,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onContentChange: (content: string) => void
   onTitleChange: (title: string) => void
   clearTrigger: number
+  promptEditorHeight: number
+  onPromptEditorHeightChange: (height: number) => void
   editorDraft: EditorDraft | null
   onEditorDraftChange: (draft: EditorDraft | null) => void
   addToHistoryShortcut: string | null
@@ -1014,8 +1124,9 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   const { t } = useI18n()
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
-  const DEFAULT_EDITOR_HEIGHT = 350
-  const [height, setHeight] = useState(DEFAULT_EDITOR_HEIGHT)
+  const MIN_EDITOR_HEIGHT = 100
+  const [height, setHeight] = useState(() => Math.max(promptEditorHeight, MIN_EDITOR_HEIGHT))
+  const heightRef = useRef(height)
   const isDraggingRef = useRef(false)
   const hasMountedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1038,17 +1149,28 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     return normalize(accelerator) === normalize(expected)
   }, [])
 
+  useEffect(() => {
+    heightRef.current = height
+  }, [height])
+
   // Silently restore drafts on first mount
   useEffect(() => {
     if (!hasMountedRef.current && editorDraft) {
       setTitle(editorDraft.title)
       setContent(editorDraft.content)
-      setHeight(Math.max(editorDraft.height, DEFAULT_EDITOR_HEIGHT))
+      setHeight(Math.max(promptEditorHeight, editorDraft.height, MIN_EDITOR_HEIGHT))
       hasMountedRef.current = true
     } else if (!hasMountedRef.current) {
       hasMountedRef.current = true
     }
-  }, [editorDraft])
+  }, [editorDraft, promptEditorHeight])
+
+  useEffect(() => {
+    if (isDraggingRef.current) return
+    const normalizedHeight = Math.max(promptEditorHeight, MIN_EDITOR_HEIGHT)
+    heightRef.current = normalizedHeight
+    setHeight((prev) => (prev === normalizedHeight ? prev : normalizedHeight))
+  }, [promptEditorHeight])
 
   // Populate content when edit mode is activated
   useEffect(() => {
@@ -1111,12 +1233,14 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDraggingRef.current) return
       const delta = startY - e.clientY
-      const newHeight = Math.max(100, startHeight + delta)
+      const newHeight = Math.max(MIN_EDITOR_HEIGHT, startHeight + delta)
+      heightRef.current = newHeight
       setHeight(newHeight)
     }
 
     const handleMouseUp = () => {
       isDraggingRef.current = false
+      onPromptEditorHeightChange(heightRef.current)
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.classList.remove('resizing-editor-height')
@@ -1125,7 +1249,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     document.body.classList.add('resizing-editor-height')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [height])
+  }, [height, onPromptEditorHeightChange])
 
   // Save processing (two strategies)
   const handleSave = useCallback((saveAsNew: boolean) => {

@@ -188,18 +188,13 @@ marked.use({
   ]
 })
 
-// Code block syntax highlighting
-marked.use({
-  renderer: {
-    code({ text, lang }: { text: string; lang?: string }) {
-      const language = lang && hljs.getLanguage(lang) ? lang : undefined
-      const highlighted = language
-        ? hljs.highlight(text, { language }).value
-        : hljs.highlightAuto(text).value
-      return `<pre><code class="hljs${lang ? ` language-${lang}` : ''}">${highlighted}</code></pre>\n`
-    }
-  }
-})
+function renderHighlightedCodeBlock(text: string, lang?: string): string {
+  const language = lang && hljs.getLanguage(lang) ? lang : undefined
+  const highlighted = language
+    ? hljs.highlight(text, { language }).value
+    : hljs.highlightAuto(text).value
+  return `<pre><code class="hljs${lang ? ` language-${lang}` : ''}">${highlighted}</code></pre>\n`
+}
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/')
@@ -339,6 +334,9 @@ ctx.addEventListener('message', (event: MessageEvent<MarkdownRenderRequest>) => 
     }
 
     const renderer = new marked.Renderer()
+    renderer.code = function code(token: Tokens.Code): string {
+      return renderHighlightedCodeBlock(token.text, token.lang)
+    }
     renderer.heading = function heading(this: { parser: { parseInline: (tokens: Tokens.Generic[]) => string } }, token: Tokens.Heading): string {
       const id = buildHeadingId(token.text, slugCounts)
       const text = this.parser.parseInline(token.tokens)

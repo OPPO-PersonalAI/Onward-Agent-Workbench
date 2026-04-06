@@ -4,6 +4,7 @@
  */
 
 import { exec, execFile } from 'child_process'
+import { createHash } from 'crypto'
 import { promisify } from 'util'
 import { platform, tmpdir } from 'os'
 import { readFile, stat, writeFile, mkdir, access, mkdtemp, rm } from 'fs/promises'
@@ -11,6 +12,7 @@ import { constants } from 'fs'
 import { resolve, relative, sep, isAbsolute, dirname, delimiter, basename, join } from 'path'
 import { ptyManager } from './pty-manager'
 import { gitRuntimeManager, type GitTaskKind, type GitTaskPriority } from './git-runtime-manager'
+import { MAX_IMAGE_FILE_SIZE, bufferToImageDataUrl, isSupportedImageFile } from './image-utils'
 
 const rawExecAsync = promisify(exec)
 const rawExecFileAsync = promisify(execFile)
@@ -31,6 +33,11 @@ function normalizeRepoKey(cwd: string | null | undefined): string | undefined {
   const trimmed = cwd.trim()
   if (!trimmed) return undefined
   return resolve(trimmed)
+}
+
+function normalizeGitPath(pathValue: string | null | undefined): string | null {
+  if (!pathValue) return null
+  return pathValue.replace(/\\/g, '/')
 }
 
 async function execAsync(command: string, options?: Parameters<typeof rawExecAsync>[1], meta: GitTaskMeta = {}): Promise<ExecResult> {
@@ -82,6 +89,7 @@ export interface GitRepoContext {
   isSubmodule: boolean
   depth: number
   changeCount: number
+  loading?: boolean
 }
 
 // Git file status
@@ -105,7 +113,12 @@ export interface GitDiffResult {
   files: GitFileStatus[]
   repos?: GitRepoContext[]
   superprojectRoot?: string
+  submodulesLoading?: boolean
   error?: string
+}
+
+export interface GitDiffLoadOptions {
+  scope?: 'root-only' | 'full'
 }
 
 export interface GitCommitInfo {
@@ -138,6 +151,8 @@ export interface GitHistoryFile {
   status: GitStatusCode
   additions: number
   deletions: number
+  isImage?: boolean
+  isSvg?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -160,8 +175,20 @@ export interface GitHistoryDiffResult {
   error?: string
 }
 
+export interface GitHistoryFileContentOptions {
+  base: string
+  head: string
+  file: Pick<GitHistoryFile, 'filename' | 'originalFilename' | 'status'>
+}
+
+export interface GitHistoryFileContentResult extends GitFileContentResult {
+  base: string
+  head: string
+}
+
 export interface TerminalGitInfo {
   cwd: string | null
+  repoRoot: string | null
   branch: string | null
   repoName: string | null
   status: TerminalGitStatus | null
@@ -202,36 +229,7 @@ export interface GitFileActionResult {
 // Timeout for command execution (milliseconds)
 const EXEC_TIMEOUT = 10000
 const MAX_FILE_SIZE = 1024 * 1024  // 1MB
-const MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 const MAX_DIFF_OUTPUT = 10 * 1024 * 1024 // 10MB
-const IMAGE_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.svg'
-])
-
-const IMAGE_MIME_TYPES: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.ico': 'image/x-icon',
-  '.svg': 'image/svg+xml'
-}
-
-function isImageFile(filename: string): boolean {
-  const ext = ('.' + filename.split('.').pop()?.toLowerCase()).replace('..', '.')
-  return IMAGE_EXTENSIONS.has(ext)
-}
-
-function getImageMime(filename: string): string {
-  const ext = ('.' + filename.split('.').pop()?.toLowerCase()).replace('..', '.')
-  return IMAGE_MIME_TYPES[ext] || 'application/octet-stream'
-}
-
-function bufferToImageDataUrl(buffer: Buffer, filename: string): string {
-  return `data:${getImageMime(filename)};base64,${buffer.toString('base64')}`
-}
 
 // Short TTL + in-flight reuse: avoid frequent forks (lsof/git) causing CPU spikes and cwd read failures.
 const TERMINAL_CWD_CACHE_TTL = 1200
@@ -257,6 +255,8 @@ const gitMetaInFlight = new Map<string, Promise<GitRepoMeta>>()
 const SUBMODULE_CACHE_TTL = 5000
 const submoduleCache = new Map<string, { value: GitSubmoduleInfo[]; at: number }>()
 const superprojectCache = new Map<string, { value: string | null; at: number }>()
+const singleRepoDiffCache = new Map<string, { value: { files: GitFileStatus[]; error?: string }; at: number }>()
+const singleRepoDiffInFlight = new Map<string, Promise<{ files: GitFileStatus[]; error?: string }>>()
 
 function getExecEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
@@ -509,7 +509,7 @@ export async function getTerminalCwd(terminalId: string): Promise<string | null>
     return inflight
   }
 
-  const task = (async () => {
+  const task: Promise<{ files: GitFileStatus[]; error?: string }> = (async () => {
     const probeStartedAt = Date.now()
     const ptyProcess = ptyManager.get(terminalId)
     if (!ptyProcess) {
@@ -741,10 +741,11 @@ export async function getGitRepoMeta(cwd: string): Promise<GitRepoMeta> {
       if (!isRepo) {
         return { gitExecutable, repoRoot: null, gitDir: null, isRepo: false }
       }
-      const repoRoot = lines[1]?.trim() || cwd
+      const repoRootRaw = lines[1]?.trim() || cwd
       const rawGitDir = lines[2]?.trim() || null
+      const repoRoot = normalizeGitPath(repoRootRaw) || repoRootRaw
       const gitDir = rawGitDir
-        ? (isAbsolute(rawGitDir) ? rawGitDir : resolve(repoRoot, rawGitDir))
+        ? (normalizeGitPath(isAbsolute(rawGitDir) ? rawGitDir : resolve(repoRootRaw, rawGitDir)) || rawGitDir)
         : null
       return { gitExecutable, repoRoot, gitDir, isRepo: true }
     } catch {
@@ -792,7 +793,7 @@ export async function detectSuperproject(cwd: string, gitExecutable: string): Pr
         label: 'git rev-parse --show-superproject-working-tree'
       }
     )
-    const value = (typeof stdout === 'string' ? stdout : stdout.toString('utf-8')).trim() || null
+    const value = normalizeGitPath((typeof stdout === 'string' ? stdout : stdout.toString('utf-8')).trim()) || null
     superprojectCache.set(normalizedCwd, { value, at: Date.now() })
     return value
   } catch {
@@ -815,7 +816,7 @@ function parseSubmoduleStatusOutput(output: string, repoRoot: string): GitSubmod
     const subPath = match[2].trim()
     if (!subPath) continue
 
-    const subRepoRoot = resolve(repoRoot, subPath)
+    const subRepoRoot = normalizeGitPath(resolve(repoRoot, subPath)) || resolve(repoRoot, subPath)
     const depth = submodules.filter((submodule) => subPath.startsWith(`${submodule.path}/`)).length
     let parentRoot = repoRoot
     for (let index = submodules.length - 1; index >= 0; index -= 1) {
@@ -837,32 +838,81 @@ function parseSubmoduleStatusOutput(output: string, repoRoot: string): GitSubmod
   return submodules
 }
 
-async function runSubmoduleStatus(cwd: string, gitExecutable: string, recursive: boolean): Promise<string> {
-  const args = recursive ? ['submodule', 'status', '--recursive'] : ['submodule', 'status']
+async function readGitmodulesSubmodulePaths(repoRoot: string): Promise<string[]> {
   try {
-    const { stdout } = await execFileAsync(
-      gitExecutable,
-      args,
-      { cwd, timeout: EXEC_TIMEOUT, env: getExecEnv() },
-      {
-        repoKey: resolve(cwd),
-        priority: 'normal',
-        dedupeKey: `repo:submodules:${resolve(cwd)}:${recursive ? 'r' : 'n'}`,
-        label: `git submodule status${recursive ? ' --recursive' : ''}`
+    const content = await readFile(join(repoRoot, '.gitmodules'), 'utf-8')
+    const paths: string[] = []
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#') || line.startsWith(';')) {
+        continue
       }
-    )
-    return typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
-  } catch (error: any) {
-    if (error?.stdout) {
-      return typeof error.stdout === 'string' ? error.stdout : error.stdout.toString('utf-8')
+      const match = line.match(/^path\s*=\s*(.+)$/)
+      if (!match) {
+        continue
+      }
+      const pathValue = match[1].trim()
+      if (pathValue) {
+        paths.push(pathValue.replace(/\\/g, '/'))
+      }
     }
-    return ''
+    return paths
+  } catch {
+    return []
   }
+}
+
+async function collectSubmodulesFromGitmodules(
+  repoRoot: string,
+  parentRoot: string,
+  depth: number,
+  prefix = ''
+): Promise<GitSubmoduleInfo[]> {
+  const directPaths = await readGitmodulesSubmodulePaths(repoRoot)
+  if (directPaths.length === 0) {
+    return []
+  }
+
+  const directSubmodules = await Promise.all(
+    directPaths.map(async (subPath) => {
+      const subRepoRoot = normalizeGitPath(resolve(repoRoot, subPath)) || resolve(repoRoot, subPath)
+      try {
+        await access(subRepoRoot, constants.F_OK)
+      } catch {
+        return null
+      }
+      return {
+        name: basename(subPath),
+        path: prefix ? `${prefix}/${subPath}` : subPath,
+        repoRoot: subRepoRoot,
+        depth,
+        parentRoot
+      } satisfies GitSubmoduleInfo
+    })
+  )
+
+  const activeSubmodules = directSubmodules.filter((submodule): submodule is GitSubmoduleInfo => Boolean(submodule))
+  const nestedResults = await Promise.allSettled(
+    activeSubmodules.map((submodule) => collectSubmodulesFromGitmodules(
+      submodule.repoRoot,
+      submodule.repoRoot,
+      depth + 1,
+      submodule.path
+    ))
+  )
+
+  const allSubmodules = [...activeSubmodules]
+  for (const result of nestedResults) {
+    if (result.status === 'fulfilled' && result.value.length > 0) {
+      allSubmodules.push(...result.value)
+    }
+  }
+  return allSubmodules
 }
 
 export async function detectSubmodulesRecursive(
   repoRoot: string,
-  gitExecutable: string
+  _gitExecutable: string
 ): Promise<GitSubmoduleInfo[]> {
   const normalizedRoot = resolve(repoRoot)
   const cached = submoduleCache.get(normalizedRoot)
@@ -878,33 +928,7 @@ export async function detectSubmodulesRecursive(
     return []
   }
 
-  const topOutput = await runSubmoduleStatus(repoRoot, gitExecutable, false)
-  const directSubmodules = parseSubmoduleStatusOutput(topOutput, repoRoot)
-  const allSubmodules: GitSubmoduleInfo[] = [...directSubmodules]
-
-  const nestedResults = await Promise.allSettled(
-    directSubmodules.map(async (submodule) => {
-      try {
-        await access(join(submodule.repoRoot, '.gitmodules'), constants.F_OK)
-      } catch {
-        return []
-      }
-
-      const nestedOutput = await runSubmoduleStatus(submodule.repoRoot, gitExecutable, true)
-      return parseSubmoduleStatusOutput(nestedOutput, submodule.repoRoot).map((nested) => ({
-        ...nested,
-        path: `${submodule.path}/${nested.path}`,
-        depth: nested.depth + 1
-      }))
-    })
-  )
-
-  for (const result of nestedResults) {
-    if (result.status === 'fulfilled' && result.value.length > 0) {
-      allSubmodules.push(...result.value)
-    }
-  }
-
+  const allSubmodules = await collectSubmodulesFromGitmodules(repoRoot, repoRoot, 0)
   submoduleCache.set(normalizedRoot, { value: allSubmodules, at: Date.now() })
   return allSubmodules
 }
@@ -939,7 +963,7 @@ export async function getGitBranchAndStatus(cwd: string): Promise<GitBranchAndSt
   try {
     const { stdout } = await execFileAsync(
       meta.gitExecutable || 'git',
-      ['-c', 'core.quotepath=false', 'status', '--porcelain=2', '--branch', '-uno'],
+      ['-c', 'core.quotepath=false', 'status', '--porcelain=2', '--branch', '-uall'],
       {
         cwd: meta.repoRoot,
         timeout: EXEC_TIMEOUT,
@@ -950,7 +974,7 @@ export async function getGitBranchAndStatus(cwd: string): Promise<GitBranchAndSt
         repoKey: meta.repoRoot,
         priority: 'high',
         dedupeKey: `branch-status:${resolve(meta.repoRoot)}`,
-        label: 'git status --porcelain=2 --branch -uno'
+        label: 'git status --porcelain=2 --branch -uall'
       }
     )
     const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
@@ -971,7 +995,7 @@ export async function getGitStatusSummary(cwd: string): Promise<TerminalGitStatu
   try {
     const { stdout } = await execFileAsync(
       gitExecutable,
-      ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uno'],
+      ['-c', 'core.quotepath=false', 'status', '--porcelain', '-uall'],
       {
         cwd,
         timeout: EXEC_TIMEOUT,
@@ -981,7 +1005,7 @@ export async function getGitStatusSummary(cwd: string): Promise<TerminalGitStatu
       {
         repoKey: cwd,
         priority: 'normal',
-        label: 'git status --porcelain -uno'
+        label: 'git status --porcelain -uall'
       }
     )
     const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
@@ -1008,17 +1032,23 @@ export async function getTerminalGitInfo(terminalId: string): Promise<TerminalGi
   const task = (async () => {
     const cwd = await getTerminalCwd(terminalId)
     if (!cwd) {
-      return { cwd: null, branch: null, repoName: null, status: null }
+      return { cwd: null, repoRoot: null, branch: null, repoName: null, status: null }
     }
 
     const meta = await getGitRepoMeta(cwd)
     if (!meta.isRepo || !meta.repoRoot) {
-      return { cwd, branch: null, repoName: null, status: null }
+      return { cwd, repoRoot: null, branch: null, repoName: null, status: null }
     }
 
     const repoName = basename(meta.repoRoot.replace(/[\\/]+$/, '')) || null
     const branchStatus = await getGitBranchAndStatus(meta.repoRoot)
-    return { cwd, branch: branchStatus.branch, repoName, status: branchStatus.status }
+    return {
+      cwd,
+      repoRoot: meta.repoRoot,
+      branch: branchStatus.branch,
+      repoName,
+      status: branchStatus.status
+    }
   })()
 
   terminalInfoInFlight.set(terminalId, task)
@@ -1083,6 +1113,95 @@ function parseNameStatusZ(output: string): Array<{ status: GitStatusCode; filena
   return entries
 }
 
+function getFieldAfterSpaceCount(record: string, spacesBeforeField: number): string | null {
+  let searchIndex = -1
+  for (let count = 0; count < spacesBeforeField; count += 1) {
+    searchIndex = record.indexOf(' ', searchIndex + 1)
+    if (searchIndex === -1) {
+      return null
+    }
+  }
+  return record.slice(searchIndex + 1)
+}
+
+function parseStatusPorcelainV2Z(output: string): GitFileStatus[] {
+  if (!output) return []
+  const tokens = output.split('\0')
+  const files: GitFileStatus[] = []
+
+  let index = 0
+  while (index < tokens.length) {
+    const record = tokens[index]
+    if (!record) {
+      index += 1
+      continue
+    }
+
+    if (record.startsWith('? ')) {
+      const filename = record.slice(2)
+      if (filename) {
+        files.push({
+          filename,
+          status: '?',
+          additions: 0,
+          deletions: 0,
+          changeType: 'untracked'
+        })
+      }
+      index += 1
+      continue
+    }
+
+    if (!record.startsWith('1 ') && !record.startsWith('2 ') && !record.startsWith('u ')) {
+      index += 1
+      continue
+    }
+
+    const type = record.charAt(0)
+    const xy = record.slice(2, 4)
+    const indexStatus = xy.charAt(0)
+    const worktreeStatus = xy.charAt(1)
+    const filename = getFieldAfterSpaceCount(
+      record,
+      type === '1' ? 8 : type === '2' ? 9 : 10
+    )
+    const originalFilename = type === '2'
+      ? (tokens[index + 1] || undefined)
+      : undefined
+
+    if (!filename) {
+      index += type === '2' ? 2 : 1
+      continue
+    }
+
+    if (indexStatus && indexStatus !== '.') {
+      files.push({
+        filename,
+        originalFilename: indexStatus === 'R' || indexStatus === 'C' ? originalFilename : undefined,
+        status: normalizeGitStatusCode(indexStatus),
+        additions: 0,
+        deletions: 0,
+        changeType: 'staged'
+      })
+    }
+
+    if (worktreeStatus && worktreeStatus !== '.') {
+      files.push({
+        filename,
+        originalFilename: worktreeStatus === 'R' || worktreeStatus === 'C' ? originalFilename : undefined,
+        status: normalizeGitStatusCode(worktreeStatus),
+        additions: 0,
+        deletions: 0,
+        changeType: 'unstaged'
+      })
+    }
+
+    index += type === '2' ? 2 : 1
+  }
+
+  return files
+}
+
 function parseNumstatZ(output: string): Map<string, { additions: number; deletions: number; originalFilename?: string }> {
   const stats = new Map<string, { additions: number; deletions: number; originalFilename?: string }>()
   if (!output) return stats
@@ -1102,24 +1221,44 @@ function parseNumstatZ(output: string): Map<string, { additions: number; deletio
     const additions = parseInt(parts[0], 10)
     const deletions = parseInt(parts[1], 10)
     const pathPart = parts.slice(2).join('\t')
-    const nextToken = tokens[i + 1]
-    const isRename = !!nextToken && nextToken.length > 0 && !nextToken.includes('\t')
-    if (isRename) {
-      stats.set(nextToken, {
+    if (pathPart) {
+      stats.set(pathPart, {
         additions: Number.isFinite(additions) ? additions : 0,
-        deletions: Number.isFinite(deletions) ? deletions : 0,
-        originalFilename: pathPart || undefined
+        deletions: Number.isFinite(deletions) ? deletions : 0
       })
-      i += 2
+      i += 1
       continue
     }
-    stats.set(pathPart, {
-      additions: Number.isFinite(additions) ? additions : 0,
-      deletions: Number.isFinite(deletions) ? deletions : 0
-    })
-    i += 1
+
+    const originalFilename = tokens[i + 1] || ''
+    const filename = tokens[i + 2] || ''
+    if (filename) {
+      stats.set(filename, {
+        additions: Number.isFinite(additions) ? additions : 0,
+        deletions: Number.isFinite(deletions) ? deletions : 0,
+        originalFilename: originalFilename || undefined
+      })
+    }
+    i += 3
   }
   return stats
+}
+
+function attachDiffStats(
+  files: GitFileStatus[],
+  stats: Map<string, { additions: number; deletions: number; originalFilename?: string }>
+): GitFileStatus[] {
+  if (stats.size === 0) return files
+  return files.map((file) => {
+    const statEntry = stats.get(file.filename)
+    if (!statEntry) return file
+    return {
+      ...file,
+      additions: statEntry.additions,
+      deletions: statEntry.deletions,
+      originalFilename: file.originalFilename ?? statEntry.originalFilename
+    }
+  })
 }
 
 const HISTORY_RECORD_SEPARATOR = '\x1e'
@@ -1194,6 +1333,39 @@ async function getGitDiffNumstat(
   return typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
 }
 
+async function getGitStatusPorcelainV2(
+  cwd: string,
+  gitExecutable: string,
+  meta?: GitTaskMeta
+): Promise<string> {
+  const { stdout } = await execFileAsync(gitExecutable, [
+    '-c',
+    'core.quotepath=false',
+    'status',
+    '--porcelain=2',
+    '-z',
+    '--find-renames=50',
+    '--untracked-files=all'
+  ], {
+    cwd,
+    timeout: EXEC_TIMEOUT,
+    env: getExecEnv(),
+    maxBuffer: MAX_DIFF_OUTPUT
+  }, meta)
+  return typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
+}
+
+async function isGitPathStaged(
+  cwd: string,
+  gitExecutable: string,
+  gitPath: string,
+  meta?: GitTaskMeta
+): Promise<boolean> {
+  const output = await getGitDiffNameStatus(cwd, gitExecutable, true, meta)
+  const entries = parseNameStatusZ(output)
+  return entries.some((entry) => entry.filename === gitPath || entry.originalFilename === gitPath)
+}
+
 async function getGitRangeNameStatus(
   cwd: string,
   gitExecutable: string,
@@ -1258,107 +1430,159 @@ async function getGitRangePatch(
   return typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
 }
 
-async function getGitUntrackedFiles(cwd: string, gitExecutable: string, meta?: GitTaskMeta): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync(
-      gitExecutable,
-      ['-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard', '-z'],
-      { cwd, timeout: EXEC_TIMEOUT, env: getExecEnv(), maxBuffer: MAX_DIFF_OUTPUT },
-      meta
-    )
-    const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
-    return output.split('\0').map(item => item.trim()).filter(Boolean)
-  } catch {
-    return []
+function cloneGitFileStatuses(files: GitFileStatus[]): GitFileStatus[] {
+  return files.map((file) => ({ ...file }))
+}
+
+function clearSingleRepoDiffCache(repoRoot: string): void {
+  const prefix = `${resolve(repoRoot)}::`
+  for (const key of Array.from(singleRepoDiffCache.keys())) {
+    if (key.startsWith(prefix)) {
+      singleRepoDiffCache.delete(key)
+    }
   }
+}
+
+async function getWorktreeAwareDiffFingerprint(
+  gitDir: string | null,
+  repoRoot: string,
+  parsedFiles: GitFileStatus[]
+): Promise<string> {
+  const baseFingerprint = await getGitRepoFingerprint(gitDir, repoRoot)
+  if (parsedFiles.length === 0) {
+    return baseFingerprint
+  }
+
+  const worktreePaths = Array.from(new Set(
+    parsedFiles.flatMap((file) => {
+      const paths = [file.filename]
+      if (file.originalFilename) {
+        paths.push(file.originalFilename)
+      }
+      return paths
+    })
+  )).sort()
+
+  const statTokens = await Promise.all(
+    worktreePaths.map(async (filePath) => `${filePath}:${await getStatToken(resolve(repoRoot, filePath))}`)
+  )
+
+  const hash = createHash('sha1')
+  hash.update(baseFingerprint)
+  for (const file of parsedFiles) {
+    hash.update('\0')
+    hash.update(file.changeType)
+    hash.update('\0')
+    hash.update(file.status)
+    hash.update('\0')
+    hash.update(file.filename)
+    hash.update('\0')
+    hash.update(file.originalFilename || '')
+  }
+  for (const token of statTokens) {
+    hash.update('\0')
+    hash.update(token)
+  }
+  return hash.digest('hex')
 }
 
 async function getSingleRepoDiff(
   repoRoot: string,
   gitExecutable: string,
-  repoLabel: string
+  repoLabel: string,
+  gitDirHint?: string | null
 ): Promise<{ files: GitFileStatus[]; error?: string }> {
-  const diffMeta: GitTaskMeta = { repoKey: repoRoot, priority: 'high' }
+  const normalizedRoot = resolve(repoRoot)
+  let gitDir = gitDirHint ?? null
+  if (!gitDir) {
+    const repoMeta = await getGitRepoMeta(repoRoot)
+    gitDir = repoMeta.gitDir
+  }
 
-  let unstagedNameOutput = ''
-  let stagedNameOutput = ''
-  try {
-    unstagedNameOutput = await getGitDiffNameStatus(repoRoot, gitExecutable, false, diffMeta)
-    stagedNameOutput = await getGitDiffNameStatus(repoRoot, gitExecutable, true, diffMeta)
-  } catch (error) {
+  const inFlightKey = `${normalizedRoot}::${repoLabel}`
+  const inFlight = singleRepoDiffInFlight.get(inFlightKey)
+  if (inFlight) {
+    const result = await inFlight
     return {
-      files: [],
-      error: `Failed to run git diff: ${formatGitError(error) || String(error)}`
+      files: cloneGitFileStatuses(result.files),
+      error: result.error
     }
   }
 
-  let unstagedNumstatOutput = ''
-  let stagedNumstatOutput = ''
+  const task = (async () => {
+    const diffMeta: GitTaskMeta = { repoKey: repoRoot, priority: 'high' }
+
+    let statusOutput = ''
+    try {
+      statusOutput = await getGitStatusPorcelainV2(repoRoot, gitExecutable, diffMeta)
+    } catch (error) {
+      return {
+        files: [],
+        error: `Failed to run git status: ${formatGitError(error) || String(error)}`
+      }
+    }
+
+    const parsedFiles = parseStatusPorcelainV2Z(statusOutput)
+    const fingerprint = await getWorktreeAwareDiffFingerprint(gitDir, repoRoot, parsedFiles)
+    const cacheKey = `${normalizedRoot}::${repoLabel}::${fingerprint}`
+    const cached = singleRepoDiffCache.get(cacheKey)
+    if (cached) {
+      return {
+        files: cloneGitFileStatuses(cached.value.files),
+        error: cached.value.error
+      }
+    }
+
+    const [unstagedNumstatResult, stagedNumstatResult] = await Promise.allSettled([
+      getGitDiffNumstat(repoRoot, gitExecutable, false, diffMeta),
+      getGitDiffNumstat(repoRoot, gitExecutable, true, diffMeta)
+    ])
+
+    if (unstagedNumstatResult.status === 'rejected') {
+      console.warn('Failed to get unstaged git diff stats:', unstagedNumstatResult.reason)
+    }
+    if (stagedNumstatResult.status === 'rejected') {
+      console.warn('Failed to get staged git diff stats:', stagedNumstatResult.reason)
+    }
+
+    const unstagedFiles = attachDiffStats(
+      parsedFiles.filter((file) => file.changeType === 'unstaged'),
+      parseNumstatZ(unstagedNumstatResult.status === 'fulfilled' ? unstagedNumstatResult.value : '')
+    )
+    const stagedFiles = attachDiffStats(
+      parsedFiles.filter((file) => file.changeType === 'staged'),
+      parseNumstatZ(stagedNumstatResult.status === 'fulfilled' ? stagedNumstatResult.value : '')
+    )
+    const untrackedFiles = parsedFiles.filter((file) => file.changeType === 'untracked')
+
+    const value = {
+      files: [...unstagedFiles, ...stagedFiles, ...untrackedFiles].map((file) => ({
+        ...file,
+        repoRoot,
+        repoLabel
+      }))
+    }
+    clearSingleRepoDiffCache(repoRoot)
+    singleRepoDiffCache.set(cacheKey, { value, at: Date.now() })
+    return value
+  })()
+
+  singleRepoDiffInFlight.set(inFlightKey, task)
   try {
-    unstagedNumstatOutput = await getGitDiffNumstat(repoRoot, gitExecutable, false, diffMeta)
-  } catch (error) {
-    console.warn('Failed to get unstaged git diff stats:', error)
+    const result = await task
+    return {
+      files: cloneGitFileStatuses(result.files),
+      error: result.error
+    }
+  } finally {
+    singleRepoDiffInFlight.delete(inFlightKey)
   }
-  try {
-    stagedNumstatOutput = await getGitDiffNumstat(repoRoot, gitExecutable, true, diffMeta)
-  } catch (error) {
-    console.warn('Failed to get staged git diff stats:', error)
-  }
-
-  const untrackedFiles = await getGitUntrackedFiles(repoRoot, gitExecutable, diffMeta)
-  const unstagedEntries = parseNameStatusZ(unstagedNameOutput)
-  const stagedEntries = parseNameStatusZ(stagedNameOutput)
-  const unstagedStats = parseNumstatZ(unstagedNumstatOutput)
-  const stagedStats = parseNumstatZ(stagedNumstatOutput)
-  const files: GitFileStatus[] = []
-
-  for (const entry of unstagedEntries) {
-    const statEntry = unstagedStats.get(entry.filename)
-    files.push({
-      filename: entry.filename,
-      originalFilename: entry.originalFilename,
-      status: entry.status,
-      additions: statEntry?.additions ?? 0,
-      deletions: statEntry?.deletions ?? 0,
-      changeType: 'unstaged',
-      repoRoot,
-      repoLabel
-    })
-  }
-
-  for (const entry of stagedEntries) {
-    const statEntry = stagedStats.get(entry.filename)
-    files.push({
-      filename: entry.filename,
-      originalFilename: entry.originalFilename,
-      status: entry.status,
-      additions: statEntry?.additions ?? 0,
-      deletions: statEntry?.deletions ?? 0,
-      changeType: 'staged',
-      repoRoot,
-      repoLabel
-    })
-  }
-
-  for (const filename of untrackedFiles) {
-    files.push({
-      filename,
-      status: '?',
-      additions: 0,
-      deletions: 0,
-      changeType: 'untracked',
-      repoRoot,
-      repoLabel
-    })
-  }
-
-  return { files }
 }
 
 /**
  * Get Git Diff information
  */
-export async function getGitDiff(cwd: string): Promise<GitDiffResult> {
+export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Promise<GitDiffResult> {
 
   // Use getGitRepoMeta (single git process) for install + repo + root checks
   const meta = await getGitRepoMeta(cwd)
@@ -1387,32 +1611,64 @@ export async function getGitDiff(cwd: string): Promise<GitDiffResult> {
   try {
     const repoRoot = meta.repoRoot
     const repoName = basename(repoRoot)
+    const loadScope = options?.scope === 'root-only' ? 'root-only' : 'full'
+    const hasGitmodules = await access(join(repoRoot, '.gitmodules'), constants.F_OK)
+      .then(() => true)
+      .catch(() => false)
     const [submodules, superprojectRoot] = await Promise.all([
-      detectSubmodulesRecursive(repoRoot, gitExecutable),
+      hasGitmodules
+        ? detectSubmodulesRecursive(repoRoot, gitExecutable)
+        : Promise.resolve([]),
       detectSuperproject(repoRoot, gitExecutable)
     ])
 
     const allRepos = [
-      { root: repoRoot, label: repoName, isSubmodule: false, depth: 0 },
+      { root: repoRoot, gitDir: meta.gitDir, label: repoName, isSubmodule: false, depth: 0 },
       ...submodules.map((submodule) => ({
         root: submodule.repoRoot,
+        gitDir: null,
         label: submodule.path,
         isSubmodule: true,
         depth: submodule.depth
       }))
     ]
 
+    const reposToLoad = loadScope === 'full'
+      ? allRepos
+      : allRepos.filter((repo) => !repo.isSubmodule)
     const results = await Promise.allSettled(
-      allRepos.map((repo) => getSingleRepoDiff(repo.root, gitExecutable, repo.label))
+      reposToLoad.map((repo) => getSingleRepoDiff(repo.root, gitExecutable, repo.label, repo.gitDir))
     )
+    const resultByRepoRoot = new Map(reposToLoad.map((repo, index) => [repo.root, results[index]]))
 
     const submodulePaths = new Set(submodules.map((submodule) => submodule.path))
     const files: GitFileStatus[] = []
     const repos: GitRepoContext[] = []
 
-    for (let index = 0; index < allRepos.length; index += 1) {
-      const repo = allRepos[index]
-      const result = results[index]
+    for (const repo of allRepos) {
+      if (loadScope !== 'full' && repo.isSubmodule) {
+        repos.push({
+          root: repo.root,
+          label: repo.label,
+          isSubmodule: repo.isSubmodule,
+          depth: repo.depth,
+          changeCount: 0,
+          loading: true
+        })
+        continue
+      }
+
+      const result = resultByRepoRoot.get(repo.root)
+      if (!result) {
+        repos.push({
+          root: repo.root,
+          label: repo.label,
+          isSubmodule: repo.isSubmodule,
+          depth: repo.depth,
+          changeCount: 0
+        })
+        continue
+      }
 
       if (result.status === 'fulfilled' && !result.value.error) {
         let repoFiles = result.value.files
@@ -1449,7 +1705,8 @@ export async function getGitDiff(cwd: string): Promise<GitDiffResult> {
       gitInstalled: true,
       files,
       repos: repos.length > 1 ? repos : undefined,
-      superprojectRoot: superprojectRoot || undefined
+      superprojectRoot: superprojectRoot || undefined,
+      submodulesLoading: hasGitmodules && loadScope !== 'full'
     }
   } catch (error) {
     console.error('Failed to get git diff:', error)
@@ -1651,12 +1908,16 @@ export async function getGitHistoryDiff(
       const stats = parseNumstatZ(numstatOutput)
       files = entries.map((entry) => {
         const stat = stats.get(entry.filename)
+        const isImage = isSupportedImageFile(entry.filename) || Boolean(entry.originalFilename && isSupportedImageFile(entry.originalFilename))
+        const isSvg = entry.filename.toLowerCase().endsWith('.svg') || Boolean(entry.originalFilename && entry.originalFilename.toLowerCase().endsWith('.svg'))
         return {
           filename: entry.filename,
           originalFilename: entry.originalFilename,
           status: entry.status,
           additions: stat?.additions ?? 0,
-          deletions: stat?.deletions ?? 0
+          deletions: stat?.deletions ?? 0,
+          ...(isImage ? { isImage: true } : {}),
+          ...(isSvg ? { isSvg: true } : {})
         }
       })
     }
@@ -1695,7 +1956,7 @@ async function readWorkingFile(
   fullPath: string,
   filename?: string
 ): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
-  const isImage = filename ? isImageFile(filename) : false
+  const isImage = filename ? isSupportedImageFile(filename) : false
   const isSvg = filename ? filename.toLowerCase().endsWith('.svg') : false
   const sizeLimit = isImage ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
   const fileStat = await stat(fullPath)
@@ -1726,7 +1987,7 @@ async function readGitFileByRef(
   ref: string,
   filename?: string
 ): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
-  const isImage = filename ? isImageFile(filename) : false
+  const isImage = filename ? isSupportedImageFile(filename) : false
   const isSvg = filename ? filename.toLowerCase().endsWith('.svg') : false
   const sizeLimit = isImage ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
 
@@ -1809,6 +2070,173 @@ async function readGitIndexFile(
   return readGitFileByRef(cwd, gitExecutable, `:${gitPath}`, filename)
 }
 
+async function readGitRevisionFile(
+  cwd: string,
+  gitExecutable: string,
+  revision: string,
+  gitPath: string,
+  filename?: string
+): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+  return readGitFileByRef(cwd, gitExecutable, `${revision}:${gitPath}`, filename)
+}
+
+export async function getGitHistoryFileContent(
+  cwd: string,
+  options: GitHistoryFileContentOptions
+): Promise<GitHistoryFileContentResult> {
+  const gitInstalled = await checkGitInstalled()
+  const gitExecutable = await resolveGitExecutable()
+  const filename = options.file.filename
+  if (!gitInstalled || !gitExecutable) {
+    return {
+      success: false,
+      cwd,
+      base: options.base,
+      head: options.head,
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary: false,
+      error: 'Git is not installed. Install Git first.'
+    }
+  }
+
+  const repoCheck = await checkGitRepository(cwd, gitExecutable)
+  if (!repoCheck.isRepo) {
+    return {
+      success: false,
+      cwd,
+      base: options.base,
+      head: options.head,
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary: false,
+      error: repoCheck.error || 'The current directory is not a Git repository.'
+    }
+  }
+
+  const { base, head, file } = options
+  if (!base || !head) {
+    return {
+      success: false,
+      cwd,
+      base: base || '',
+      head: head || '',
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary: false,
+      error: 'Missing commit range.'
+    }
+  }
+
+  const repoRoot = (await getGitRoot(cwd, gitExecutable)) || cwd
+  const originalTarget = file.originalFilename || filename
+  const isImage = isSupportedImageFile(filename) || isSupportedImageFile(originalTarget)
+  let originalContent = ''
+  let modifiedContent = ''
+  let isBinary = false
+  let isSvg = false
+  let originalImageUrl: string | undefined
+  let modifiedImageUrl: string | undefined
+  let originalImageSize: number | undefined
+  let modifiedImageSize: number | undefined
+
+  try {
+    if (file.status !== 'A' && file.status !== '?') {
+      const gitPath = toGitPath(repoRoot, originalTarget)
+      if (!gitPath) {
+        return {
+          success: false,
+          cwd: repoRoot,
+          base,
+          head,
+          filename,
+          originalContent: '',
+          modifiedContent: '',
+          isBinary: false,
+          error: 'Invalid file path.'
+        }
+      }
+      const originalResult = await readGitRevisionFile(repoRoot, gitExecutable, base, gitPath, originalTarget)
+      originalContent = originalResult.content
+      if (originalResult.isBinary) {
+        isBinary = true
+      }
+      if (originalResult.isSvg) {
+        isSvg = true
+      }
+      if (originalResult.imageDataUrl) {
+        originalImageUrl = originalResult.imageDataUrl
+      }
+      if (originalResult.imageSize !== undefined) {
+        originalImageSize = originalResult.imageSize
+      }
+    }
+
+    if (file.status !== 'D') {
+      const gitPath = toGitPath(repoRoot, filename)
+      if (!gitPath) {
+        return {
+          success: false,
+          cwd: repoRoot,
+          base,
+          head,
+          filename,
+          originalContent,
+          modifiedContent: '',
+          isBinary,
+          error: 'Invalid file path.'
+        }
+      }
+      const modifiedResult = await readGitRevisionFile(repoRoot, gitExecutable, head, gitPath, filename)
+      modifiedContent = modifiedResult.content
+      if (modifiedResult.isBinary) {
+        isBinary = true
+      }
+      if (modifiedResult.isSvg) {
+        isSvg = true
+      }
+      if (modifiedResult.imageDataUrl) {
+        modifiedImageUrl = modifiedResult.imageDataUrl
+      }
+      if (modifiedResult.imageSize !== undefined) {
+        modifiedImageSize = modifiedResult.imageSize
+      }
+    }
+
+    return {
+      success: true,
+      cwd: repoRoot,
+      base,
+      head,
+      filename,
+      originalContent,
+      modifiedContent,
+      isBinary,
+      ...(isImage ? { isImage: true } : {}),
+      ...(isSvg ? { isSvg: true } : {}),
+      ...(originalImageUrl ? { originalImageUrl } : {}),
+      ...(modifiedImageUrl ? { modifiedImageUrl } : {}),
+      ...(originalImageSize !== undefined ? { originalImageSize } : {}),
+      ...(modifiedImageSize !== undefined ? { modifiedImageSize } : {})
+    }
+  } catch (error) {
+    return {
+      success: false,
+      cwd: repoRoot,
+      base,
+      head,
+      filename,
+      originalContent: '',
+      modifiedContent: '',
+      isBinary,
+      error: `Failed to read file: ${String(error)}`
+    }
+  }
+}
+
 export async function getGitFileContent(
   cwd: string,
   file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>,
@@ -1850,7 +2278,7 @@ export async function getGitFileContent(
   let originalContent = ''
   let modifiedContent = ''
   let isBinary = false
-  const isImage = isImageFile(filename)
+  const isImage = isSupportedImageFile(filename)
   const isSvg = filename.toLowerCase().endsWith('.svg')
   let originalImageUrl: string | undefined
   let modifiedImageUrl: string | undefined
@@ -2158,6 +2586,30 @@ export async function stageGitFile(
       timeout: EXEC_TIMEOUT,
       env: getExecEnv()
     })
+    let staged = await isGitPathStaged(repoRoot, gitExecutable, gitPath, { repoKey: repoRoot, priority: 'high' })
+    if (!staged) {
+      await execFileAsync(gitExecutable, ['add', '-A', '--', gitPath], {
+        cwd: repoRoot,
+        timeout: EXEC_TIMEOUT,
+        env: getExecEnv()
+      })
+      staged = await isGitPathStaged(repoRoot, gitExecutable, gitPath, { repoKey: repoRoot, priority: 'high' })
+    }
+    if (!staged) {
+      try {
+        await execFileAsync(gitExecutable, ['add', '-f', '--', gitPath], {
+          cwd: repoRoot,
+          timeout: EXEC_TIMEOUT,
+          env: getExecEnv()
+        })
+        staged = await isGitPathStaged(repoRoot, gitExecutable, gitPath, { repoKey: repoRoot, priority: 'high' })
+      } catch {
+        // Ignore fallback failures and report the verification result below.
+      }
+    }
+    if (!staged) {
+      return { success: false, filename, error: 'Failed to stage file: Git did not report the file as staged.' }
+    }
     return { success: true, filename }
   } catch (error) {
     return { success: false, filename, error: `Failed to stage file: ${formatGitError(error) || String(error)}` }

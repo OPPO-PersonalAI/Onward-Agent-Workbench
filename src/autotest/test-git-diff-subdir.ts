@@ -31,6 +31,7 @@ export async function testGitDiffSubdir(ctx: AutotestContext): Promise<TestResul
 
   const getGitDiffApi = () => window.__onwardGitDiffDebug
   const platform = window.electronAPI.platform
+  const shellThresholdMs = platform === 'win32' ? 700 : 300
   const sep = platform === 'win32' ? '\\' : '/'
 
   // Helper method
@@ -45,6 +46,8 @@ export async function testGitDiffSubdir(ctx: AutotestContext): Promise<TestResul
     return await waitFor(`gitdiff-loaded:${label}`, () => {
       const api = getGitDiffApi()
       if (!api?.getFileList) return false
+      const timing = api.getTiming?.()
+      if (!timing || timing.diffLoadedAt === null) return false
       const fileList = api.getFileList()
       if (!Array.isArray(fileList)) return false
       if (fileList.length >= minFileCount) return true
@@ -103,9 +106,20 @@ export async function testGitDiffSubdir(ctx: AutotestContext): Promise<TestResul
       const api = getGitDiffApi()
       baselineFileCount = api?.getFileList()?.length ?? 0
       const repoRoot = api?.getRepoRoot?.() ?? null
+      const timing = api?.getTiming?.() ?? null
 
-      _assert('SD-01-root-loads', loaded, { fileCount: baselineFileCount, repoRoot })
-      log('SD-01:baseline', { fileCount: baselineFileCount, repoRoot })
+      _assert('SD-01-root-loads', loaded, {
+        fileCount: baselineFileCount,
+        repoRoot,
+        openToShellMs: timing?.openToShellMs ?? null,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null
+      })
+      log('SD-01:baseline', {
+        fileCount: baselineFileCount,
+        repoRoot,
+        openToShellMs: timing?.openToShellMs ?? null,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null
+      })
       await closeGitDiff('SD-01')
     } else {
       _assert('SD-01-root-loads', false, { reason: 'open failed' })
@@ -145,17 +159,33 @@ export async function testGitDiffSubdir(ctx: AutotestContext): Promise<TestResul
       const fileCount = fileList.length
       const repoRoot = api?.getRepoRoot?.() ?? null
       const cwdProp = api?.getCwd?.() ?? null
+      const timing = api?.getTiming?.() ?? null
 
       // Core assertion 1: The subdirectory can be loaded normally
-      _assert('SD-02-subdir-loads', loaded, { fileCount, loadMs, repoRoot, cwdProp })
+      _assert('SD-02-subdir-loads', loaded, {
+        fileCount,
+        loadMs,
+        repoRoot,
+        cwdProp,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null,
+        openToCwdReadyMs: timing?.openToCwdReadyMs ?? null
+      })
+      _assert('SD-02-shell-visible-fast', (timing?.openToShellMs ?? Number.MAX_SAFE_INTEGER) < shellThresholdMs, {
+        openToShellMs: timing?.openToShellMs ?? null,
+        thresholdMs: shellThresholdMs
+      })
 
       // Core Assertion 2: repoRoot resolves to the warehouse root directory, not a subdirectory
       if (repoRoot && cwdProp) {
         const repoRootNorm = repoRoot.replace(/[\\/]+$/, '')
         const subdirNorm = subDir.replace(/[\\/]+$/, '')
-        _assert('SD-02-resolved-to-repo-root', repoRootNorm !== subdirNorm, {
+        const repoRootUsesForwardSlash = !repoRootNorm.includes('\\')
+        const cwdUsesForwardSlash = !cwdProp.includes('\\')
+        _assert('SD-02-resolved-to-repo-root', repoRootNorm !== subdirNorm && repoRootUsesForwardSlash && cwdUsesForwardSlash, {
           repoRoot: repoRootNorm,
-          subDir: subdirNorm
+          subDir: subdirNorm,
+          repoRootUsesForwardSlash,
+          cwdUsesForwardSlash
         })
       } else {
         _assert('SD-02-resolved-to-repo-root', false, { reason: 'repoRoot or cwdProp is null', repoRoot, cwdProp })
@@ -195,11 +225,13 @@ export async function testGitDiffSubdir(ctx: AutotestContext): Promise<TestResul
       const loadMs = Math.round(performance.now() - startMs)
       const api = getGitDiffApi()
       const fileCount = api?.getFileList()?.length ?? 0
+      const timing = api?.getTiming?.() ?? null
 
       _assert('SD-03-cache-hit-fast', loaded && loadMs < 3000, {
         loaded,
         fileCount,
-        loadMs
+        loadMs,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null
       })
 
       log('SD-03:result', { fileCount, loadMs })
@@ -226,16 +258,24 @@ export async function testGitDiffSubdir(ctx: AutotestContext): Promise<TestResul
       const api = getGitDiffApi()
       const fileCount = api?.getFileList()?.length ?? 0
       const repoRoot = api?.getRepoRoot?.() ?? null
+      const timing = api?.getTiming?.() ?? null
 
-      _assert('SD-04-deep-subdir-loads', loaded, { fileCount, loadMs, repoRoot })
+      _assert('SD-04-deep-subdir-loads', loaded, {
+        fileCount,
+        loadMs,
+        repoRoot,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null
+      })
 
       // Verify that repoRoot equals the project root directory
       if (repoRoot) {
         const repoRootNorm = repoRoot.replace(/[\\/]+$/, '')
         const rootNorm = rootPath.replace(/[\\/]+$/, '')
-        _assert('SD-04-deep-repo-root-matches', repoRootNorm === rootNorm, {
+        const repoRootUsesForwardSlash = !repoRootNorm.includes('\\')
+        _assert('SD-04-deep-repo-root-matches', repoRootNorm === rootNorm && repoRootUsesForwardSlash, {
           repoRoot: repoRootNorm,
-          expected: rootNorm
+          expected: rootNorm,
+          repoRootUsesForwardSlash
         })
       } else {
         _assert('SD-04-deep-repo-root-matches', false, { reason: 'repoRoot is null' })

@@ -609,6 +609,7 @@ export function ProjectEditor({
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const previewLayoutRef = useRef<HTMLDivElement>(null)
+  const imagePreviewRef = useRef<HTMLImageElement | null>(null)
 
   const [dialog, setDialog] = useState<DialogState | null>(null)
   const [dialogInput, setDialogInput] = useState('')
@@ -1417,6 +1418,17 @@ export function ProjectEditor({
     isSqliteRef.current = isSqlite
   }, [isSqlite])
 
+  const getImageFilePreviewState = useCallback(() => {
+    if (!activeFilePathRef.current || !isImageRef.current) return null
+    const image = imagePreviewRef.current
+    return {
+      visible: Boolean(imagePreviewUrl),
+      loaded: Boolean(image && image.complete && image.naturalWidth > 0),
+      broken: Boolean(image && image.complete && image.naturalWidth === 0),
+      src: image?.currentSrc || image?.src || imagePreviewUrl || ''
+    }
+  }, [imagePreviewUrl])
+
   useEffect(() => {
     if (!isMarkdownRenderAllowed) {
       resetPreviewRestoreState()
@@ -1597,7 +1609,10 @@ export function ProjectEditor({
       }))
       if (cancelled) return
       if (Object.keys(updates).length > 0) {
-        setMarkdownImageMap((prev) => ({ ...prev, ...updates }))
+        const nextMap = { ...markdownImageMapRef.current, ...updates }
+        markdownImageMapRef.current = nextMap
+        setMarkdownImageMap(nextMap)
+        sendMarkdownRenderRequest()
       }
     }
 
@@ -1605,7 +1620,7 @@ export function ProjectEditor({
     return () => {
       cancelled = true
     }
-  }, [isMarkdownRenderAllowed, markdownImageMap, markdownImagePaths, rootPath])
+  }, [isMarkdownRenderAllowed, markdownImageMap, markdownImagePaths, rootPath, sendMarkdownRenderRequest])
 
 
   const showStatus = useCallback((type: 'success' | 'error', text: string) => {
@@ -3401,6 +3416,15 @@ export function ProjectEditor({
       getRootPath: () => rootRef.current,
       getActiveFilePath: () => activeFilePathRef.current,
       getEditorContent: () => fileContentRef.current,
+      setEditorContent: (content: string) => {
+        const editor = editorRef.current
+        const model = editor?.getModel()
+        if (!editor || !model) return false
+        editor.pushUndoStop()
+        editor.executeEdits('debug-set-editor-content', [{ range: model.getFullModelRange(), text: content }])
+        editor.pushUndoStop()
+        return true
+      },
       getEditorLineCount: () => {
         const model = editorRef.current?.getModel()
         return model ? model.getLineCount() : 0
@@ -3408,6 +3432,7 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      getImageFilePreviewState,
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
         setIsMarkdownEditorVisible(visible)
@@ -3427,6 +3452,24 @@ export function ProjectEditor({
       isPreviewSearchOpen: () => previewSearchOpenRef.current,
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
       getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
+      getMarkdownPreviewImageState: () => {
+        const preview = previewRef.current
+        if (!preview) {
+          return {
+            count: 0,
+            loadedCount: 0,
+            brokenCount: 0,
+            sources: []
+          }
+        }
+        const images = Array.from(preview.querySelectorAll('img')) as HTMLImageElement[]
+        return {
+          count: images.length,
+          loadedCount: images.filter((image) => image.complete && image.naturalWidth > 0).length,
+          brokenCount: images.filter((image) => image.complete && image.naturalWidth === 0).length,
+          sources: images.map((image) => image.currentSrc || image.src || '')
+        }
+      },
       isPreviewTransitioning: () => previewRestorePhaseRef.current !== 'idle',
       isPreviewContentVisible: () => isPreviewContentVisibleNow(),
       getPreviewRestorePhase: () => previewRestorePhaseRef.current,
@@ -3565,6 +3608,7 @@ export function ProjectEditor({
     }
   }, [
     capturePreviewScrollMemory,
+    getImageFilePreviewState,
     isPreviewContentVisibleNow,
     scanPreviewNearestSlug,
     scheduleProjectStateSave,
@@ -3579,6 +3623,15 @@ export function ProjectEditor({
       getRootPath: () => rootRef.current,
       getActiveFilePath: () => activeFilePathRef.current,
       getEditorContent: () => fileContentRef.current,
+      setEditorContent: (content: string) => {
+        const editor = editorRef.current
+        const model = editor?.getModel()
+        if (!editor || !model) return false
+        editor.pushUndoStop()
+        editor.executeEdits('autotest-set-editor-content', [{ range: model.getFullModelRange(), text: content }])
+        editor.pushUndoStop()
+        return true
+      },
       getEditorLineCount: () => {
         const model = editorRef.current?.getModel()
         return model ? model.getLineCount() : 0
@@ -3655,6 +3708,7 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      getImageFilePreviewState,
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
         setIsMarkdownEditorVisible(visible)
@@ -3674,6 +3728,24 @@ export function ProjectEditor({
       isPreviewSearchOpen: () => previewSearchOpenRef.current,
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
       getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
+      getMarkdownPreviewImageState: () => {
+        const preview = previewRef.current
+        if (!preview) {
+          return {
+            count: 0,
+            loadedCount: 0,
+            brokenCount: 0,
+            sources: []
+          }
+        }
+        const images = Array.from(preview.querySelectorAll('img')) as HTMLImageElement[]
+        return {
+          count: images.length,
+          loadedCount: images.filter((image) => image.complete && image.naturalWidth > 0).length,
+          brokenCount: images.filter((image) => image.complete && image.naturalWidth === 0).length,
+          sources: images.map((image) => image.currentSrc || image.src || '')
+        }
+      },
       isPreviewTransitioning: () => previewRestorePhaseRef.current !== 'idle',
       isPreviewContentVisible: () => isPreviewContentVisibleNow(),
       getPreviewRestorePhase: () => previewRestorePhaseRef.current,
@@ -3742,6 +3814,7 @@ export function ProjectEditor({
     }
   }, [
     capturePreviewScrollMemory,
+    getImageFilePreviewState,
     isPreviewContentVisibleNow,
     scanPreviewNearestSlug,
     scheduleProjectStateSave,
@@ -4905,7 +4978,7 @@ export function ProjectEditor({
               )}
               {activeFilePath && isImage && imagePreviewUrl ? (
                 <div className="project-editor-image-preview">
-                  <img src={imagePreviewUrl} alt={activeFilePath} />
+                  <img ref={imagePreviewRef} src={imagePreviewUrl} alt={activeFilePath} />
                 </div>
               ) : activeFilePath && isSqlite && (rootRef.current ?? rootPath) ? (
                 <SqliteViewer

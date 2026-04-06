@@ -36,3 +36,49 @@
 - **Problem**: When PowerShell commands were sent through `curl`, bash expanded PowerShell variables such as `$i` and `$_` as bash variables, which broke command delivery in most terminals. Python-generated terminal IDs also contained `\r`, which corrupted URL construction.
 - **Cause**: Cross-shell invocation chains such as `bash -> curl -> JSON -> PowerShell` introduce multiple escaping layers, and each layer can rewrite or consume special characters.
 - **Lesson**: When commands cross shells, prefer heredocs such as `<< 'EOF'` or file-based payloads to avoid multi-layer escaping bugs. Always normalize external command output with `tr -d '\r'` when Windows line endings may be present.
+
+## 2026-04-02: Markdown migration regressions and incomplete first-pass fixes
+
+### 1. Migration review must include shell-level files such as `index.html`, not only component logic
+- **Problem**: Markdown images appeared to be wired correctly in the renderer and worker, but the packaged app still failed to display them.
+- **Cause**: The migration review focused on `ProjectEditor.tsx` and `markdownPreviewWorker.ts`, but did not compare the source project's `index.html`. The source project allowed Markdown images through CSP with `img-src 'self' data:`, while this repo's initial `index.html` omitted `img-src`, so the browser blocked image rendering even when the generated HTML was correct.
+- **Lesson**: When porting a working feature from another project, compare the full execution path end to end: HTML shell and CSP, preload boundaries, renderer state, worker output, and DOM behavior. Do not assume root-level files match the source project unless they have been explicitly diffed.
+
+### 2. End-to-end validation must check visible behavior, not only generated HTML
+- **Problem**: The first repair looked successful because the Markdown preview HTML already contained `<img src="data:image/...">`, yet the user still saw broken images.
+- **Cause**: The verification standard stopped at internal state and rendered HTML strings. That proved the data path was partly correct, but it did not prove that the browser actually loaded and displayed the image.
+- **Lesson**: For UI rendering bugs, autotests must verify the user-visible outcome. In this case the correct assertion is not just "the HTML contains an `<img>` tag" but also "the preview DOM contains images whose `naturalWidth > 0` and whose broken count is zero."
+
+### 3. When a user says the bug still exists, assume layered failures until disproven
+- **Problem**: The first Markdown image fix restored the missing re-render after image caching, but the overall issue still remained because a second independent failure was still active.
+- **Cause**: The debugging process converged too early on a plausible internal cause and treated that as the whole bug. In reality there were two separate regressions: the missing re-render path and the missing CSP `img-src` allowance.
+- **Lesson**: If a user reports that the visible bug still exists after a fix, immediately test for stacked regressions instead of defending the first explanation. Re-check every layer of the pipeline and look for independent blockers that can mask each other.
+
+## 2026-04-02: Settings closing logic must distinguish tab switches from task switches
+
+### 1. Do not apply a tab-switch fix blindly to task switching in the same tab
+- **Problem**: After introducing conditional Settings closing, the implementation also closed Settings during `focusTerminal` task switching inside the same tab. In the user flow `Prompt -> manually open Settings -> use task-switch shortcut`, the Settings button and panel disappeared unexpectedly.
+- **Cause**: The fix correctly identified that cross-tab navigation needed contextual handling, but it overgeneralized that rule to all shortcut-driven focus changes. Task switching and tab switching are different UX operations and should not share the same closing behavior by default.
+- **Lesson**: When a bug report is specifically about cross-tab state, keep the fix scoped to cross-tab transitions unless there is explicit evidence that same-tab task switching should behave the same way. Validate each shortcut path independently.
+
+### 2. Reproduce the exact user interaction sequence before finalizing a state-management fix
+- **Problem**: The first revision looked logically correct against the review comments, but it still broke a real user edge case that combined Prompt, manual Settings opening, and task-switch shortcuts.
+- **Cause**: The implementation was optimized around inferred state transitions instead of replaying the exact UI sequence the user would perform. That missed a behavior regression in a neighboring path.
+- **Lesson**: For UI state fixes, convert the user report into a concrete step-by-step scenario and verify the implementation against that scenario before treating the change as complete. Review comments are useful signals, but they do not replace end-user flow validation.
+
+## 2026-04-05: Git Diff split-view persistence must follow the real drag path
+
+### 1. Do not treat preference writes as proof that the UI interaction works
+- **Problem**: The first attempt claimed the Git Diff split width was "remembered" because the code wrote a ratio into `localStorage`, but the user could still drag the sash manually and see no persistence after re-entering Git Diff.
+- **Cause**: The validation path only proved that a stored value existed. It did not prove that the manual sash drag path updated that value, nor that reopening Git Diff restored the same visual ratio.
+- **Lesson**: For UI persistence bugs, test the exact user path end to end: drag the real control, leave the page, reopen it, and compare the restored layout against the stored value. A stored preference alone is not an acceptance signal.
+
+### 2. Prefer editor layout APIs over DOM guessing for third-party UI state
+- **Problem**: Split-width measurement sometimes returned obviously wrong values such as `5px / 5px`, which made the stored ratio meaningless and caused false confidence during debugging.
+- **Cause**: The implementation relied on DOM structure and private editor elements that were unstable across render states. Hidden or not-yet-laid-out editors could still satisfy the selector but report garbage geometry.
+- **Lesson**: When reading layout state from Monaco or similar editors, prefer public APIs such as `getLayoutInfo()` first, and use DOM probing only as a fallback. The persistence pipeline is only as good as the measurement source.
+
+### 3. Remove experimental self-healing logic before trusting packaged validation
+- **Problem**: The intermediate implementation mixed real persistence with simulated drag-on-mount behavior and dangling references from earlier experiments. That made the code harder to reason about and increased the chance of renderer regressions.
+- **Cause**: The debugging flow tried to "force" the UI into the desired state instead of first fixing the measurement and persistence chain. Experimental scaffolding remained in the packaged app path for too long.
+- **Lesson**: When a UI fix starts accumulating simulated interactions or recovery hacks, stop and simplify. Fix the state source, delete experimental code paths, then rebuild and rerun the packaged end-to-end suite before reporting success.

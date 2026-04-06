@@ -6,22 +6,12 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { readdir, stat, readFile, writeFile, mkdir, rename, rm, unlink, access } from 'fs/promises'
 import { resolve, relative, dirname, sep, normalize, extname } from 'path'
+import { MAX_IMAGE_FILE_SIZE, bufferToImageDataUrl, isSupportedImageFile } from './image-utils'
 
 const MAX_FILE_SIZE = 1024 * 1024
 const SQLITE_DEFAULT_LIMIT = 100
 const SQLITE_MAX_LIMIT = 500
 const SQLITE_MAX_QUERY_ROWS = 500
-
-const IMAGE_EXTENSIONS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.bmp',
-  '.ico',
-  '.svg'
-])
 
 const SQLITE_EXTENSIONS = new Set([
   '.sqlite',
@@ -32,17 +22,6 @@ const SQLITE_EXTENSIONS = new Set([
 ])
 
 const SQLITE_MAGIC_HEADER = Buffer.from('SQLite format 3\u0000', 'utf-8')
-
-const IMAGE_MIME_TYPES: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.ico': 'image/x-icon',
-  '.svg': 'image/svg+xml'
-}
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>
 
@@ -437,7 +416,9 @@ export async function readProjectFile(root: string, path: string) {
     }
     const ext = extname(fullPath).toLowerCase()
     const isSqliteByExt = SQLITE_EXTENSIONS.has(ext)
-    if (fileStat.size > MAX_FILE_SIZE && !isSqliteByExt) {
+    const isImageByExt = isSupportedImageFile(fullPath)
+    const sizeLimit = isImageByExt ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
+    if (fileStat.size > sizeLimit && !isSqliteByExt) {
       return {
         success: false,
         root: rootPath,
@@ -446,7 +427,7 @@ export async function readProjectFile(root: string, path: string) {
         isBinary: false,
         isImage: false,
         isSqlite: false,
-        error: `File is too large to load (>${Math.floor(MAX_FILE_SIZE / 1024)}KB).`
+        error: `File is too large to load (>${Math.floor(sizeLimit / 1024)}KB).`
       }
     }
 
@@ -464,11 +445,10 @@ export async function readProjectFile(root: string, path: string) {
 
     const buffer = await readFile(fullPath)
     const isBinary = buffer.includes(0)
-    const isImage = IMAGE_EXTENSIONS.has(ext)
+    const isImage = isSupportedImageFile(fullPath)
     const isSqlite = isLikelySqliteFile(fullPath, buffer)
-    const mime = IMAGE_MIME_TYPES[ext]
-    const previewUrl = isImage && mime
-      ? `data:${mime};base64,${buffer.toString('base64')}`
+    const previewUrl = isImage
+      ? bufferToImageDataUrl(buffer, fullPath)
       : undefined
 
     if (isImage) {

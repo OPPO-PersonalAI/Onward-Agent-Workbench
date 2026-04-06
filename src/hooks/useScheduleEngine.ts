@@ -6,10 +6,9 @@
 import { useEffect, useRef, useCallback } from 'react'
 import type { PromptSchedule, ExecutionLogEntry } from '../types/tab.d.ts'
 import type { Prompt } from '../types/electron.d.ts'
+import type { TerminalBatchResult } from '../types/prompt'
 import { computeNextExecution } from '../utils/schedule'
 import { useI18n } from '../i18n/useI18n'
-import { terminalSessionManager } from '../terminal/terminal-session-manager'
-
 /** Maximum polling interval (60 seconds) */
 const MAX_POLL_INTERVAL = 60 * 1000
 
@@ -43,6 +42,10 @@ interface UseScheduleEngineOptions {
   updateSchedule: (schedule: PromptSchedule) => void
   /** Notification callback */
   onNotification: (notification: ScheduleNotification) => void
+  /** Shared send-and-execute coordinator */
+  onSendAndExecute: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
+  /** Batch error summarizer */
+  summarizeBatchError: (result: TerminalBatchResult) => string
 }
 
 /**
@@ -56,7 +59,9 @@ export function useScheduleEngine({
   tabs,
   allPrompts,
   updateSchedule,
-  onNotification
+  onNotification,
+  onSendAndExecute,
+  summarizeBatchError
 }: UseScheduleEngineOptions) {
   const { t } = useI18n()
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -66,6 +71,8 @@ export function useScheduleEngine({
   const allPromptsRef = useRef(allPrompts)
   const updateScheduleRef = useRef(updateSchedule)
   const onNotificationRef = useRef(onNotification)
+  const onSendAndExecuteRef = useRef(onSendAndExecute)
+  const summarizeBatchErrorRef = useRef(summarizeBatchError)
 
   // Keep ref up to date
   schedulesRef.current = schedules
@@ -73,6 +80,8 @@ export function useScheduleEngine({
   allPromptsRef.current = allPrompts
   updateScheduleRef.current = updateSchedule
   onNotificationRef.current = onNotification
+  onSendAndExecuteRef.current = onSendAndExecute
+  summarizeBatchErrorRef.current = summarizeBatchError
 
   /**
    * Execute a single scheduled task
@@ -128,23 +137,33 @@ export function useScheduleEngine({
       return
     }
 
-    // Reuse the same send-and-execute logic as handleSendAndExecuteOnTerminals.
-    // Tier 1: session manager (handles single-line vs multi-line internally).
-    // Tier 2: direct PTY write fallback for sessions without xterm instance.
     try {
-      for (const terminalId of existingTerminalIds) {
-        if (terminalSessionManager.pasteAndExecute(terminalId, prompt.content)) {
-          continue
+      const result = await onSendAndExecuteRef.current(existingTerminalIds, prompt.content)
+      if (result.failedIds.length > 0 || result.sentOnlyIds.length > 0) {
+        const errorMessage = summarizeBatchErrorRef.current(result)
+        const errorLog: ExecutionLogEntry = {
+          timestamp: Date.now(),
+          success: false,
+          targetTerminalIds: existingTerminalIds,
+          error: errorMessage
         }
-        // Fallback: direct PTY write
-        const result = await window.electronAPI.terminal.writeSplit(terminalId, prompt.content, '\r')
-        if (!result.ok) {
-          console.warn('[Schedule] writeSplit failed:', {
-            terminalId,
-            phase: result.phase,
-            error: result.error
+        if (schedule.scheduleType === 'recurring') {
+          const nextTime = computeNextExecution(schedule, Date.now() + 1)
+          updateScheduleRef.current({
+            ...schedule,
+            nextExecutionAt: nextTime,
+            lastError: errorMessage,
+            executionLog: appendLogEntry(schedule, errorLog)
+          })
+        } else {
+          updateScheduleRef.current({
+            ...schedule,
+            status: 'failed',
+            lastError: errorMessage,
+            executionLog: appendLogEntry(schedule, errorLog)
           })
         }
+        return
       }
 
       const now = Date.now()
@@ -195,11 +214,22 @@ export function useScheduleEngine({
         targetTerminalIds: existingTerminalIds,
         error: String(error)
       }
-      updateScheduleRef.current({
-        ...schedule,
-        lastError: String(error),
-        executionLog: appendLogEntry(schedule, errorLog)
-      })
+      if (schedule.scheduleType === 'recurring') {
+        const nextTime = computeNextExecution(schedule, Date.now() + 1)
+        updateScheduleRef.current({
+          ...schedule,
+          nextExecutionAt: nextTime,
+          lastError: String(error),
+          executionLog: appendLogEntry(schedule, errorLog)
+        })
+      } else {
+        updateScheduleRef.current({
+          ...schedule,
+          status: 'failed',
+          lastError: String(error),
+          executionLog: appendLogEntry(schedule, errorLog)
+        })
+      }
     }
   }, [])
 

@@ -99,6 +99,7 @@ interface TerminalSession {
   visible: boolean
   pendingData: string[]
   pendingDataBytes: number
+  interactiveBoostUntil: number
 }
 
 // Maximum bytes to buffer per hidden terminal before discarding old data.
@@ -115,6 +116,7 @@ const VISIBLE_WRITE_MAX_CHUNK_BYTES = 256 * 1024
 // for terminal updates — visually smooth while leaving ~70% of each frame
 // budget free for user input, React renders, and other UI work.
 const VISIBLE_WRITE_THROTTLE_MS = 50
+const INTERACTIVE_BOOST_WINDOW_MS = 250
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
@@ -152,6 +154,7 @@ export class TerminalSessionManager {
   private lastVisibleFlushTime = 0
   private visibleFlushTimeoutId: number | null = null
   private visibleFlushAnimationFrameId: number | null = null
+  private activeInteractiveTerminalId: string | null = null
 
   constructor() {
     this.registerBufferRequestListener()
@@ -176,6 +179,8 @@ export class TerminalSessionManager {
 
       perfMonitor.recordIpcData(data.length)
 
+      const interactiveBoostActive = this.shouldUseInteractiveBoost(session)
+
       // Fast path: for visible terminals with no pending data, write small
       // interactive data (keystroke echoes) directly to xterm, bypassing
       // the 50 ms throttled flush.  This eliminates the renderer-side
@@ -184,13 +189,18 @@ export class TerminalSessionManager {
       if (
         session.visible &&
         session.terminal &&
-        data.length <= TerminalSessionManager.INTERACTIVE_FAST_PATH_BYTES &&
-        session.pendingDataBytes === 0
+        (
+          interactiveBoostActive ||
+          (
+            data.length <= TerminalSessionManager.INTERACTIVE_FAST_PATH_BYTES &&
+            session.pendingDataBytes === 0
+          )
+        )
       ) {
-        const pending = this.captureViewportIntent(session, 'output')
-        session.terminal.write(data, () => {
-          this.applyOutputBottomFastPath(session, pending)
-        })
+        if (interactiveBoostActive && session.pendingDataBytes > 0) {
+          this.flushPendingData(session)
+        }
+        this.writeTerminalData(session, data)
 
         // Still record input latency for the perf monitor
         const ksTs = (session as any)._lastKeystrokeTs as number | undefined
@@ -288,11 +298,7 @@ export class TerminalSessionManager {
       const merged = this.consumePendingDataChunk(session, VISIBLE_WRITE_MAX_CHUNK_BYTES)
       if (!merged) continue
 
-      const t0 = performance.now()
-      session.terminal.write(merged, () => {
-        this.applyOutputBottomFastPath(session, pending)
-      })
-      perfMonitor.recordXtermWrite(performance.now() - t0)
+      this.writeTerminalData(session, merged, pending)
 
       if (session.pendingData.length > 0) {
         requeue.push(termId)
@@ -691,6 +697,7 @@ export class TerminalSessionManager {
         // Only track short inputs (keystrokes) — not pasted blocks
         ;(session as any)._lastKeystrokeTs = performance.now()
       }
+      this.activateInteractiveBoost(id)
       window.electronAPI.terminal.write(id, data)
     })
 
@@ -720,7 +727,8 @@ export class TerminalSessionManager {
       scrollTrackingDisposable: null,
       visible: true,
       pendingData: [],
-      pendingDataBytes: 0
+      pendingDataBytes: 0,
+      interactiveBoostUntil: 0
     }
 
     session.writeParsedDisposable = terminal.onWriteParsed(() => {
@@ -771,52 +779,10 @@ export class TerminalSessionManager {
     return true
   }
 
-  /**
-   * Send content to a terminal and execute (send Enter).
-   *
-   * Strategy depends on whether the content is single-line or multi-line:
-   *
-   * **Single-line**: `terminal.input(content + '\r', true)` — sends raw data
-   * through the same path as keyboard input (triggerDataEvent → onData → PTY).
-   * No bracketed paste wrapping.  Equivalent to the user typing the content
-   * and pressing Enter.  Works for all programs (shells, TUIs, Ink-based apps).
-   *
-   * **Multi-line**: `terminal.paste(content)` for bracketed paste protection
-   * (prevents ConPTY from splitting multi-line content at each \r), then
-   * after a 300 ms delay, `terminal.input('\r', true)` to send Enter.
-   * The delay allows Ink-based TUIs (Claude Code, Codex) to complete the
-   * async React state update triggered by the paste event before the Enter
-   * arrives.
-   *
-   * Returns true if the operation was initiated via the xterm session,
-   * false if no session was found (caller should fall back to direct PTY write).
-   */
-  pasteAndExecute(id: string, data: string): boolean {
+  isBracketedPasteEnabled(id: string): boolean | null {
     const session = this.sessions.get(id)
-    if (!session) return false
-
-    const isMultiLine = /\r?\n/.test(data)
-
-    if (!isMultiLine) {
-      // Single-line: send content + Enter as raw input (no bracket wrapping).
-      // This is the same behaviour as before commit 09aa7e9 and is known to
-      // work for all programs including Ink-based TUIs.
-      session.terminal.input(data + '\r', true)
-    } else {
-      // Multi-line: use bracketed paste to protect \r in the content from
-      // being interpreted as Enter by the child program, then send Enter
-      // after a delay so the async paste handler has time to complete.
-      session.terminal.paste(data)
-      setTimeout(() => {
-        // Guard: session may have been disposed during the delay
-        const s = this.sessions.get(id)
-        if (s) {
-          s.terminal.input('\r', true)
-        }
-      }, 300)
-    }
-
-    return true
+    if (!session) return null
+    return session.terminal.modes.bracketedPasteMode
   }
 
   ensureSession(id: string, options: TerminalSessionOptions): TerminalSession {
@@ -881,11 +847,7 @@ export class TerminalSessionManager {
     const merged = this.consumePendingDataChunk(session, PENDING_DATA_MAX_BYTES)
     if (!merged) return
 
-    const t0 = performance.now()
-    session.terminal.write(merged, () => {
-      this.applyOutputBottomFastPath(session, pending)
-    })
-    perfMonitor.recordXtermWrite(performance.now() - t0)
+    this.writeTerminalData(session, merged, pending)
 
     if (session.pendingData.length > 0) {
       this.flushPendingData(session)
@@ -1133,6 +1095,7 @@ export class TerminalSessionManager {
   focus(id: string): boolean {
     const session = this.sessions.get(id)
     if (!session?.open) return false
+    this.activeInteractiveTerminalId = id
 
     const textarea = this.getTextareaElementForSession(session)
     if (textarea) {
@@ -1225,7 +1188,38 @@ export class TerminalSessionManager {
     }
     session.terminal.dispose()
 
+    if (this.activeInteractiveTerminalId === id) {
+      this.activeInteractiveTerminalId = null
+    }
     this.sessions.delete(id)
+  }
+
+  private writeTerminalData(
+    session: TerminalSession,
+    data: string,
+    pending = this.captureViewportIntent(session, 'output')
+  ): void {
+    const t0 = performance.now()
+    session.terminal.write(data, () => {
+      this.applyOutputBottomFastPath(session, pending)
+    })
+    perfMonitor.recordXtermWrite(performance.now() - t0)
+  }
+
+  private activateInteractiveBoost(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+    session.interactiveBoostUntil = performance.now() + INTERACTIVE_BOOST_WINDOW_MS
+    this.activeInteractiveTerminalId = id
+    window.electronAPI.terminal.notifyInteractiveInput(id)
+  }
+
+  private shouldUseInteractiveBoost(session: TerminalSession): boolean {
+    return (
+      session.visible &&
+      this.activeInteractiveTerminalId === session.id &&
+      performance.now() < session.interactiveBoostUntil
+    )
   }
 }
 

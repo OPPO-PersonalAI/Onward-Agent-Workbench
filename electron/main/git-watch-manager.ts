@@ -40,7 +40,7 @@ type RepoBoostState = {
 const ENABLE_ADAPTIVE_POLLING = process.env.ONWARD_GIT_POLLING !== '0'
 const GIT_WATCH_DEBUG = process.env.ONWARD_DEBUG === '1' || process.env.ELECTRON_ENABLE_LOGGING === '1'
 
-const ACTIVE_POLL_MS = 800
+const ACTIVE_POLL_MS = 400
 const IDLE_POLL_MS = 1200
 const QUIET_POLL_MS = 3000
 
@@ -51,7 +51,7 @@ const STATUS_REFRESH_ACTIVE_MS = 1200
 const STATUS_REFRESH_IDLE_MS = 3500
 const STATUS_REFRESH_QUIET_MS = 7000
 
-const ACTIVITY_TRIGGER_MS = 800
+const ACTIVITY_TRIGGER_MS = 120
 const MANUAL_TRIGGER_MS = 80
 
 export class GitWatchManager {
@@ -297,6 +297,7 @@ export class GitWatchManager {
       entry.lastStatusAt = 0
       this.emitInfo(entry, {
         cwd: null,
+        repoRoot: null,
         branch: null,
         repoName: null,
         status: null
@@ -313,6 +314,7 @@ export class GitWatchManager {
       entry.lastStatusAt = 0
       this.emitInfo(entry, {
         cwd,
+        repoRoot: null,
         branch: null,
         repoName: null,
         status: null
@@ -344,6 +346,7 @@ export class GitWatchManager {
 
     this.emitInfo(entry, {
       cwd,
+      repoRoot: meta.repoRoot,
       branch: snapshot.branch,
       repoName,
       status: snapshot.status
@@ -387,6 +390,7 @@ export class GitWatchManager {
     if (!prev || !next) return false
     return (
       prev.cwd === next.cwd &&
+      prev.repoRoot === next.repoRoot &&
       prev.branch === next.branch &&
       prev.repoName === next.repoName &&
       prev.status === next.status

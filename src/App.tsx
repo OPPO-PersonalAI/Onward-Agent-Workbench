@@ -15,26 +15,39 @@ import { Settings } from './components/Settings'
 import { ProjectEditor } from './components/ProjectEditor'
 import { useScheduleEngine } from './hooks/useScheduleEngine'
 import type { ScheduleNotification } from './hooks/useScheduleEngine'
-import { LayoutMode, TerminalBatchResult, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest } from './types/prompt'
+import {
+  LayoutMode,
+  TerminalBatchResult,
+  TerminalInfo,
+  TerminalShortcutAction,
+  TerminalFocusRequest
+} from './types/prompt'
+import type { TerminalBatchIssue, TerminalBatchIssueReason } from './types/prompt'
 import type { Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
 import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { computeNextExecution } from './utils/schedule'
 import {
+  createTerminalBatchResult,
+  getDeliveredTerminalIds
+} from './utils/terminal-batch'
+import {
   buildImportPlan,
   buildPromptExportPayload,
   formatExportFileName,
   parsePromptExportPayload,
-  type PromptImportResult
+  type ImportPrepareResult
 } from './utils/prompt-io'
 import { useI18n } from './i18n/useI18n'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
 import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/focus-coordinator'
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
+import { buildChangeDirectoryCommand } from './utils/terminal-command'
 import './App.css'
 
 const MAX_SCHEDULE_LOG_ENTRIES = 50
+const SEND_AND_EXECUTE_SETTLE_DELAY_MS = 150
 const DEBUG_TERMINAL_FOCUS = Boolean(window.electronAPI?.debug?.enabled)
 
 function debugTerminalFocus(message: string, data?: unknown) {
@@ -50,6 +63,12 @@ function debugTerminalFocus(message: string, data?: unknown) {
 function appendScheduleLogEntry(schedule: PromptSchedule, entry: ExecutionLogEntry): ExecutionLogEntry[] {
   const log = [...(schedule.executionLog ?? []), entry]
   return log.slice(-MAX_SCHEDULE_LOG_ENTRIES)
+}
+
+async function waitForSendAndExecuteSettle(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, SEND_AND_EXECUTE_SETTLE_DELAY_MS)
+  })
 }
 
 async function resolveProjectEditorDebugCwd(
@@ -72,6 +91,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   isActive,
   onTerminalFocus,
   onTerminalRename,
+  onPersistTerminalCwd,
   onOpenProjectEditor,
   focusRequest,
   shortcutAction,
@@ -81,6 +101,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   isActive: boolean
   onTerminalFocus: (tabId: string, terminalId: string) => void
   onTerminalRename: (tabId: string, terminalId: string, newTitle: string) => void
+  onPersistTerminalCwd: (terminalId: string, cwd: string | null) => void
   onOpenProjectEditor: (terminalId: string) => void
   focusRequest: TerminalFocusRequest | null
   shortcutAction: TerminalShortcutAction | null
@@ -92,6 +113,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       id: t.id,
       title: getTerminalDisplayName(index, t.customName),
       customName: t.customName,
+      lastCwd: t.lastCwd,
       isActive: t.id === tab.activeTerminalId
     }))
   }, [tab.terminals, tab.activeTerminalId, getTerminalDisplayName])
@@ -124,6 +146,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       theme="vscode-dark"
       onTerminalFocus={handleTerminalFocus}
       onTerminalRename={handleTerminalRename}
+      onPersistTerminalCwd={onPersistTerminalCwd}
       onOpenProjectEditor={onOpenProjectEditor}
       tabId={tab.id}
       hidden={!isActive}
@@ -193,6 +216,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     getTerminalDisplayName,
     updateTabById,
     updateEditorDraftForTab,
+    updatePromptEditorHeightForTab,
     importPrompts
   } = useAppState()
 
@@ -201,6 +225,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       id: t.id,
       title: getTerminalDisplayName(index, t.customName),
       customName: t.customName,
+      lastCwd: t.lastCwd,
       isActive: t.id === tab.activeTerminalId
     }))
   }, [tab.terminals, tab.layoutMode, tab.activeTerminalId, getTerminalDisplayName])
@@ -232,6 +257,10 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     updateEditorDraftForTab(tab.id, draft)
   }, [tab.id, updateEditorDraftForTab])
 
+  const handlePromptEditorHeightChange = useCallback((height: number) => {
+    updatePromptEditorHeightForTab(tab.id, height)
+  }, [tab.id, updatePromptEditorHeightForTab])
+
   const handleExportAllPrompts = useCallback(async () => {
     const exportNow = Date.now()
     const appInfo = await window.electronAPI.appInfo.get().catch((error) => {
@@ -252,33 +281,22 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     }
   }, [getTabDisplayName, state, t])
 
-  const handleImportAllPrompts = useCallback(async (): Promise<PromptImportResult> => {
+  const handlePrepareImport = useCallback(async (): Promise<ImportPrepareResult> => {
     const fileResult = await window.electronAPI.dialog.openTextFile({
       title: t('app.importPrompts'),
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
 
     if (!fileResult.success) {
-      return {
-        success: false,
-        canceled: fileResult.canceled,
-        globalImported: 0,
-        localImported: 0,
-        skippedDuplicate: 0,
-        error: fileResult.error
+      if (fileResult.canceled) {
+        return { success: false, globals: [], locals: [], duplicateCount: 0 }
       }
+      return { success: false, globals: [], locals: [], duplicateCount: 0, error: fileResult.error }
     }
 
     const parsed = parsePromptExportPayload(fileResult.content ?? '')
     if (!parsed.success) {
-      console.error('Failed to parse prompt import payload:', parsed.error)
-      return {
-        success: false,
-        globalImported: 0,
-        localImported: 0,
-        skippedDuplicate: 0,
-        error: parsed.error
-      }
+      return { success: false, globals: [], locals: [], duplicateCount: 0, error: parsed.error }
     }
 
     const existingPrompts = [
@@ -286,14 +304,14 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       ...state.tabs.flatMap(item => item.localPrompts)
     ]
     const plan = buildImportPlan(parsed.payload, existingPrompts)
-    importPrompts(plan.globals, plan.locals)
+
     return {
       success: true,
-      globalImported: plan.globals.length,
-      localImported: plan.locals.length,
-      skippedDuplicate: plan.duplicateCount
+      globals: plan.globals,
+      locals: plan.locals,
+      duplicateCount: plan.duplicateCount
     }
-  }, [importPrompts, state.globalPrompts, state.tabs, t])
+  }, [state.globalPrompts, state.tabs, t])
 
   return (
     <PromptNotebook
@@ -315,10 +333,13 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       globalPromptIds={globalPromptIds}
       promptCleanup={state.promptCleanup}
       onExportAllPrompts={handleExportAllPrompts}
-      onImportAllPrompts={handleImportAllPrompts}
+      onPrepareImport={handlePrepareImport}
+      onExecuteImport={importPrompts}
       onTouchPromptLastUsed={onTouchPromptLastUsed}
       onCleanupPrompts={onCleanupPrompts}
       onUpdatePromptCleanup={onUpdatePromptCleanup}
+      promptEditorHeight={tab.promptEditorHeight}
+      onPromptEditorHeightChange={handlePromptEditorHeightChange}
       editorDraft={editorDraft}
       onEditorDraftChange={handleEditorDraftChange}
       addToHistoryShortcut={addToHistoryShortcut}
@@ -358,6 +379,7 @@ function AppContent({
     cleanupPrompts,
     updatePromptCleanup,
     setLastFocusedTerminalId,
+    setTerminalLastCwd,
     getTerminalDisplayName,
     setLastFocusOwner,
     addSchedule,
@@ -371,7 +393,59 @@ function AppContent({
     setSettingsPanelWidth
   } = useSettings()
 
-  const { registerCloseSettings } = usePromptActions()
+  const { registerCloseSettings, registerTryCloseSettingsOnSwitch } = usePromptActions()
+
+  const buildTerminalIssue = useCallback((
+    terminalId: string,
+    status: TerminalBatchIssue['status'],
+    reason: TerminalBatchIssueReason,
+    error?: string
+  ): TerminalBatchIssue => {
+    const messageKey = reason === 'unsafe-multiline-send'
+      ? 'terminalAction.reason.unsafeMultilineSend'
+      : reason === 'unsafe-multiline-execute'
+        ? 'terminalAction.reason.unsafeMultilineExecute'
+        : reason === 'execute-failed'
+          ? 'terminalAction.reason.executeFailed'
+          : 'terminalAction.reason.sendFailed'
+
+    return {
+      terminalId,
+      status,
+      reason,
+      message: t(messageKey),
+      error
+    }
+  }, [t])
+
+  const summarizeScheduleBatchError = useCallback((result: TerminalBatchResult): string => {
+    const sentOnlyCount = result.sentOnlyIds.length
+    const failedCount = result.failedIds.length
+    const unsafeMultiLineFailures = result.issues.filter(
+      (issue) => issue.reason === 'unsafe-multiline-send'
+    ).length
+
+    if (sentOnlyCount > 0 && failedCount === 0) {
+      return t('schedule.sentOnly', { count: sentOnlyCount })
+    }
+
+    if (failedCount > 0 && sentOnlyCount === 0 && unsafeMultiLineFailures === failedCount) {
+      return t('schedule.multilineBlocked', { count: failedCount })
+    }
+
+    if (sentOnlyCount > 0 && failedCount > 0) {
+      return t('schedule.partialMixed', {
+        sentOnlyCount,
+        failedCount
+      })
+    }
+
+    if (failedCount > 0) {
+      return t('schedule.partialFailure', { count: failedCount })
+    }
+
+    return result.issues[0]?.message ?? t('schedule.partialFailure', { count: 1 })
+  }, [t])
 
   // Automatically create terminals for each Tab (when layout requires more terminals)
   useEffect(() => {
@@ -388,7 +462,8 @@ function AppContent({
           for (let i = currentTerminals.length; i < layoutMode; i++) {
             newTerminals.push({
               id: `terminal-${tab.id}-${Date.now()}-${i}`,
-              customName: null
+              customName: null,
+              lastCwd: null
             })
           }
           updateActiveTab({
@@ -414,6 +489,7 @@ function AppContent({
       id: t.id,
       title: getTerminalDisplayName(index, t.customName),
       customName: t.customName,
+      lastCwd: t.lastCwd,
       isActive: t.id === activeTab.activeTerminalId
     }))
   }, [activeTab, getTerminalDisplayName])
@@ -458,8 +534,154 @@ function AppContent({
     setScheduleNotifications(prev => prev.filter(n => !(n.promptId === promptId && n.type === type)))
   }, [])
 
+  const writeToTerminals = useCallback(async (
+    terminalIds: string[],
+    data: string,
+    action: string
+  ): Promise<TerminalBatchResult> => {
+    const result = createTerminalBatchResult()
+
+    for (const id of terminalIds) {
+      try {
+        const ok = await window.electronAPI.terminal.write(id, data)
+        if (ok) {
+          result.successIds.push(id)
+        } else {
+          result.failedIds.push(id)
+          result.issues.push(buildTerminalIssue(id, 'failed', 'execute-failed'))
+        }
+      } catch (error) {
+        result.failedIds.push(id)
+        result.issues.push(buildTerminalIssue(id, 'failed', 'execute-failed', String(error)))
+        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
+      }
+    }
+
+    if (result.failedIds.length > 0) {
+      console.warn('[PromptSender] terminal write failed:', { action, failedIds: result.failedIds })
+    }
+
+    return result
+  }, [buildTerminalIssue])
+
+  // Send content to terminals.
+  //
+  // Strategy (two tiers):
+  //   1. Single-line content: always use the main-process raw input path.
+  //      This avoids relying on renderer-only input injection semantics.
+  //   2. Multi-line content: prefer mounted xterm session paste() so
+  //      bracketed paste mode is applied when supported by the child program.
+  //   3. Session unavailable: use the main-process input sequence API so
+  //      multi-line content still goes through paste semantics instead of the
+  //      old direct PTY write fallback.
+  const sendContentToTerminals = useCallback(async (
+    terminalIds: string[],
+    content: string,
+    action: string
+  ): Promise<TerminalBatchResult> => {
+    const result = createTerminalBatchResult()
+    const isMultiLine = /\r?\n/.test(content)
+
+    for (const id of terminalIds) {
+      if (isMultiLine) {
+        const sessionBracketedPaste = terminalSessionManager.isBracketedPasteEnabled(id)
+        if (sessionBracketedPaste === true && terminalSessionManager.paste(id, content)) {
+          result.successIds.push(id)
+          continue
+        }
+        if (sessionBracketedPaste === false) {
+          result.failedIds.push(id)
+          result.issues.push(buildTerminalIssue(id, 'failed', 'unsafe-multiline-send'))
+          continue
+        }
+      }
+
+      try {
+        if (isMultiLine) {
+          const capabilities = await window.electronAPI.terminal.getInputCapabilities(id)
+          if (!capabilities.bracketedPasteEnabled) {
+            result.failedIds.push(id)
+            result.issues.push(buildTerminalIssue(id, 'failed', 'unsafe-multiline-send'))
+            continue
+          }
+        }
+        const writeResult = await window.electronAPI.terminal.sendInputSequence(id, {
+          kind: isMultiLine ? 'paste' : 'raw',
+          content
+        })
+        if (writeResult.ok) {
+          result.successIds.push(id)
+        } else {
+          result.failedIds.push(id)
+          result.issues.push(buildTerminalIssue(id, 'failed', 'send-failed', writeResult.error))
+        }
+      } catch (error) {
+        result.failedIds.push(id)
+        result.issues.push(buildTerminalIssue(id, 'failed', 'send-failed', String(error)))
+        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
+      }
+    }
+
+    if (result.failedIds.length > 0) {
+      console.warn('[PromptSender] terminal send failed:', { action, failedIds: result.failedIds })
+    }
+
+    return result
+  }, [buildTerminalIssue])
+
+  // Send command to specified terminal
+  const handleSendToTerminals = useCallback(async (terminalIds: string[], content: string) => {
+    return sendContentToTerminals(terminalIds, content, 'send')
+  }, [sendContentToTerminals])
+
+  // Execute command in terminal (send carriage return)
+  const handleExecuteOnTerminals = useCallback(async (terminalIds: string[]) => {
+    return writeToTerminals(terminalIds, '\r', 'execute')
+  }, [writeToTerminals])
+
+  const handleSendAndExecuteOnTerminals = useCallback(async (terminalIds: string[], content: string) => {
+    const sendResult = await sendContentToTerminals(terminalIds, content, 'send-and-execute:send')
+    const deliveredIds = getDeliveredTerminalIds(sendResult)
+    if (deliveredIds.length === 0) {
+      return sendResult
+    }
+
+    await waitForSendAndExecuteSettle()
+
+    const executeResult = await writeToTerminals(deliveredIds, '\r', 'send-and-execute:execute')
+    const result = createTerminalBatchResult({
+      successIds: executeResult.successIds,
+      failedIds: sendResult.failedIds,
+      issues: [...sendResult.issues]
+    })
+
+    if (executeResult.sentOnlyIds.length > 0) {
+      result.sentOnlyIds.push(...executeResult.sentOnlyIds)
+    }
+
+    if (executeResult.failedIds.length > 0) {
+      result.sentOnlyIds.push(...executeResult.failedIds)
+      result.issues.push(
+        ...executeResult.issues.map((issue) => ({
+          ...issue,
+          status: 'sent-only' as const
+        }))
+      )
+    }
+
+    if (result.failedIds.length > 0 || result.sentOnlyIds.length > 0) {
+      console.warn('[PromptSender] sendAndExecute completed with issues:', {
+        successIds: result.successIds,
+        sentOnlyIds: result.sentOnlyIds,
+        failedIds: result.failedIds,
+        issues: result.issues
+      })
+    }
+
+    return result
+  }, [sendContentToTerminals, writeToTerminals])
+
   const handleRetrySchedule = useCallback(async (promptId: string) => {
-    // Find the corresponding prompt and execute it immediately
     const prompt = allPromptsForSchedule.find(p => p.id === promptId)
     const schedule = state.promptSchedules.find(s => s.promptId === promptId)
     if (!prompt || !schedule) return
@@ -471,29 +693,31 @@ function AppContent({
       tab.terminals.some(t => t.id === terminalId)
     )
 
-    for (const terminalId of availableTerminalIds) {
-      const result = await window.electronAPI.terminal.writeSplit(terminalId, prompt.content, '\r')
-      if (!result.ok) {
-        console.warn('[Schedule] retry writeSplit failed:', {
-          terminalId,
-          phase: result.phase,
-          error: result.error
-        })
-      }
-    }
-
+    const result = await handleSendAndExecuteOnTerminals(availableTerminalIds, prompt.content)
     const now = Date.now()
-    const executedCount = schedule.executedCount + 1
     const successLog: ExecutionLogEntry = {
       timestamp: now,
-      success: true,
-      targetTerminalIds: availableTerminalIds
+      success: result.failedIds.length === 0 && result.sentOnlyIds.length === 0,
+      targetTerminalIds: availableTerminalIds,
+      error: result.failedIds.length > 0 || result.sentOnlyIds.length > 0
+        ? summarizeScheduleBatchError(result)
+        : undefined
     }
 
-    // Clear this missed-execution notification and keep other notifications with the same prompt
     setScheduleNotifications(prev => prev.filter(n => !(n.promptId === promptId && n.type === 'missed-execution')))
 
-    // Update the execution count and recalculate the next execution to avoid immediate repeated triggering
+    if (result.failedIds.length > 0 || result.sentOnlyIds.length > 0) {
+      updateSchedule({
+        ...schedule,
+        missedExecutions: 0,
+        lastError: summarizeScheduleBatchError(result),
+        executionLog: appendScheduleLogEntry(schedule, successLog)
+      })
+      return
+    }
+
+    const executedCount = schedule.executedCount + 1
+
     if (schedule.scheduleType === 'recurring') {
       const reachedMax = schedule.maxExecutions !== null && executedCount >= schedule.maxExecutions
       updateSchedule({
@@ -519,151 +743,25 @@ function AppContent({
       executionLog: appendScheduleLogEntry(schedule, successLog),
       lastError: null
     })
-  }, [allPromptsForSchedule, state.promptSchedules, state.tabs, updateSchedule])
+  }, [
+    allPromptsForSchedule,
+    handleSendAndExecuteOnTerminals,
+    state.promptSchedules,
+    state.tabs,
+    summarizeScheduleBatchError,
+    updateSchedule
+  ])
 
-  // Install scheduling engine
   useScheduleEngine({
     isLoaded,
     schedules: state.promptSchedules,
     tabs: tabsForSchedule,
     allPrompts: allPromptsForSchedule,
     updateSchedule,
-    onNotification: handleScheduleNotification
+    onNotification: handleScheduleNotification,
+    onSendAndExecute: handleSendAndExecuteOnTerminals,
+    summarizeBatchError: summarizeScheduleBatchError
   })
-
-  const writeToTerminals = useCallback(async (
-    terminalIds: string[],
-    data: string,
-    action: string
-  ): Promise<TerminalBatchResult> => {
-    const successIds: string[] = []
-    const failedIds: string[] = []
-
-    for (const id of terminalIds) {
-      try {
-        const ok = await window.electronAPI.terminal.write(id, data)
-        if (ok) {
-          successIds.push(id)
-        } else {
-          failedIds.push(id)
-        }
-      } catch (error) {
-        failedIds.push(id)
-        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
-      }
-    }
-
-    if (failedIds.length > 0) {
-      console.warn('[PromptSender] terminal write failed:', { action, failedIds })
-    }
-
-    return { successIds, failedIds }
-  }, [])
-
-  // Send content to terminals as a paste operation.
-  //
-  // Strategy (two tiers):
-  //   1. xterm.js paste — uses terminal.paste() which applies bracketed paste mode
-  //      when the child program supports it (e.g. Claude Code sends \x1b[?2004h).
-  //      Within bracketed paste, \r\n is safe — the child treats the entire block
-  //      as pasted text rather than interpreting each \r as Enter.
-  //   2. Direct PTY write — fallback when the xterm.js instance is unavailable
-  //      (e.g. terminal on an unmounted tab). Content is written as-is.
-  //
-  // Content is NOT modified (no line ending normalization). The bracketed paste
-  // mechanism is what protects multi-line content from being split — this is
-  // the same approach used by every modern terminal emulator (macOS Terminal,
-  // iTerm2, Windows Terminal, etc.).
-  const sendContentToTerminals = useCallback(async (
-    terminalIds: string[],
-    content: string,
-    action: string
-  ): Promise<TerminalBatchResult> => {
-    const successIds: string[] = []
-    const failedIds: string[] = []
-
-    for (const id of terminalIds) {
-      // Tier 1: try xterm.js paste via session manager (handles bracketed paste mode)
-      if (terminalSessionManager.paste(id, content)) {
-        successIds.push(id)
-        continue
-      }
-
-      // Tier 2: fallback to direct PTY write (session not found)
-      try {
-        const ok = await window.electronAPI.terminal.write(id, content)
-        if (ok) {
-          successIds.push(id)
-        } else {
-          failedIds.push(id)
-        }
-      } catch (error) {
-        failedIds.push(id)
-        console.warn('[PromptSender] terminal write threw:', { action, terminalId: id, error: String(error) })
-      }
-    }
-
-    if (failedIds.length > 0) {
-      console.warn('[PromptSender] terminal send failed:', { action, failedIds })
-    }
-
-    return { successIds, failedIds }
-  }, [])
-
-  // Send command to specified terminal
-  const handleSendToTerminals = useCallback(async (terminalIds: string[], content: string) => {
-    return sendContentToTerminals(terminalIds, content, 'send')
-  }, [sendContentToTerminals])
-
-  // Execute command in terminal (send carriage return)
-  const handleExecuteOnTerminals = useCallback(async (terminalIds: string[]) => {
-    return writeToTerminals(terminalIds, '\r', 'execute')
-  }, [writeToTerminals])
-
-  const handleSendAndExecuteOnTerminals = useCallback(async (terminalIds: string[], content: string) => {
-    // Send content to terminals and execute (Enter).
-    //
-    // Tier 1 — via session manager (pasteAndExecute):
-    //   Single-line: terminal.input(content + '\r') — raw input, no brackets.
-    //   Multi-line:  terminal.paste(content) + 300 ms delay + terminal.input('\r').
-    //
-    // Tier 2 — direct PTY write (session unavailable, e.g. unmounted tab):
-    //   Fallback to the old two-phase approach: pty.write(content), delay, pty.write('\r').
-    const successIds: string[] = []
-    const failedIds: string[] = []
-
-    for (const id of terminalIds) {
-      // Tier 1: session manager handles single-line vs multi-line internally
-      if (terminalSessionManager.pasteAndExecute(id, content)) {
-        successIds.push(id)
-        continue
-      }
-
-      // Tier 2: direct PTY write (no session)
-      try {
-        const result = await window.electronAPI.terminal.writeSplit(id, content, '\r')
-        if (result.ok) {
-          successIds.push(id)
-        } else {
-          failedIds.push(id)
-          console.warn('[PromptSender] send-and-execute writeSplit failed:', {
-            terminalId: id,
-            phase: result.phase,
-            error: result.error
-          })
-        }
-      } catch (error) {
-        failedIds.push(id)
-        console.warn('[PromptSender] send-and-execute write threw:', { terminalId: id, error: String(error) })
-      }
-    }
-
-    if (failedIds.length > 0) {
-      console.warn('[PromptSender] send-and-execute failed:', { failedIds })
-    }
-
-    return { successIds, failedIds }
-  }, [])
 
   // Terminal focus processing (with tabId parameter)
   const handleTerminalFocusWithTab = useCallback((tabId: string, terminalId: string) => {
@@ -692,6 +790,14 @@ function AppContent({
 
   // Display state of the Settings panel (independent of Tab state)
   const [showSettings, setShowSettings] = useState(false)
+  // Track the panel state before Settings opened for each tab during the current Settings session.
+  const panelBeforeSettingsByTabRef = useRef<Record<string, 'prompt' | null>>({})
+  const showSettingsRef = useRef(false)
+  showSettingsRef.current = showSettings
+  const activePanelRef = useRef<'prompt' | null>(activeTab?.activePanel ?? null)
+  activePanelRef.current = activeTab?.activePanel ?? null
+  const activeTabIdRef = useRef<string | null>(activeTab?.id ?? null)
+  activeTabIdRef.current = activeTab?.id ?? null
   const [projectEditorOpen, setProjectEditorOpen] = useState(false)
   const [projectEditorTerminalId, setProjectEditorTerminalId] = useState<string | null>(null)
   const [projectEditorCwd, setProjectEditorCwd] = useState<string | null>(null)
@@ -699,21 +805,53 @@ function AppContent({
   const projectEditorDebugOpenedRef = useRef(false)
   const projectEditorProfileScenarioRef = useRef(false)
 
+  const clearPanelBeforeSettings = useCallback(() => {
+    panelBeforeSettingsByTabRef.current = {}
+  }, [])
+
+  const getPanelBeforeSettings = useCallback((tabId: string | null | undefined, fallbackPanel: 'prompt' | null = null) => {
+    if (!tabId) return fallbackPanel
+    const panelByTab = panelBeforeSettingsByTabRef.current
+    return Object.prototype.hasOwnProperty.call(panelByTab, tabId)
+      ? panelByTab[tabId]
+      : fallbackPanel
+  }, [])
+
   // True panel switching handling
   const handlePanelChangeWithSettings = useCallback((panel: 'prompt' | 'settings' | null) => {
     if (panel === 'settings') {
+      const currentTabId = activeTabIdRef.current
+      if (currentTabId) {
+        panelBeforeSettingsByTabRef.current[currentTabId] = activePanelRef.current
+      }
       setShowSettings(true)
       updateActiveTab({ activePanel: null })
     } else {
+      clearPanelBeforeSettings()
       setShowSettings(false)
       updateActiveTab({ activePanel: panel })
     }
-  }, [updateActiveTab])
+  }, [clearPanelBeforeSettings, updateActiveTab])
 
   // Close Settings
   const handleCloseSettings = useCallback(() => {
+    clearPanelBeforeSettings()
     setShowSettings(false)
-  }, [])
+  }, [clearPanelBeforeSettings])
+
+  // Conditionally close Settings on Task/Tab switch
+  // Only closes if the relevant panel state is 'prompt'; otherwise keeps Settings open
+  const handleTryCloseSettingsOnSwitch = useCallback((targetTabId?: string, targetActivePanel?: 'prompt' | null) => {
+    if (!showSettingsRef.current) return
+    const resolvedTabId = targetTabId ?? activeTabIdRef.current
+    // focusTerminal (same tab): use the active tab's saved panel state for this Settings session
+    // switchTab: prefer the target tab's saved panel state, otherwise fall back to targetTab.activePanel
+    const panelToCheck = getPanelBeforeSettings(resolvedTabId, targetActivePanel ?? null)
+    if (panelToCheck === 'prompt') {
+      clearPanelBeforeSettings()
+      setShowSettings(false)
+    }
+  }, [clearPanelBeforeSettings, getPanelBeforeSettings])
 
   const handleOpenProjectEditor = useCallback(async (terminalId: string) => {
     if (
@@ -726,11 +864,19 @@ function AppContent({
       if (!confirmed) return
     }
 
-    const cwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+    const persistedCwd = state.tabs
+      .flatMap((tab) => tab.terminals)
+      .find((terminal) => terminal.id === terminalId)?.lastCwd ?? null
+    let cwd = persistedCwd
+    try {
+      cwd = await window.electronAPI.git.getTerminalCwd(terminalId) || persistedCwd
+    } catch {
+      cwd = persistedCwd
+    }
     setProjectEditorTerminalId(terminalId)
     setProjectEditorCwd(cwd)
     setProjectEditorOpen(true)
-  }, [projectEditorOpen, projectEditorTerminalId, projectEditorDirty, t])
+  }, [projectEditorOpen, projectEditorTerminalId, projectEditorDirty, state.tabs, t])
 
   // Debug profile: Automatically execute ProjectEditor <-> Git Diff loop to facilitate CPU sampling
   useEffect(() => {
@@ -760,9 +906,7 @@ function AppContent({
         }
         projectEditorProfileScenarioRef.current = true
         const platform = window.electronAPI.platform
-        const cdCommand = platform === 'win32'
-          ? `cd /d "${debugCwd}"\r`
-          : `cd "${debugCwd}"\r`
+        const cdCommand = buildChangeDirectoryCommand(platform, debugCwd)
         await window.electronAPI.terminal.write(terminalId, cdCommand)
         await sleep(400)
         openProjectEditorDebug(debugCwd)
@@ -835,6 +979,14 @@ function AppContent({
     }
   }, [registerCloseSettings, handleCloseSettings])
 
+  // Register tryCloseSettingsOnSwitch callback to Context
+  useEffect(() => {
+    registerTryCloseSettingsOnSwitch(handleTryCloseSettingsOnSwitch)
+    return () => {
+      registerTryCloseSettingsOnSwitch(null)
+    }
+  }, [registerTryCloseSettingsOnSwitch, handleTryCloseSettingsOnSwitch])
+
   // Restore focus when ProjectEditor or Settings panel closes
   const prevProjectEditorOpenRef = useRef(projectEditorOpen)
   const projectEditorTerminalIdRef = useRef(projectEditorTerminalId)
@@ -874,18 +1026,13 @@ function AppContent({
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalIds: string[], directory: string) => {
     const platform = window.electronAPI.platform
-    let fullCommand: string
-
-    if (platform === 'win32') {
-      fullCommand = `cd /d "${directory}"\r`
-    } else {
-      fullCommand = `cd "${directory}"\r`
-    }
+    const fullCommand = buildChangeDirectoryCommand(platform, directory)
 
     for (const id of terminalIds) {
       await window.electronAPI.terminal.write(id, fullCommand)
+      setTerminalLastCwd(id, directory)
     }
-  }, [])
+  }, [setTerminalLastCwd])
 
   // Globally intercept all link clicks in the page, and unify the main process "open externally after confirmation" process
   useEffect(() => {
@@ -929,30 +1076,43 @@ function AppContent({
             result = await handleSendAndExecuteOnTerminals([terminalId], content)
             break
           default:
-            result = { successIds: [], failedIds: [terminalId] }
+            result = createTerminalBatchResult({
+              failedIds: [terminalId],
+              issues: [buildTerminalIssue(terminalId, 'failed', 'send-failed')]
+            })
         }
 
         // When sent successfully and there is content, save to Prompt history
-        if (result.successIds.length > 0 && content.trim()) {
+        if (getDeliveredTerminalIds(result).length > 0 && content.trim()) {
           addPrompt({ title: '', content: content.trim(), pinned: false })
         }
 
         window.electronAPI.terminal.sendPromptBridgeResponse(requestId, {
-          success: result.successIds.length > 0,
+          success: result.successIds.length > 0 && result.sentOnlyIds.length === 0 && result.failedIds.length === 0,
           successIds: result.successIds,
-          failedIds: result.failedIds
+          sentOnlyIds: result.sentOnlyIds,
+          failedIds: result.failedIds,
+          issues: result.issues,
+          error: result.issues[0]?.message
         })
       } catch (error) {
         window.electronAPI.terminal.sendPromptBridgeResponse(requestId, {
           success: false,
           successIds: [],
+          sentOnlyIds: [],
           failedIds: [terminalId],
           error: String(error)
         })
       }
     })
     return cleanup
-  }, [handleSendToTerminals, handleExecuteOnTerminals, handleSendAndExecuteOnTerminals, addPrompt])
+  }, [
+    addPrompt,
+    buildTerminalIssue,
+    handleExecuteOnTerminals,
+    handleSendAndExecuteOnTerminals,
+    handleSendToTerminals
+  ])
 
   // Wait for loading to complete
   if (!isLoaded || !activeTab) {
@@ -1027,6 +1187,7 @@ function AppContent({
                 isActive={tab.id === state.activeTabId}
                 onTerminalFocus={handleTerminalFocusWithTab}
                 onTerminalRename={handleTerminalRenameWithTab}
+                onPersistTerminalCwd={setTerminalLastCwd}
                 onOpenProjectEditor={handleOpenProjectEditor}
                 focusRequest={terminalFocusRequest}
                 shortcutAction={terminalShortcutAction}
@@ -1068,7 +1229,7 @@ function SettingsProviderWithHandler() {
     setLastFocusOwner,
     getLastFocusOwner
   } = useAppState()
-  const { focusEditor, submitEditor, closeSettings } = usePromptActions()
+  const { focusEditor, submitEditor, closeSettings, tryCloseSettingsOnSwitch } = usePromptActions()
   const lastFocusedElementRef = useRef<HTMLElement | null>(null)
   const [terminalShortcutAction, setTerminalShortcutAction] = useState<TerminalShortcutAction | null>(null)
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null)
@@ -1175,8 +1336,7 @@ function SettingsProviderWithHandler() {
           const terminalId = activeTab.terminals[action.index - 1]?.id
           if (terminalId) {
             setLastFocusOwner('terminal')
-            // First close the Settings panel (if it is open)
-            closeSettings()
+            // Keep Settings open while switching Tasks inside the same Tab.
             // Only update activeTerminalId, do not change activePanel (keep Prompt panel state)
             updateActiveTab({ activeTerminalId: terminalId })
             setLastFocusedTerminalId(terminalId)
@@ -1190,7 +1350,8 @@ function SettingsProviderWithHandler() {
         if (action.index <= state.tabs.length) {
           const targetTab = state.tabs[action.index - 1]
           if (targetTab) {
-            closeSettings()
+            // Conditionally close Settings based on the target tab's pre-Settings panel context.
+            tryCloseSettingsOnSwitch(targetTab.id, targetTab.activePanel)
             switchTab(targetTab.id)
             const terminalId = targetTab.activeTerminalId
             if (terminalId) {
@@ -1258,7 +1419,7 @@ function SettingsProviderWithHandler() {
         break
       }
     }
-  }, [activeTab, state.tabs, switchTab, updateActiveTab, getLastFocusedTerminalId, setLastFocusedTerminalId, setLastFocusOwner, closeSettings, focusEditor, submitEditor, requestTerminalFocus])
+  }, [activeTab, state.tabs, switchTab, updateActiveTab, getLastFocusedTerminalId, setLastFocusedTerminalId, setLastFocusOwner, closeSettings, tryCloseSettingsOnSwitch, focusEditor, submitEditor, requestTerminalFocus])
 
   const restoreLastFocus = useCallback((reason: TerminalFocusRestoreReason) => {
     if (!activeTab) return

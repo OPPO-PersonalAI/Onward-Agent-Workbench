@@ -13,8 +13,9 @@
 
 export interface GitDiffDebugApi {
   isOpen: () => boolean
-  getFileList: () => { filename: string; originalFilename?: string }[]
-  getSelectedFile: () => { filename: string; originalFilename?: string } | null
+  getFileList: () => Array<{ filename: string; originalFilename?: string; status?: string; changeType?: string }>
+  getRepoList: () => Array<{ root: string; label: string; isSubmodule: boolean; depth: number; changeCount: number; loading?: boolean }>
+  getSelectedFile: () => { filename: string; originalFilename?: string; status?: string; changeType?: string } | null
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
   isSelectedReady: () => boolean
@@ -26,6 +27,24 @@ export interface GitDiffDebugApi {
   getDiffFontSize: () => number
   getCwd: () => string | null
   getRepoRoot: () => string | null
+  isSubmodulesLoading: () => boolean
+  getTiming: () => {
+    openRequestedAt: number | null
+    shellShownAt: number | null
+    cwdReadyAt: number | null
+    diffLoadedAt: number | null
+    openToShellMs: number | null
+    openToCwdReadyMs: number | null
+    openToDiffLoadedMs: number | null
+    cwdReadyToDiffLoadedMs: number | null
+  }
+  getSplitViewState?: () => {
+    ratio: number | null
+    originalWidth: number
+    modifiedWidth: number
+  } | null
+  setSplitViewRatio?: (ratio: number) => boolean
+  dragSplitViewRatio?: (ratio: number) => Promise<boolean>
   getImagePreviewState?: () => {
     isImage: boolean
     isSvg: boolean
@@ -36,6 +55,14 @@ export interface GitDiffDebugApi {
     displayMode: 'original' | 'fit'
     loading: boolean
   } | null
+  getFileActionState?: () => {
+    fileActionsVisible: boolean
+    lineActionsVisible: boolean
+    keepDisabled: boolean
+    denyDisabled: boolean
+    pending: boolean
+  } | null
+  triggerFileAction?: (action: 'keep' | 'deny') => Promise<boolean>
 }
 
 export interface PromptSenderDebugApi {
@@ -57,6 +84,19 @@ export interface GitHistoryDebugApi {
   getSelectedShas: () => string[]
   getFiles: () => Array<{ filename: string; status: string }>
   getSelectedFile: () => { filename: string } | null
+  getImagePreviewState?: () => {
+    isImage: boolean
+    isSvg: boolean
+    hasOriginalUrl: boolean
+    hasModifiedUrl: boolean
+    compareMode: '2up' | 'swipe' | 'onion'
+    displayMode: 'original' | 'fit'
+    svgViewMode: 'visual' | 'text'
+    loading: boolean
+  } | null
+  setImageCompareMode?: (mode: '2up' | 'swipe' | 'onion') => void
+  setImageDisplayMode?: (mode: 'original' | 'fit') => void
+  setSvgViewMode?: (mode: 'visual' | 'text') => void
   isLoading: () => boolean
   getActiveCwd: () => string | null
   getRepoState: () => {
@@ -65,6 +105,7 @@ export interface GitHistoryDebugApi {
     repoSearch: string
     cachedRepoCount: number
   }
+  switchRepo?: (repoRoot: string | null) => void
   injectRepoState: (state: {
     selectedRepoRoot: string | null
     cachedParentCwd: string | null
@@ -108,6 +149,8 @@ export interface PromptNotebookDebugApi {
   getPrompts: () => Array<{ id: string; title: string; pinned: boolean; color?: string; lastUsedAt: number }>
   getCleanupConfig: () => { autoEnabled: boolean; autoKeepDays: number; autoDeleteColored: boolean; lastAutoCleanupAt: number | null }
   getEditorContent: () => string
+  getEditorHeight: () => number | null
+  getPersistedEditorHeight: () => number
   setEditorContent: (content: string) => void
   submitEditor: () => void
   // Scheduled task Debug API
@@ -128,11 +171,18 @@ export interface ProjectEditorDebugApi {
   getRootPath: () => string | null
   getActiveFilePath: () => string | null
   getEditorContent: () => string
+  setEditorContent?: (content: string) => boolean
   getEditorLineCount: () => number
   openFileByPath: (filePath: string) => Promise<void>
   triggerEditorSaveCommand: () => boolean
   triggerToolbarSave: () => Promise<boolean>
   isSqliteViewerVisible: () => boolean
+  getImageFilePreviewState?: () => {
+    visible: boolean
+    loaded: boolean
+    broken: boolean
+    src: string
+  } | null
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean
@@ -140,6 +190,12 @@ export interface ProjectEditorDebugApi {
   isPreviewSearchOpen?: () => boolean
   isMarkdownRenderPending: () => boolean
   getMarkdownRenderedHtml: () => string
+  getMarkdownPreviewImageState?: () => {
+    count: number
+    loadedCount: number
+    brokenCount: number
+    sources: string[]
+  }
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
   isOutlineVisible?: () => boolean
@@ -235,6 +291,43 @@ export interface TerminalDebugApi {
   remountTerminal: (terminalId?: string) => boolean
 }
 
+export interface SettingsDebugApi {
+  isOpen: () => boolean
+  getUpdaterState: () => {
+    phase: string
+    supported: boolean
+    statusLabel: string
+    actionLabel: string
+    actionDisabled: boolean
+    detailText: string | null
+    actionCounts: {
+      checkNow: number
+      restartToUpdate: number
+    }
+    targetVersion: string | null
+    lastCheckedAt: number | null
+    actionError: string | null
+  }
+  setMockUpdaterStatus: (
+    patch: Partial<import('../types/electron.d.ts').UpdaterStatus> & {
+      phase: import('../types/electron.d.ts').UpdatePhase
+    }
+  ) => boolean
+  setMockNextCheckResult: (
+    patch: Partial<import('../types/electron.d.ts').UpdaterStatus> & {
+      phase: import('../types/electron.d.ts').UpdatePhase
+    },
+    delayMs?: number
+  ) => boolean
+  setMockRestartResult: (result: {
+    success: boolean
+    error?: string
+    delayMs?: number
+  }) => boolean
+  clickUpdateAction: () => Promise<boolean>
+  resetMockUpdater: () => boolean
+}
+
 // ============================================================
 // Test run environment
 // ============================================================
@@ -291,6 +384,7 @@ declare global {
     __onwardGitHistoryDebug?: GitHistoryDebugApi
     __onwardPromptNotebookDebug?: PromptNotebookDebugApi
     __onwardProjectEditorDebug?: ProjectEditorDebugApi
+    __onwardSettingsDebug?: SettingsDebugApi
     __onwardTerminalFocusDebug?: TerminalFocusDebugApi
     __onwardTerminalDebug?: TerminalDebugApi
   }

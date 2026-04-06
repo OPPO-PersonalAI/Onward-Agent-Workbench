@@ -43,8 +43,12 @@ if (Select-String -Path $LogFile -Pattern '\[AutoTest\] FAIL' -Quiet) {
   Write-Error "Image diff autotest failed"
 }
 
-if (-not (Select-String -Path $LogFile -Pattern 'ID-04-image-preview-loaded' -Quiet)) {
-  Write-Error "Missing ID-04 result; the test may not have executed correctly"
+if (Select-String -Path $LogFile -Pattern 'totalFailed:\s+[1-9]' -Quiet) {
+  Write-Error "Image diff autotest reported failed cases in the summary"
+}
+
+if (-not (Select-String -Path $LogFile -Pattern 'ID-21-cleanup' -Quiet)) {
+  Write-Error "Missing ID-21 result; the test may not have executed correctly"
 }
 
 Write-Host "Image diff autotest passed"

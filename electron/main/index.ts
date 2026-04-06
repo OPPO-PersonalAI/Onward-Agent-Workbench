@@ -22,10 +22,39 @@ import { isSameAppNavigation, openExternalUrlWithConfirm } from './external-link
 import { startApiServer, stopApiServer } from './api-server'
 import { tMain } from './localization'
 import { getUpdateService } from './update-service'
+import { getAppStateStorage } from './app-state-storage'
+import { getTerminalCwd } from './git-utils'
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 let installUpdateOnQuit = false
+
+async function persistTerminalCwdSnapshot(): Promise<void> {
+  const appStateStorage = getAppStateStorage()
+  const state = appStateStorage.get()
+  const terminalIds = state.tabs.flatMap((tab) => tab.terminals.map((terminal) => terminal.id))
+  const uniqueTerminalIds = Array.from(new Set(terminalIds))
+
+  if (uniqueTerminalIds.length === 0) {
+    return
+  }
+
+  const updates = await Promise.all(uniqueTerminalIds.map(async (terminalId) => {
+    if (!ptyManager.get(terminalId)) {
+      return null
+    }
+    const cwd = await getTerminalCwd(terminalId)
+    if (!cwd) {
+      return null
+    }
+    return { terminalId, cwd }
+  }))
+
+  const validUpdates = updates.filter((item): item is { terminalId: string; cwd: string } => Boolean(item))
+  if (validUpdates.length > 0) {
+    appStateStorage.setTerminalLastCwds(validUpdates)
+  }
+}
 
 if (process.env.ONWARD_DISABLE_GPU === '1') {
   app.disableHardwareAcceleration()
@@ -53,6 +82,7 @@ export async function requestQuit(): Promise<void> {
   if (await confirmQuit()) {
     isQuitting = true
     installUpdateOnQuit = false
+    await persistTerminalCwdSnapshot()
     const shutdownResult = await ptyManager.shutdownAll()
     if (shutdownResult.timedOut > 0) {
       console.warn(
@@ -76,6 +106,7 @@ export async function requestRestartToApplyUpdate(): Promise<{ success: boolean;
   isQuitting = true
   installUpdateOnQuit = true
 
+  await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {
     console.warn(
@@ -95,6 +126,7 @@ export async function requestQuitForDebug(): Promise<{ success: boolean; error?:
   isQuitting = true
   installUpdateOnQuit = false
 
+  await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {
     console.warn(

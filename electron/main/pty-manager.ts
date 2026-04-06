@@ -19,6 +19,7 @@ export interface PtyOptions {
 }
 
 type PtyExitEvent = { exitCode: number; signal?: number }
+type PtySequencePhase = 'content' | 'enter'
 
 interface PtyRecord {
   pty: pty.IPty
@@ -30,9 +31,10 @@ interface PtyRecord {
   disposed: boolean
 }
 
-// Chunked write constants for Windows ConPTY pipe buffer safety
-const CHUNK_SIZE = 1024
-const CHUNK_DELAY_MS = 5
+// Chunked write constants for Windows ConPTY pipe buffer safety.
+// macOS/Linux can write large payloads directly without the extra pacing.
+const WINDOWS_CHUNK_SIZE = 8 * 1024
+const WINDOWS_CHUNK_DELAY_MS = 1
 const SMALL_WRITE_THRESHOLD = 1024
 
 export class PtyManager {
@@ -174,24 +176,21 @@ export class PtyManager {
     // ipcMain.handle() awaits the Promise, so the renderer's
     // `await terminal.write()` won't resolve until all chunks are written.
     // This prevents the follow-up '\r' from arriving mid-content.
-    record.writeQueue = record.writeQueue.then(() =>
-      this.writeChunked(record, data)
-    )
+    record.writeQueue = record.writeQueue.then(() => this.writeLargeData(record, data))
     return record.writeQueue.then(() => true)
   }
 
-  async writeSplit(
+  async sendInputSequence(
     id: string,
     content: string,
-    suffix: string,
-    delayMs: number = 150
-  ): Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }> {
+    enterDelayMs?: number
+  ): Promise<{ ok: boolean; phase?: PtySequencePhase; error?: string }> {
     const record = this.instances.get(id)
     if (!record || record.disposed || record.exited) {
       return { ok: false, phase: 'content', error: record?.exited ? 'pty exited' : 'pty not found' }
     }
 
-    let failedPhase: 'content' | 'suffix' = 'content'
+    let failedPhase: PtySequencePhase = 'content'
     let failedError: unknown = null
 
     const task = record.writeQueue.then(async () => {
@@ -201,28 +200,28 @@ export class PtyManager {
       }
 
       try {
-        if (content.length <= SMALL_WRITE_THRESHOLD) {
-          record.pty.write(content)
-        } else {
-          await this.writeChunked(record, content)
-        }
+        await this.writeLargeData(record, content)
       } catch (error) {
         failedPhase = 'content'
         failedError = error
         throw error
       }
 
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+      if (enterDelayMs === undefined) {
+        return
+      }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, enterDelayMs))
 
       if (record.disposed || record.exited) {
-        failedPhase = 'suffix'
-        throw new Error(record.exited ? 'pty exited during split delay' : 'pty disposed during split delay')
+        failedPhase = 'enter'
+        throw new Error(record.exited ? 'pty exited during enter delay' : 'pty disposed during enter delay')
       }
 
       try {
-        record.pty.write(suffix)
+        record.pty.write('\r')
       } catch (error) {
-        failedPhase = 'suffix'
+        failedPhase = 'enter'
         failedError = error
         throw error
       }
@@ -235,18 +234,27 @@ export class PtyManager {
       return { ok: true }
     } catch (error) {
       const message = String(failedError ?? error)
-      console.warn('[PTY] writeSplit failed:', { id, phase: failedPhase, error: message })
+      console.warn('[PTY] sendInputSequence failed:', { id, phase: failedPhase, error: message })
       return { ok: false, phase: failedPhase, error: message }
     }
   }
 
+  private async writeLargeData(record: PtyRecord, data: string): Promise<void> {
+    if (data.length === 0) return
+    if (data.length <= SMALL_WRITE_THRESHOLD || platform() !== 'win32') {
+      record.pty.write(data)
+      return
+    }
+    await this.writeChunked(record, data)
+  }
+
   private async writeChunked(record: PtyRecord, data: string): Promise<void> {
-    for (let offset = 0; offset < data.length; offset += CHUNK_SIZE) {
+    for (let offset = 0; offset < data.length; offset += WINDOWS_CHUNK_SIZE) {
       if (record.disposed) return
-      const chunk = data.slice(offset, offset + CHUNK_SIZE)
+      const chunk = data.slice(offset, offset + WINDOWS_CHUNK_SIZE)
       record.pty.write(chunk)
-      if (offset + CHUNK_SIZE < data.length) {
-        await new Promise<void>((resolve) => setTimeout(resolve, CHUNK_DELAY_MS))
+      if (offset + WINDOWS_CHUNK_SIZE < data.length) {
+        await new Promise<void>((resolve) => setTimeout(resolve, WINDOWS_CHUNK_DELAY_MS))
       }
     }
   }

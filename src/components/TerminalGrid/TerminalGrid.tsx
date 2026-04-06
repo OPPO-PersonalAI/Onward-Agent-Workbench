@@ -19,6 +19,7 @@ import { focusCoordinator } from '../../terminal/focus-coordinator'
 import type { TerminalDebugApi } from '../../autotest/types'
 import { perfMonitor } from '../../utils/perf-monitor'
 import { useI18n } from '../../i18n/useI18n'
+import { buildChangeDirectoryCommand } from '../../utils/terminal-command'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
 
@@ -44,6 +45,7 @@ interface TerminalGridProps {
   fontFamily?: string
   onTerminalFocus: (id: string) => void
   onTerminalRename: (id: string, newTitle: string) => void
+  onPersistTerminalCwd: (terminalId: string, cwd: string | null) => void
   onOpenProjectEditor: (terminalId: string) => void
   tabId?: string
   hidden?: boolean
@@ -54,6 +56,7 @@ interface TerminalGridProps {
 
 interface TerminalGitInfo {
   cwd: string | null
+  repoRoot: string | null
   branch: string | null
   repoName: string | null
   status: 'clean' | 'modified' | 'added' | 'unknown' | null
@@ -72,6 +75,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   fontFamily = DEFAULT_TERMINAL_FONT_FAMILY,
   onTerminalFocus,
   onTerminalRename,
+  onPersistTerminalCwd,
   onOpenProjectEditor,
   tabId: _tabId,
   hidden = false,
@@ -86,6 +90,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const hiddenRef = useRef(hidden)
+  const prevHiddenForOverflowRef = useRef(hidden)
   const activeTerminalIdRef = useRef(activeTerminalId)
   const containerRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
   const terminalIdsRef = useRef<string[]>([])
@@ -117,6 +122,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [gitDiffOpen, setGitDiffOpen] = useState(false)
   const [gitDiffTerminalId, setGitDiffTerminalId] = useState<string | null>(null)
   const [gitDiffCwd, setGitDiffCwd] = useState<string | null>(null)
+  const [gitDiffCwdPending, setGitDiffCwdPending] = useState(false)
+  const [gitDiffOpenRequestedAt, setGitDiffOpenRequestedAt] = useState<number | null>(null)
+  const [gitDiffCwdReadyAt, setGitDiffCwdReadyAt] = useState<number | null>(null)
   const [gitHistoryOpen, setGitHistoryOpen] = useState(false)
   const [gitHistoryTerminalId, setGitHistoryTerminalId] = useState<string | null>(null)
   const [gitHistoryCwd, setGitHistoryCwd] = useState<string | null>(null)
@@ -129,6 +137,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [copyNotice, setCopyNotice] = useState<{ terminalId: string; message: string } | null>(null)
   const copyNoticeTimerRef = useRef<number | null>(null)
   const lastShortcutTokenRef = useRef<number | null>(null)
+  const gitDiffOpenTokenRef = useRef(0)
   const [terminalStatuses, setTerminalStatuses] = useState<Record<string, TerminalSessionStatus>>({})
   const globalOverlayActive = gitDiffOpen || gitHistoryOpen || projectEditorOpen
   const [browserOpenTerminals, setBrowserOpenTerminals] = useState<Set<string>>(new Set())
@@ -278,6 +287,12 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [])
 
+  const getPersistedTerminalCwd = useCallback((terminalId: string): string | null => {
+    const terminal = terminals.find((item) => item.id === terminalId)
+    const lastCwd = terminal?.lastCwd
+    return typeof lastCwd === 'string' && lastCwd.trim() ? lastCwd : null
+  }, [terminals])
+
   const handleCopyText = useCallback(async (terminalId: string, label: string, text: string | null) => {
     if (!text) return
     const success = await copyTextToClipboard(text)
@@ -339,10 +354,14 @@ export const TerminalGrid = memo(function TerminalGrid({
 
   const applyTerminalInfoUpdate = useCallback((terminalId: string, info: TerminalGitInfo | null) => {
     if (!info) return
+    if (typeof info.cwd === 'string' && info.cwd.trim()) {
+      onPersistTerminalCwd(terminalId, info.cwd)
+    }
     setTerminalInfos(prev => {
       const current = prev[terminalId]
       if (
         current?.cwd === info.cwd &&
+        current?.repoRoot === info.repoRoot &&
         current?.branch === info.branch &&
         current?.repoName === info.repoName &&
         current?.status === info.status
@@ -351,7 +370,7 @@ export const TerminalGrid = memo(function TerminalGrid({
       }
       return { ...prev, [terminalId]: info }
     })
-  }, [])
+  }, [onPersistTerminalCwd])
 
   const setTerminalStatus = useCallback((terminalId: string, status: TerminalSessionStatus) => {
     setTerminalStatuses(prev => {
@@ -364,7 +383,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   // can skip xterm.write() and release WebGL contexts.
   // Only reacts to the `hidden` prop (tab switch), NOT to visibleTerminals
   // changes (layout transition), to avoid disposing WebGL during init.
-  useEffect(() => {
+  // Uses useLayoutEffect so WebGL rebuild + data flush + fit complete
+  // BEFORE the browser paints, preventing the visible width "shrink" glitch.
+  useLayoutEffect(() => {
     const ids = terminals.map(term => term.id)
     ids.forEach(id => terminalSessionManager.setVisibility(id, !hidden))
   }, [hidden, terminals])
@@ -543,6 +564,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   const adaptiveCollapseRef = useRef<ResizeObserver | null>(null)
 
   useLayoutEffect(() => {
+    const wasHidden = prevHiddenForOverflowRef.current
+    prevHiddenForOverflowRef.current = hidden
+
     if (hidden) return
     const wrapper = gridWrapperRef.current
     if (!wrapper) return
@@ -579,7 +603,12 @@ export const TerminalGrid = memo(function TerminalGrid({
       })
     }
 
-    checkOverflow()
+    // Skip immediate checkOverflow on hidden→visible transition to avoid
+    // forced synchronous reflows during tab switch; the ResizeObserver
+    // will handle measurement once dimensions stabilize.
+    if (!wasHidden) {
+      checkOverflow()
+    }
 
     const observer = new ResizeObserver(checkOverflow)
     adaptiveCollapseRef.current = observer
@@ -869,22 +898,54 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [editingId])
 
-  // View Git Diff — always opens from the Git repository root
+  // View Git Diff — open the shell immediately, then resolve the best cwd for diff loading
   const handleViewGitDiff = useCallback(async (terminalId: string) => {
-    const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
-    // Resolve to the root directory of the Git repository to ensure that diff is always executed in the root directory
-    const cwd = terminalCwd
-      ? await window.electronAPI.git.resolveRepoRoot(terminalCwd)
-      : terminalCwd
-    debugLog('gitdiff:view', { terminalId, terminalCwd, cwd })
+    const currentToken = ++gitDiffOpenTokenRef.current
+    const requestedAt = performance.now()
+    const terminalInfo = terminalInfos[terminalId]
+    const persistedCwd = getPersistedTerminalCwd(terminalId)
+    const initialCwd = terminalInfo?.repoRoot || terminalInfo?.cwd || persistedCwd
+    debugLog('gitdiff:view:start', {
+      terminalId,
+      initialCwd,
+      repoRoot: terminalInfo?.repoRoot || null,
+      terminalCwd: terminalInfo?.cwd || null,
+      persistedCwd
+    })
     setGitDiffTerminalId(terminalId)
-    setGitDiffCwd(cwd)
+    setGitDiffOpenRequestedAt(requestedAt)
+    setGitDiffCwdReadyAt(initialCwd ? requestedAt : null)
+    setGitDiffCwd(initialCwd)
+    setGitDiffCwdPending(!initialCwd)
     setGitDiffOpen(true)
     setGitHistoryOpen(false)
-  }, [])
+    if (initialCwd) return
+
+    try {
+      const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+      if (gitDiffOpenTokenRef.current !== currentToken) return
+      const readyAt = performance.now()
+      debugLog('gitdiff:view:cwd-ready', { terminalId, terminalCwd, readyAt })
+      setGitDiffCwd(terminalCwd || persistedCwd)
+      setGitDiffCwdReadyAt(readyAt)
+    } catch (error) {
+      if (gitDiffOpenTokenRef.current !== currentToken) return
+      debugLog('gitdiff:view:cwd-error', { terminalId, error: String(error) })
+      setGitDiffCwd(persistedCwd)
+      setGitDiffCwdReadyAt(performance.now())
+    } finally {
+      if (gitDiffOpenTokenRef.current === currentToken) {
+        setGitDiffCwdPending(false)
+      }
+    }
+  }, [getPersistedTerminalCwd, terminalInfos])
 
   const handleViewGitHistory = useCallback(async (terminalId: string) => {
-    const terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+    const persistedCwd = getPersistedTerminalCwd(terminalId)
+    let terminalCwd = terminalInfos[terminalId]?.cwd || persistedCwd
+    if (!terminalCwd) {
+      terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+    }
     // Resolve to git repo root so the path format matches what getHistory returns
     // (git uses forward slashes; raw terminal CWD on Windows uses backslashes)
     const cwd = terminalCwd
@@ -894,15 +955,19 @@ export const TerminalGrid = memo(function TerminalGrid({
     setGitHistoryCwd(cwd)
     setGitHistoryOpen(true)
     setGitDiffOpen(false)
-  }, [])
+  }, [getPersistedTerminalCwd, terminalInfos])
 
   // Close the Git Diff viewer
   const handleCloseGitDiff = useCallback(() => {
     debugLog('gitdiff:close')
+    gitDiffOpenTokenRef.current += 1
     const openedFrom = gitDiffTerminalId
     setGitDiffOpen(false)
     setGitDiffTerminalId(null)
     setGitDiffCwd(null)
+    setGitDiffCwdPending(false)
+    setGitDiffOpenRequestedAt(null)
+    setGitDiffCwdReadyAt(null)
     // Restore focus to the terminal that opened the diff viewer
     requestAnimationFrame(() => {
       const tid = openedFrom ?? activeTerminalIdRef.current
@@ -1008,17 +1073,18 @@ export const TerminalGrid = memo(function TerminalGrid({
   const handleChangeWorkDir = useCallback(async (terminalId: string) => {
     const result = await window.electronAPI.dialog.openDirectory()
     if (result.success && result.path) {
-      const cdCommand = `cd "${result.path}"\r`
-      window.electronAPI.terminal.write(terminalId, cdCommand)
+      const cdCommand = buildChangeDirectoryCommand(window.electronAPI.platform, result.path)
+      await window.electronAPI.terminal.write(terminalId, cdCommand)
+      onPersistTerminalCwd(terminalId, result.path)
       onTerminalFocus(terminalId)
       window.setTimeout(() => {
         void window.electronAPI.git.notifyTerminalActivity(terminalId)
       }, 300)
     }
-  }, [onTerminalFocus])
+  }, [onPersistTerminalCwd, onTerminalFocus])
 
   const handleOpenWorkDir = useCallback(async (terminalId: string) => {
-    let cwd = terminalInfos[terminalId]?.cwd || null
+    let cwd = terminalInfos[terminalId]?.cwd || getPersistedTerminalCwd(terminalId)
     if (!cwd) {
       try {
         cwd = await window.electronAPI.git.getTerminalCwd(terminalId)
@@ -1032,7 +1098,7 @@ export const TerminalGrid = memo(function TerminalGrid({
     if (!result.success && result.error) {
       console.error('Failed to open work directory:', result.error)
     }
-  }, [terminalInfos])
+  }, [getPersistedTerminalCwd, terminalInfos])
 
   useEffect(() => {
     if (hidden || !shortcutAction) return
@@ -1062,7 +1128,7 @@ export const TerminalGrid = memo(function TerminalGrid({
 
   const handleTerminalFocus = useCallback((terminalId: string, event?: React.MouseEvent) => {
     // Skip focus steal when click originates inside a browser panel
-    if (event?.target instanceof Element && event.target.closest('.browser-panel')) {
+    if (event?.target instanceof Element && event.target.closest('.browser-panel-cell')) {
       return
     }
     void window.electronAPI.git.notifyTerminalFocus(terminalId)
@@ -1110,6 +1176,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                     onToggleBrowser={() => handleToggleBrowser(termInfo.id)}
                     isBrowserOpen={browserOpenTerminals.has(termInfo.id)}
                     onOpenCodingAgent={(agentType) => handleOpenCodingAgent(termInfo.id, agentType)}
+                    forceClose={hidden || globalOverlayActive}
                   />
                   <div className="terminal-grid-header-left">
                     {editingId === termInfo.id ? (
@@ -1136,6 +1203,17 @@ export const TerminalGrid = memo(function TerminalGrid({
                         {termInfo.title}
                       </span>
                     )}
+                    {branch && (
+                      <span
+                        className={`${branchClassName} terminal-grid-copyable`}
+                        title={t('terminalGrid.branchTitle', { branch })}
+                        onDoubleClick={() => {
+                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
+                        }}
+                      >
+                        <span className="terminal-grid-branch-name">{branch}</span>
+                      </span>
+                    )}
                     {repoName && (
                       <span
                         className="terminal-grid-adaptive-repo terminal-grid-copyable"
@@ -1151,17 +1229,6 @@ export const TerminalGrid = memo(function TerminalGrid({
                           </svg>
                           <span className="terminal-grid-adaptive-hover-text">{repoName}</span>
                         </span>
-                      </span>
-                    )}
-                    {branch && (
-                      <span
-                        className={`${branchClassName} terminal-grid-copyable`}
-                        title={t('terminalGrid.branchTitle', { branch })}
-                        onDoubleClick={() => {
-                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
-                        }}
-                      >
-                        <span className="terminal-grid-branch-name">{branch}</span>
                       </span>
                     )}
                     {compactCwd && (
@@ -1252,6 +1319,9 @@ export const TerminalGrid = memo(function TerminalGrid({
           onClose={handleCloseGitDiff}
           terminalId={gitDiffTerminalId || ''}
           cwd={gitDiffCwd}
+          cwdPending={gitDiffCwdPending}
+          openRequestedAt={gitDiffOpenRequestedAt}
+          cwdReadyAt={gitDiffCwdReadyAt}
           displayMode="panel"
         />
       )}

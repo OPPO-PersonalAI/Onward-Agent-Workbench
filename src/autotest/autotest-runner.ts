@@ -11,6 +11,7 @@
 import type { AutotestContext, TestResult, TestSuiteResult } from './types'
 import { testTerminalAutofollow } from './test-terminal-autofollow'
 import { testPromptSender } from './test-prompt-sender'
+import { testPromptIntegrity } from './test-prompt-integrity'
 import { testPerAgentFont } from './test-per-agent-font'
 import { testGitHistory } from './test-git-history'
 import { testPromptCleanup } from './test-prompt-cleanup'
@@ -21,6 +22,8 @@ import { testProjectEditorRestore } from './test-project-editor-restore'
 import { testProjectEditorRestoreUnit } from './test-project-editor-restore-unit'
 import { testProjectEditorOpenPosition } from './test-project-editor-open-position'
 import { testGitDiffSubdir } from './test-git-diff-subdir'
+import { testGitDiffSubmodules } from './test-git-diff-submodules'
+import { testGitDiffRecursiveSubmodules } from './test-git-diff-recursive-submodules'
 import { testGitCrossPlatform } from './test-git-cross-platform'
 import { testProjectEditorMultiTerminalScope } from './test-project-editor-multi-terminal-scope'
 import { testMarkdownLatexPreview } from './test-markdown-latex-preview'
@@ -31,9 +34,11 @@ import { testTerminalStress } from './test-terminal-stress'
 import { testImageDiff } from './test-image-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 import { testGlobalSearch } from './test-global-search'
+import { testSettingsUpdate } from './test-settings-update'
 import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
+import { testTerminalStatePersistence } from './test-terminal-state-persistence'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -183,6 +188,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       await sleep(500)
     }
 
+    if (!ctx.cancelled() && shouldRun('settings-update')) {
+      log('phase0.877:begin')
+      const results = await testSettingsUpdate(ctx)
+      collectSuiteResults('SettingsUpdate', results)
+      await sleep(400)
+    }
+
     if (!ctx.cancelled() && shouldRun('file-watch')) {
       log('phase0.88:begin')
       const results = await testFileWatch(ctx)
@@ -213,6 +225,20 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase1:begin')
       const results = await testPromptSender(ctx)
       collectSuiteResults('PromptSender', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('prompt-integrity')) {
+      log('phase1.1:begin')
+      const results = await testPromptIntegrity(ctx)
+      collectSuiteResults('PromptIntegrity', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('terminal-state-persistence')) {
+      log('phase1.15:begin')
+      const results = await testTerminalStatePersistence(ctx)
+      collectSuiteResults('TerminalStatePersistence', results)
       await sleep(500)
     }
 
@@ -283,6 +309,26 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testGitCrossPlatform(ctx)
       collectSuiteResults('GitCrossPlatform', results)
       await ctx.reopenProjectEditor('phase5.4-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('git-diff-submodules')) {
+      log('phase5.45:begin')
+      await ctx.reopenProjectEditor('phase5.45-setup')
+      await sleep(300)
+      const results = await testGitDiffSubmodules(ctx)
+      collectSuiteResults('GitDiffSubmodules', results)
+      await ctx.reopenProjectEditor('phase5.45-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('git-diff-recursive-submodules')) {
+      log('phase5.47:begin')
+      await ctx.reopenProjectEditor('phase5.47-setup')
+      await sleep(300)
+      const results = await testGitDiffRecursiveSubmodules(ctx)
+      collectSuiteResults('GitDiffRecursiveSubmodules', results)
+      await ctx.reopenProjectEditor('phase5.47-cleanup')
       await sleep(500)
     }
 

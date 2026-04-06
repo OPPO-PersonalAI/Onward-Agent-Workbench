@@ -40,15 +40,35 @@ export interface TerminalInfo {
   title: string
   /** Custom name (for editing) */
   customName: string | null
+  /** Persisted working directory */
+  lastCwd?: string | null
   isActive: boolean
 }
 
 /**
  * Terminal batch operation results
  */
+export type TerminalBatchIssueStatus = 'sent-only' | 'failed'
+
+export type TerminalBatchIssueReason =
+  | 'unsafe-multiline-send'
+  | 'unsafe-multiline-execute'
+  | 'send-failed'
+  | 'execute-failed'
+
+export interface TerminalBatchIssue {
+  terminalId: string
+  status: TerminalBatchIssueStatus
+  reason: TerminalBatchIssueReason
+  message: string
+  error?: string
+}
+
 export interface TerminalBatchResult {
   successIds: string[]
+  sentOnlyIds: string[]
   failedIds: string[]
+  issues: TerminalBatchIssue[]
 }
 
 /**

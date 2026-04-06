@@ -48,20 +48,38 @@ export interface PromptBridgeSendRequest {
 export interface PromptBridgeSendResult {
   success: boolean
   successIds: string[]
+  sentOnlyIds: string[]
   failedIds: string[]
+  issues?: Array<{
+    terminalId: string
+    status: 'sent-only' | 'failed'
+    reason: 'unsafe-multiline-send' | 'unsafe-multiline-execute' | 'send-failed' | 'execute-failed'
+    message: string
+    error?: string
+  }>
   error?: string
+}
+
+export interface TerminalInputSequencePayload {
+  kind: 'raw' | 'paste'
+  content: string
+}
+
+export interface TerminalInputCapabilities {
+  bracketedPasteEnabled: boolean
 }
 
 export interface TerminalAPI {
   create: (id: string, options?: TerminalOptions) => Promise<{ success: boolean; id?: string; error?: string }>
   write: (id: string, data: string) => Promise<boolean>
-  writeSplit: (
-    id: string,
-    content: string,
-    suffix: string,
-    delayMs?: number
-  ) => Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }>
   resize: (id: string, cols: number, rows: number) => Promise<boolean>
+  sendInputSequence: (
+    id: string,
+    payload: TerminalInputSequencePayload
+  ) => Promise<{ ok: boolean; phase?: 'content' | 'enter'; error?: string }>
+  getInputCapabilities: (id: string) => Promise<TerminalInputCapabilities>
+  setBufferFastPath: (id: string, enabled: boolean) => void
+  notifyInteractiveInput: (id: string) => void
   dispose: (id: string) => Promise<boolean>
   onData: (callback: (id: string, data: string) => void) => () => void
   onExit: (callback: (id: string, exitCode: number, signal?: number) => void) => () => void
@@ -166,6 +184,19 @@ export interface PromptCleanupConfig {
   lastAutoCleanupAt: number | null
 }
 
+export interface EditorDraft {
+  title: string
+  content: string
+  height: number
+  savedAt: number
+}
+
+export interface PersistedTerminalState {
+  id: string
+  customName: string | null
+  lastCwd: string | null
+}
+
 export interface TabState {
   id: string
   customName: string | null
@@ -173,9 +204,11 @@ export interface TabState {
   layoutMode: 1 | 2 | 4 | 6
   activePanel: 'prompt' | null
   promptPanelWidth: number
+  promptEditorHeight: number
   activeTerminalId: string | null
-  terminals: { id: string; title: string }[]
+  terminals: PersistedTerminalState[]
   localPrompts: LocalPrompt[]
+  editorDraft?: EditorDraft
 }
 
 export interface AppState {
@@ -184,6 +217,8 @@ export interface AppState {
   globalPrompts: GlobalPrompt[]
   promptCleanup: PromptCleanupConfig
   lastFocusedTerminalId: string | null
+  projectEditorStates?: Record<string, unknown>
+  promptSchedules?: unknown[]
   updatedAt: number
 }
 
@@ -209,6 +244,7 @@ export interface GitRepoContext {
   isSubmodule: boolean
   depth: number
   changeCount: number
+  loading?: boolean
 }
 
 // Git file status
@@ -232,7 +268,12 @@ export interface GitDiffResult {
   files: GitFileStatus[]
   repos?: GitRepoContext[]
   superprojectRoot?: string
+  submodulesLoading?: boolean
   error?: string
+}
+
+export interface GitDiffLoadOptions {
+  scope?: 'root-only' | 'full'
 }
 
 export interface GitCommitInfo {
@@ -265,6 +306,8 @@ export interface GitHistoryFile {
   status: GitStatusCode
   additions: number
   deletions: number
+  isImage?: boolean
+  isSvg?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -287,10 +330,17 @@ export interface GitHistoryDiffResult {
   error?: string
 }
 
+export interface GitHistoryFileContentOptions {
+  base: string
+  head: string
+  file: Pick<GitHistoryFile, 'filename' | 'originalFilename' | 'status'>
+}
+
 export type TerminalGitStatus = 'clean' | 'modified' | 'added' | 'unknown'
 
 export interface TerminalGitInfo {
   cwd: string | null
+  repoRoot: string | null
   branch: string | null
   repoName: string | null
   status: TerminalGitStatus | null
@@ -310,6 +360,11 @@ export interface GitFileContentResult {
   originalImageSize?: number
   modifiedImageSize?: number
   error?: string
+}
+
+export interface GitHistoryFileContentResult extends GitFileContentResult {
+  base: string
+  head: string
 }
 
 export interface GitFileSaveResult {
@@ -483,9 +538,10 @@ export interface ProjectSearchStats {
 // Git API
 export interface GitAPI {
   resolveRepoRoot: (cwd: string) => Promise<string>
-  getDiff: (cwd: string) => Promise<GitDiffResult>
+  getDiff: (cwd: string, options?: GitDiffLoadOptions) => Promise<GitDiffResult>
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
+  getHistoryFileContent: (cwd: string, options: GitHistoryFileContentOptions) => Promise<GitHistoryFileContentResult>
   getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
   saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
   stageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
@@ -796,16 +852,24 @@ const terminalAPI: TerminalAPI = {
     return ipcRenderer.invoke('terminal:write', id, data)
   },
 
-  writeSplit: (id: string, content: string, suffix: string, delayMs?: number) => {
-    return ipcRenderer.invoke('terminal:write-split', id, content, suffix, delayMs)
-  },
-
   resize: (id: string, cols: number, rows: number) => {
     return ipcRenderer.invoke('terminal:resize', id, cols, rows)
   },
 
+  sendInputSequence: (id: string, payload: TerminalInputSequencePayload) => {
+    return ipcRenderer.invoke('terminal:send-input-sequence', id, payload)
+  },
+
+  getInputCapabilities: (id: string) => {
+    return ipcRenderer.invoke('terminal:get-input-capabilities', id)
+  },
+
   setBufferFastPath: (id: string, enabled: boolean) => {
     ipcRenderer.send('terminal:set-buffer-fast-path', id, enabled)
+  },
+
+  notifyInteractiveInput: (id: string) => {
+    ipcRenderer.send('terminal:notify-interactive-input', id)
   },
 
   dispose: (id: string) => {
@@ -939,8 +1003,8 @@ const gitAPI: GitAPI = {
     return ipcRenderer.invoke('git:resolve-repo-root', cwd)
   },
 
-  getDiff: (cwd: string) => {
-    return ipcRenderer.invoke('git:get-diff', cwd)
+  getDiff: (cwd: string, options?: GitDiffLoadOptions) => {
+    return ipcRenderer.invoke('git:get-diff', cwd, options)
   },
 
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => {
@@ -949,6 +1013,10 @@ const gitAPI: GitAPI = {
 
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => {
     return ipcRenderer.invoke('git:get-history-diff', cwd, options)
+  },
+
+  getHistoryFileContent: (cwd: string, options: GitHistoryFileContentOptions) => {
+    return ipcRenderer.invoke('git:get-history-file-content', cwd, options)
   },
 
   getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {
@@ -1286,6 +1354,12 @@ const browserAPI: BrowserAPI = {
   },
   clearCookies: (maxAge?: number) => {
     return ipcRenderer.invoke('browser:clear-cookies', maxAge)
+  },
+  setRememberCookies: (rememberCookies: boolean) => {
+    return ipcRenderer.invoke('browser:set-remember-cookies', rememberCookies) as Promise<{ rememberCookies: boolean }>
+  },
+  showCookieMenu: (options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => {
+    return ipcRenderer.invoke('browser:show-cookie-menu', options) as Promise<{ action: string; rememberCookies?: boolean } | null>
   },
   onUrlChanged: (callback: (id: string, url: string) => void) => {
     const listener = (_: Electron.IpcRendererEvent, id: string, url: string) => {

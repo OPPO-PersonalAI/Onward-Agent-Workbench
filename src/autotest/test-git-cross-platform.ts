@@ -19,6 +19,7 @@ import type { AutotestContext, TestResult } from './types'
 
 const LOAD_TIMEOUT_MS = 15000
 const QUICK_TIMEOUT_MS = 8000
+const DIFF_SPLIT_STORAGE_KEY = 'git-diff-split-view-ratio'
 
 export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestResult[]> {
   const { log, sleep, waitFor, assert, cancelled, terminalId, rootPath } = ctx
@@ -31,8 +32,11 @@ export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestRe
   log('git-xplat:start', { suite: 'GitCrossPlatform', rootPath })
 
   const platform = window.electronAPI.platform
+  const shellThresholdMs = platform === 'win32' ? 700 : 300
+  const splitRatioTolerance = 0.05
   const getHistoryApi = () => window.__onwardGitHistoryDebug
   const getDiffApi = () => window.__onwardGitDiffDebug
+  let persistedSplitRatio: number | null = null
 
   // ================================================================
   // Section 1: CWD & Path Resolution
@@ -145,7 +149,7 @@ export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestRe
         const a = getHistoryApi()
         return Boolean(a && a.getFiles().length > 0 && !a.isLoading())
       }, LOAD_TIMEOUT_MS)
-      const files = api.getFiles()
+      const files = getHistoryApi()?.getFiles() ?? []
       _assert('XP-06-history-files-load', filesLoaded && files.length > 0, {
         filesLoaded,
         fileCount: files.length,
@@ -182,23 +186,33 @@ export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestRe
   // XP-08: Git Diff opens and loads file list
   if (!cancelled()) {
     window.dispatchEvent(new CustomEvent('git-diff:open', { detail: { terminalId, source: 'debug' } }))
-    const opened = await waitFor('XP-08-diff-open', () => {
+    const shellVisible = await waitFor('XP-08-diff-open', () => {
       const a = getDiffApi()
-      return Boolean(a?.isOpen())
+      return Boolean(a?.isOpen() && a.getTiming().shellShownAt !== null)
     }, QUICK_TIMEOUT_MS)
 
-    if (opened) {
-      // Wait for loading to complete (may show 0 files if working tree is clean)
+    const shellTiming = getDiffApi()?.getTiming() ?? null
+    _assert('XP-08-diff-shell-visible-fast', shellVisible && (shellTiming?.openToShellMs ?? Number.MAX_SAFE_INTEGER) < shellThresholdMs, {
+      shellVisible,
+      openToShellMs: shellTiming?.openToShellMs ?? null,
+      thresholdMs: shellThresholdMs,
+      platform
+    })
+
+    if (shellVisible) {
       const loadDone = await waitFor('XP-08-diff-loaded', () => {
         const a = getDiffApi()
         if (!a) return false
-        // isSelectedReady may not apply; check if getFileList returns without error
-        try { a.getFileList(); return true } catch { return false }
+        return a.getTiming().diffLoadedAt !== null
       }, LOAD_TIMEOUT_MS)
+      const timing = getDiffApi()?.getTiming() ?? null
       const fileCount = getDiffApi()?.getFileList()?.length ?? -1
       _assert('XP-08-diff-loads', loadDone, {
         loadDone,
         fileCount,
+        openToDiffLoadedMs: timing?.openToDiffLoadedMs ?? null,
+        openToCwdReadyMs: timing?.openToCwdReadyMs ?? null,
+        cwdReadyToDiffLoadedMs: timing?.cwdReadyToDiffLoadedMs ?? null,
         platform
       })
     } else {
@@ -223,6 +237,103 @@ export async function testGitCrossPlatform(ctx: AutotestContext): Promise<TestRe
       })
     } else {
       results.push({ name: 'XP-09-diff-cwd-normalized', ok: false, detail: { reason: 'not open' } })
+    }
+  }
+
+  // XP-09b: Git Diff split view ratio can be changed away from the default
+  if (!cancelled()) {
+    const ready = await waitFor('XP-09b-diff-selected-ready', () => {
+      const a = getDiffApi()
+      return Boolean(a?.isOpen() && a.isSelectedReady?.())
+    }, LOAD_TIMEOUT_MS)
+    const api = getDiffApi()
+    if (ready && api?.dragSplitViewRatio && api.getSplitViewState) {
+      const currentRatio = api.getSplitViewState()?.ratio ?? 0.5
+      const targetRatio = currentRatio >= 0.5 ? 0.38 : 0.62
+      const beforeRatio = currentRatio
+      await sleep(120)
+      const applied = await api.dragSplitViewRatio(targetRatio)
+      const splitState = getDiffApi()?.getSplitViewState?.() ?? null
+      const afterRatio = splitState?.ratio ?? null
+      const storedRatioRaw = window.localStorage.getItem(DIFF_SPLIT_STORAGE_KEY)
+      const storedRatio = storedRatioRaw !== null ? Number(storedRatioRaw) : null
+      const movedEnough = afterRatio !== null && Math.abs(afterRatio - beforeRatio) >= 0.08
+      const nearTarget = afterRatio !== null && Math.abs(afterRatio - targetRatio) <= 0.08
+      const storedMatchesActual = afterRatio !== null &&
+        storedRatio !== null &&
+        Number.isFinite(storedRatio) &&
+        Math.abs(storedRatio - afterRatio) <= splitRatioTolerance
+      const appliedAndPersisted = applied && movedEnough && nearTarget && storedMatchesActual
+      persistedSplitRatio = appliedAndPersisted ? storedRatio : null
+      _assert('XP-09b-diff-split-ratio-applies', ready && appliedAndPersisted, {
+        ready,
+        targetRatio,
+        applied,
+        beforeRatio,
+        afterRatio,
+        storedRatio,
+        movedEnough,
+        nearTarget,
+        storedMatchesActual,
+        actualRatio: splitState?.ratio ?? null,
+        originalWidth: splitState?.originalWidth ?? null,
+        modifiedWidth: splitState?.modifiedWidth ?? null,
+        tolerance: splitRatioTolerance,
+        platform
+      })
+    } else if ((api?.getFileList()?.length ?? 0) === 0) {
+      _assert('XP-09b-diff-split-ratio-applies', true, {
+        skipped: true,
+        reason: 'no diff files to render split editor',
+        platform
+      })
+    } else {
+      results.push({ name: 'XP-09b-diff-split-ratio-applies', ok: false, detail: { reason: 'diff editor not ready' } })
+    }
+  }
+
+  // XP-09c: Git Diff split view ratio survives close and reopen
+  if (!cancelled()) {
+    if (persistedSplitRatio === null) {
+      _assert('XP-09c-diff-split-ratio-restored', true, {
+        skipped: true,
+        reason: 'no persisted split ratio available',
+        platform
+      })
+    } else {
+      const api = getDiffApi()
+      if (api?.isOpen()) {
+        window.dispatchEvent(new CustomEvent('git-diff:close', { detail: { terminalId } }))
+        const closed = await waitFor('XP-09c-diff-close-before-reopen', () => {
+          const a = getDiffApi()
+          return !a || !a.isOpen()
+        }, 4000)
+        const reopened = closed ? await (async () => {
+          window.dispatchEvent(new CustomEvent('git-diff:open', { detail: { terminalId, source: 'debug' } }))
+          return waitFor('XP-09c-diff-reopen', () => {
+            const a = getDiffApi()
+            return Boolean(a?.isOpen() && a.getTiming().diffLoadedAt !== null && a.isSelectedReady?.())
+          }, LOAD_TIMEOUT_MS)
+        })() : false
+        const splitState = getDiffApi()?.getSplitViewState?.() ?? null
+        const restoredRatio = splitState?.ratio ?? null
+        const restored = reopened &&
+          persistedSplitRatio !== null &&
+          restoredRatio !== null &&
+          Math.abs(restoredRatio - persistedSplitRatio) <= splitRatioTolerance
+        _assert('XP-09c-diff-split-ratio-restored', restored, {
+          closed,
+          reopened,
+          expectedRatio: persistedSplitRatio,
+          restoredRatio,
+          originalWidth: splitState?.originalWidth ?? null,
+          modifiedWidth: splitState?.modifiedWidth ?? null,
+          tolerance: splitRatioTolerance,
+          platform
+        })
+      } else {
+        results.push({ name: 'XP-09c-diff-split-ratio-restored', ok: false, detail: { reason: 'not open' } })
+      }
     }
   }
 

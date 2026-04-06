@@ -37,30 +37,53 @@
 
 /* drop down menu */
 .terminal-dropdown-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
-  min-width: 160px;
-  background-color: var(--panel);
+  position: fixed;
+  min-width: 236px;
+  max-width: calc(100vw - 16px);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel) 94%, var(--bg-1) 6%),
+      var(--panel)
+    );
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 12px;
   box-shadow: var(--shadow-1);
-  z-index: 100;
-  padding: 4px 0;
-  overflow: visible;
-  animation: dropdown-fade-in 0.15s ease;
+  z-index: 200;
+  padding: 8px;
+  contain: layout paint style;
 }
 
-@keyframes dropdown-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.terminal-dropdown-section + .terminal-dropdown-section {
+  margin-top: 8px;
+}
+
+.terminal-dropdown-section-title {
+  margin-bottom: 6px;
+  padding: 0 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.terminal-dropdown-section-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 10px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-1) 82%, var(--panel) 18%),
+      color-mix(in srgb, var(--bg-1) 60%, var(--panel) 40%)
+    );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, black 7%, transparent);
 }
 
 /* menu item */
@@ -68,19 +91,28 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  width: 100%;
+  background: transparent;
   color: var(--text-2);
   font-size: var(--font-sm);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
 }
 
 .terminal-dropdown-item:hover {
-  background-color: var(--bg-1);
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-1);
 }
 
 .terminal-dropdown-item.is-active {
   color: var(--text-1);
+  background-color: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .terminal-dropdown-item.is-active svg {
@@ -94,56 +126,6 @@
 
 .terminal-dropdown-item:hover svg {
   color: var(--text-2);
-}
-
-/* Submenu parent - arrow indicator */
-.terminal-dropdown-submenu-parent {
-  position: relative;
-}
-
-.terminal-dropdown-arrow {
-  margin-left: auto;
-  flex-shrink: 0;
-  color: var(--text-3);
-}
-
-/* Submenu container - shown on hover */
-.terminal-dropdown-submenu {
-  display: none;
-  position: absolute;
-  left: calc(100% + 2px);
-  top: -6px;
-  min-width: 260px;
-  white-space: nowrap;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px;
-  box-shadow: var(--shadow-1);
-  animation: dropdown-fade-in 0.15s ease;
-  z-index: 101;
-}
-
-/* Invisible bridge to prevent hover gap between parent and submenu */
-.terminal-dropdown-submenu::before {
-  content: '';
-  position: absolute;
-  right: 100%;
-  top: 0;
-  width: 8px;
-  height: 100%;
-}
-
-.terminal-dropdown-submenu-parent:hover > .terminal-dropdown-submenu {
-  display: block;
-}
-
-.terminal-dropdown-submenu-parent:hover {
-  background-color: var(--bg-1);
-}
-
-.terminal-dropdown-submenu .terminal-dropdown-item {
-  border-radius: 6px;
 }
 
 /* Active terminal dropdown button */

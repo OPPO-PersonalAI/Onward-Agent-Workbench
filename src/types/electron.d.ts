@@ -49,21 +49,38 @@ export interface PromptBridgeSendRequest {
 export interface PromptBridgeSendResult {
   success: boolean
   successIds: string[]
+  sentOnlyIds: string[]
   failedIds: string[]
+  issues?: Array<{
+    terminalId: string
+    status: 'sent-only' | 'failed'
+    reason: 'unsafe-multiline-send' | 'unsafe-multiline-execute' | 'send-failed' | 'execute-failed'
+    message: string
+    error?: string
+  }>
   error?: string
+}
+
+export interface TerminalInputSequencePayload {
+  kind: 'raw' | 'paste'
+  content: string
+}
+
+export interface TerminalInputCapabilities {
+  bracketedPasteEnabled: boolean
 }
 
 export interface TerminalAPI {
   create: (id: string, options?: TerminalOptions) => Promise<{ success: boolean; id?: string; error?: string }>
   write: (id: string, data: string) => Promise<boolean>
-  writeSplit: (
-    id: string,
-    content: string,
-    suffix: string,
-    delayMs?: number
-  ) => Promise<{ ok: boolean; phase?: 'content' | 'suffix'; error?: string }>
   resize: (id: string, cols: number, rows: number) => Promise<boolean>
+  sendInputSequence: (
+    id: string,
+    payload: TerminalInputSequencePayload
+  ) => Promise<{ ok: boolean; phase?: 'content' | 'enter'; error?: string }>
+  getInputCapabilities: (id: string) => Promise<TerminalInputCapabilities>
   setBufferFastPath: (id: string, enabled: boolean) => void
+  notifyInteractiveInput: (id: string) => void
   dispose: (id: string) => Promise<boolean>
   onData: (callback: (id: string, data: string) => void) => () => void
   onExit: (callback: (id: string, exitCode: number, signal?: number) => void) => () => void
@@ -78,6 +95,7 @@ export interface PromptSendRecord {
   taskName: string
   sentAt: number
   action: 'send' | 'execute' | 'sendAndExecute'
+  result?: 'executed' | 'sent-only'
 }
 
 export interface Prompt {
@@ -174,6 +192,7 @@ export interface GitRepoContext {
   isSubmodule: boolean
   depth: number
   changeCount: number
+  loading?: boolean
 }
 
 // Git file status
@@ -197,7 +216,12 @@ export interface GitDiffResult {
   files: GitFileStatus[]
   repos?: GitRepoContext[]
   superprojectRoot?: string
+  submodulesLoading?: boolean
   error?: string
+}
+
+export interface GitDiffLoadOptions {
+  scope?: 'root-only' | 'full'
 }
 
 export interface GitCommitInfo {
@@ -230,6 +254,8 @@ export interface GitHistoryFile {
   status: GitStatusCode
   additions: number
   deletions: number
+  isImage?: boolean
+  isSvg?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -252,10 +278,17 @@ export interface GitHistoryDiffResult {
   error?: string
 }
 
+export interface GitHistoryFileContentOptions {
+  base: string
+  head: string
+  file: Pick<GitHistoryFile, 'filename' | 'originalFilename' | 'status'>
+}
+
 export type TerminalGitStatus = 'clean' | 'modified' | 'added' | 'unknown'
 
 export interface TerminalGitInfo {
   cwd: string | null
+  repoRoot: string | null
   branch: string | null
   repoName: string | null
   status: TerminalGitStatus | null
@@ -275,6 +308,11 @@ export interface GitFileContentResult {
   originalImageSize?: number
   modifiedImageSize?: number
   error?: string
+}
+
+export interface GitHistoryFileContentResult extends GitFileContentResult {
+  base: string
+  head: string
 }
 
 export interface GitFileSaveResult {
@@ -448,9 +486,10 @@ export interface ProjectSearchStats {
 // Git API
 export interface GitAPI {
   resolveRepoRoot: (cwd: string) => Promise<string>
-  getDiff: (cwd: string) => Promise<GitDiffResult>
+  getDiff: (cwd: string, options?: GitDiffLoadOptions) => Promise<GitDiffResult>
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
+  getHistoryFileContent: (cwd: string, options: GitHistoryFileContentOptions) => Promise<GitHistoryFileContentResult>
   getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
   saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
   stageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
@@ -610,6 +649,8 @@ export interface BrowserAPI {
   hide: (id: string) => Promise<boolean>
   getNavState: (id: string) => Promise<BrowserNavState | null>
   clearCookies: (maxAge?: number) => Promise<{ removed: number }>
+  setRememberCookies: (rememberCookies: boolean) => Promise<{ rememberCookies: boolean }>
+  showCookieMenu: (options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => Promise<{ action: string; rememberCookies?: boolean } | null>
   onUrlChanged: (callback: (id: string, url: string) => void) => () => void
   onTitleChanged: (callback: (id: string, title: string) => void) => () => void
   onLoadingChanged: (callback: (id: string, isLoading: boolean) => void) => () => void

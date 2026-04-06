@@ -10,13 +10,17 @@ This directory contains reusable automation notes and validation procedures for 
 - PromptSender UI behavior
 - Prompt send / execute flow and failure handling
 - Auto-update behavior, including "download only until explicit restart" and GitHub release publishing
+- Settings update controls, including manual check and restart-to-update actions
 - Per-agent font settings for Git Diff and Project Editor
 - Git History browsing and diff rendering
+- Image rendering across Git Diff, Git History, and Project Editor
 - Prompt cleanup and retention behavior
+- Terminal working-directory and Prompt editor height persistence
 - Markdown preview rendering
 - External file change watching and automatic refresh
 - Preview position restore without top flash
 - Git state inspection and Git Diff behavior
+- Multi-submodule Git Diff staged loading
 - Terminal autofollow and viewport preservation
 - CPU and performance regression checks
 - Terminal focus restore and activation behavior
@@ -50,19 +54,24 @@ pnpm dist:dev
 src/autotest/
 ├── autotest-runner.ts
 ├── types.ts
+├── test-prompt-integrity.ts
 ├── test-project-editor-restore-unit.ts
 ├── test-project-editor-restore.ts
 ├── test-project-editor-open-position.ts
 ├── test-project-editor-multi-terminal-scope.ts
 ├── test-markdown-latex-preview.ts
+├── test-settings-update.ts
 ├── test-file-watch.ts
 ├── test-preview-position-restore.ts
 ├── test-project-editor-sqlite.ts
 ├── test-prompt-sender.ts
+├── test-terminal-state-persistence.ts
 ├── test-per-agent-font.ts
 ├── test-git-history.ts
 ├── test-git-history-multi-terminal-scope.ts
 ├── test-git-cross-platform.ts
+├── test-git-diff-submodules.ts
+├── test-git-diff-recursive-submodules.ts
 ├── test-terminal-autofollow.ts
 ├── test-prompt-cleanup.ts
 ├── test-regression.ts
@@ -77,10 +86,11 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 
 | API | Component | Purpose |
 |-----|-----------|---------|
-| `window.__onwardGitDiffDebug` | `GitDiffViewer.tsx` | Diff state, scroll state, font size |
+| `window.__onwardGitDiffDebug` | `GitDiffViewer.tsx` | Diff state, scroll state, font size, and open/load timing |
 | `window.__onwardPromptSenderDebug` | `PromptSender.tsx` | Terminal cards, selection state, action buttons |
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style, repo-scope state |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
+| `window.__onwardSettingsDebug` | `Settings.tsx` | Update action state, mock updater status injection, and action triggering |
 | `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
 | `window.__onwardProjectEditorDebug` | `ProjectEditor.tsx` | File content, preview restore state, and external file refresh hooks |
 | `window.__onwardTerminalDebug` | `TerminalGrid.tsx` | Terminal viewport state, tail text, fit / remount helpers |
@@ -181,6 +191,24 @@ node test/test-auto-update-public-github-e2e.mjs \
   --target-version 2.1.0-daily.20260402.1701
 ```
 
+### Settings Update Suite
+
+- `src/autotest/test-settings-update.ts`
+  - Verifies unsupported environments keep the action disabled
+  - Verifies the smart action enters `checking` and blocks repeated clicks
+  - Verifies `up-to-date`, `error`, `downloading`, and `downloaded` detail rendering
+  - Verifies the restart action locks while pending and surfaces restart errors
+
+Run the Settings update suite:
+
+```bash
+bash test/run-settings-update-autotest.sh
+```
+
+```powershell
+pwsh test/run-settings-update-autotest.ps1
+```
+
 ### Phase 1: PromptSender UI
 
 Source set: PromptSender UI validation suite
@@ -193,6 +221,35 @@ Source set: PromptSender UI validation suite
 - `PS-06`: primary actions are disabled when no terminal is selected
 - `PS-07`: repeated rapid selection toggling does not crash
 - `PS-08`: rendered card count matches layout metadata
+- `PS-09`: single-line Send and execute still runs end to end
+
+### Phase 1.1: Prompt Integrity
+
+Source set: multiline prompt transport integrity suite
+
+- `PI-01`: multi-line `Send` preserves mixed prompt content when bracketed paste is enabled
+- `PI-02`: multi-line `Send and execute` preserves content and appends one execute Enter when bracketed paste is enabled
+- `PI-03`: large 50-line prompt survives `Send` without truncation
+- `PI-04`: multi-line `Send` is blocked cleanly when bracketed paste is unavailable
+- `PI-05`: multi-line `Send and execute` is blocked cleanly when bracketed paste is unavailable
+
+Run the prompt integrity suite:
+
+```bash
+bash test/run-prompt-integrity-autotest.sh
+```
+
+Run the PromptSender suite:
+
+```bash
+bash test/run-prompt-sender-autotest.sh
+```
+
+### Phase 1.1: Terminal State Persistence
+
+Source set: terminal cwd + Prompt height persistence validation suite
+
+- `TSP-01` to `TSP-09`: prompt panel availability, multi-terminal cwd persistence, editor height persistence, and empty-draft height retention
 
 ### Phase 2: Per-Agent Font Size
 
@@ -222,6 +279,35 @@ Source set: Git History validation suite
 Source set: Git History terminal-switch isolation regression suite
 
 - `GHMS-01` to `GHMS-11`: dual-terminal layout setup, stale repo-state injection, terminal switch reload, and stale state cleanup
+
+### Phase 3.75: Git Diff Multi-Submodule
+
+Source set: staged-loading validation for repositories with multiple submodules
+
+- `DSM-01`: root-only diff returns repo outline with submodules marked as loading
+- `DSM-02`: Git Diff shell becomes visible quickly
+- `DSM-03`: repo outline is visible before full submodule aggregation finishes
+- `DSM-04`: full submodule load completes and clears loading markers
+- `DSM-05`: Git Diff still closes cleanly
+
+### Phase 3.8: Git Diff Recursive Submodule
+
+Source set: staged-loading validation for nested submodule trees created from a temporary fixture
+
+- `RSM-01`: root-only diff discovers nested submodules and marks them as loading
+- `RSM-02`: Git Diff shell becomes visible quickly
+- `RSM-03`: nested repo outline is visible before full aggregation finishes
+- `RSM-04`: full load completes and nested repo changes are attached
+- `RSM-05`: Git Diff still closes cleanly
+
+### Image Rendering Suite
+
+Source set: image rendering validation suite
+
+- `ID-01` to `ID-12`: Git Diff raster and SVG image preview behavior
+- `ID-13` to `ID-18`: Git History image commit preview behavior
+- `ID-19`: Project Editor direct image file preview behavior
+- `ID-20` to `ID-21`: suite cleanup and closeout
 
 ### Phase 4: Prompt Cleanup
 
@@ -263,6 +349,12 @@ Source set: ProjectEditor multi-terminal isolation validation suite
 Source set: Markdown LaTeX preview validation suite
 
 - `MLP-00` to `MLP-15`: fixture existence, preview rendering, KaTeX output, and temporary file preview behavior
+
+### Phase 0.81: Image Diff
+
+Source set: Git Diff image validation suite
+
+- `ID-01` to `ID-21`: PNG keep / deny state transitions are validated end-to-end, while SVG preview loading and image-only action visibility are verified in the same Git Diff flow
 
 ### Phase 0.88: File Watch
 

@@ -24,6 +24,9 @@ const DEFAULT_PROMPT_CLEANUP_CONFIG: PromptCleanupConfig = {
   autoDeleteColored: false,
   lastAutoCleanupAt: null
 }
+const DEFAULT_PROMPT_PANEL_WIDTH = 320
+const DEFAULT_PROMPT_EDITOR_HEIGHT = 350
+const MIN_PROMPT_EDITOR_HEIGHT = 100
 
 /**
  * Generate unique ID
@@ -35,14 +38,14 @@ function generateId(): string {
 /**
  * Completion of Prompt's lastUsedAt
  */
-function normalizePromptTimestamp(prompt: Prompt): Prompt {
+function normalizePromptTimestamp<T extends Prompt>(prompt: T): T {
   const fallback = typeof prompt.updatedAt === 'number'
     ? prompt.updatedAt
     : (typeof prompt.createdAt === 'number' ? prompt.createdAt : Date.now())
   return {
     ...prompt,
     lastUsedAt: typeof prompt.lastUsedAt === 'number' ? prompt.lastUsedAt : fallback
-  }
+  } as T
 }
 
 /**
@@ -163,8 +166,20 @@ function isProjectEditorStateEqual(
   return true
 }
 
-const DEFAULT_PROMPT_PANEL_WIDTH = 320
 const DEBUG_APP_STATE = Boolean(window.electronAPI?.debug?.enabled)
+
+function normalizePromptEditorHeight(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_PROMPT_EDITOR_HEIGHT
+  }
+  return Math.max(Math.round(value), MIN_PROMPT_EDITOR_HEIGHT)
+}
+
+function normalizePersistedTerminalCwd(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
 
 /**
  * Create default tab state
@@ -177,6 +192,7 @@ function createDefaultTabState(id: string): TabState {
     layoutMode: 1,
     activePanel: null,
     promptPanelWidth: DEFAULT_PROMPT_PANEL_WIDTH,
+    promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
     activeTerminalId: null,
     terminals: [],
     localPrompts: []
@@ -238,6 +254,8 @@ interface AppStateContextValue {
   // Tab-level operations (not limited to activeTab)
   updateTabById: (tabId: string, updates: Partial<TabState>) => void
   updateEditorDraftForTab: (tabId: string, draft: EditorDraft | null) => void
+  updatePromptEditorHeightForTab: (tabId: string, height: number) => void
+  setTerminalLastCwd: (terminalId: string, cwd: string | null) => void
 
   // Draft operations
   updateEditorDraft: (draft: EditorDraft | null) => void
@@ -269,6 +287,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  const promptEditorHeightTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const lastFocusOwnerRef = useRef<'terminal' | 'input'>('terminal')
   const perfCountersRef = useRef({
     updateCalls: 0,
@@ -285,6 +304,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     unpinPrompt: 0,
     reorderPinnedPrompts: 0,
     updateEditorDraft: 0,
+    updatePromptEditorHeight: 0,
+    setTerminalLastCwd: 0,
     setLastFocusedTerminalId: 0,
     setProjectEditorState: 0
   })
@@ -302,6 +323,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           tabs: loadedState.tabs.map(tab => ({
             ...tab,
             promptPanelWidth: Math.max(tab.promptPanelWidth || 0, DEFAULT_PROMPT_PANEL_WIDTH),
+            promptEditorHeight: normalizePromptEditorHeight(
+              tab.promptEditorHeight ?? tab.editorDraft?.height ?? DEFAULT_PROMPT_EDITOR_HEIGHT
+            ),
+            terminals: (tab.terminals ?? []).map((terminal) => ({
+              ...terminal,
+              customName: terminal.customName ?? null,
+              lastCwd: normalizePersistedTerminalCwd(terminal.lastCwd)
+            })),
             localPrompts: (tab.localPrompts || []).map(prompt => normalizePromptTimestamp(prompt))
           })),
           projectEditorStates: Object.fromEntries(
@@ -312,7 +341,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setState(normalizedState)
         const shouldSave = normalizedState.tabs.some((tab, index) => {
           const original = loadedState.tabs[index]
-          return !original || tab.promptPanelWidth !== original.promptPanelWidth
+          return !original
+            || tab.promptPanelWidth !== original.promptPanelWidth
+            || tab.promptEditorHeight !== original.promptEditorHeight
+            || tab.terminals.some((terminal, terminalIndex) => terminal.lastCwd !== original.terminals?.[terminalIndex]?.lastCwd)
         })
         if (shouldSave) {
           await window.electronAPI.appState.save(normalizedState)
@@ -324,6 +356,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
     }
     load()
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+      }
+      if (draftSaveTimeoutRef.current) {
+        clearTimeout(draftSaveTimeoutRef.current)
+      }
+      draftSaveTimersRef.current.forEach((timer) => clearTimeout(timer))
+      draftSaveTimersRef.current.clear()
+      promptEditorHeightTimersRef.current.forEach((timer) => clearTimeout(timer))
+      promptEditorHeightTimersRef.current.clear()
+    }
   }, [])
 
   // Debounced state save
@@ -873,6 +920,67 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     draftSaveTimersRef.current.set(tabId, timer)
   }, [])
 
+  const updatePromptEditorHeightForTab = useCallback((tabId: string, height: number) => {
+    if (DEBUG_APP_STATE) {
+      perfCountersRef.current.updatePromptEditorHeight += 1
+    }
+    const normalizedHeight = normalizePromptEditorHeight(height)
+    const existingTimer = promptEditorHeightTimersRef.current.get(tabId)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+    }
+    const timer = setTimeout(() => {
+      promptEditorHeightTimersRef.current.delete(tabId)
+      setState(prev => {
+        const currentTab = prev.tabs.find(tab => tab.id === tabId)
+        if (!currentTab || currentTab.promptEditorHeight === normalizedHeight) {
+          return prev
+        }
+        const newState = {
+          ...prev,
+          tabs: prev.tabs.map(tab =>
+            tab.id === tabId
+              ? { ...tab, promptEditorHeight: normalizedHeight }
+              : tab
+          ),
+          updatedAt: Date.now()
+        }
+        window.electronAPI.appState.save(newState)
+        return newState
+      })
+    }, DRAFT_SAVE_DEBOUNCE_MS)
+    promptEditorHeightTimersRef.current.set(tabId, timer)
+  }, [])
+
+  const setTerminalLastCwd = useCallback((terminalId: string, cwd: string | null) => {
+    if (DEBUG_APP_STATE) {
+      perfCountersRef.current.setTerminalLastCwd += 1
+    }
+    const normalizedCwd = normalizePersistedTerminalCwd(cwd)
+    updateState(prev => {
+      let changed = false
+      const tabs = prev.tabs.map((tab) => {
+        let tabChanged = false
+        const terminals = tab.terminals.map((terminal) => {
+          if (terminal.id !== terminalId) {
+            return terminal
+          }
+          if (terminal.lastCwd === normalizedCwd) {
+            return terminal
+          }
+          changed = true
+          tabChanged = true
+          return {
+            ...terminal,
+            lastCwd: normalizedCwd
+          }
+        })
+        return tabChanged ? { ...tab, terminals } : tab
+      })
+      return changed ? { ...prev, tabs } : prev
+    })
+  }, [updateState])
+
   // Get the editor draft of the current Tab
   const getEditorDraft = useCallback((): EditorDraft | null => {
     const currentTab = state.tabs.find(t => t.id === state.activeTabId)
@@ -996,6 +1104,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     updateActiveTab,
     updateTabById,
     updateEditorDraftForTab,
+    updatePromptEditorHeightForTab,
+    setTerminalLastCwd,
     reorderTabs,
     canCreateTab,
     getTabDisplayName,
@@ -1026,7 +1136,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }), [
     state, isLoaded, activeTab,
     createTab, closeTab, switchTab, renameTab,
-    updateActiveTab, updateTabById, updateEditorDraftForTab,
+    updateActiveTab, updateTabById, updateEditorDraftForTab, updatePromptEditorHeightForTab, setTerminalLastCwd,
     reorderTabs, canCreateTab,
     addPrompt, updatePrompt, deletePrompt,
     pinPrompt, unpinPrompt, reorderPinnedPrompts,

@@ -66,6 +66,9 @@ For platform-related commands, always consider these three platforms:
 - Process management safety: when killing or searching for processes (e.g., `taskkill`, `Get-Process`, `pkill`), always use the exact process name — never use wildcards or partial matches. Using wildcards risks terminating unrelated processes.
 - Hard rule — Cross-platform development (Windows / macOS / Linux):
     - Every new feature and bug fix must be designed and validated for all three platforms from the start. Do not implement for one platform first and "port later."
+    - When creating a new feature or fixing a bug, always consider macOS, Linux, and Windows compatibility at the same time. This is a mandatory execution requirement, not an optional follow-up check.
+    - The preferred design is three-platform independence: each platform's solution should be as decoupled as possible, without relying on another platform's behavior, tooling, path format, shell semantics, or fallback logic to work correctly.
+    - If cross-platform dependency is truly unavoidable, the dependency must be isolated and made explicit with clear platform-specific branches or adapters (for example, `process.platform` dispatch, separate platform handlers, or clearly named platform conditionals). Do not hide cross-platform coupling inside shared implicit logic.
     - Platform-divergent areas require explicit per-platform branching (e.g., `process.platform` checks). The most error-prone areas, based on historical experience, include:
         1. **Git operations** (Git History, Git Diff): line-ending handling (`CRLF` vs `LF`), path separators (`\` vs `/`), shell escaping, locale-dependent output, and Git executable resolution differ significantly across platforms.
         2. **Terminal / shell operations**: default shell (`cmd.exe` / `powershell` vs `bash` / `zsh`), environment variable syntax (`%VAR%` vs `$VAR`), signal handling (`SIGTERM` vs `taskkill`), and PTY implementations vary.

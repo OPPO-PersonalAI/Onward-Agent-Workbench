@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { DiffEditor } from '@monaco-editor/react'
 import { PatchDiff } from '@pierre/diffs/react'
 import { parsePatchFiles } from '@pierre/diffs'
 import type {
@@ -11,6 +12,7 @@ import type {
   GitCommitInfo,
   GitHistoryFile,
   GitHistoryDiffResult,
+  GitHistoryFileContentResult,
   GitRepoContext
 } from '../../types/electron'
 import { useSettings } from '../../contexts/SettingsContext'
@@ -18,6 +20,15 @@ import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import type { TerminalGitStatus } from '../../types/electron'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { useI18n } from '../../i18n/useI18n'
+import {
+  GitImagePreview,
+  IMAGE_COMPARE_MODE_STORAGE_KEY,
+  IMAGE_DISPLAY_MODE_STORAGE_KEY,
+  type GitImagePreviewFileState,
+  type ImageCompareMode,
+  type ImageDisplayMode,
+  type SvgViewMode
+} from '../GitImagePreview/GitImagePreview'
 import './GitHistoryViewer.css'
 
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
@@ -132,6 +143,10 @@ function buildPatchKey(base: string, head: string, filePath: string, hideWhitesp
   return `${base}..${head}::${filePath}::${hideWhitespace ? 'w' : 'n'}`
 }
 
+function buildFileContentKey(base: string, head: string, file: GitHistoryFile) {
+  return `${base}..${head}::${file.status}::${file.originalFilename ?? ''}::${file.filename}`
+}
+
 export function GitHistoryViewer({
   isOpen,
   onClose,
@@ -152,6 +167,7 @@ export function GitHistoryViewer({
   const [files, setFiles] = useState<GitHistoryFile[]>([])
   const [selectedFile, setSelectedFile] = useState<GitHistoryFile | null>(null)
   const [diffPatch, setDiffPatch] = useState('')
+  const [selectedFileContent, setSelectedFileContent] = useState<GitHistoryFileContentResult | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState<string | null>(null)
   const [filesLoading, setFilesLoading] = useState(false)
@@ -165,6 +181,15 @@ export function GitHistoryViewer({
     const saved = localStorage.getItem(STORAGE_KEY_DIFF_STYLE)
     return saved === 'unified' ? 'unified' : 'split'
   })
+  const [imageDisplayMode, setImageDisplayMode] = useState<ImageDisplayMode>(() => {
+    const saved = localStorage.getItem(IMAGE_DISPLAY_MODE_STORAGE_KEY)
+    return saved === 'original' || saved === 'fit' ? saved : 'fit'
+  })
+  const [imageCompareMode, setImageCompareMode] = useState<ImageCompareMode>(() => {
+    const saved = localStorage.getItem(IMAGE_COMPARE_MODE_STORAGE_KEY)
+    return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
+  })
+  const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
   const [diffOptionsOpen, setDiffOptionsOpen] = useState(false)
   const diffOptionsRef = useRef<HTMLDivElement | null>(null)
 
@@ -193,8 +218,10 @@ export function GitHistoryViewer({
   const patchTokenRef = useRef(0)
   const fileCacheRef = useRef(new Map<string, GitHistoryFile[]>())
   const patchCacheRef = useRef(new Map<string, string>())
+  const fileContentCacheRef = useRef(new Map<string, GitHistoryFileContentResult>())
   const commitsRef = useRef<GitCommitInfo[]>([])
   const loadingRef = useRef(false)
+  const fileContentTokenRef = useRef(0)
   const didRestoreRef = useRef(false)
   const pendingScrollRef = useRef<{ commit: number; file: number; diff: number } | null>(null)
   const commitListRef = useRef<HTMLDivElement | null>(null)
@@ -317,6 +344,32 @@ export function GitHistoryViewer({
     theme: 'pierre-dark' as const,
     themeType: 'dark' as const
   }), [diffStyle])
+  const imageTextDiffOptions = useMemo(() => ({
+    renderSideBySide: true,
+    readOnly: true,
+    originalEditable: false,
+    minimap: { enabled: false },
+    wordWrap: 'on' as const,
+    diffWordWrap: 'on' as const,
+    fontSize: diffFontSize,
+    lineHeight: Math.round(diffFontSize * 1.5),
+    automaticLayout: true,
+    scrollBeyondLastLine: false,
+    hideUnchangedRegions: {
+      enabled: true,
+      minimumLineCount: 3,
+      contextLineCount: 3,
+      revealLineCount: 20
+    }
+  }), [diffFontSize])
+  const toggleImageDisplayMode = useCallback((mode: ImageDisplayMode) => {
+    setImageDisplayMode(mode)
+    localStorage.setItem(IMAGE_DISPLAY_MODE_STORAGE_KEY, mode)
+  }, [])
+  const toggleImageCompareMode = useCallback((mode: ImageCompareMode) => {
+    setImageCompareMode(mode)
+    localStorage.setItem(IMAGE_COMPARE_MODE_STORAGE_KEY, mode)
+  }, [])
 
   const resetState = useCallback(() => {
     setHistoryResult(null)
@@ -327,13 +380,16 @@ export function GitHistoryViewer({
     setFiles([])
     setSelectedFile(null)
     setDiffPatch('')
+    setSelectedFileContent(null)
     setDiffError(null)
     setDiffLoading(false)
     setFilesLoading(false)
     fileCacheRef.current.clear()
     patchCacheRef.current.clear()
+    fileContentCacheRef.current.clear()
     ++filesTokenRef.current
     ++patchTokenRef.current
+    ++fileContentTokenRef.current
     didRestoreRef.current = false
     pendingScrollRef.current = null
     selectedRepoRootRef.current = null
@@ -467,10 +523,51 @@ export function GitHistoryViewer({
     }
   }, [hideWhitespace, t])
 
+  const loadFileContentForHistory = useCallback(async (base: string, head: string, file: GitHistoryFile) => {
+    const cwdToUse = activeCwdRef.current
+    if (!cwdToUse) return
+    const cacheKey = buildFileContentKey(base, head, file)
+    if (fileContentCacheRef.current.has(cacheKey)) {
+      setSelectedFileContent(fileContentCacheRef.current.get(cacheKey) || null)
+      return
+    }
+    const token = ++fileContentTokenRef.current
+    setDiffLoading(true)
+    setDiffError(null)
+    try {
+      const result = await window.electronAPI.git.getHistoryFileContent(cwdToUse, {
+        base,
+        head,
+        file: {
+          filename: file.filename,
+          originalFilename: file.originalFilename,
+          status: file.status
+        }
+      })
+      if (token !== fileContentTokenRef.current) return
+      if (!result.success) {
+        setDiffError(result.error || t('gitHistory.error.loadDiff'))
+        setSelectedFileContent(null)
+        return
+      }
+      fileContentCacheRef.current.set(cacheKey, result)
+      setSelectedFileContent(result)
+    } finally {
+      if (token === fileContentTokenRef.current) {
+        setDiffLoading(false)
+      }
+    }
+  }, [t])
+
   const switchRepo = useCallback((repoRoot: string | null) => {
     isSwitchingRepoRef.current = true
     fileCacheRef.current.clear()
     patchCacheRef.current.clear()
+    fileContentCacheRef.current.clear()
+    ++patchTokenRef.current
+    ++fileContentTokenRef.current
+    setDiffPatch('')
+    setSelectedFileContent(null)
     didRestoreRef.current = false
     selectedRepoRootRef.current = repoRoot
     setSelectedRepoRoot(repoRoot)
@@ -609,15 +706,21 @@ export function GitHistoryViewer({
   useEffect(() => {
     if (!isOpen) return
     if (!selectionInfo.head || !selectionInfo.base) {
+      ++patchTokenRef.current
+      ++fileContentTokenRef.current
       setFiles([])
       setSelectedFile(null)
       setDiffPatch('')
+      setSelectedFileContent(null)
       return
     }
     if (!selectionInfo.isContiguous) {
+      ++patchTokenRef.current
+      ++fileContentTokenRef.current
       setFiles([])
       setSelectedFile(null)
       setDiffPatch('')
+      setSelectedFileContent(null)
       return
     }
     void loadFilesForRange(selectionInfo.base, selectionInfo.head)
@@ -648,11 +751,23 @@ export function GitHistoryViewer({
     if (!isOpen) return
     if (!selectionInfo.isContiguous || !selectionInfo.head || !selectionInfo.base) return
     if (!selectedFile) {
+      ++patchTokenRef.current
+      ++fileContentTokenRef.current
       setDiffPatch('')
+      setSelectedFileContent(null)
       return
     }
+    if (selectedFile.isImage) {
+      ++patchTokenRef.current
+      setDiffPatch('')
+      setSelectedFileContent(null)
+      void loadFileContentForHistory(selectionInfo.base, selectionInfo.head, selectedFile)
+      return
+    }
+    ++fileContentTokenRef.current
+    setSelectedFileContent(null)
     void loadPatchForFile(selectionInfo.base, selectionInfo.head, selectedFile)
-  }, [selectedFile, selectionInfo.isContiguous, selectionInfo.base, selectionInfo.head, loadPatchForFile, isOpen])
+  }, [selectedFile, selectionInfo.isContiguous, selectionInfo.base, selectionInfo.head, loadFileContentForHistory, loadPatchForFile, isOpen])
 
   useEffect(() => {
     if (!isOpen) return
@@ -666,7 +781,7 @@ export function GitHistoryViewer({
       diffScrollTopRef.current = pendingScrollRef.current.diff
     }
     pendingScrollRef.current = null
-  }, [files.length, diffPatch, isOpen])
+  }, [files.length, diffPatch, selectedFileContent?.filename, isOpen])
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -707,6 +822,28 @@ export function GitHistoryViewer({
       getSelectedShas: () => selectedShas,
       getFiles: () => files.map(f => ({ filename: f.filename, status: f.status })),
       getSelectedFile: () => selectedFile ? { filename: selectedFile.filename } : null,
+      getImagePreviewState: () => {
+        if (!selectedFile?.isImage) return null
+        return {
+          isImage: true,
+          isSvg: Boolean(selectedFileContent?.isSvg),
+          hasOriginalUrl: Boolean(selectedFileContent?.originalImageUrl),
+          hasModifiedUrl: Boolean(selectedFileContent?.modifiedImageUrl),
+          compareMode: imageCompareMode,
+          displayMode: imageDisplayMode,
+          svgViewMode,
+          loading: diffLoading
+        }
+      },
+      setImageCompareMode: (mode: ImageCompareMode) => {
+        toggleImageCompareMode(mode)
+      },
+      setImageDisplayMode: (mode: ImageDisplayMode) => {
+        toggleImageDisplayMode(mode)
+      },
+      setSvgViewMode: (mode: SvgViewMode) => {
+        setSvgViewMode(mode)
+      },
       isLoading: () => loading || filesLoading || diffLoading,
       getActiveCwd: () => activeCwdRef.current ?? null,
       getRepoState: () => ({
@@ -715,6 +852,9 @@ export function GitHistoryViewer({
         repoSearch,
         cachedRepoCount: cachedRepos?.length ?? 0
       }),
+      switchRepo: (repoRoot: string | null) => {
+        switchRepo(repoRoot)
+      },
       injectRepoState: (state: {
         selectedRepoRoot: string | null
         cachedParentCwd: string | null
@@ -765,7 +905,7 @@ export function GitHistoryViewer({
         delete (window as any).__onwardGitHistoryDebug
       }
     }
-  }, [isOpen, commits, selectedShas, files, selectedFile, loading, filesLoading, diffLoading, diffStyle, hideWhitespace, selectedRepoRoot, cachedParentCwd, repoSearch, cachedRepos])
+  }, [isOpen, commits, selectedShas, files, selectedFile, selectedFileContent, loading, filesLoading, diffLoading, diffStyle, hideWhitespace, imageCompareMode, imageDisplayMode, svgViewMode, selectedRepoRoot, cachedParentCwd, repoSearch, cachedRepos, toggleImageCompareMode, toggleImageDisplayMode, switchRepo])
 
   useSubpageEscape({ isOpen, onEscape: onClose })
 
@@ -1115,6 +1255,75 @@ export function GitHistoryViewer({
     )
   }
 
+  const renderSvgDiffEditor = useCallback((fileState: GitHistoryFileContentResult) => {
+    const originalPath = (selectedFile?.originalFilename || fileState.filename)
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/')
+    const modifiedPath = fileState.filename
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/')
+    const baseSegment = encodeURIComponent(selectionInfo.base || 'base')
+    const headSegment = encodeURIComponent(selectionInfo.head || 'head')
+    return (
+      <div className="git-diff-editor-container">
+        <DiffEditor
+          key={`git-history-svg-text-${selectionInfo.base}-${selectionInfo.head}-${fileState.filename}`}
+          original={fileState.originalContent}
+          modified={fileState.modifiedContent}
+          language="xml"
+          originalModelPath={`inmemory://model/onward-git-history/${baseSegment}/original/${originalPath}`}
+          modifiedModelPath={`inmemory://model/onward-git-history/${headSegment}/modified/${modifiedPath}`}
+          keepCurrentOriginalModel={true}
+          keepCurrentModifiedModel={true}
+          theme="vs-dark"
+          options={imageTextDiffOptions}
+          className="git-diff-monaco"
+          height="100%"
+        />
+      </div>
+    )
+  }, [imageTextDiffOptions, selectedFile, selectionInfo.base, selectionInfo.head])
+
+  const renderImagePreview = useCallback((fileState: GitHistoryFileContentResult, file: GitHistoryFile) => {
+    const status = file.status === 'A' || file.status === '?'
+      ? 'added'
+      : file.status === 'D'
+        ? 'deleted'
+        : 'modified'
+    return (
+      <GitImagePreview
+        fileState={fileState as GitImagePreviewFileState}
+        status={status}
+        labels={{
+          statusAdded: t('gitDiff.image.status.added'),
+          statusDeleted: t('gitDiff.image.status.deleted'),
+          statusModified: t('gitDiff.image.status.modified'),
+          svg: t('gitDiff.image.svg'),
+          viewVisual: t('gitDiff.image.view.visual'),
+          viewText: t('gitDiff.image.view.text'),
+          compareTwoUp: t('gitDiff.image.compare.twoUp'),
+          compareSwipe: t('gitDiff.image.compare.swipe'),
+          compareOnion: t('gitDiff.image.compare.onion'),
+          displayOriginal: t('gitDiff.image.display.original'),
+          displayFit: t('gitDiff.image.display.fit'),
+          labelOriginal: t('gitDiff.image.label.original'),
+          labelAdded: t('gitDiff.image.label.added'),
+          labelModified: t('gitDiff.image.label.modified'),
+          opacity: t('gitDiff.image.opacity')
+        }}
+        imageDisplayMode={imageDisplayMode}
+        imageCompareMode={imageCompareMode}
+        svgViewMode={svgViewMode}
+        onImageDisplayModeChange={toggleImageDisplayMode}
+        onImageCompareModeChange={toggleImageCompareMode}
+        onSvgViewModeChange={setSvgViewMode}
+        renderSvgDiffEditor={(state) => renderSvgDiffEditor(state as GitHistoryFileContentResult)}
+      />
+    )
+  }, [imageCompareMode, imageDisplayMode, renderSvgDiffEditor, svgViewMode, t, toggleImageCompareMode, toggleImageDisplayMode])
+
   const renderDiffOptions = () => {
     return (
       <div className="git-history-diff-options" ref={diffOptionsRef}>
@@ -1196,6 +1405,16 @@ export function GitHistoryViewer({
           <div className="git-history-spinner" />
         </div>
       )
+    }
+    if (selectedFile.isImage) {
+      if (!selectedFileContent) {
+        return (
+          <div className="git-history-no-selection">
+            {t('gitHistory.diff.empty')}
+          </div>
+        )
+      }
+      return renderImagePreview(selectedFileContent, selectedFile)
     }
     if (!diffPatch) {
       return (
@@ -1372,7 +1591,7 @@ export function GitHistoryViewer({
                         </>
                       )}
                     </div>
-                    {renderDiffOptions()}
+                    {!selectedFile?.isImage && renderDiffOptions()}
                   </div>
                   <div className="git-history-diff-content">
                     {renderDiff()}

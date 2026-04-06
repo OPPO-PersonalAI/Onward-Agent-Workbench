@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { app, ipcMain, BrowserWindow, dialog, shell } from 'electron'
+import { app, ipcMain, BrowserWindow, Menu, dialog, shell } from 'electron'
 import { join, resolve } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
@@ -19,6 +19,7 @@ import {
   getGitDiff,
   getGitHistory,
   getGitHistoryDiff,
+  getGitHistoryFileContent,
   getGitFileContent,
   getGitRepoMeta,
   getTerminalCwd,
@@ -31,7 +32,8 @@ import {
   detectSubmodulesRecursive,
   updateGitIndexContent,
   GitFileStatus,
-  GitHistoryDiffOptions
+  GitHistoryDiffOptions,
+  GitHistoryFileContentOptions
 } from './git-utils'
 import {
   listDirectory,
@@ -63,6 +65,39 @@ let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
 let fileWatchManager: FileWatchManager | null = null
 
+type TerminalInputSequencePayload = {
+  kind: 'raw' | 'paste'
+  content: string
+}
+
+const BRACKETED_PASTE_ENABLE_RE = /\x1b\[\?2004h/g
+const BRACKETED_PASTE_DISABLE_RE = /\x1b\[\?2004l/g
+const BRACKETED_PASTE_START = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
+const INTERACTIVE_BOOST_WINDOW_MS = 250
+
+function prepareTextForPaste(text: string): string {
+  return text.replace(/\r?\n/g, '\r')
+}
+
+function wrapBracketedPaste(text: string, enabled: boolean): string {
+  return enabled ? `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}` : text
+}
+
+function updateBracketedPasteMode(current: boolean, data: string): boolean {
+  let next = current
+  BRACKETED_PASTE_ENABLE_RE.lastIndex = 0
+  BRACKETED_PASTE_DISABLE_RE.lastIndex = 0
+
+  for (const _ of data.matchAll(BRACKETED_PASTE_ENABLE_RE)) {
+    next = true
+  }
+  for (const _ of data.matchAll(BRACKETED_PASTE_DISABLE_RE)) {
+    next = false
+  }
+  return next
+}
+
 /**
  * Batches PTY output data into periodic flushes to reduce IPC message rate.
  * Instead of sending one IPC message per onData callback (which can be
@@ -73,6 +108,7 @@ class TerminalDataBuffer {
   private totalBytes = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
+  private interactiveBoostUntil = 0
 
   // IPC flush interval.  The previous value of 16 ms (~60 fps) sent up to
   // 360 IPC messages/s across 6 terminals, saturating the renderer's main
@@ -106,8 +142,26 @@ class TerminalDataBuffer {
     this._fastPathEnabled = enabled
   }
 
+  notifyInteractiveInput(): void {
+    this.interactiveBoostUntil = Date.now() + INTERACTIVE_BOOST_WINDOW_MS
+    if (this.chunks.length > 0) {
+      this.flush()
+    }
+  }
+
   push(data: string): void {
     if (this.disposed) return
+
+    const interactiveBoostActive = this._fastPathEnabled && Date.now() < this.interactiveBoostUntil
+
+    if (interactiveBoostActive && this.chunks.length > 0) {
+      this.flush()
+    }
+
+    if (interactiveBoostActive) {
+      this.send(this.terminalId, data)
+      return
+    }
 
     // Fast path: small interactive data (keystroke echoes, short escape
     // sequences) is sent immediately when no data is already buffered.
@@ -140,6 +194,10 @@ class TerminalDataBuffer {
   }
 
   flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
     if (this.chunks.length === 0) return
     const merged = this.chunks.length === 1 ? this.chunks[0] : this.chunks.join('')
     this.chunks = []
@@ -166,6 +224,7 @@ const terminalDataBuffers = new Map<string, TerminalDataBuffer>()
 // created (race between renderer setVisibility and terminal:create) is
 // not lost.  When a new buffer is created it reads from this map.
 const terminalFastPathState = new Map<string, boolean>()
+const terminalBracketedPasteState = new Map<string, boolean>()
 
 // Buffer request waiting queue
 interface TerminalBufferResult {
@@ -234,7 +293,15 @@ export type PromptBridgeAction = 'send' | 'execute' | 'send-and-execute'
 export interface PromptBridgeSendResult {
   success: boolean
   successIds: string[]
+  sentOnlyIds: string[]
   failedIds: string[]
+  issues?: Array<{
+    terminalId: string
+    status: 'sent-only' | 'failed'
+    reason: 'unsafe-multiline-send' | 'unsafe-multiline-execute' | 'send-failed' | 'execute-failed'
+    message: string
+    error?: string
+  }>
   error?: string
 }
 
@@ -250,16 +317,16 @@ export function sendPromptViaBridge(
 ): Promise<PromptBridgeSendResult> {
   return new Promise((resolve) => {
     if (mainWindow.isDestroyed()) {
-      resolve({ success: false, successIds: [], failedIds: [terminalId], error: 'Window was destroyed' })
+      resolve({ success: false, successIds: [], sentOnlyIds: [], failedIds: [terminalId], error: 'Window was destroyed' })
       return
     }
 
     const requestId = `prompt-bridge-${++promptBridgeCounter}-${Date.now()}`
 
-    // 10 second timeout (send-and-execute includes 50ms delay)
+    // 10 second timeout to cover prompt delivery plus any renderer-side coordination.
     const timer = setTimeout(() => {
       promptBridgeCallbacks.delete(requestId)
-      resolve({ success: false, successIds: [], failedIds: [terminalId], error: 'Request timed out (10 seconds)' })
+      resolve({ success: false, successIds: [], sentOnlyIds: [], failedIds: [terminalId], error: 'Request timed out (10 seconds)' })
     }, 10000)
 
     promptBridgeCallbacks.set(requestId, { resolve, timer })
@@ -360,6 +427,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   const createTerminalProcess = (id: string, options?: PtyOptions) => {
     try {
+      let restoredPersistedCwd: string | null = null
+
       // If no cwd provided but we have a saved agent cwd, use it
       if (!options?.cwd) {
         const savedCwd = agentRestartCwdMap.get(id)
@@ -367,10 +436,33 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
           options = { ...options, cwd: savedCwd }
         }
       }
+      if (!options?.cwd) {
+        const persistedCwd = appStateStorage.getTerminalLastCwd(id)
+        if (persistedCwd) {
+          restoredPersistedCwd = persistedCwd
+          options = { ...options, cwd: persistedCwd }
+        }
+      }
       // Clear the saved cwd after using it once
       agentRestartCwdMap.delete(id)
 
-      const ptyProcess = ptyManager.create(id, options)
+      let ptyProcess
+      try {
+        ptyProcess = ptyManager.create(id, options)
+      } catch (error) {
+        if (!restoredPersistedCwd) {
+          throw error
+        }
+        console.warn('[PTY] Falling back to default cwd after persisted cwd restore failed:', {
+          id,
+          cwd: restoredPersistedCwd,
+          error: String(error)
+        })
+        appStateStorage.setTerminalLastCwd(id, null)
+        const fallbackOptions = options ? { ...options } : {}
+        delete fallbackOptions.cwd
+        ptyProcess = ptyManager.create(id, fallbackOptions)
+      }
 
       // IPC data buffer: merge high-frequency PTY output into batched sends
       const dataBuffer = new TerminalDataBuffer(id, (tid, mergedData) => {
@@ -386,6 +478,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
         }
       })
       terminalDataBuffers.set(id, dataBuffer)
+      terminalBracketedPasteState.set(id, false)
 
       // Apply any fast-path state that arrived before the buffer was created
       // (e.g. setVisibility(id, false) sent before terminal:create completed).
@@ -401,6 +494,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       const dataDisposable = ptyProcess.onData((data) => {
         // Parse OSC 9;9 CWD reports from shell integration (Windows)
         ptyManager.detectCwd(id, data)
+        const bracketedPasteMode = terminalBracketedPasteState.get(id) ?? false
+        terminalBracketedPasteState.set(id, updateBracketedPasteMode(bracketedPasteMode, data))
         dataBuffer.push(data)
 
         // Notify git watch on PTY output (throttled) instead of on every keystroke
@@ -475,8 +570,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await ptyManager.write(id, data)
   })
 
-  ipcMain.handle('terminal:write-split', async (_, id: string, content: string, suffix: string, delayMs?: number) => {
-    return await ptyManager.writeSplit(id, content, suffix, delayMs)
+  ipcMain.handle('terminal:send-input-sequence', async (_, id: string, payload: TerminalInputSequencePayload) => {
+    if (payload.kind === 'raw') {
+      const ok = await ptyManager.write(id, payload.content)
+      return ok ? { ok: true } : { ok: false, phase: 'content' as const, error: 'pty write failed' }
+    }
+
+    // 'paste' kind — send content without Enter
+    const bracketedPasteEnabled = terminalBracketedPasteState.get(id) ?? false
+    const prepared = wrapBracketedPaste(prepareTextForPaste(payload.content), bracketedPasteEnabled)
+    return await ptyManager.sendInputSequence(id, prepared)
+  })
+
+  ipcMain.handle('terminal:get-input-capabilities', (_, id: string) => {
+    return {
+      bracketedPasteEnabled: terminalBracketedPasteState.get(id) ?? false
+    }
   })
 
   // Toggle fast-path on the IPC data buffer for a terminal.
@@ -488,6 +597,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     terminalFastPathState.set(id, enabled)
     const buf = terminalDataBuffers.get(id)
     if (buf) buf.setFastPathEnabled(enabled)
+  })
+
+  ipcMain.on('terminal:notify-interactive-input', (_, id: string) => {
+    const buf = terminalDataBuffers.get(id)
+    if (buf) buf.notifyInteractiveInput()
   })
 
   // Resize terminal
@@ -504,6 +618,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       terminalDataBuffers.delete(id)
     }
     terminalFastPathState.delete(id)
+    terminalBracketedPasteState.delete(id)
     ipcDataCounters.delete(id)
     gitWatchManager?.unsubscribe(id)
     return ptyManager.dispose(id)
@@ -681,6 +796,43 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return browserViewManager.clearCookies(maxAge)
   })
 
+  ipcMain.handle('browser:set-remember-cookies', (_, rememberCookies: boolean) => {
+    return browserViewManager.setRememberCookies(rememberCookies)
+  })
+
+  ipcMain.handle(
+    'browser:show-cookie-menu',
+    (_, options: { rememberCookies: boolean; labels: { remember: string; clearDay: string; clearWeek: string; clearAll: string } }) => {
+      return new Promise<{ action: string; rememberCookies?: boolean } | null>((resolve) => {
+        const { rememberCookies, labels } = options
+        const items: Electron.MenuItemConstructorOptions[] = [
+          {
+            label: labels.remember,
+            type: 'checkbox',
+            checked: rememberCookies,
+            click: () => resolve({ action: 'toggleRemember', rememberCookies: !rememberCookies })
+          }
+        ]
+
+        if (rememberCookies) {
+          items.push(
+            { type: 'separator' },
+            { label: labels.clearDay, click: () => resolve({ action: 'clear', rememberCookies: undefined }) },
+            { label: labels.clearWeek, click: () => resolve({ action: 'clearWeek', rememberCookies: undefined }) },
+            { type: 'separator' },
+            { label: labels.clearAll, click: () => resolve({ action: 'clearAll', rememberCookies: undefined }) }
+          )
+        }
+
+        const menu = Menu.buildFromTemplate(items)
+        menu.popup({
+          window: mainWindow,
+          callback: () => resolve(null)
+        })
+      })
+    }
+  )
+
   // Command preset storage handlers
   const commandPresetStorage = getCommandPresetStorage()
 
@@ -833,8 +985,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
 
   // Get Git diff for a directory
-  ipcMain.handle('git:get-diff', async (_, cwd: string) => {
-    return await getGitDiff(cwd)
+  ipcMain.handle('git:get-diff', async (_, cwd: string, options?: { scope?: 'root-only' | 'full' }) => {
+    return await getGitDiff(cwd, options)
   })
 
   // Get Git history list
@@ -845,6 +997,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   // Get Git history diff (range + file)
   ipcMain.handle('git:get-history-diff', async (_, cwd: string, options: GitHistoryDiffOptions) => {
     return await getGitHistoryDiff(cwd, options)
+  })
+
+  ipcMain.handle('git:get-history-file-content', async (_, cwd: string, options: GitHistoryFileContentOptions) => {
+    return await getGitHistoryFileContent(cwd, options)
   })
 
   // Get Git file content for diff view
@@ -1195,8 +1351,10 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('updater:dismiss-banner')
   ipcMain.removeHandler('terminal:create')
   ipcMain.removeHandler('terminal:write')
-  ipcMain.removeHandler('terminal:write-split')
+  ipcMain.removeHandler('terminal:send-input-sequence')
+  ipcMain.removeHandler('terminal:get-input-capabilities')
   ipcMain.removeAllListeners('terminal:set-buffer-fast-path')
+  ipcMain.removeAllListeners('terminal:notify-interactive-input')
   ipcMain.removeHandler('terminal:resize')
   ipcMain.removeHandler('terminal:dispose')
   ipcMain.removeHandler('prompt:load')
@@ -1223,6 +1381,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('browser:hide')
   ipcMain.removeHandler('browser:get-nav-state')
   ipcMain.removeHandler('browser:clear-cookies')
+  ipcMain.removeHandler('browser:set-remember-cookies')
+  ipcMain.removeHandler('browser:show-cookie-menu')
   ipcMain.removeHandler('command-preset:load')
   ipcMain.removeHandler('command-preset:save')
   ipcMain.removeHandler('command-preset:delete')
@@ -1238,6 +1398,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('git:get-diff')
   ipcMain.removeHandler('git:get-history')
   ipcMain.removeHandler('git:get-history-diff')
+  ipcMain.removeHandler('git:get-history-file-content')
   ipcMain.removeHandler('git:get-file-content')
   ipcMain.removeHandler('git:save-file-content')
   ipcMain.removeHandler('git:stage-file')
