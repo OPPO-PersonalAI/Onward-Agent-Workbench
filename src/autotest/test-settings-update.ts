@@ -9,6 +9,10 @@ function querySettingsToggleButton(): HTMLButtonElement | null {
   return document.querySelector('[data-testid="sidebar-settings-button"]') as HTMLButtonElement | null
 }
 
+function querySettingsSelect(testId: string): HTMLSelectElement | null {
+  return document.querySelector(`[data-testid="${testId}"]`) as HTMLSelectElement | null
+}
+
 export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResult[]> {
   const { assert, cancelled, log, sleep, waitFor } = ctx
   const results: TestResult[] = []
@@ -87,6 +91,42 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
     if (!api || cancelled()) {
       return results
     }
+
+    const trackedSelects = [
+      {
+        testId: 'settings-language-select',
+        label: 'language'
+      },
+      {
+        testId: 'settings-terminal-font-select',
+        label: 'terminal-font'
+      },
+      {
+        testId: 'settings-terminal-select',
+        label: 'terminal'
+      }
+    ]
+
+    const selectStyleSummary = trackedSelects.map(({ testId, label }) => {
+      const select = querySettingsSelect(testId)
+      const shell = select?.closest('.settings-select-shell') as HTMLElement | null
+      const style = select ? window.getComputedStyle(select) : null
+      return {
+        label,
+        exists: Boolean(select),
+        shellWrapped: Boolean(shell),
+        appearance: style?.appearance ?? null,
+        paddingRight: style?.paddingRight ?? null
+      }
+    })
+    const selectsUseInsetArrow = selectStyleSummary.every(item => {
+      if (!item.exists || !item.shellWrapped || !item.paddingRight) return false
+      return item.appearance === 'none' && Number.parseFloat(item.paddingRight) >= 30
+    })
+    record('SU-00b-settings-selects-use-inset-arrow-spacing', selectsUseInsetArrow, {
+      selects: selectStyleSummary
+    })
+    if (cancelled()) return results
 
     api.resetMockUpdater()
     await sleep(60)

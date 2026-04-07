@@ -61,7 +61,7 @@ const productName = `${baseName}-${branch}`
 run('node', [join(__dirname, 'check-chinese-comments.js')])
 run('node', [join(__dirname, 'compile-changelog.js')])
 // Generate third-party license notices for binary distribution
-run('npx', ['license-checker-rseidelsohn', '--production', '--plainVertical', '--out', 'ThirdPartyNotices.txt'])
+run('pnpm', ['generate-notices'])
 run('electron-vite', ['build'])
 // On Windows with shell: true, arguments containing spaces must be quoted
 const q = process.platform === 'win32' ? '"' : ''

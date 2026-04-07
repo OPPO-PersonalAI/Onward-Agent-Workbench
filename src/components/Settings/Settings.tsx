@@ -635,10 +635,18 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                 <div className="settings-row">
                   <span className="settings-row-label">{t('settings.update.targetChannel')}</span>
                   <div className="settings-row-input">
-                    <select className="font-selector" value={targetChannelValue} disabled aria-label={t('settings.update.targetChannel')}>
-                      <option value="daily">{t('settings.update.channel.daily')}</option>
-                      <option value="stable">{t('settings.update.channel.stable')}</option>
-                    </select>
+                    <div className="settings-select-shell">
+                      <select
+                        className="font-selector"
+                        value={targetChannelValue}
+                        disabled
+                        aria-label={t('settings.update.targetChannel')}
+                        data-testid="settings-update-channel-select"
+                      >
+                        <option value="daily">{t('settings.update.channel.daily')}</option>
+                        <option value="stable">{t('settings.update.channel.stable')}</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -659,18 +667,21 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               <div className="settings-row">
                 <span className="settings-row-label">{t('settings.language.selectLabel')}</span>
                 <div className="settings-row-input">
-                  <select
-                    className="font-selector"
-                    value={locale}
-                    onChange={handleLanguageChange}
-                    aria-label={t('settings.language.selectLabel')}
-                  >
-                    {locales.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="settings-select-shell">
+                    <select
+                      className="font-selector"
+                      value={locale}
+                      onChange={handleLanguageChange}
+                      aria-label={t('settings.language.selectLabel')}
+                      data-testid="settings-language-select"
+                    >
+                      {locales.map(option => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
@@ -721,21 +732,24 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               {/* Terminal Selector */}
               <div className="terminal-selector-wrapper">
                 <span className="terminal-selector-label">{t('settings.terminal.select')}</span>
-                <select
-                  className="terminal-selector"
-                  value={selectedTerminalId}
-                  onChange={handleTerminalSelect}
-                >
-                  {terminals.length === 0 ? (
-                    <option value="">{t('settings.terminal.none')}</option>
-                  ) : (
-                    terminals.map(terminal => (
-                      <option key={terminal.id} value={terminal.id}>
-                        {terminal.title}
-                      </option>
-                    ))
-                  )}
-                </select>
+                <div className="settings-select-shell">
+                  <select
+                    className="terminal-selector"
+                    value={selectedTerminalId}
+                    onChange={handleTerminalSelect}
+                    data-testid="settings-terminal-select"
+                  >
+                    {terminals.length === 0 ? (
+                      <option value="">{t('settings.terminal.none')}</option>
+                    ) : (
+                      terminals.map(terminal => (
+                        <option key={terminal.id} value={terminal.id}>
+                          {terminal.title}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
               </div>
 
               {terminals.length > 0 && selectedTerminalId && (
@@ -796,10 +810,13 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   <div className="settings-row">
                     <span className="settings-row-label">{t('settings.terminal.fontFamily')}</span>
                     <div className="settings-row-input">
-                      <FontSelector
-                        value={currentTerminalStyle?.fontFamily || null}
-                        onChange={(value) => handleStyleChange('fontFamily', value)}
-                      />
+                      <div className="settings-select-shell">
+                        <FontSelector
+                          value={currentTerminalStyle?.fontFamily || null}
+                          onChange={(value) => handleStyleChange('fontFamily', value)}
+                          dataTestId="settings-terminal-font-select"
+                        />
+                      </div>
                       <button
                         className="settings-apply-global-btn"
                         type="button"

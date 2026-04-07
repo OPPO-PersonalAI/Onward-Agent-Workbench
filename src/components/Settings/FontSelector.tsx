@@ -10,6 +10,7 @@ import { useI18n } from '../../i18n/useI18n'
 interface FontSelectorProps {
   value: string | null
   onChange: (value: string | null) => void
+  dataTestId?: string
 }
 
 // List of commonly used terminal fonts (cross-platform)
@@ -36,7 +37,8 @@ const TERMINAL_FONTS: Array<{ value: string; fallbackLabel: string; labelKey?: T
 
 export function FontSelector({
   value,
-  onChange
+  onChange,
+  dataTestId
 }: FontSelectorProps) {
   const { t } = useI18n()
 
@@ -77,6 +79,7 @@ export function FontSelector({
       className="font-selector"
       value={value || ''}
       onChange={handleChange}
+      data-testid={dataTestId}
     >
       {platformFonts.map(font => (
         <option
