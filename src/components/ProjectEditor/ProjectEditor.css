@@ -916,17 +916,21 @@ body.project-editor-preview-resizing * {
   color: var(--text-3);
 }
 
-.project-editor-sqlite-pagination select,
+.project-editor-sqlite-pagination-select,
+.project-editor-sqlite-jump-input {
+  font-size: var(--font-xs);
+}
+
+.project-editor-sqlite-pagination-select {
+  border-color: var(--border-strong);
+}
+
 .project-editor-sqlite-jump-input {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background-color: var(--bg-1);
   color: var(--text-1);
   padding: 4px 8px;
-  font-size: var(--font-xs);
-}
-
-.project-editor-sqlite-jump-input {
   width: 70px;
 }
 

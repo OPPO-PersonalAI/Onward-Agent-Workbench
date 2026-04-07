@@ -207,7 +207,7 @@ node test/test-auto-update-public-github-e2e.mjs \
   - Verifies the smart action enters `checking` and blocks repeated clicks
   - Verifies `up-to-date`, `error`, `downloading`, and `downloaded` detail rendering
   - Verifies the restart action locks while pending and surfaces restart errors
-  - Verifies the language, font, and task selectors use the shared inset dropdown arrow spacing
+  - Verifies the language, font, and task selectors use the shared dropdown shell and inset arrow spacing
 
 Run the Settings update suite:
 
@@ -251,6 +251,7 @@ pwsh test/run-change-log-autotest.ps1
 - `src/autotest/test-feedback-ui.ts`
   - Drives the real sidebar button and feedback modal UI
   - Validates hidden prerender, optional rating submission, system-browser draft handoff, history scrolling, local removal, and status refresh transitions
+  - Verifies the feedback type selector uses the shared dropdown shell and inset arrow spacing
   - Uses an isolated `ONWARD_USER_DATA_DIR` plus autotest-only mock GitHub issue state so the run is deterministic and does not open a real browser
 - `src/autotest/test-feedback-persistence.ts`
   - Seeds a feedback record, relaunches the app with the same `ONWARD_USER_DATA_DIR`, and verifies consent + history persistence across restart

@@ -47,6 +47,7 @@ import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/fo
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
 import { buildChangeDirectoryCommand } from './utils/terminal-command'
 import './App.css'
+import './styles/form-controls.css'
 
 const MAX_SCHEDULE_LOG_ENTRIES = 50
 const SEND_AND_EXECUTE_SETTLE_DELAY_MS = 150

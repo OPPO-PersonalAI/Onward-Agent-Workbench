@@ -706,17 +706,20 @@ export function SqliteViewer({ rootPath, filePath, onNotifyGitChange }: SqliteVi
         <div className="project-editor-sqlite-pagination-center" />
         <div className="project-editor-sqlite-pagination-right">
           <label htmlFor="sqlite-page-size-select">{t('sqliteViewer.pagination.perPage')}</label>
-          <select
-            id="sqlite-page-size-select"
-            data-testid="sqlite-page-size-select"
-            value={pageSize}
-            onChange={(event) => handlePageSizeChange(Number(event.target.value))}
-            disabled={!activeTable || rowsLoading}
-          >
-            {PAGE_SIZE_OPTIONS.map(option => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
+          <div className="onward-select-shell">
+            <select
+              id="sqlite-page-size-select"
+              className="project-editor-sqlite-pagination-select onward-select onward-select--compact-xs"
+              data-testid="sqlite-page-size-select"
+              value={pageSize}
+              onChange={(event) => handlePageSizeChange(Number(event.target.value))}
+              disabled={!activeTable || rowsLoading}
+            >
+              {PAGE_SIZE_OPTIONS.map(option => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
           <span>{t('sqliteViewer.pagination.rows')}</span>
           <button
             className="project-editor-action-btn"

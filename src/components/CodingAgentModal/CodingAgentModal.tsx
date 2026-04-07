@@ -235,18 +235,20 @@ export function CodingAgentModal({ agentType, onLaunch, onCancel }: CodingAgentM
               <>
                 <div className="claude-code-field">
                   <label className="claude-code-label" htmlFor="ca-provider">{t('codingAgent.providerLabel')}</label>
-                  <select
-                    id="ca-provider"
-                    className="claude-code-select"
-                    value={provider}
-                    onChange={(e) => handleProviderChange(e.target.value as CodingAgentProvider)}
-                  >
-                    {PROVIDER_OPTIONS.map(item => (
-                      <option key={item.value} value={item.value}>
-                        {item.labelKey ? t(item.labelKey) : item.fallbackLabel}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="onward-select-shell onward-select-shell--block">
+                    <select
+                      id="ca-provider"
+                      className="claude-code-select onward-select onward-select--regular"
+                      value={provider}
+                      onChange={(e) => handleProviderChange(e.target.value as CodingAgentProvider)}
+                    >
+                      {PROVIDER_OPTIONS.map(item => (
+                        <option key={item.value} value={item.value}>
+                          {item.labelKey ? t(item.labelKey) : item.fallbackLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div className="claude-code-field">

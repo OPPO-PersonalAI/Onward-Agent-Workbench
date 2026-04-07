@@ -213,7 +213,6 @@
   fill: currentColor;
 }
 
-.feedback-select,
 .feedback-input,
 .feedback-textarea {
   border: 1px solid var(--border);
@@ -225,11 +224,14 @@
 }
 
 .feedback-input:focus,
-.feedback-select:focus,
 .feedback-textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.feedback-select {
+  width: 100%;
 }
 
 .feedback-textarea {

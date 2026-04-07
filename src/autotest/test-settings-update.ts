@@ -109,19 +109,20 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
 
     const selectStyleSummary = trackedSelects.map(({ testId, label }) => {
       const select = querySettingsSelect(testId)
-      const shell = select?.closest('.settings-select-shell') as HTMLElement | null
+      const shell = select?.closest('.onward-select-shell') as HTMLElement | null
       const style = select ? window.getComputedStyle(select) : null
       return {
         label,
         exists: Boolean(select),
         shellWrapped: Boolean(shell),
+        sharedSelectClass: select?.classList.contains('onward-select') ?? false,
         appearance: style?.appearance ?? null,
         paddingRight: style?.paddingRight ?? null
       }
     })
     const selectsUseInsetArrow = selectStyleSummary.every(item => {
       if (!item.exists || !item.shellWrapped || !item.paddingRight) return false
-      return item.appearance === 'none' && Number.parseFloat(item.paddingRight) >= 30
+      return item.sharedSelectClass && item.appearance === 'none' && Number.parseFloat(item.paddingRight) >= 30
     })
     record('SU-00b-settings-selects-use-inset-arrow-spacing', selectsUseInsetArrow, {
       selects: selectStyleSummary

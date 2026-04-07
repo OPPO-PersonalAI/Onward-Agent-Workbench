@@ -133,6 +133,23 @@ export async function testFeedbackUi(ctx: AutotestContext): Promise<TestResult[]
       return results
     }
 
+    const feedbackTypeSelect = queryElement<HTMLSelectElement>('[data-testid="feedback-type-select"]')
+    const feedbackTypeStyle = feedbackTypeSelect ? window.getComputedStyle(feedbackTypeSelect) : null
+    record('FBU-01b-feedback-select-uses-shared-shell', Boolean(feedbackTypeSelect) &&
+      feedbackTypeSelect?.classList.contains('onward-select') === true &&
+      Boolean(feedbackTypeSelect.closest('.onward-select-shell')) &&
+      feedbackTypeStyle?.appearance === 'none' &&
+      Number.parseFloat(feedbackTypeStyle?.paddingRight ?? '0') >= 30, {
+      hasSelect: Boolean(feedbackTypeSelect),
+      sharedSelectClass: feedbackTypeSelect?.classList.contains('onward-select') ?? false,
+      shellWrapped: Boolean(feedbackTypeSelect?.closest('.onward-select-shell')),
+      appearance: feedbackTypeStyle?.appearance ?? null,
+      paddingRight: feedbackTypeStyle?.paddingRight ?? null
+    })
+    if (cancelled()) {
+      return results
+    }
+
     const blankSubmitClicked = clickElement(queryElement<HTMLButtonElement>(submitButtonSelector))
     const validationShown = await waitFor(
       'feedback-ui-validation',

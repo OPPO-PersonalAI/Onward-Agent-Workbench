@@ -98,14 +98,17 @@
   letter-spacing: 0.5px;
 }
 
-.claude-code-input,
-.claude-code-select {
+.claude-code-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background-color: var(--bg-1);
   padding: 8px 10px;
   color: var(--text-1);
   font-size: var(--font-md);
+}
+
+.claude-code-select {
+  width: 100%;
 }
 
 .claude-code-input-row .claude-code-input {
@@ -138,8 +141,7 @@
   outline-offset: 2px;
 }
 
-.claude-code-input:focus,
-.claude-code-select:focus {
+.claude-code-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);

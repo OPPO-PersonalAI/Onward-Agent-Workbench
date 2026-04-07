@@ -76,7 +76,7 @@ export function FontSelector({
 
   return (
     <select
-      className="font-selector"
+      className="font-selector onward-select onward-select--control"
       value={value || ''}
       onChange={handleChange}
       data-testid={dataTestId}

@@ -635,9 +635,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                 <div className="settings-row">
                   <span className="settings-row-label">{t('settings.update.targetChannel')}</span>
                   <div className="settings-row-input">
-                    <div className="settings-select-shell">
+                    <div className="onward-select-shell">
                       <select
-                        className="font-selector"
+                        className="font-selector onward-select onward-select--control"
                         value={targetChannelValue}
                         disabled
                         aria-label={t('settings.update.targetChannel')}
@@ -667,9 +667,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               <div className="settings-row">
                 <span className="settings-row-label">{t('settings.language.selectLabel')}</span>
                 <div className="settings-row-input">
-                  <div className="settings-select-shell">
+                  <div className="onward-select-shell">
                     <select
-                      className="font-selector"
+                      className="font-selector onward-select onward-select--control"
                       value={locale}
                       onChange={handleLanguageChange}
                       aria-label={t('settings.language.selectLabel')}
@@ -732,9 +732,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               {/* Terminal Selector */}
               <div className="terminal-selector-wrapper">
                 <span className="terminal-selector-label">{t('settings.terminal.select')}</span>
-                <div className="settings-select-shell">
+                <div className="onward-select-shell">
                   <select
-                    className="terminal-selector"
+                    className="terminal-selector onward-select onward-select--control"
                     value={selectedTerminalId}
                     onChange={handleTerminalSelect}
                     data-testid="settings-terminal-select"
@@ -810,7 +810,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   <div className="settings-row">
                     <span className="settings-row-label">{t('settings.terminal.fontFamily')}</span>
                     <div className="settings-row-input">
-                      <div className="settings-select-shell">
+                      <div className="onward-select-shell">
                         <FontSelector
                           value={currentTerminalStyle?.fontFamily || null}
                           onChange={(value) => handleStyleChange('fontFamily', value)}

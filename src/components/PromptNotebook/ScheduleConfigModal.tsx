@@ -312,14 +312,16 @@ export function ScheduleConfigModal({
                     value={intervalValue}
                     onChange={(e) => setIntervalValue(e.target.value)}
                   />
-                  <select
-                    className="schedule-modal-input schedule-modal-input-select"
-                    value={intervalUnit}
-                    onChange={(e) => setIntervalUnit(e.target.value as 'minutes' | 'hours')}
-                  >
-                    <option value="minutes">{t('scheduleModal.unit.minutes')}</option>
-                    <option value="hours">{t('scheduleModal.unit.hours')}</option>
-                  </select>
+                  <div className="onward-select-shell">
+                    <select
+                      className="schedule-modal-input schedule-modal-input-select onward-select onward-select--compact"
+                      value={intervalUnit}
+                      onChange={(e) => setIntervalUnit(e.target.value as 'minutes' | 'hours')}
+                    >
+                      <option value="minutes">{t('scheduleModal.unit.minutes')}</option>
+                      <option value="hours">{t('scheduleModal.unit.hours')}</option>
+                    </select>
+                  </div>
                 </div>
               </>
             )}

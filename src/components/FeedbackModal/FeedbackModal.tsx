@@ -363,16 +363,18 @@ export function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
             <div className="feedback-form">
               <div className="feedback-field">
                 <label className="feedback-label" htmlFor="feedback-type">{t('feedback.type.label')}</label>
-                <select
-                  id="feedback-type"
-                  className="feedback-select"
-                  value={type}
-                  onChange={(event) => setType(event.target.value as FeedbackType)}
-                  data-testid="feedback-type-select"
-                >
-                  <option value="bug">{t('feedback.type.bug')}</option>
-                  <option value="feature">{t('feedback.type.feature')}</option>
-                </select>
+                <div className="onward-select-shell onward-select-shell--block">
+                  <select
+                    id="feedback-type"
+                    className="feedback-select onward-select onward-select--roomy"
+                    value={type}
+                    onChange={(event) => setType(event.target.value as FeedbackType)}
+                    data-testid="feedback-type-select"
+                  >
+                    <option value="bug">{t('feedback.type.bug')}</option>
+                    <option value="feature">{t('feedback.type.feature')}</option>
+                  </select>
+                </div>
               </div>
 
               <div className="feedback-field">
