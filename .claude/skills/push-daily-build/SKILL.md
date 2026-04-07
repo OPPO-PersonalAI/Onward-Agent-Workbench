@@ -5,7 +5,7 @@ description: Push local commits, create a daily build tag, trigger GitHub Action
 
 # Push and Trigger Daily Build
 
-Push local commits to `origin/master`, create a versioned daily build tag, trigger GitHub Actions CI, and verify the full pipeline including GitHub Release artifacts and update manifests.
+Push local commits to `origin/master`, generate and confirm the release Change Log, create a versioned daily build tag, trigger GitHub Actions CI, and verify the full pipeline including GitHub Release artifacts and update manifests.
 
 ## User Input
 
@@ -57,18 +57,69 @@ Present the resolved tag to the user for confirmation before proceeding:
 > Commits to push: 12
 > Proceed?
 
-### Phase 3: Push and Tag
+### Phase 3: Generate Change Log Draft
+
+Before any push, tag, or release action, generate the Change Log draft for the resolved tag:
 
 ```bash
-# Push local commits
-git push origin master
+node scripts/generate-changelog.js --tag {TAG}
+```
 
+This script writes the draft files:
+
+- `resources/changelog/en/daily/{TAG}.md`
+- `resources/changelog/index.json`
+- derived HTML assets under `resources/changelog/html/**`
+
+The draft is always written in English, based on the current `HEAD` diff against the previous Daily tag. It is only a starting point.
+The HTML assets are generated automatically from the Markdown and should not be edited by hand.
+
+After generation, **stop and ask the user to review the draft**. Do not continue automatically.
+
+Show the generated file paths and explicitly request confirmation:
+
+> Change Log draft generated for `{TAG}`.
+> Review the generated draft:
+> - `resources/changelog/en/daily/{TAG}.md`
+> Continue after confirmation?
+
+Rules for this pause:
+
+- The user must have a chance to edit the English draft before release.
+- Do not push commits, create the tag, or publish anything before the user confirms.
+- If the user requests edits, apply them first and re-show the final draft state.
+
+### Phase 4: Commit Approved Change Log and Push
+
+After the user confirms the draft, ensure the Change Log files are included in git history before tagging:
+
+```bash
+git status --short
+git add resources/changelog
+git commit -m "docs(changelog): add release notes for {TAG}"
+```
+
+Notes:
+
+- The commit message must stay in English.
+- If the user prefers to fold the Change Log into an existing unreleased commit, follow that instruction instead.
+- If `git status --short` shows unexpected unrelated changes, stop and ask before committing them.
+
+Then push local commits:
+
+```bash
+git push origin master
+```
+
+### Phase 5: Create and Push Tag
+
+```bash
 # Create and push the tag
 git tag {TAG}
 git push origin {TAG}
 ```
 
-### Phase 4: Monitor CI Build
+### Phase 6: Monitor CI Build
 
 ```bash
 # Verify the workflow was triggered
@@ -85,7 +136,7 @@ If the build fails, show the failing job logs:
 gh run view {RUN_ID} --log-failed
 ```
 
-### Phase 5: Verify Release Pipeline
+### Phase 7: Verify Release Pipeline
 
 After the build succeeds, verify all outputs:
 
@@ -109,11 +160,13 @@ Verify the following conditions:
 |---|---|
 | GitHub Release title | `Daily Build {TAG}` |
 | Release assets | 4 files: arm64 dmg+zip, x64 dmg+zip |
+| GitHub Release notes | Matches `resources/changelog/en/daily/{TAG}.md` |
 | arm64 manifest version | Matches the tag version |
 | x64 manifest version | Matches the tag version |
+| Manifest `releaseNotes` | Matches the approved English Change Log |
 | Artifact download URL | HTTP 302 (redirect to CDN) |
 
-### Phase 6: Report
+### Phase 8: Report
 
 Present a summary table:
 
@@ -144,6 +197,8 @@ The `package.json` version field (`2.0.1`) is only used for development builds a
 
 - **Not on master**: Stop immediately. Do not push or tag from other branches.
 - **Dirty working tree**: Warn the user. They may want to commit first.
+- **Change Log draft missing**: Stop. Generate `resources/changelog/**` first.
+- **Change Log not yet confirmed**: Stop. Wait for explicit user approval before Phase 4.
 - **Push fails**: Check network and authentication. Show the error.
 - **Tag already exists**: Increment the sequence number or ask the user.
 - **CI build fails**: Show failed job logs. Do not proceed to verification.

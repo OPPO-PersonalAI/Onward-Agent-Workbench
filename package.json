@@ -20,6 +20,8 @@
     "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3 && node scripts/ensure-ripgrep-binary.js",
     "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3",
     "lint:comments": "node scripts/check-chinese-comments.js",
+    "compile:changelog": "node scripts/compile-changelog.js",
+    "generate:changelog": "node scripts/generate-changelog.js",
     "generate:icons": "node scripts/generate-icons.js",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder",

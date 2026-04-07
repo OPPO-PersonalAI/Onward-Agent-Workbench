@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar/Sidebar'
 import { PromptNotebook } from './components/PromptNotebook/PromptNotebook'
 import { TerminalGrid } from './components/TerminalGrid/TerminalGrid'
 import { Settings } from './components/Settings'
+import { ChangeLogModal } from './components/ChangeLogModal'
 import { ProjectEditor } from './components/ProjectEditor'
 import { useScheduleEngine } from './hooks/useScheduleEngine'
 import type { ScheduleNotification } from './hooks/useScheduleEngine'
@@ -23,7 +24,7 @@ import {
   TerminalFocusRequest
 } from './types/prompt'
 import type { TerminalBatchIssue, TerminalBatchIssueReason } from './types/prompt'
-import type { Prompt } from './types/electron.d.ts'
+import type { CurrentChangelogResult, Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
 import { requestOpenExternalHttpLink } from './utils/externalLink'
@@ -209,7 +210,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   onDismissScheduleNotification: (promptId: string, type: ScheduleNotification['type']) => void
   onRetrySchedule: (promptId: string) => void
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const {
     state,
     getTabDisplayName,
@@ -363,7 +364,7 @@ function AppContent({
   terminalShortcutAction: TerminalShortcutAction | null
   terminalFocusRequest: TerminalFocusRequest | null
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const {
     state,
     isLoaded,
@@ -790,6 +791,9 @@ function AppContent({
 
   // Display state of the Settings panel (independent of Tab state)
   const [showSettings, setShowSettings] = useState(false)
+  const [showChangeLog, setShowChangeLog] = useState(false)
+  const [changeLogResult, setChangeLogResult] = useState<CurrentChangelogResult | null>(null)
+  const [changeLogLoading, setChangeLogLoading] = useState(false)
   // Track the panel state before Settings opened for each tab during the current Settings session.
   const panelBeforeSettingsByTabRef = useRef<Record<string, 'prompt' | null>>({})
   const showSettingsRef = useRef(false)
@@ -838,6 +842,41 @@ function AppContent({
     clearPanelBeforeSettings()
     setShowSettings(false)
   }, [clearPanelBeforeSettings])
+
+  const handleToggleChangeLog = useCallback(() => {
+    setShowChangeLog((previous) => !previous)
+  }, [])
+
+  const handleCloseChangeLog = useCallback(() => {
+    setShowChangeLog(false)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    setChangeLogLoading(true)
+    void window.electronAPI.changelog.getCurrent(locale)
+      .then((nextResult) => {
+        if (!active) return
+        setChangeLogResult(nextResult)
+      })
+      .catch((error) => {
+        if (!active) return
+        setChangeLogResult({
+          success: false,
+          locale,
+          tag: null,
+          reason: 'read-failed',
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+      .finally(() => {
+        if (!active) return
+        setChangeLogLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [locale])
 
   // Conditionally close Settings on Task/Tab switch
   // Only closes if the relevant panel state is 'prompt'; otherwise keeps Settings open
@@ -1136,8 +1175,10 @@ function AppContent({
         <Sidebar
           activePanel={displayActivePanel}
           layoutMode={layoutMode}
+          isChangeLogOpen={showChangeLog}
           onPanelChange={handlePanelChangeWithSettings}
           onLayoutChange={handleLayoutChange}
+          onChangeLogToggle={handleToggleChangeLog}
         />
         <main className="main-content">
           {showSettings && (
@@ -1205,6 +1246,12 @@ function AppContent({
           </div>
         </main>
       </div>
+      <ChangeLogModal
+        isOpen={showChangeLog}
+        onClose={handleCloseChangeLog}
+        result={changeLogResult}
+        isLoading={changeLogLoading}
+      />
     </div>
   )
 }

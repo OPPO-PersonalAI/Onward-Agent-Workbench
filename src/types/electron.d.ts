@@ -558,6 +558,41 @@ export interface AppInfoAPI {
   readNotice: (locale?: string) => Promise<string | null>
 }
 
+export type ChangelogLocale = 'en' | 'zh-CN'
+export type ChangelogChannel = 'daily' | 'stable'
+export type ChangelogReadReason = 'no-tag' | 'index-missing' | 'entry-missing' | 'file-missing' | 'invalid-index' | 'read-failed'
+
+export interface ChangelogEntry {
+  tag: string
+  version: string
+  channel: ChangelogChannel
+  previousTag: string | null
+  publishedAt: string | null
+  markdown: {
+    en: string
+    'zh-CN'?: string
+  }
+  html?: {
+    en: string
+    'zh-CN'?: string
+  }
+}
+
+export interface CurrentChangelogResult {
+  success: boolean
+  locale: ChangelogLocale
+  tag: string | null
+  entry?: ChangelogEntry
+  html?: string
+  content?: string
+  reason?: ChangelogReadReason
+  error?: string
+}
+
+export interface ChangelogAPI {
+  getCurrent: (locale?: string) => Promise<CurrentChangelogResult>
+}
+
 export interface UpdaterStatus {
   phase: UpdatePhase
   supported: boolean
@@ -732,6 +767,7 @@ export interface ElectronAPI {
   project: ProjectAPI
   settings: SettingsAPI
   appInfo: AppInfoAPI
+  changelog: ChangelogAPI
   updater: UpdaterAPI
   browser: BrowserAPI
   codingAgentConfig: CodingAgentConfigAPI

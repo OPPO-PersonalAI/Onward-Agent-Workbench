@@ -5,7 +5,7 @@
  */
 
 const { createHash } = require('crypto')
-const { mkdirSync, readdirSync, readFileSync, writeFileSync } = require('fs')
+const { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } = require('fs')
 const { join, basename } = require('path')
 
 function fail(message) {
@@ -65,11 +65,21 @@ function buildAssetUrl(repository, tag, fileName) {
   return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(releaseAssetName)}`
 }
 
+function readReleaseNotes(changelogRoot, release) {
+  const notesPath = join(changelogRoot, 'en', release.releaseChannel, `${release.tag}.md`)
+  if (!existsSync(notesPath)) {
+    fail(`Missing Change Log file "${notesPath}". Generate and commit the changelog before publishing.`)
+  }
+  return readFileSync(notesPath, 'utf-8')
+}
+
 const repository = getRequiredEnv('ONWARD_GITHUB_REPOSITORY')
 const releaseTag = getRequiredEnv('ONWARD_RELEASE_TAG')
 const artifactDir = getRequiredEnv('ONWARD_ARTIFACT_DIR')
 const manifestDir = getRequiredEnv('ONWARD_MANIFEST_DIR')
+const changelogRoot = String(process.env.ONWARD_CHANGELOG_ROOT || join(process.cwd(), 'resources', 'changelog')).trim()
 const release = parseReleaseTag(releaseTag)
+const releaseNotes = readReleaseNotes(changelogRoot, release)
 const artifactFiles = readdirSync(artifactDir).filter(fileName => fileName.endsWith('.zip'))
 
 if (artifactFiles.length === 0) {
@@ -101,7 +111,7 @@ for (const fileName of artifactFiles) {
     artifactName: toGitHubReleaseAssetName(basename(fileName)),
     artifactUrl: buildAssetUrl(repository, release.tag, fileName),
     sha256: checksum,
-    releaseNotes: null,
+    releaseNotes,
     publishedAt: new Date().toISOString()
   }
 

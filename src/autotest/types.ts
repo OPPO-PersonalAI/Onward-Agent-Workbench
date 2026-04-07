@@ -339,6 +339,21 @@ export interface SettingsDebugApi {
   resetMockUpdater: () => boolean
 }
 
+export interface ChangeLogDebugApi {
+  isOpen: () => boolean
+  isLoading: () => boolean
+  getCurrentTag: () => string | null
+  getRenderedText: () => string
+  getUnavailableState: () => {
+    visible: boolean
+    message: string | null
+    detail: string | null
+  }
+  clickCloseButton: () => boolean
+  clickOverlay: () => boolean
+  pressEscape: () => boolean
+}
+
 // ============================================================
 // Test run environment
 // ============================================================
@@ -396,6 +411,7 @@ declare global {
     __onwardPromptNotebookDebug?: PromptNotebookDebugApi
     __onwardProjectEditorDebug?: ProjectEditorDebugApi
     __onwardSettingsDebug?: SettingsDebugApi
+    __onwardChangeLogDebug?: ChangeLogDebugApi
     __onwardTerminalFocusDebug?: TerminalFocusDebugApi
     __onwardTerminalDebug?: TerminalDebugApi
   }

@@ -124,6 +124,7 @@ jobs:
           ONWARD_RELEASE_TAG: ${{ github.ref_name }}
           ONWARD_ARTIFACT_DIR: dist-artifacts
           ONWARD_MANIFEST_DIR: update-manifests
+          ONWARD_CHANGELOG_ROOT: resources/changelog
         run: node scripts/generate-update-manifest.js
 
       - name: Upload artifacts to GitHub Release
@@ -133,9 +134,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          NOTES_FILE="resources/changelog/en/daily/${RELEASE_TAG}.md"
+          if [[ ! -f "$NOTES_FILE" ]]; then
+            echo "Missing Change Log file: $NOTES_FILE" >&2
+            exit 1
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
               --title "Daily Build $RELEASE_TAG" \
+              --notes-file "$NOTES_FILE" \
               --draft=false \
               --prerelease
           else
@@ -143,8 +150,8 @@ jobs:
               dist-artifacts/*.dmg \
               dist-artifacts/*.zip \
               --title "Daily Build $RELEASE_TAG" \
-              --prerelease \
-              --generate-notes
+              --notes-file "$NOTES_FILE" \
+              --prerelease
           fi
           gh release upload "$RELEASE_TAG" dist-artifacts/*.dmg dist-artifacts/*.zip --clobber
 

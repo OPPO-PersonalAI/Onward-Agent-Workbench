@@ -14,6 +14,7 @@ import { getCommandPresetStorage, CommandPreset } from './command-preset-storage
 import { getCodingAgentConfigStorage, CodingAgentConfigInput, CodingAgentType } from './coding-agent-config-storage'
 import { getCodingAgentRuntimeInfo } from './coding-agent-runtime'
 import { getAppStateStorage, AppState } from './app-state-storage'
+import { readCurrentChangelog } from './changelog'
 import {
   checkGitInstalled,
   getGitDiff,
@@ -540,6 +541,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       }
     }
     return null
+  })
+
+  ipcMain.handle('changelog:get-current', (_event, locale?: string) => {
+    return readCurrentChangelog(locale)
   })
 
   ipcMain.handle('updater:get-status', () => {

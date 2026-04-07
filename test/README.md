@@ -26,6 +26,7 @@ This directory contains reusable automation notes and validation procedures for 
 - CPU and performance regression checks
 - Terminal focus restore and activation behavior
 - Stability when switching between Project Editor, Git Diff, and Git History
+- Change Log draft generation, manifest publishing, and in-app rendering
 
 Reference document for Markdown + LaTeX syntax:
 
@@ -63,6 +64,7 @@ src/autotest/
 ├── test-project-editor-multi-terminal-scope.ts
 ├── test-markdown-latex-preview.ts
 ├── test-settings-update.ts
+├── test-change-log.ts
 ├── test-file-watch.ts
 ├── test-preview-position-restore.ts
 ├── test-project-editor-sqlite.ts
@@ -93,6 +95,7 @@ Automation uses debug-only APIs exposed by renderer components when `ONWARD_AUTO
 | `window.__onwardGitHistoryDebug` | `GitHistoryViewer.tsx` | Commit list, file list, diff style, repo-scope state |
 | `window.__onwardPromptNotebookDebug` | `PromptNotebook.tsx` | Prompt list, cleanup config, editor content |
 | `window.__onwardSettingsDebug` | `Settings.tsx` | Update action state, mock updater status injection, and action triggering |
+| `window.__onwardChangeLogDebug` | `ChangeLogModal.tsx` | Modal open state, rendered markdown content, and close interactions |
 | `window.__onwardTerminalFocusDebug` | `App.tsx` | Focus restore state, pointer suppression, and synthetic focus simulation |
 | `window.__onwardProjectEditorDebug` | `ProjectEditor.tsx` | File content, preview restore state, and external file refresh hooks |
 | `window.__onwardTerminalDebug` | `TerminalGrid.tsx` | Terminal viewport state, tail text, fit / remount helpers |
@@ -209,6 +212,31 @@ bash test/run-settings-update-autotest.sh
 
 ```powershell
 pwsh test/run-settings-update-autotest.ps1
+```
+
+### Change Log Suite
+
+- `test/test-changelog-generation.mjs`
+  - Verifies daily changelog drafts stay English-only
+  - Verifies the nearest lower daily tag is selected as the previous tag
+  - Verifies changelog-only commits are filtered out of the generated draft
+  - Verifies the draft flow also emits precompiled HTML assets for the packaged app
+- `test/test-changelog-manifest.mjs`
+  - Verifies updater manifests embed the approved English changelog into `releaseNotes`
+  - Verifies publishing fails fast when the changelog file is missing
+- `src/autotest/test-change-log.ts`
+  - Verifies the sidebar button opens the Change Log modal
+  - Verifies the current tagged build loads the precompiled HTML payload, including `zh-CN` fallback to the English asset
+  - Verifies close button, overlay click, and `Esc` all close the modal
+
+Run the Change Log suite:
+
+```bash
+bash test/run-change-log-autotest.sh
+```
+
+```powershell
+pwsh test/run-change-log-autotest.ps1
 ```
 
 ### Phase 1: PromptSender UI
