@@ -69,6 +69,7 @@ interface GitDiffViewerProps {
   openRequestedAt?: number | null
   cwdReadyAt?: number | null
   displayMode?: 'modal' | 'panel'
+  taskTitle?: string
 }
 
 type GitDiffTimingSnapshot = {
@@ -363,7 +364,8 @@ export function GitDiffViewer({
   cwdPending = false,
   openRequestedAt = null,
   cwdReadyAt = null,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  taskTitle
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
   const { getTerminalStyle } = useSettings()
@@ -3100,7 +3102,7 @@ export function GitDiffViewer({
 
         {/* Header */}
         <div className="git-diff-header">
-          <h2 className="git-diff-title">{t('gitDiff.title')}</h2>
+          <h2 className="git-diff-title">{t('gitDiff.title')}{taskTitle && <span className="git-diff-task-label"> · {taskTitle}</span>}</h2>
           <div className="git-diff-header-actions">
             <button className="git-diff-history" onClick={handleOpenHistory} title={t('gitDiff.openHistory')}>
               {t('gitDiff.openHistory')}

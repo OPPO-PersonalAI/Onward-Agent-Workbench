@@ -1201,6 +1201,14 @@ function AppContent({
               onClose={handleCloseProjectEditor}
               onDirtyChange={setProjectEditorDirty}
               displayMode="panel"
+              taskTitle={(() => {
+                if (!projectEditorTerminalId) return undefined
+                for (const tab of state.tabs) {
+                  const idx = tab.terminals.findIndex(t => t.id === projectEditorTerminalId)
+                  if (idx !== -1) return getTerminalDisplayName(idx, tab.terminals[idx].customName)
+                }
+                return undefined
+              })()}
             />
           </div>
         </main>

@@ -54,6 +54,7 @@ interface GitHistoryViewerProps {
   terminalId: string
   cwd: string | null
   displayMode?: 'modal' | 'panel'
+  taskTitle?: string
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -152,7 +153,8 @@ export function GitHistoryViewer({
   onClose,
   terminalId: _terminalId,
   cwd,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  taskTitle
 }: GitHistoryViewerProps) {
   const isPanel = displayMode === 'panel'
   const { settings } = useSettings()
@@ -1465,7 +1467,7 @@ export function GitHistoryViewer({
     <div className={overlayClassName}>
       <div className={modalClassName}>
         <div className="git-history-header">
-          <h2 className="git-history-title">Git History</h2>
+          <h2 className="git-history-title">Git History{taskTitle && <span className="git-history-task-label"> · {taskTitle}</span>}</h2>
           <div className="git-history-header-actions">
             {renderWorktreeStatus()}
             <button className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>

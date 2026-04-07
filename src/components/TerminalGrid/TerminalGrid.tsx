@@ -1323,6 +1323,7 @@ export const TerminalGrid = memo(function TerminalGrid({
           openRequestedAt={gitDiffOpenRequestedAt}
           cwdReadyAt={gitDiffCwdReadyAt}
           displayMode="panel"
+          taskTitle={terminals.find(t => t.id === gitDiffTerminalId)?.title}
         />
       )}
       {!hidden && (
@@ -1332,6 +1333,7 @@ export const TerminalGrid = memo(function TerminalGrid({
           terminalId={gitHistoryTerminalId || ''}
           cwd={gitHistoryCwd}
           displayMode="panel"
+          taskTitle={terminals.find(t => t.id === gitHistoryTerminalId)?.title}
         />
       )}
       {codingAgentModalOpen && (

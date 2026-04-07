@@ -38,6 +38,7 @@ interface ProjectEditorProps {
   onClose: () => void
   onDirtyChange?: (dirty: boolean) => void
   displayMode?: 'modal' | 'panel'
+  taskTitle?: string
 }
 
 interface TreeNode {
@@ -507,7 +508,8 @@ export function ProjectEditor({
   cwd,
   onClose,
   onDirtyChange,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  taskTitle
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
   const { getTerminalStyle } = useSettings()
@@ -4614,7 +4616,7 @@ export function ProjectEditor({
         )}
 
         <div className="project-editor-header">
-          <div className="project-editor-title">{t('projectEditor.title')}</div>
+          <div className="project-editor-title">{t('projectEditor.title')}{taskTitle && <span className="project-editor-task-label"> · {taskTitle}</span>}</div>
           <div className="project-editor-header-actions">
             <button
               className="project-editor-secondary"

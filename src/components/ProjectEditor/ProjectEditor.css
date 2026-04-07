@@ -74,6 +74,15 @@
   font-size: var(--font-lg);
   color: var(--text-1);
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-editor-task-label {
+  font-weight: 400;
+  opacity: 0.6;
 }
 
 .project-editor-header-actions {
