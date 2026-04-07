@@ -4,7 +4,7 @@
  */
 
 import { app } from 'electron'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync, existsSync, copyFileSync, mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 
 export type BuildChannel = 'dev' | 'prod'
@@ -146,6 +146,94 @@ function getDevUserDataPath(displayName: string): string {
   return join(dirname(exePath), dataDirName)
 }
 
+/**
+ * Migrate state files from a versioned userData directory (e.g. "Onward 2 v2026.03.01")
+ * to the stable productName-based directory (e.g. "Onward 2").
+ * Only runs when the stable directory has no existing app-state.json.
+ * Copies files without deleting the source.
+ */
+function migrateFromVersionedUserData(stableUserDataPath: string, productName: string): void {
+  try {
+    if (existsSync(join(stableUserDataPath, 'app-state.json'))) {
+      return
+    }
+
+    const appDataPath = app.getPath('appData')
+    const prefix = `${productName} v`
+
+    let entries: string[]
+    try {
+      entries = readdirSync(appDataPath, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name.startsWith(prefix))
+        .map(d => d.name)
+    } catch {
+      return
+    }
+
+    if (entries.length === 0) return
+
+    // Find the most recently updated candidate.
+    // A directory qualifies if it has app-state.json OR legacy files (terminal-config.json / prompts.json).
+    let bestDir: string | null = null
+    let bestUpdatedAt = -1
+
+    for (const dirName of entries) {
+      const candidatePath = join(appDataPath, dirName)
+      const statePath = join(candidatePath, 'app-state.json')
+      const hasLegacy = existsSync(join(candidatePath, 'terminal-config.json'))
+        || existsSync(join(candidatePath, 'prompts.json'))
+
+      if (!existsSync(statePath) && !hasLegacy) continue
+
+      let updatedAt = 0
+      if (existsSync(statePath)) {
+        try {
+          const raw = readFileSync(statePath, 'utf-8')
+          const parsed = JSON.parse(raw) as { updatedAt?: number }
+          updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+        } catch {
+          // Unreadable app-state.json; still consider if legacy files exist
+        }
+      }
+
+      if (updatedAt > bestUpdatedAt || (bestDir === null && hasLegacy)) {
+        bestUpdatedAt = updatedAt
+        bestDir = candidatePath
+      }
+    }
+
+    if (!bestDir) return
+
+    if (!existsSync(stableUserDataPath)) {
+      mkdirSync(stableUserDataPath, { recursive: true })
+    }
+
+    const filesToMigrate = [
+      'app-state.json',
+      'settings.json',
+      'command-presets.json',
+      'coding-agent-config.json',
+      'window-state.json',
+      // Legacy files needed by AppStateStorage.migrateFromLegacy()
+      'terminal-config.json',
+      'prompts.json'
+    ]
+
+    let copiedCount = 0
+    for (const fileName of filesToMigrate) {
+      const src = join(bestDir, fileName)
+      if (existsSync(src)) {
+        copyFileSync(src, join(stableUserDataPath, fileName))
+        copiedCount++
+      }
+    }
+
+    console.log(`[AppInfo] Migrated ${copiedCount} state files from "${bestDir}" to "${stableUserDataPath}"`)
+  } catch (error) {
+    console.error('[AppInfo] State migration failed (non-blocking):', error)
+  }
+}
+
 export function initializeAppIdentity(): AppInfo {
   const appInfo = getAppInfo()
   const forcedUserDataPath = String(process.env.ONWARD_USER_DATA_DIR || '').trim()
@@ -162,6 +250,16 @@ export function initializeAppIdentity(): AppInfo {
   if (appInfo.buildChannel === 'dev' && appInfo.isPackaged) {
     const userDataPath = getDevUserDataPath(appInfo.displayName)
     app.setPath('userData', userDataPath)
+    return appInfo
+  }
+
+  // For prod builds with tags, displayName includes the version tag (e.g. "Onward 2 v2026.04.06").
+  // Since app.setName(displayName) changes the default userData path, explicitly set userData
+  // to a stable path based on productName to prevent state loss across upgrades.
+  if (appInfo.buildChannel === 'prod' && appInfo.isPackaged && appInfo.tag) {
+    const stableUserDataPath = join(app.getPath('appData'), appInfo.productName)
+    app.setPath('userData', stableUserDataPath)
+    migrateFromVersionedUserData(stableUserDataPath, appInfo.productName)
   }
 
   return appInfo
