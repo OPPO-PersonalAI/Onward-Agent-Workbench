@@ -287,6 +287,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   }, [actionError, effectiveUpdaterStatus, formatUpdateTimestamp, t])
   const targetChannelValue = appInfo?.releaseChannel === 'stable' ? 'stable' : 'daily'
   const isUpdateDetailError = Boolean(actionError) || effectiveUpdaterStatus?.phase === 'error'
+  const isUpdateDetailSuccess = effectiveUpdaterStatus?.phase === 'up-to-date'
   const updateStatusLabel = t(updateStatusKey)
   const updateActionLabel = t(updateActionKey)
 
@@ -605,12 +606,13 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               <div className="settings-update-action-row">
                 <div className="settings-update-action-copy">
                   <div className="settings-update-action-label">{t('settings.update.checkLabel')}</div>
-                  {updateDetailText && (
+                  {(isUpdateDetailSuccess || updateDetailText) && (
                     <div
-                      className={`settings-update-action-detail${isUpdateDetailError ? ' is-error' : ''}`}
+                      className={`settings-update-action-detail${isUpdateDetailError ? ' is-error' : ''}${isUpdateDetailSuccess ? ' is-success' : ''}`}
                       data-testid="settings-update-detail"
                     >
-                      {updateDetailText}
+                      {isUpdateDetailSuccess && <div>{t('settings.update.detail.upToDate')}</div>}
+                      {updateDetailText && <div>{updateDetailText}</div>}
                     </div>
                   )}
                 </div>
