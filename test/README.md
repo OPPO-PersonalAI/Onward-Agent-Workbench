@@ -15,6 +15,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Git History browsing and diff rendering
 - Image rendering across Git Diff, Git History, and Project Editor
 - Prompt cleanup and retention behavior
+- Feedback modal browser handoff and GitHub status refresh
 - Terminal working-directory and Prompt editor height persistence
 - Markdown preview rendering
 - External file change watching and automatic refresh
@@ -66,6 +67,9 @@ src/autotest/
 ├── test-settings-update.ts
 ├── test-change-log.ts
 ├── test-file-watch.ts
+├── test-feedback.ts
+├── test-feedback-ui.ts
+├── test-feedback-persistence.ts
 ├── test-preview-position-restore.ts
 ├── test-project-editor-sqlite.ts
 ├── test-prompt-sender.ts
@@ -237,6 +241,38 @@ bash test/run-change-log-autotest.sh
 
 ```powershell
 pwsh test/run-change-log-autotest.ps1
+```
+
+### Feedback Suite
+
+- `src/autotest/test-feedback.ts`
+  - Verifies GitHub draft URL generation, feedback body markers, and status mapping helpers
+- `src/autotest/test-feedback-ui.ts`
+  - Drives the real sidebar button and feedback modal UI
+  - Validates hidden prerender, optional rating submission, system-browser draft handoff, history scrolling, local removal, and status refresh transitions
+  - Uses an isolated `ONWARD_USER_DATA_DIR` plus autotest-only mock GitHub issue state so the run is deterministic and does not open a real browser
+- `src/autotest/test-feedback-persistence.ts`
+  - Seeds a feedback record, relaunches the app with the same `ONWARD_USER_DATA_DIR`, and verifies consent + history persistence across restart
+  - Cleans up the persisted test record at the end of the verification pass
+
+Run the Feedback suite:
+
+```bash
+bash test/run-feedback-autotest.sh
+```
+
+```powershell
+pwsh test/run-feedback-autotest.ps1
+```
+
+Run the Feedback persistence suite:
+
+```bash
+bash test/run-feedback-persistence-autotest.sh
+```
+
+```powershell
+pwsh test/run-feedback-persistence-autotest.ps1
 ```
 
 ### Phase 1: PromptSender UI

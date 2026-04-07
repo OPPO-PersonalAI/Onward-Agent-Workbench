@@ -55,6 +55,7 @@ import {
 import { getSettingsStorage, SettingsState, ShortcutConfig } from './settings-storage'
 import { getShortcutManager } from './shortcut-manager'
 import { getAppInfo } from './app-info'
+import { getFeedbackStorage } from './feedback-storage'
 import { gitRuntimeManager } from './git-runtime-manager'
 import { openExternalUrlWithConfirm } from './external-link-guard'
 import { RipgrepSearchManager } from './ripgrep-search'
@@ -67,6 +68,7 @@ let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
 let fileWatchManager: FileWatchManager | null = null
 let imageWatchManager: ImageWatchManager | null = null
+let feedbackDebugLastOpenedUrl: string | null = null
 
 type TerminalInputSequencePayload = {
   kind: 'raw' | 'paste'
@@ -420,6 +422,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   ipcMain.handle('debug:get-git-runtime-metrics', () => {
     return gitRuntimeManager.getMetrics()
   })
+  ipcMain.handle('debug:feedback-reset', () => {
+    feedbackDebugLastOpenedUrl = null
+    getFeedbackStorage().debugReset()
+  })
+  ipcMain.handle('debug:feedback-set-mock-issues', (_, issues) => {
+    getFeedbackStorage().debugSetMockIssues(Array.isArray(issues) ? issues : [])
+  })
+  ipcMain.handle('debug:feedback-get-last-opened-url', () => {
+    return feedbackDebugLastOpenedUrl
+  })
   ipcMain.handle('debug:quit', () => {
     app.exit(0)
   })
@@ -527,6 +539,91 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   // App info
   ipcMain.handle('app:get-info', () => {
     return getAppInfo()
+  })
+
+  ipcMain.handle('feedback:load', () => {
+    return getFeedbackStorage().get()
+  })
+
+  ipcMain.handle('feedback:update-preferences', (_, payload) => {
+    return getFeedbackStorage().updatePreferences(
+      payload && typeof payload === 'object' ? payload : {}
+    )
+  })
+
+  ipcMain.handle('feedback:create-submission', async (_, payload) => {
+    const storage = getFeedbackStorage()
+    const appInfo = getAppInfo()
+    const result = storage.createSubmission(payload, {
+      locale: payload?.locale === 'zh-CN' ? 'zh-CN' : 'en',
+      platform: process.platform,
+      productName: appInfo.productName,
+      version: appInfo.version,
+      buildChannel: appInfo.buildChannel,
+      releaseChannel: appInfo.releaseChannel,
+      releaseOs: appInfo.releaseOs,
+      createdAt: Date.now()
+    })
+
+    if (!result.success || !result.record) {
+      return result
+    }
+
+    try {
+      if (process.env.ONWARD_AUTOTEST === '1') {
+        feedbackDebugLastOpenedUrl = result.record.prefilledUrl
+        storage.markBrowserOpened(result.record.id)
+        return {
+          success: true,
+          record: storage.getRecord(result.record.id) ?? result.record
+        }
+      }
+
+      await shell.openExternal(result.record.prefilledUrl)
+      storage.markBrowserOpened(result.record.id)
+      return {
+        success: true,
+        record: storage.getRecord(result.record.id) ?? result.record
+      }
+    } catch (error) {
+      storage.removeRecord(result.record.id)
+      return {
+        success: false,
+        error: String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('feedback:sync', async (_, recordId?: string, force?: boolean) => {
+    return await getFeedbackStorage().sync(recordId, force === true)
+  })
+
+  ipcMain.handle('feedback:reopen-in-browser', async (_, recordId: string) => {
+    const storage = getFeedbackStorage()
+    const record = storage.getRecord(recordId)
+    if (!record) {
+      return { success: false, error: 'Feedback record not found.' }
+    }
+
+    try {
+      if (process.env.ONWARD_AUTOTEST === '1') {
+        feedbackDebugLastOpenedUrl = record.prefilledUrl
+        storage.markBrowserOpened(recordId)
+        return { success: true }
+      }
+
+      await shell.openExternal(record.prefilledUrl)
+      storage.markBrowserOpened(recordId)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('feedback:remove-record', (_, recordId: string) => {
+    const storage = getFeedbackStorage()
+    storage.removeRecord(recordId)
+    return storage.get()
   })
 
   // Read NOTICE / ThirdPartyNotices file for open-source license display
@@ -1371,6 +1468,15 @@ export function cleanupIpcHandlers(): void {
   imageWatchManager?.dispose()
   imageWatchManager = null
   ipcMain.removeHandler('app:get-info')
+  ipcMain.removeHandler('feedback:load')
+  ipcMain.removeHandler('feedback:update-preferences')
+  ipcMain.removeHandler('feedback:create-submission')
+  ipcMain.removeHandler('feedback:sync')
+  ipcMain.removeHandler('feedback:reopen-in-browser')
+  ipcMain.removeHandler('feedback:remove-record')
+  ipcMain.removeHandler('debug:feedback-reset')
+  ipcMain.removeHandler('debug:feedback-set-mock-issues')
+  ipcMain.removeHandler('debug:feedback-get-last-opened-url')
   ipcMain.removeHandler('app:read-notice')
   ipcMain.removeHandler('updater:get-status')
   ipcMain.removeHandler('updater:check-now')

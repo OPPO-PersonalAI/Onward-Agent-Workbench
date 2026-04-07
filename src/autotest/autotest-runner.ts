@@ -41,6 +41,9 @@ import { testPreviewPositionRestore } from './test-preview-position-restore'
 import { testTerminalStatePersistence } from './test-terminal-state-persistence'
 import { testProjectEditorFileMemory } from './test-project-editor-file-memory'
 import { testChangeLog } from './test-change-log'
+import { testFeedback } from './test-feedback'
+import { testFeedbackUi } from './test-feedback-ui'
+import { testFeedbackPersistenceSeed, testFeedbackPersistenceVerify } from './test-feedback-persistence'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -134,6 +137,32 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testTerminalAutofollow(ctx)
       collectSuiteResults('TerminalAutofollow', results)
       await sleep(400)
+    }
+
+    if (!ctx.cancelled() && shouldRun('feedback')) {
+      log('phase0.15:begin')
+      const logicResults = await testFeedback(ctx)
+      collectSuiteResults('Feedback', logicResults)
+      await sleep(200)
+      if (!ctx.cancelled()) {
+        const uiResults = await testFeedbackUi(ctx)
+        collectSuiteResults('FeedbackUI', uiResults)
+        await sleep(200)
+      }
+    }
+
+    if (!ctx.cancelled() && suiteFilter === 'feedback-persistence-seed') {
+      log('phase0.16:begin')
+      const results = await testFeedbackPersistenceSeed(ctx)
+      collectSuiteResults('FeedbackPersistenceSeed', results)
+      await sleep(200)
+    }
+
+    if (!ctx.cancelled() && suiteFilter === 'feedback-persistence-verify') {
+      log('phase0.17:begin')
+      const results = await testFeedbackPersistenceVerify(ctx)
+      collectSuiteResults('FeedbackPersistenceVerify', results)
+      await sleep(200)
     }
 
     // Phase 0.4: Project Editor restore unit tests

@@ -9,18 +9,22 @@ import './Sidebar.css'
 
 interface SidebarProps {
   activePanel: 'prompt' | 'settings' | null
+  isFeedbackOpen: boolean
   layoutMode: LayoutMode
   isChangeLogOpen: boolean
   onPanelChange: (panel: 'prompt' | 'settings' | null) => void
+  onFeedbackToggle: () => void
   onLayoutChange: (mode: LayoutMode) => void
   onChangeLogToggle: () => void
 }
 
 export function Sidebar({
   activePanel,
+  isFeedbackOpen,
   layoutMode,
   isChangeLogOpen,
   onPanelChange,
+  onFeedbackToggle,
   onLayoutChange,
   onChangeLogToggle
 }: SidebarProps) {
@@ -116,6 +120,20 @@ export function Sidebar({
           <path d="M9 12h6" />
           <path d="M9 16h6" />
           <path d="M9 8.5h1" />
+        </svg>
+      </button>
+
+      <button
+        className={`sidebar-btn sidebar-feedback-btn ${isFeedbackOpen ? 'active' : ''}`}
+        onClick={onFeedbackToggle}
+        title={t('sidebar.feedback')}
+        data-testid="sidebar-feedback-button"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M7 5.5h10A3.5 3.5 0 0 1 20.5 9v5A3.5 3.5 0 0 1 17 17.5h-5.25L7 20.5v-3A3.5 3.5 0 0 1 3.5 14V9A3.5 3.5 0 0 1 7 5.5Z" />
+          <path d="M8.25 10h7.5" />
+          <path d="M8.25 13.5h4.75" />
+          <path d="M17.75 5.25 18.35 6.65 19.75 7.25 18.35 7.85 17.75 9.25 17.15 7.85 15.75 7.25 17.15 6.65 17.75 5.25Z" fill="currentColor" stroke="none" />
         </svg>
       </button>
 

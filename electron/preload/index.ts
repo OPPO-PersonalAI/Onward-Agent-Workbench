@@ -4,6 +4,13 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  FeedbackActionResult,
+  FeedbackCreateSubmissionResult,
+  FeedbackDebugRemoteIssue,
+  FeedbackState,
+  FeedbackSubmissionInput
+} from '../../src/types/feedback'
 
 export interface TerminalOptions {
   cols?: number
@@ -790,6 +797,9 @@ export interface DebugAPI {
   focusWindow: () => Promise<boolean>
   getAppMetrics: () => Promise<Record<string, unknown>[]>
   getGitRuntimeMetrics: () => Promise<GitRuntimeMetrics>
+  feedbackReset: () => Promise<void>
+  feedbackSetMockIssues: (issues: FeedbackDebugRemoteIssue[]) => Promise<void>
+  feedbackGetLastOpenedUrl: () => Promise<string | null>
   quit: () => Promise<void>
 }
 
@@ -882,6 +892,15 @@ export interface BrowserAPI {
   onEscapePressed: (callback: (id: string) => void) => () => void
 }
 
+export interface FeedbackAPI {
+  load: () => Promise<FeedbackState>
+  createSubmission: (payload: FeedbackSubmissionInput) => Promise<FeedbackCreateSubmissionResult>
+  sync: (recordId?: string, force?: boolean) => Promise<FeedbackState>
+  reopenInBrowser: (recordId: string) => Promise<FeedbackActionResult>
+  updatePreferences: (payload: Partial<FeedbackState['preferences']>) => Promise<FeedbackState>
+  removeRecord: (recordId: string) => Promise<FeedbackState>
+}
+
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
@@ -897,6 +916,7 @@ export interface ElectronAPI {
   changelog: ChangelogAPI
   updater: UpdaterAPI
   browser: BrowserAPI
+  feedback: FeedbackAPI
   codingAgentConfig: CodingAgentConfigAPI
   codingAgent: CodingAgentAPI
   debug: DebugAPI
@@ -1408,6 +1428,15 @@ const debugAPI: DebugAPI = {
   getGitRuntimeMetrics: () => {
     return ipcRenderer.invoke('debug:get-git-runtime-metrics')
   },
+  feedbackReset: () => {
+    return ipcRenderer.invoke('debug:feedback-reset')
+  },
+  feedbackSetMockIssues: (issues: FeedbackDebugRemoteIssue[]) => {
+    return ipcRenderer.invoke('debug:feedback-set-mock-issues', issues)
+  },
+  feedbackGetLastOpenedUrl: () => {
+    return ipcRenderer.invoke('debug:feedback-get-last-opened-url')
+  },
   quit: () => {
     return ipcRenderer.invoke('debug:quit')
   }
@@ -1512,6 +1541,27 @@ const browserAPI: BrowserAPI = {
   }
 }
 
+const feedbackAPI: FeedbackAPI = {
+  load: () => {
+    return ipcRenderer.invoke('feedback:load')
+  },
+  createSubmission: (payload: FeedbackSubmissionInput) => {
+    return ipcRenderer.invoke('feedback:create-submission', payload)
+  },
+  sync: (recordId?: string, force?: boolean) => {
+    return ipcRenderer.invoke('feedback:sync', recordId, force)
+  },
+  reopenInBrowser: (recordId: string) => {
+    return ipcRenderer.invoke('feedback:reopen-in-browser', recordId)
+  },
+  updatePreferences: (payload: Partial<FeedbackState['preferences']>) => {
+    return ipcRenderer.invoke('feedback:update-preferences', payload)
+  },
+  removeRecord: (recordId: string) => {
+    return ipcRenderer.invoke('feedback:remove-record', recordId)
+  }
+}
+
 const codingAgentConfigAPI: CodingAgentConfigAPI = {
   load: (agentType?: CodingAgentType) => ipcRenderer.invoke('coding-agent-config:load', agentType),
   save: (config: CodingAgentConfigInput) => ipcRenderer.invoke('coding-agent-config:save', config),
@@ -1538,6 +1588,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   changelog: changelogAPI,
   updater: updaterAPI,
   browser: browserAPI,
+  feedback: feedbackAPI,
   codingAgentConfig: codingAgentConfigAPI,
   codingAgent: codingAgentAPI,
   debug: debugAPI,
