@@ -113,6 +113,29 @@ interface TabState {
 }
 
 /**
+ * Global UI preferences persisted across restarts and upgrades.
+ */
+interface UIPreferences {
+  projectEditorFileTreeWidth?: number
+  projectEditorModalSize?: { width: number; height: number }
+  projectEditorMarkdownPreviewWidth?: number
+  projectEditorMarkdownEditorVisible?: boolean
+  projectEditorOutlineVisible?: boolean
+  projectEditorOutlineWidth?: number
+  projectEditorOutlineTarget?: 'editor' | 'preview'
+  gitDiffFileListWidth?: number
+  gitDiffModalSize?: { width: number; height: number }
+  gitDiffSplitViewRatio?: number
+  gitDiffImageDisplayMode?: string
+  gitDiffImageCompareMode?: string
+  gitHistoryFileListWidth?: number
+  gitHistoryHideWhitespace?: boolean
+  gitHistoryDiffStyle?: string
+  gitHistorySummaryHeight?: number
+  gitHistoryStates?: Record<string, unknown>
+}
+
+/**
  * Application state
  */
 interface AppState {
@@ -123,6 +146,7 @@ interface AppState {
   lastFocusedTerminalId: string | null
   projectEditorStates: Record<string, ProjectEditorState>
   promptSchedules: PromptSchedule[]
+  uiPreferences: UIPreferences
   updatedAt: number
 }
 
@@ -236,6 +260,7 @@ function createDefaultAppState(): AppState {
     lastFocusedTerminalId: null,
     projectEditorStates: {},
     promptSchedules: [],
+    uiPreferences: {},
     updatedAt: Date.now()
   }
 }
@@ -362,6 +387,7 @@ class AppStateStorage {
       lastFocusedTerminalId: null,
       projectEditorStates: {},
       promptSchedules: [],
+      uiPreferences: {},
       updatedAt: Date.now()
     }
 
@@ -525,6 +551,12 @@ class AppStateStorage {
       (state as AppState & { promptSchedules?: unknown }).promptSchedules
     )
 
+    // Preserve uiPreferences as-is (all fields are optional)
+    const uiPreferences: UIPreferences =
+      state.uiPreferences && typeof state.uiPreferences === 'object'
+        ? (state.uiPreferences as UIPreferences)
+        : {}
+
     return {
       activeTabId,
       tabs,
@@ -533,6 +565,7 @@ class AppStateStorage {
       lastFocusedTerminalId,
       projectEditorStates,
       promptSchedules,
+      uiPreferences,
       updatedAt: state.updatedAt ?? Date.now()
     }
   }

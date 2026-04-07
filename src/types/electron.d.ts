@@ -173,6 +173,7 @@ import type { AppState } from './tab.d.ts'
 export interface AppStateAPI {
   load: () => Promise<AppState>
   save: (state: AppState) => Promise<boolean>
+  onFlushPendingState: (callback: () => void) => void
 }
 
 export type GitChangeType = 'unstaged' | 'staged' | 'untracked'

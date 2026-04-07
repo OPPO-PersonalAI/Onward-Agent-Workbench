@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { AppState, TabState, GlobalPrompt, LocalPrompt, EditorDraft, ProjectEditorState, PromptCleanupConfig, PromptSchedule } from '../types/tab.d.ts'
+import type { AppState, TabState, GlobalPrompt, LocalPrompt, EditorDraft, ProjectEditorState, PromptCleanupConfig, PromptSchedule, UIPreferences } from '../types/tab.d.ts'
 import type { Prompt } from '../types/electron.d.ts'
 
 /**
@@ -243,6 +243,7 @@ function createDefaultAppState(): AppState {
     lastFocusedTerminalId: null,
     projectEditorStates: {},
     promptSchedules: [],
+    uiPreferences: {},
     updatedAt: Date.now()
   }
 }
@@ -305,6 +306,10 @@ interface AppStateContextValue {
   setProjectEditorState: (scope: ProjectEditorScope, state: ProjectEditorState | null) => void
   flushProjectEditorState: (scope: ProjectEditorScope, state: ProjectEditorState | null) => void
 
+  // UI preferences (persisted across restarts/upgrades)
+  getUIPreferences: () => UIPreferences
+  updateUIPreferences: (updates: Partial<UIPreferences>) => void
+
   // Scheduled task operations
   addSchedule: (schedule: Omit<PromptSchedule, 'executedCount' | 'createdAt' | 'lastExecutedAt' | 'missedExecutions'>) => void
   updateSchedule: (schedule: PromptSchedule) => void
@@ -321,6 +326,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const draftSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const promptEditorHeightTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  // Track pending debounced values so they can be flushed before quit
+  const pendingHeightsRef = useRef<Map<string, number>>(new Map())
+  const pendingDraftsRef = useRef<Map<string, EditorDraft | undefined>>(new Map())
   const lastFocusOwnerRef = useRef<'terminal' | 'input'>('terminal')
   const perfCountersRef = useRef({
     updateCalls: 0,
@@ -369,7 +377,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           projectEditorStates: Object.fromEntries(
             Object.entries(loadedState.projectEditorStates ?? {}).map(([key, value]) => [key, normalizeProjectEditorState(value)])
           ),
-          promptSchedules: Array.isArray(loadedState.promptSchedules) ? loadedState.promptSchedules : []
+          promptSchedules: Array.isArray(loadedState.promptSchedules) ? loadedState.promptSchedules : [],
+          uiPreferences: loadedState.uiPreferences ?? {}
         }
         stateRef.current = normalizedState
         setState(normalizedState)
@@ -405,6 +414,75 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       promptEditorHeightTimersRef.current.forEach((timer) => clearTimeout(timer))
       promptEditorHeightTimersRef.current.clear()
     }
+  }, [])
+
+  // Flush all pending debounced saves immediately (called before app quit/update)
+  const stateRef = useRef(state)
+  stateRef.current = state
+  useEffect(() => {
+    window.electronAPI.appState.onFlushPendingState(() => {
+      // Cancel all pending timers
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = null
+      }
+      if (draftSaveTimeoutRef.current) {
+        clearTimeout(draftSaveTimeoutRef.current)
+        draftSaveTimeoutRef.current = null
+      }
+      draftSaveTimersRef.current.forEach((timer) => clearTimeout(timer))
+      draftSaveTimersRef.current.clear()
+      promptEditorHeightTimersRef.current.forEach((timer) => clearTimeout(timer))
+      promptEditorHeightTimersRef.current.clear()
+
+      // Build final state with all pending changes applied
+      let finalState = { ...stateRef.current }
+      let dirty = false
+
+      // Apply pending prompt editor height updates
+      for (const [tabId, height] of pendingHeightsRef.current) {
+        finalState = {
+          ...finalState,
+          tabs: finalState.tabs.map(tab =>
+            tab.id === tabId ? { ...tab, promptEditorHeight: height } : tab
+          )
+        }
+        dirty = true
+      }
+      pendingHeightsRef.current.clear()
+
+      // Apply pending tab-level draft updates
+      for (const [tabId, draft] of pendingDraftsRef.current) {
+        finalState = {
+          ...finalState,
+          tabs: finalState.tabs.map(tab =>
+            tab.id === tabId ? { ...tab, editorDraft: draft } : tab
+          )
+        }
+        dirty = true
+      }
+      pendingDraftsRef.current.clear()
+
+      // Apply pending active-tab draft update
+      if (pendingActiveDraftRef.current) {
+        const { draft } = pendingActiveDraftRef.current
+        finalState = {
+          ...finalState,
+          tabs: finalState.tabs.map(tab =>
+            tab.id === finalState.activeTabId ? { ...tab, editorDraft: draft } : tab
+          )
+        }
+        pendingActiveDraftRef.current = null
+        dirty = true
+      }
+
+      if (dirty) {
+        finalState.updatedAt = Date.now()
+      }
+
+      // Always save current state to ensure nothing is lost
+      window.electronAPI.appState.save(finalState)
+    })
   }, [])
 
   // Debounced state save
@@ -907,14 +985,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [state])
 
   // Update editor draft (independent 300ms anti-shake)
+  const pendingActiveDraftRef = useRef<{ draft: EditorDraft | undefined } | null>(null)
   const updateEditorDraft = useCallback((draft: EditorDraft | null) => {
     if (DEBUG_APP_STATE) {
       perfCountersRef.current.updateEditorDraft += 1
     }
+    pendingActiveDraftRef.current = { draft: draft ?? undefined }
     if (draftSaveTimeoutRef.current) {
       clearTimeout(draftSaveTimeoutRef.current)
     }
     draftSaveTimeoutRef.current = setTimeout(() => {
+      pendingActiveDraftRef.current = null
       setState(prev => {
         const newState = {
           ...prev,
@@ -935,12 +1016,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Tab-level draft anti-shake saving (independent timer for each Tab)
   const updateEditorDraftForTab = useCallback((tabId: string, draft: EditorDraft | null) => {
+    pendingDraftsRef.current.set(tabId, draft ?? undefined)
     const existingTimer = draftSaveTimersRef.current.get(tabId)
     if (existingTimer) {
       clearTimeout(existingTimer)
     }
     const timer = setTimeout(() => {
       draftSaveTimersRef.current.delete(tabId)
+      pendingDraftsRef.current.delete(tabId)
       setState(prev => {
         const newState = {
           ...prev,
@@ -964,12 +1047,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       perfCountersRef.current.updatePromptEditorHeight += 1
     }
     const normalizedHeight = normalizePromptEditorHeight(height)
+    pendingHeightsRef.current.set(tabId, normalizedHeight)
     const existingTimer = promptEditorHeightTimersRef.current.get(tabId)
     if (existingTimer) {
       clearTimeout(existingTimer)
     }
     const timer = setTimeout(() => {
       promptEditorHeightTimersRef.current.delete(tabId)
+      pendingHeightsRef.current.delete(tabId)
       setState(prev => {
         const currentTab = prev.tabs.find(tab => tab.id === tabId)
         if (!currentTab || currentTab.promptEditorHeight === normalizedHeight) {
@@ -1138,6 +1223,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }))
   }, [updateState])
 
+  // UI preferences
+  const getUIPreferences = useCallback((): UIPreferences => {
+    return state.uiPreferences ?? {}
+  }, [state.uiPreferences])
+
+  const updateUIPreferences = useCallback((updates: Partial<UIPreferences>) => {
+    updateState(prev => ({
+      ...prev,
+      uiPreferences: { ...(prev.uiPreferences ?? {}), ...updates }
+    }))
+  }, [updateState])
+
   const value: AppStateContextValue = useMemo(() => ({
     state,
     isLoaded,
@@ -1176,6 +1273,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     getProjectEditorState,
     setProjectEditorState,
     flushProjectEditorState,
+    getUIPreferences,
+    updateUIPreferences,
     addSchedule,
     updateSchedule,
     deleteSchedule: deleteScheduleByPromptId
@@ -1192,6 +1291,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setLastFocusedTerminalId, getLastFocusedTerminalId,
     setLastFocusOwner, getLastFocusOwner,
     getProjectEditorState, setProjectEditorState, flushProjectEditorState,
+    getUIPreferences, updateUIPreferences,
     addSchedule, updateSchedule, deleteScheduleByPromptId
   ])
 
