@@ -1065,6 +1065,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return { success: true }
   })
 
+  // Background diff cache warming — pre-compute diff so opening the panel is instant
+  ipcMain.handle('git:warm-diff-cache', async (_, cwd: string) => {
+    try {
+      await getGitDiff(cwd, { scope: 'full' })
+      return { success: true }
+    } catch {
+      return { success: false }
+    }
+  })
+
   // Project editor handlers
   ipcMain.handle('project:list-directory', async (_, root: string, path: string) => {
     return await listDirectory(root, path)

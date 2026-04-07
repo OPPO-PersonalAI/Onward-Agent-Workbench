@@ -505,6 +505,7 @@ export interface GitAPI {
   notifyTerminalActivity: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalFocus: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalGitUpdate: (terminalId: string) => Promise<{ success: true }>
+  warmDiffCache: (cwd: string) => Promise<{ success: boolean }>
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => () => void
 }
 

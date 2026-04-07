@@ -557,6 +557,7 @@ export interface GitAPI {
   notifyTerminalActivity: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalFocus: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalGitUpdate: (terminalId: string) => Promise<{ success: true }>
+  warmDiffCache: (cwd: string) => Promise<{ success: boolean }>
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => () => void
 }
 
@@ -1077,6 +1078,10 @@ const gitAPI: GitAPI = {
 
   notifyTerminalGitUpdate: (terminalId: string) => {
     return ipcRenderer.invoke('git:notify-terminal-git-update', terminalId)
+  },
+
+  warmDiffCache: (cwd: string) => {
+    return ipcRenderer.invoke('git:warm-diff-cache', cwd)
   },
 
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => {

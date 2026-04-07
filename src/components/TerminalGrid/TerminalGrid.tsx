@@ -117,6 +117,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const focusRetryTimerRef = useRef<number | null>(null)
   const latestFocusRequestRef = useRef<TerminalFocusRequest | null>(focusRequest)
   const lastHandledFocusTokenRef = useRef<number | null>(null)
+  const warmDiffTimerRef = useRef<number | null>(null)
 
   // Git Diff Viewer Status
   const [gitDiffOpen, setGitDiffOpen] = useState(false)
@@ -413,11 +414,24 @@ export const TerminalGrid = memo(function TerminalGrid({
   useEffect(() => {
     const unsubscribe = window.electronAPI.git.onTerminalInfo((terminalId, info) => {
       applyTerminalInfoUpdate(terminalId, info)
+
+      // Background diff cache warming: when git state changes and diff panel is not open,
+      // proactively compute diff so opening the panel is near-instant.
+      if (info?.repoRoot && !gitDiffOpen) {
+        if (warmDiffTimerRef.current) clearTimeout(warmDiffTimerRef.current)
+        warmDiffTimerRef.current = window.setTimeout(() => {
+          void window.electronAPI.git.warmDiffCache(info.repoRoot!)
+        }, 2000)
+      }
     })
     return () => {
       unsubscribe()
+      if (warmDiffTimerRef.current) {
+        clearTimeout(warmDiffTimerRef.current)
+        warmDiffTimerRef.current = null
+      }
     }
-  }, [applyTerminalInfoUpdate])
+  }, [applyTerminalInfoUpdate, gitDiffOpen])
 
   useEffect(() => {
     getTerminalOptionsRef.current = (terminalId: string) => ({
