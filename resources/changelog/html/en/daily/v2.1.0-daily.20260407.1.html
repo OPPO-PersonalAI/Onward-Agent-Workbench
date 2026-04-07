@@ -1,0 +1,24 @@
+<h1>Onward Daily Build v2.1.0-daily.20260407.1</h1>
+<p>Changes since <code>v2.1.0-daily.20260406.1</code>.</p>
+<h2>New Features</h2>
+<ul>
+<li>Add in-app feedback workflow backed by GitHub Issues, with local history persistence and public issue status tracking.</li>
+<li>Add a packaged Change Log viewer accessible from the sidebar, displaying release notes for the current build.</li>
+<li>Add real-time image change detection in Markdown preview with automatic cache invalidation and a manual refresh button.</li>
+<li>Introduce a shared dropdown component with consistent sizing and cross-platform arrow alignment across all select controls.</li>
+</ul>
+<h2>Bug Fixes</h2>
+<ul>
+<li>Fix terminal PATH resolution on macOS and Linux by launching the default shell as a login shell, ensuring profile files are sourced correctly.</li>
+<li>Prevent data loss during app quit and auto-update by flushing all pending debounced saves before exit.</li>
+<li>Add UI preference persistence across upgrades so panel widths, toggle states, and viewer settings survive version transitions.</li>
+<li>Unify project editor file memory into per-file state, fixing stale reopen tracking, markdown preview anchor restoration, and legacy data migration.</li>
+<li>Persist project editor sidebar scroll positions for both file browser and outline panels, surviving tab switches and app restarts.</li>
+<li>Improve scroll restore reliability with extended retry attempts and stale quick-file list validation to prevent async operations from overwriting user changes.</li>
+<li>Show an explicit &quot;Already up to date&quot; confirmation in Settings after a manual update check completes with no available update.</li>
+</ul>
+<h2>UI Improvements</h2>
+<ul>
+<li>Redesign sidebar icons to a unified 20×20 / stroke-width-2 style with new sparkles (Change Log) and lightbulb (Feedback) icons.</li>
+<li>Replace Change Log modal backdrop blur with a solid dark overlay for improved rendering performance.</li>
+</ul>
