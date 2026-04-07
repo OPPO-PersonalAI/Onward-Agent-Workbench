@@ -194,10 +194,13 @@ export function OutlinePanel({
 
   // Auto-scroll to active item
   useEffect(() => {
+    if (!initialScrollAppliedRef.current && typeof initialScrollTop === 'number' && initialScrollTop > 0) {
+      return
+    }
     if (activeRef.current) {
       activeRef.current.scrollIntoView({ block: 'nearest' })
     }
-  }, [effectiveActiveItem])
+  }, [effectiveActiveItem, initialScrollTop])
 
   useEffect(() => {
     const tree = treeRef.current

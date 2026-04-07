@@ -170,10 +170,13 @@ export interface ProjectEditorDebugApi {
   isOpen: () => boolean
   getRootPath: () => string | null
   getActiveFilePath: () => string | null
+  getSidebarMode?: () => 'files' | 'search'
+  setSidebarMode?: (mode: 'files' | 'search') => void
   getEditorContent: () => string
   setEditorContent?: (content: string) => boolean
   getEditorLineCount: () => number
   openFileByPath: (filePath: string) => Promise<void>
+  openFileByPathAsUser?: (filePath: string, options?: { trackRecent?: boolean }) => Promise<void>
   triggerEditorSaveCommand: () => boolean
   triggerToolbarSave: () => Promise<boolean>
   isSqliteViewerVisible: () => boolean
@@ -183,9 +186,13 @@ export interface ProjectEditorDebugApi {
     broken: boolean
     src: string
   } | null
+  getFileBrowserScrollTop?: () => number
+  getFileBrowserScrollHeight?: () => number
+  scrollFileBrowserToFraction?: (fraction: number) => boolean
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean
+  setMarkdownPreviewOpen?: (open: boolean) => void
   setPreviewSearchOpen?: (open: boolean) => void
   isPreviewSearchOpen?: () => boolean
   isMarkdownRenderPending: () => boolean
@@ -199,8 +206,12 @@ export interface ProjectEditorDebugApi {
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
   isOutlineVisible?: () => boolean
+  setOutlineVisible?: (visible: boolean) => void
   getOutlineSymbolCount?: () => number
   getOutlineActiveItemName?: () => string | null
+  getOutlineScrollTop?: () => number
+  getOutlineScrollHeight?: () => number
+  scrollOutlineToFraction?: (fraction: number) => boolean
   getPreviewActiveSlug?: () => string | null
   scrollPreviewToFraction?: (fraction: number) => boolean
   getPreviewScrollTop?: () => number

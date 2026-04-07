@@ -8,6 +8,7 @@
  */
 import type { AutotestContext, TestResult } from './types'
 import {
+  buildLegacyFileMemoryEntry,
   buildMissingFileNotice,
   buildPendingCursor,
   clampCursorPosition,
@@ -21,9 +22,24 @@ function makeState(partial: Partial<ProjectEditorState>): ProjectEditorState {
     rootPath: partial.rootPath ?? null,
     activeFilePath: partial.activeFilePath ?? null,
     expandedDirs: partial.expandedDirs ?? [],
+    pinnedFiles: partial.pinnedFiles,
+    recentFiles: partial.recentFiles,
     editorViewState: partial.editorViewState,
     cursorLine: partial.cursorLine,
     cursorColumn: partial.cursorColumn,
+    isPreviewOpen: partial.isPreviewOpen,
+    isEditorVisible: partial.isEditorVisible,
+    isOutlineVisible: partial.isOutlineVisible,
+    outlineTarget: partial.outlineTarget,
+    fileTreeWidth: partial.fileTreeWidth,
+    previewWidth: partial.previewWidth,
+    outlineWidth: partial.outlineWidth,
+    modalWidth: partial.modalWidth,
+    modalHeight: partial.modalHeight,
+    previewScrollAnchor: partial.previewScrollAnchor,
+    fileTreeScrollTop: partial.fileTreeScrollTop,
+    outlineScrollTop: partial.outlineScrollTop,
+    fileStates: partial.fileStates,
     savedAt: partial.savedAt ?? Date.now()
   }
 }
@@ -119,6 +135,32 @@ export async function testProjectEditorRestoreUnit(ctx: AutotestContext): Promis
     'PEU-10-missing-notice-user',
     missingNoticeUser.status === 'File was deleted or does not exist' && missingNoticeUser.notice.includes('File was deleted or does not exist'),
     missingNoticeUser
+  )
+
+  const legacyCursorOnly = buildLegacyFileMemoryEntry(makeState({
+    activeFilePath: 'docs/cursor-only.md',
+    cursorLine: 18,
+    cursorColumn: 4
+  }))
+  _assert('PEU-11-legacy-cursor-only-migrated', legacyCursorOnly?.cursorLine === 18 && legacyCursorOnly?.cursorColumn === 4, {
+    legacyCursorOnly
+  })
+
+  const legacyPreviewOnly = buildLegacyFileMemoryEntry(makeState({
+    activeFilePath: 'docs/preview-only.md',
+    previewScrollAnchor: { slug: 'section-2', ratio: 0.6, headingOffsetY: 42 },
+    isPreviewOpen: false,
+    isEditorVisible: true,
+    outlineTarget: 'preview',
+    outlineScrollTop: 120
+  }))
+  _assert(
+    'PEU-12-legacy-preview-only-migrated',
+    legacyPreviewOnly?.previewScrollAnchor?.headingOffsetY === 42
+      && legacyPreviewOnly?.isPreviewOpen === false
+      && legacyPreviewOnly?.outlineTarget === 'preview'
+      && legacyPreviewOnly?.outlineScrollTop === 120,
+    { legacyPreviewOnly }
   )
 
   return results
