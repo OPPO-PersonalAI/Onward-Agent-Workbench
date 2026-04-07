@@ -114,26 +114,25 @@ export function Sidebar({
         title={t('sidebar.changeLog')}
         data-testid="sidebar-change-log-button"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-          <path d="M14 3v5h5" />
-          <path d="M9 12h6" />
-          <path d="M9 16h6" />
-          <path d="M9 8.5h1" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z" />
+          <path d="M5 3v4" />
+          <path d="M19 17v4" />
+          <path d="M3 5h4" />
+          <path d="M17 19h4" />
         </svg>
       </button>
 
       <button
-        className={`sidebar-btn sidebar-feedback-btn ${isFeedbackOpen ? 'active' : ''}`}
+        className={`sidebar-btn ${isFeedbackOpen ? 'active' : ''}`}
         onClick={onFeedbackToggle}
         title={t('sidebar.feedback')}
         data-testid="sidebar-feedback-button"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M7 5.5h10A3.5 3.5 0 0 1 20.5 9v5A3.5 3.5 0 0 1 17 17.5h-5.25L7 20.5v-3A3.5 3.5 0 0 1 3.5 14V9A3.5 3.5 0 0 1 7 5.5Z" />
-          <path d="M8.25 10h7.5" />
-          <path d="M8.25 13.5h4.75" />
-          <path d="M17.75 5.25 18.35 6.65 19.75 7.25 18.35 7.85 17.75 9.25 17.15 7.85 15.75 7.25 17.15 6.65 17.75 5.25Z" fill="currentColor" stroke="none" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+          <path d="M9 18h6" />
+          <path d="M10 22h4" />
         </svg>
       </button>
 

@@ -117,6 +117,7 @@ const MAX_MODAL_HEIGHT_PERCENT = 95
 
 const MIN_MARKDOWN_PREVIEW_RATIO = 0.2
 const MAX_MARKDOWN_PREVIEW_RATIO = 0.8
+const SCROLL_RESTORE_MAX_ATTEMPTS = 120
 
 const DEFAULT_MARKDOWN_PREVIEW_WIDTH = 480
 const MIN_MARKDOWN_PREVIEW_WIDTH = 240
@@ -174,6 +175,14 @@ function replaceQuickFilePath(paths: readonly string[], sourcePath: string, next
     return item
   })
   return normalizeQuickFilePaths(mapped, maxCount)
+}
+
+function areQuickFileListsEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false
+  }
+  return true
 }
 
 function removeQuickFilePath(paths: readonly string[], targetPath: string, maxCount: number): string[] {
@@ -552,6 +561,10 @@ export function ProjectEditor({
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const [pinnedFiles, setPinnedFiles] = useState<string[]>([])
   const [recentFiles, setRecentFiles] = useState<string[]>([])
+  const pinnedFilesRef = useRef<string[]>(pinnedFiles)
+  const recentFilesRef = useRef<string[]>(recentFiles)
+  pinnedFilesRef.current = pinnedFiles
+  recentFilesRef.current = recentFiles
   const [draggingPinnedPath, setDraggingPinnedPath] = useState<string | null>(null)
   const [draggingQuickPath, setDraggingQuickPath] = useState<string | null>(null)
   const [draggingQuickSource, setDraggingQuickSource] = useState<'pinned' | 'recent' | null>(null)
@@ -679,6 +692,7 @@ export function ProjectEditor({
   const previewRevealFrameRef = useRef<number | null>(null)
   const previewRevealSettleFrameRef = useRef<number | null>(null)
   const fileTreeRestoreFrameRef = useRef<number | null>(null)
+  const outlineRestoreFrameRef = useRef<number | null>(null)
 
   const [fileTreeWidth, setFileTreeWidth] = useState(() => {
     const prefs = getUIPreferences()
@@ -877,7 +891,7 @@ export function ProjectEditor({
         applied &&
         (!targetBeyondCurrentRange || stableFrames >= 2)
 
-      if (finished || attempts >= 24) return
+      if (finished || attempts >= SCROLL_RESTORE_MAX_ATTEMPTS) return
 
       fileTreeRestoreFrameRef.current = window.requestAnimationFrame(run)
     }
@@ -2100,6 +2114,20 @@ export function ProjectEditor({
 
     if (normalizePath(rootRef.current ?? '') !== normalizePath(root)) {
       return
+    }
+
+    // Restore-time validation runs asynchronously. If the user changed the
+    // quick-file lists while existence checks were in flight, skip this stale
+    // write-back instead of clobbering the newer recent/pinned order.
+    if (source) {
+      const currentPinned = normalizeQuickFilePaths(pinnedFilesRef.current, MAX_PINNED_FILES)
+      const currentRecent = normalizeQuickFilePaths(recentFilesRef.current, MAX_RECENT_FILES)
+      if (
+        !areQuickFileListsEqual(currentPinned, pinnedSource) ||
+        !areQuickFileListsEqual(currentRecent, recentSource)
+      ) {
+        return
+      }
     }
 
     const existingSet = new Set(existing.filter((path): path is string => Boolean(path)))

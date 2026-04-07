@@ -11,8 +11,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background-color: color-mix(in srgb, var(--bg-1) 82%, transparent);
-  backdrop-filter: blur(4px);
+  background-color: rgba(0, 0, 0, 0.6);
 }
 
 .change-log-modal {

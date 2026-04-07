@@ -321,6 +321,7 @@ const AppStateContext = createContext<AppStateContextValue | null>(null)
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(createDefaultAppState())
   const stateRef = useRef(state)
+  stateRef.current = state
   const [isLoaded, setIsLoaded] = useState(false)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -417,8 +418,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   // Flush all pending debounced saves immediately (called before app quit/update)
-  const stateRef = useRef(state)
-  stateRef.current = state
   useEffect(() => {
     window.electronAPI.appState.onFlushPendingState(() => {
       // Cancel all pending timers
