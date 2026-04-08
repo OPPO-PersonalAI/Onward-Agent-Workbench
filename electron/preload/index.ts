@@ -142,6 +142,11 @@ export interface ShellAPI {
   }>
 }
 
+export interface ClipboardAPI {
+  writeText: (text: string) => Promise<boolean>
+  readText: () => Promise<string>
+}
+
 export interface CommandPreset {
   id: string
   command: string
@@ -975,6 +980,15 @@ const shellAPI: ShellAPI = {
   }
 }
 
+const clipboardAPI: ClipboardAPI = {
+  writeText: (text: string) => {
+    return ipcRenderer.invoke('clipboard:write-text', text)
+  },
+  readText: () => {
+    return ipcRenderer.invoke('clipboard:read-text')
+  }
+}
+
 const commandPresetAPI: CommandPresetAPI = {
   load: () => {
     return ipcRenderer.invoke('command-preset:load')
@@ -1439,6 +1453,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalConfig: terminalConfigAPI,
   dialog: dialogAPI,
   shell: shellAPI,
+  clipboard: clipboardAPI,
   commandPreset: commandPresetAPI,
   appState: appStateAPI,
   git: gitAPI,

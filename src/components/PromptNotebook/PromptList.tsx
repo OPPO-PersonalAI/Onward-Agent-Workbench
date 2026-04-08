@@ -9,16 +9,40 @@ import type { PromptSchedule } from '../../types/tab.d.ts'
 import { formatShortTime } from '../../utils/schedule'
 import { useI18n } from '../../i18n/useI18n'
 
+type PromptColorFilter = 'red' | 'yellow' | 'green' | null
+
+interface PromptColorFilterStats {
+  red: number
+  yellow: number
+  green: number
+}
+
+interface PromptTaskFilterOption {
+  taskNumber: number
+  count: number
+}
+
 interface PromptListProps {
   prompts: Prompt[]
   selectedId: string | null
   searchKeyword: string
+  filterEnabled: boolean
+  targetsEnabled: boolean
+  activeColorFilter: PromptColorFilter
+  colorFilterStats: PromptColorFilterStats
+  activeTaskFilter: number | null
+  taskFilterOptions: PromptTaskFilterOption[]
+  promptTaskNumbers: Map<string, number[]>
   onSelect: (id: string) => void
   onDoubleClick: (prompt: Prompt) => void
   onDelete: (id: string) => void
   onTogglePin: (id: string) => void
   onAppend: (prompt: Prompt) => void
   onColorChange: (id: string, color: 'red' | 'yellow' | 'green' | null) => void
+  onToggleFilterEnabled: (nextEnabled: boolean) => void
+  onToggleTargetsEnabled: (nextEnabled: boolean) => void
+  onToggleColorFilter: (color: Exclude<PromptColorFilter, null>) => void
+  onToggleTaskFilter: (taskNumber: number) => void
   onReorderPinned?: (dragId: string, targetId: string, position: 'before' | 'after') => void
   globalPromptIds?: string[]
   autoCleanupEnabled: boolean
@@ -35,6 +59,7 @@ interface PromptListProps {
   onPauseSchedule?: (promptId: string) => void
   onResumeSchedule?: (promptId: string) => void
   onViewSendHistory?: (prompt: Prompt) => void
+  onCopyPrompt?: (prompt: Prompt) => void | Promise<void>
 }
 
 // Color configuration
@@ -213,16 +238,32 @@ function getDisplayText(prompt: Prompt): string {
   return lines.join('\n')
 }
 
+function getTaskAccentColor(taskNumber: number): string {
+  const paletteIndex = ((taskNumber - 1) % 6) + 1
+  return `var(--rainbow-${paletteIndex})`
+}
+
 export const PromptList = memo(function PromptList({
   prompts,
   selectedId,
   searchKeyword,
+  filterEnabled,
+  targetsEnabled,
+  activeColorFilter,
+  colorFilterStats,
+  activeTaskFilter,
+  taskFilterOptions,
+  promptTaskNumbers,
   onSelect,
   onDoubleClick,
   onDelete,
   onTogglePin,
   onAppend,
   onColorChange,
+  onToggleFilterEnabled,
+  onToggleTargetsEnabled,
+  onToggleColorFilter,
+  onToggleTaskFilter,
   onReorderPinned,
   globalPromptIds = [],
   autoCleanupEnabled,
@@ -237,7 +278,8 @@ export const PromptList = memo(function PromptList({
   onCancelSchedule,
   onPauseSchedule,
   onResumeSchedule,
-  onViewSendHistory
+  onViewSendHistory,
+  onCopyPrompt
 }: PromptListProps) {
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -543,18 +585,81 @@ export const PromptList = memo(function PromptList({
   return (
     <div className="prompt-list">
       <div className="prompt-list-header">
-        <div className="prompt-list-header-left">
-        <PromptRetentionDropdown
-          autoCleanupEnabled={autoCleanupEnabled}
-          onExportAllPrompts={onExportAllPrompts}
-          onImportPrompts={onImportPrompts}
-          onRetentionKeepDays={onRetentionKeepDays}
-            onRetentionKeepCustom={onRetentionKeepCustom}
-            onToggleAutoCleanup={onToggleAutoCleanup}
-          />
-          <span className="prompt-list-title">{t('promptList.title')}</span>
+        <div className="prompt-list-header-main">
+          <div className="prompt-list-header-left">
+            <PromptRetentionDropdown
+              autoCleanupEnabled={autoCleanupEnabled}
+              onExportAllPrompts={onExportAllPrompts}
+              onImportPrompts={onImportPrompts}
+              onRetentionKeepDays={onRetentionKeepDays}
+              onRetentionKeepCustom={onRetentionKeepCustom}
+              onToggleAutoCleanup={onToggleAutoCleanup}
+            />
+            <span className="prompt-list-title">{t('promptList.title')}</span>
+            <label className="prompt-list-filter-toggle">
+              <input
+                type="checkbox"
+                checked={filterEnabled}
+                onChange={(event) => onToggleFilterEnabled(event.target.checked)}
+              />
+              <span className="prompt-list-filter-toggle-box" aria-hidden="true" />
+              <span className="prompt-list-filter-toggle-label">{t('promptList.filter.toggle')}</span>
+            </label>
+            <label className="prompt-list-filter-toggle">
+              <input
+                type="checkbox"
+                checked={targetsEnabled}
+                onChange={(event) => onToggleTargetsEnabled(event.target.checked)}
+              />
+              <span className="prompt-list-filter-toggle-box" aria-hidden="true" />
+              <span className="prompt-list-filter-toggle-label">{t('promptList.targets.toggle')}</span>
+            </label>
+          </div>
+          <span className="prompt-list-count">{t('promptList.count', { count: prompts.length })}</span>
         </div>
-        <span className="prompt-list-count">{t('promptList.count', { count: prompts.length })}</span>
+        {filterEnabled && (
+          <div className="prompt-list-filters">
+          <div className="prompt-list-filter-group">
+            {COLORS.map(({ key, hex }) => {
+              const count = colorFilterStats[key]
+              const isActive = activeColorFilter === key
+              return (
+                <button
+                  key={key}
+                  className={`prompt-list-filter-btn color ${isActive ? 'active' : ''}`}
+                  style={{ '--filter-color': hex } as React.CSSProperties}
+                  onClick={() => onToggleColorFilter(key)}
+                  data-filter-color={key}
+                  title={t(`promptList.filter.color.${key}`)}
+                >
+                  <span className="prompt-list-filter-dot" />
+                  <span className="prompt-list-filter-label">{count}</span>
+                </button>
+              )
+            })}
+          </div>
+          {taskFilterOptions.length > 0 && (
+            <div className="prompt-list-filter-group task">
+              {taskFilterOptions.map(({ taskNumber, count }) => {
+                const isActive = activeTaskFilter === taskNumber
+                return (
+                  <button
+                    key={taskNumber}
+                    className={`prompt-list-filter-btn task ${isActive ? 'active' : ''} ${count === 0 ? 'is-empty' : ''}`}
+                    style={{ '--task-filter-color': getTaskAccentColor(taskNumber) } as React.CSSProperties}
+                    onClick={() => onToggleTaskFilter(taskNumber)}
+                    data-filter-task={taskNumber}
+                    title={t('promptList.filter.task', { taskNumber, count })}
+                  >
+                    <span className="prompt-list-filter-task-number">{taskNumber}</span>
+                    <span className="prompt-list-filter-label">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          </div>
+        )}
       </div>
       <div className="prompt-list-items">
         {sortedPrompts.length === 0 ? (
@@ -562,6 +667,7 @@ export const PromptList = memo(function PromptList({
         ) : (
           sortedPrompts.map((prompt) => {
             const displayText = getDisplayText(prompt)
+            const taskNumbers = promptTaskNumbers.get(prompt.id) ?? []
             const isGlobal = globalPromptIds.includes(prompt.id)
             const isPinned = isGlobal || prompt.pinned
             const isDragging = draggingId === prompt.id
@@ -580,38 +686,56 @@ export const PromptList = memo(function PromptList({
                 onContextMenu={(event) => handleContextMenu(event, prompt)}
                 onPointerDown={(event) => handlePointerDown(event, prompt, isPinned)}
               >
-                <div className="prompt-item-content">
-                  {/* color dots */}
-                  {prompt.color && (
-                    <span
-                      className={`prompt-item-color-dot prompt-item-color-${prompt.color}`}
-                    />
-                  )}
-                  {(isGlobal || prompt.pinned) && (
-                    <span className="prompt-item-pin-icon" title={isGlobal ? t('promptList.globalPrompt') : t('promptList.pinned')}>📌</span>
-                  )}
-                  {hasActiveSchedule && activeSchedule && (
-                    <span className="prompt-item-schedule-badge" title={t('promptList.nextExecution', { time: formatShortTime(activeSchedule.nextExecutionAt) })}>
-                      <svg className="prompt-item-schedule-icon" width="12" height="12" viewBox="0 0 16 16" fill="none">
-                        <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
-                        <path d="M8 4.5V8L10.5 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                      </svg>
-                      <span className="prompt-item-schedule-time">{formatShortTime(activeSchedule.nextExecutionAt)}</span>
+                <div className="prompt-item-body">
+                  <div className="prompt-item-content">
+                    {prompt.color && (
+                      <span
+                        className={`prompt-item-color-dot prompt-item-color-${prompt.color}`}
+                      />
+                    )}
+                    {(isGlobal || prompt.pinned) && (
+                      <span className="prompt-item-pin-icon" title={isGlobal ? t('promptList.globalPrompt') : t('promptList.pinned')}>📌</span>
+                    )}
+                    {hasActiveSchedule && activeSchedule && (
+                      <span className="prompt-item-schedule-badge" title={t('promptList.nextExecution', { time: formatShortTime(activeSchedule.nextExecutionAt) })}>
+                        <svg className="prompt-item-schedule-icon" width="12" height="12" viewBox="0 0 16 16" fill="none">
+                          <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
+                          <path d="M8 4.5V8L10.5 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        </svg>
+                        <span className="prompt-item-schedule-time">{formatShortTime(activeSchedule.nextExecutionAt)}</span>
+                      </span>
+                    )}
+                    {isPausedSchedule && activeSchedule && (
+                      <span className="prompt-item-schedule-badge paused" title={t('promptList.schedulePaused')}>
+                        <svg className="prompt-item-schedule-icon" width="12" height="12" viewBox="0 0 16 16" fill="none">
+                          <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
+                          <rect x="5.5" y="5" width="2" height="6" rx="0.5" fill="currentColor" />
+                          <rect x="8.5" y="5" width="2" height="6" rx="0.5" fill="currentColor" />
+                        </svg>
+                        <span className="prompt-item-schedule-time">{t('promptList.paused')}</span>
+                      </span>
+                    )}
+                    <span className="prompt-item-text">
+                      {highlightText(displayText, searchKeyword)}
                     </span>
+                  </div>
+                  {targetsEnabled && taskNumbers.length > 0 && (
+                    <div
+                      className="prompt-item-task-history"
+                      data-task-history={taskNumbers.join(',')}
+                      title={t('promptList.sentToTasks', { tasks: taskNumbers.join(', ') })}
+                    >
+                      {taskNumbers.map((taskNumber) => (
+                        <span
+                          key={`${prompt.id}-${taskNumber}`}
+                          className="prompt-item-task-pill"
+                          style={{ '--task-pill-color': getTaskAccentColor(taskNumber) } as React.CSSProperties}
+                        >
+                          {taskNumber}
+                        </span>
+                      ))}
+                    </div>
                   )}
-                  {isPausedSchedule && activeSchedule && (
-                    <span className="prompt-item-schedule-badge paused" title={t('promptList.schedulePaused')}>
-                      <svg className="prompt-item-schedule-icon" width="12" height="12" viewBox="0 0 16 16" fill="none">
-                        <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
-                        <rect x="5.5" y="5" width="2" height="6" rx="0.5" fill="currentColor" />
-                        <rect x="8.5" y="5" width="2" height="6" rx="0.5" fill="currentColor" />
-                      </svg>
-                      <span className="prompt-item-schedule-time">{t('promptList.paused')}</span>
-                    </span>
-                  )}
-                  <span className="prompt-item-text">
-                    {highlightText(displayText, searchKeyword)}
-                  </span>
                 </div>
               </div>
             )
@@ -680,6 +804,19 @@ export const PromptList = memo(function PromptList({
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h5.5a.5.5 0 0 0 0-1H2V2h12v5.5a.5.5 0 0 0 1 0V2a1 1 0 0 0-1-1H2zm10.854 7.146a.5.5 0 0 0-.708.708L14.293 11H9.5a.5.5 0 0 0 0 1h4.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3z" /></svg>
               <span className="prompt-context-label">{t('promptList.appendToEditor')}</span>
+            </button>
+          )}
+          {onCopyPrompt && (
+            <button
+              className="prompt-context-item"
+              onClick={() => {
+                void onCopyPrompt(contextPrompt)
+                closeContextMenu()
+              }}
+              role="menuitem"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6z" /><path d="M2 6a2 2 0 0 1 2-2v1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1h1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z" /></svg>
+              <span className="prompt-context-label">{t('promptList.copyPrompt')}</span>
             </button>
           )}
           {/* View sending records */}

@@ -8,6 +8,7 @@ This directory contains reusable automation notes and validation procedures for 
 ## Coverage Areas
 
 - PromptSender UI behavior
+- Prompt List filtering, Task badges, and copy behavior
 - Prompt send / execute flow and failure handling
 - Auto-update behavior, including "download only until explicit restart" and GitHub release publishing
 - Settings update controls, including manual check and restart-to-update actions
@@ -55,6 +56,7 @@ src/autotest/
 ├── autotest-runner.ts
 ├── types.ts
 ├── test-prompt-integrity.ts
+├── test-prompt-list.ts
 ├── test-project-editor-restore-unit.ts
 ├── test-project-editor-restore.ts
 ├── test-project-editor-open-position.ts
@@ -207,6 +209,23 @@ bash test/run-settings-update-autotest.sh
 
 ```powershell
 pwsh test/run-settings-update-autotest.ps1
+```
+
+### Prompt List Suite
+
+- `src/autotest/test-prompt-list.ts`
+  - Verifies Prompt history Task badges appear after sending
+  - Verifies color and Task filters can be toggled through the Prompt Notebook debug API
+  - Verifies copying a Prompt writes the Prompt content to the clipboard
+
+Run the Prompt List suite:
+
+```bash
+bash test/run-prompt-list-autotest.sh
+```
+
+```powershell
+pwsh test/run-prompt-list-autotest.ps1
 ```
 
 ### Phase 1: PromptSender UI

@@ -155,6 +155,11 @@ export interface ShellAPI {
   }>
 }
 
+export interface ClipboardAPI {
+  writeText: (text: string) => Promise<boolean>
+  readText: () => Promise<string>
+}
+
 export interface CommandPreset {
   id: string
   command: string
@@ -726,6 +731,7 @@ export interface ElectronAPI {
   terminalConfig: TerminalConfigAPI
   dialog: DialogAPI
   shell: ShellAPI
+  clipboard: ClipboardAPI
   commandPreset: CommandPresetAPI
   appState: AppStateAPI
   git: GitAPI
