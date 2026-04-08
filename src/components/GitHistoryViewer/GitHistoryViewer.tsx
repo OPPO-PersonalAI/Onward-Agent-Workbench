@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { DiffEditor } from '@monaco-editor/react'
 import { PatchDiff } from '@pierre/diffs/react'
 import { parsePatchFiles } from '@pierre/diffs'
@@ -17,10 +17,11 @@ import type {
 } from '../../types/electron'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
-import type { TerminalGitStatus } from '../../types/electron'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { useI18n } from '../../i18n/useI18n'
 import { useAppState } from '../../hooks/useAppState'
+import type { ProjectEditorOpenEventDetail, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
+import { SubpagePanelButton, SubpagePanelShell, SubpageSwitcher, type SubpagePanelShellState } from '../SubpageSwitcher'
 import {
   GitImagePreview,
   IMAGE_COMPARE_MODE_STORAGE_KEY,
@@ -55,6 +56,8 @@ interface GitHistoryViewerProps {
   terminalId: string
   cwd: string | null
   displayMode?: 'modal' | 'panel'
+  panelShellMode?: 'internal' | 'external'
+  onPanelShellStateChange?: (state: SubpagePanelShellState | null) => void
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -153,7 +156,9 @@ export function GitHistoryViewer({
   onClose,
   terminalId: _terminalId,
   cwd,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  panelShellMode = 'internal',
+  onPanelShellStateChange
 }: GitHistoryViewerProps) {
   const isPanel = displayMode === 'panel'
   const { settings } = useSettings()
@@ -173,7 +178,6 @@ export function GitHistoryViewer({
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState<string | null>(null)
   const [filesLoading, setFilesLoading] = useState(false)
-  const [worktreeStatus, setWorktreeStatus] = useState<TerminalGitStatus | null>(null)
 
   const [hideWhitespace, setHideWhitespace] = useState(() => {
     const prefs = getUIPreferences()
@@ -655,27 +659,6 @@ export function GitHistoryViewer({
   }, [isOpen, selectedShas, selectionAnchor, selectedFile, schedulePersist])
 
   useEffect(() => {
-    if (!isOpen || !terminalId) return
-    let cancelled = false
-    const loadStatus = async () => {
-      try {
-        const info = await window.electronAPI.git.getTerminalInfo(terminalId)
-        if (cancelled) return
-        setWorktreeStatus(info.status)
-      } catch {
-        if (cancelled) return
-        setWorktreeStatus(null)
-      }
-    }
-    void loadStatus()
-    const timer = window.setInterval(loadStatus, 5000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [isOpen, terminalId])
-
-  useEffect(() => {
     if (!isOpen) return
     if (commits.length > 0 && selectedShas.length === 0) {
       setSelectedShas([commits[0].sha])
@@ -1062,27 +1045,36 @@ export function GitHistoryViewer({
 
   const handleJumpToDiff = useCallback(() => {
     if (!terminalId) return
-    window.dispatchEvent(new CustomEvent('git-diff:open', { detail: { terminalId } }))
-    onClose()
-  }, [terminalId, onClose])
+    const detail: SubpageNavigateEventDetail = { terminalId, target: 'diff' }
+    window.dispatchEvent(new CustomEvent('subpage:navigate', { detail }))
+  }, [terminalId])
 
-  const renderWorktreeStatus = () => {
-    if (!worktreeStatus) {
-      return null
+  const handleOpenEditor = useCallback(() => {
+    if (!terminalId) return
+    const detail: ProjectEditorOpenEventDetail = {
+      terminalId,
+      filePath: selectedFile?.filename ?? null,
+      repoRoot: activeCwd || null
     }
-    const isDirty = worktreeStatus === 'modified' || worktreeStatus === 'added'
-    const label = isDirty ? t('gitHistory.worktree.dirty') : t('gitHistory.worktree.clean')
-    return (
-      <div className={`git-history-worktree ${isDirty ? 'dirty' : 'clean'}`}>
-        <span className="git-history-worktree-label">{label}</span>
-        {isDirty && (
-          <button className="git-history-worktree-btn" onClick={handleJumpToDiff}>
-            {t('gitHistory.worktree.viewDiff')}
-          </button>
-        )}
-      </div>
-    )
-  }
+    window.dispatchEvent(new CustomEvent<SubpageNavigateEventDetail>('subpage:navigate', {
+      detail: {
+        terminalId: detail.terminalId,
+        target: 'editor',
+        filePath: detail.filePath,
+        repoRoot: detail.repoRoot
+      }
+    }))
+  }, [activeCwd, selectedFile, terminalId])
+
+  const handleSelectSubpage = useCallback((target: SubpageId) => {
+    if (target === 'diff') {
+      handleJumpToDiff()
+      return
+    }
+    if (target === 'editor') {
+      handleOpenEditor()
+    }
+  }, [handleJumpToDiff, handleOpenEditor])
 
   const renderCommitSummary = () => {
     if (selectionInfo.selectedCommits.length === 0) {
@@ -1485,151 +1477,216 @@ export function GitHistoryViewer({
     )
   }
 
-  if (!isOpen) return null
-
   const overlayClassName = `git-history-overlay ${isPanel ? 'panel' : ''}`
   const modalClassName = `git-history-modal ${isPanel ? 'panel' : ''}`
-
-  return (
-    <div className={overlayClassName}>
-      <div className={modalClassName}>
-        <div className="git-history-header">
-          <h2 className="git-history-title">Git History</h2>
-          <div className="git-history-header-actions">
-            {renderWorktreeStatus()}
-            <button className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>
-              {t('gitHistory.returnToTerminal')}
-            </button>
-          </div>
+  const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
+  const keepMountedInPanel = isPanel
+  const historyWorkingDirectory = historyResult?.cwd && historyResult.isGitRepo
+    ? (cachedParentCwd || historyResult.cwd)
+    : null
+  const externalPanelActions = useMemo(() => (
+    <SubpagePanelButton className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>
+      {t('gitHistory.returnToTerminal')}
+    </SubpagePanelButton>
+  ), [onClose, t])
+  const externalPanelShellState = useMemo<SubpagePanelShellState>(() => ({
+    current: 'history',
+    onSelect: handleSelectSubpage,
+    workingDirectoryLabel: t('gitHistory.cwd'),
+    workingDirectoryPath: historyWorkingDirectory,
+    actions: externalPanelActions
+  }), [externalPanelActions, handleSelectSubpage, historyWorkingDirectory, t])
+  const historyBody = (
+    <>
+      {historyResult?.superprojectRoot && !selectedRepoRoot && (
+        <div
+          className="git-history-superproject-hint"
+          onClick={() => switchRepo(historyResult.superprojectRoot!)}
+        >
+          <span>{t('gitHistory.repo.inSubmodule')}</span>
+          <span style={{ color: 'var(--accent)', cursor: 'pointer' }}>{t('gitHistory.repo.viewParent')}</span>
         </div>
-        {historyResult?.cwd && historyResult.isGitRepo && (
-          <div className="git-history-cwd-bar">
-            <span className="git-history-cwd-label">{t('gitHistory.cwd')}</span>
-            <span className="git-history-cwd-path">{cachedParentCwd || historyResult.cwd}</span>
-          </div>
-        )}
-        {historyResult?.superprojectRoot && !selectedRepoRoot && (
-          <div
-            className="git-history-superproject-hint"
-            onClick={() => switchRepo(historyResult.superprojectRoot!)}
-          >
-            <span>{t('gitHistory.repo.inSubmodule')}</span>
-            <span style={{ color: 'var(--accent)', cursor: 'pointer' }}>{t('gitHistory.repo.viewParent')}</span>
-          </div>
-        )}
-        <div className="git-history-body">
-          {cachedRepos && cachedRepos.length > 1 && (() => {
-            const parentCwd = cachedParentCwd || historyResult?.cwd || ''
-            const sorted = [...cachedRepos].sort((a, b) => a.label.localeCompare(b.label))
-            const query = repoSearch.toLowerCase()
-            const filtered = query
-              ? sorted.filter((repo) => repo.label.toLowerCase().includes(query))
-              : sorted
-            return (
-              <div className="git-history-repo-sidebar">
-                <div className="git-history-repo-sidebar-header">{t('gitHistory.repo.title')}</div>
-                {sorted.length > 6 && (
-                  <div className="git-history-repo-search-wrap">
-                    <input
-                      className="git-history-repo-search"
-                      type="text"
-                      placeholder={t('gitHistory.repo.search')}
-                      value={repoSearch}
-                      onChange={(event) => setRepoSearch(event.target.value)}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    />
-                    {repoSearch && (
-                      <span
-                        className="git-history-repo-search-clear"
-                        onClick={() => setRepoSearch('')}
-                      >×</span>
-                    )}
-                  </div>
-                )}
-                <div className="git-history-repo-list">
-                  <div
-                    className={`git-history-repo-item${!selectedRepoRoot ? ' active' : ''}`}
-                    onClick={() => switchRepo(null)}
-                    title={parentCwd}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
-                      <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H7.71L6.85 2.57A1.5 1.5 0 0 0 5.57 2H1.5z" />
-                    </svg>
-                    <span className="git-history-repo-item-label">{t('gitHistory.repo.all')}</span>
-                  </div>
-                  <div className="git-history-repo-divider" />
-                  {filtered.map((repo) => {
-                    if (repo.root === parentCwd) return null
-                    return (
-                      <div
-                        key={repo.root}
-                        className={`git-history-repo-item${selectedRepoRoot === repo.root ? ' active' : ''}`}
-                        onClick={() => switchRepo(repo.root)}
-                        title={repo.root}
-                      >
-                        <span className="git-history-repo-item-label">{repo.label}</span>
-                      </div>
-                    )
-                  })}
-                  {filtered.length === 0 && (
-                    <div className="git-history-repo-empty">{t('gitHistory.repo.noMatch')}</div>
+      )}
+      <div className="git-history-body">
+        {cachedRepos && cachedRepos.length > 1 && (() => {
+          const parentCwd = cachedParentCwd || historyResult?.cwd || ''
+          const sorted = [...cachedRepos].sort((a, b) => a.label.localeCompare(b.label))
+          const query = repoSearch.toLowerCase()
+          const filtered = query
+            ? sorted.filter((repo) => repo.label.toLowerCase().includes(query))
+            : sorted
+          return (
+            <div className="git-history-repo-sidebar">
+              <div className="git-history-repo-sidebar-header">{t('gitHistory.repo.title')}</div>
+              {sorted.length > 6 && (
+                <div className="git-history-repo-search-wrap">
+                  <input
+                    className="git-history-repo-search"
+                    type="text"
+                    placeholder={t('gitHistory.repo.search')}
+                    value={repoSearch}
+                    onChange={(event) => setRepoSearch(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                  {repoSearch && (
+                    <span
+                      className="git-history-repo-search-clear"
+                      onClick={() => setRepoSearch('')}
+                    >×</span>
                   )}
                 </div>
+              )}
+              <div className="git-history-repo-list">
+                <div
+                  className={`git-history-repo-item${!selectedRepoRoot ? ' active' : ''}`}
+                  onClick={() => switchRepo(null)}
+                  title={parentCwd}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
+                    <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H7.71L6.85 2.57A1.5 1.5 0 0 0 5.57 2H1.5z" />
+                  </svg>
+                  <span className="git-history-repo-item-label">{t('gitHistory.repo.all')}</span>
+                </div>
+                <div className="git-history-repo-divider" />
+                {filtered.map((repo) => {
+                  if (repo.root === parentCwd) return null
+                  return (
+                    <div
+                      key={repo.root}
+                      className={`git-history-repo-item${selectedRepoRoot === repo.root ? ' active' : ''}`}
+                      onClick={() => switchRepo(repo.root)}
+                      title={repo.root}
+                    >
+                      <span className="git-history-repo-item-label">{repo.label}</span>
+                    </div>
+                  )
+                })}
+                {filtered.length === 0 && (
+                  <div className="git-history-repo-empty">{t('gitHistory.repo.noMatch')}</div>
+                )}
               </div>
-            )
-          })()}
-          <div className="git-history-main">
-            <div className="git-history-commit-list">
-              <div className="git-history-commit-list-header">
-                {t('gitHistory.commitList.title')} {historyResult?.totalCount ? `(${historyResult.totalCount})` : ''}
-              </div>
-              {renderCommitList()}
             </div>
-            <div className="git-history-detail" ref={detailContainerRef}>
-              <div className="git-history-summary-wrapper" style={{ height: summaryHeight }}>
-                {renderCommitSummary()}
+          )
+        })()}
+        <div className="git-history-main">
+          <div className="git-history-commit-list">
+            <div className="git-history-commit-list-header">
+              {t('gitHistory.commitList.title')} {historyResult?.totalCount ? `(${historyResult.totalCount})` : ''}
+            </div>
+            {renderCommitList()}
+          </div>
+          <div className="git-history-detail" ref={detailContainerRef}>
+            <div className="git-history-summary-wrapper" style={{ height: summaryHeight }}>
+              {renderCommitSummary()}
+            </div>
+            <div
+              className="git-history-summary-resizer"
+              onMouseDown={handleSummaryResizerMouseDown}
+            />
+            <div className="git-history-detail-body">
+              <div className="git-history-file-list" style={{ width: fileListWidth }}>
+                <div className="git-history-file-list-header">
+                  {t('gitHistory.fileList.title')} {files.length ? `(${files.length})` : ''}
+                </div>
+                {renderFileList()}
               </div>
               <div
-                className="git-history-summary-resizer"
-                onMouseDown={handleSummaryResizerMouseDown}
+                className="git-history-file-resizer"
+                onMouseDown={handleFileResizerMouseDown}
               />
-              <div className="git-history-detail-body">
-                <div className="git-history-file-list" style={{ width: fileListWidth }}>
-                  <div className="git-history-file-list-header">
-                    {t('gitHistory.fileList.title')} {files.length ? `(${files.length})` : ''}
+              <div className="git-history-diff">
+                <div className="git-history-diff-header">
+                  <div className="git-history-diff-file">
+                    {selectedFile && (
+                      <>
+                        <span className={`git-history-file-status status-${selectedFile.status}`}>
+                          {selectedFile.status}
+                        </span>
+                        <span className="git-history-diff-file-name">
+                          {selectedFile.originalFilename
+                            ? `${selectedFile.originalFilename} → ${selectedFile.filename}`
+                            : selectedFile.filename}
+                        </span>
+                      </>
+                    )}
                   </div>
-                  {renderFileList()}
+                  {!selectedFile?.isImage && renderDiffOptions()}
                 </div>
-                <div
-                  className="git-history-file-resizer"
-                  onMouseDown={handleFileResizerMouseDown}
-                />
-                <div className="git-history-diff">
-                  <div className="git-history-diff-header">
-                    <div className="git-history-diff-file">
-                      {selectedFile && (
-                        <>
-                          <span className={`git-history-file-status status-${selectedFile.status}`}>
-                            {selectedFile.status}
-                          </span>
-                          <span className="git-history-diff-file-name">
-                            {selectedFile.originalFilename
-                              ? `${selectedFile.originalFilename} → ${selectedFile.filename}`
-                              : selectedFile.filename}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {!selectedFile?.isImage && renderDiffOptions()}
-                  </div>
-                  <div className="git-history-diff-content">
-                    {renderDiff()}
-                  </div>
+                <div className="git-history-diff-content">
+                  {renderDiff()}
                 </div>
               </div>
             </div>
           </div>
         </div>
+      </div>
+    </>
+  )
+
+  useLayoutEffect(() => {
+    if (!isPanel || panelShellMode !== 'external' || !onPanelShellStateChange) return
+    if (!isOpen) {
+      onPanelShellStateChange(null)
+      return
+    }
+    onPanelShellStateChange(externalPanelShellState)
+    return () => {
+      onPanelShellStateChange(null)
+    }
+  }, [
+    externalPanelActions,
+    externalPanelShellState,
+    isOpen,
+    isPanel,
+    onPanelShellStateChange,
+    panelShellMode
+  ])
+
+  if (!isOpen && !keepMountedInPanel) return null
+
+  return (
+    <div className={`${overlayClassName} ${isOpen ? 'is-open' : 'is-hidden'}`} aria-hidden={!isOpen}>
+      <div className={modalClassName}>
+        {useSharedPanelHeader ? (
+          <SubpagePanelShell
+            current="history"
+            onSelect={handleSelectSubpage}
+            workingDirectoryLabel={t('gitHistory.cwd')}
+            workingDirectoryPath={historyWorkingDirectory}
+            actions={(
+              <>
+                <SubpagePanelButton className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>
+                  {t('gitHistory.returnToTerminal')}
+                </SubpagePanelButton>
+              </>
+            )}
+          >
+            {historyBody}
+          </SubpagePanelShell>
+        ) : panelShellMode === 'external' && isPanel ? (
+          historyBody
+        ) : (
+          <>
+            <div className="git-history-header">
+              <div className="git-history-header-main">
+                <h2 className="git-history-title">{t('gitHistory.title')}</h2>
+                <SubpageSwitcher current="history" onSelect={handleSelectSubpage} />
+              </div>
+              <div className="git-history-header-actions">
+                <SubpagePanelButton className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>
+                  {t('gitHistory.returnToTerminal')}
+                </SubpagePanelButton>
+              </div>
+            </div>
+            {historyWorkingDirectory && (
+              <div className="git-history-cwd-bar">
+                <span className="git-history-cwd-label">{t('gitHistory.cwd')}</span>
+                <span className="git-history-cwd-path">{historyWorkingDirectory}</span>
+              </div>
+            )}
+            {historyBody}
+          </>
+        )}
       </div>
     </div>
   )

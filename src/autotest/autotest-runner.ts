@@ -22,6 +22,7 @@ import { testStress } from './test-stress'
 import { testProjectEditorRestore } from './test-project-editor-restore'
 import { testProjectEditorRestoreUnit } from './test-project-editor-restore-unit'
 import { testProjectEditorOpenPosition } from './test-project-editor-open-position'
+import { testSubpageNavigation } from './test-subpage-navigation'
 import { testGitDiffSubdir } from './test-git-diff-subdir'
 import { testGitDiffSubmodules } from './test-git-diff-submodules'
 import { testGitDiffRecursiveSubmodules } from './test-git-diff-recursive-submodules'
@@ -195,6 +196,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.6:begin')
       const results = await testProjectEditorOpenPosition(ctx)
       collectSuiteResults('ProjectEditorOpenPosition', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('subpage-navigation')) {
+      log('phase0.58:begin')
+      const results = await testSubpageNavigation(ctx)
+      collectSuiteResults('SubpageNavigation', results)
       await sleep(500)
     }
 

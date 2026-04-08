@@ -14,6 +14,8 @@ import { DEFAULT_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { useI18n } from '../../i18n/useI18n'
 import { useAppState } from '../../hooks/useAppState'
+import type { ProjectEditorOpenEventDetail, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
+import { SubpagePanelButton, SubpagePanelShell, SubpageSwitcher, type SubpagePanelShellState } from '../SubpageSwitcher'
 import {
   GitImagePreview,
   IMAGE_COMPARE_MODE_STORAGE_KEY,
@@ -70,6 +72,8 @@ interface GitDiffViewerProps {
   openRequestedAt?: number | null
   cwdReadyAt?: number | null
   displayMode?: 'modal' | 'panel'
+  panelShellMode?: 'internal' | 'external'
+  onPanelShellStateChange?: (state: SubpagePanelShellState | null) => void
 }
 
 type GitDiffTimingSnapshot = {
@@ -368,7 +372,9 @@ export function GitDiffViewer({
   cwdPending = false,
   openRequestedAt = null,
   cwdReadyAt = null,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  panelShellMode = 'internal',
+  onPanelShellStateChange
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
   const { getTerminalStyle } = useSettings()
@@ -2183,9 +2189,51 @@ export function GitDiffViewer({
     captureDiffView()
     detachDiffEditor()
     setDiffRestoreNotice(null)
-    onClose()
-    window.dispatchEvent(new CustomEvent('git-history:open', { detail: { terminalId } }))
-  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, onClose, persistCurrentDiffSplitRatio, terminalId])
+    const detail: SubpageNavigateEventDetail = { terminalId, target: 'history' }
+    window.dispatchEvent(new CustomEvent('subpage:navigate', { detail }))
+  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, persistCurrentDiffSplitRatio, terminalId])
+
+  const handleOpenEditor = useCallback(() => {
+    if (!terminalId) return
+    if (!confirmCloseWithDraft()) return
+    const activeFile = selectedFileRef.current ?? selectedFile
+    const detail: ProjectEditorOpenEventDetail = {
+      terminalId,
+      filePath: activeFile?.filename ?? null,
+      repoRoot: activeFile?.repoRoot || diffResult?.cwd || activeCwd || null
+    }
+    persistCurrentDiffSplitRatio()
+    captureDiffView()
+    detachDiffEditor()
+    setDiffRestoreNotice(null)
+    window.dispatchEvent(new CustomEvent<SubpageNavigateEventDetail>('subpage:navigate', {
+      detail: {
+        terminalId: detail.terminalId,
+        target: 'editor',
+        filePath: detail.filePath,
+        repoRoot: detail.repoRoot
+      }
+    }))
+  }, [
+    activeCwd,
+    captureDiffView,
+    confirmCloseWithDraft,
+    detachDiffEditor,
+    diffResult?.cwd,
+    persistCurrentDiffSplitRatio,
+    selectedFile,
+    terminalId
+  ])
+
+  const handleSelectSubpage = useCallback((target: SubpageId) => {
+    if (target === 'editor') {
+      handleOpenEditor()
+      return
+    }
+    if (target === 'history') {
+      handleOpenHistory()
+    }
+  }, [handleOpenEditor, handleOpenHistory])
 
   useSubpageEscape({ isOpen, onEscape: requestClose })
   const lineSelectionInfo = useMemo<LineSelectionInfo | null>(() => {
@@ -3278,11 +3326,47 @@ export function GitDiffViewer({
   const modalClassName = `git-diff-modal ${isPanel ? 'panel' : ''}`
   const modalStyle = isPanel ? { width: '100%', height: '100%' } : { width: modalSize.width, height: modalSize.height }
   const displayedCwd = diffResult?.cwd || (!cwdPending ? cwd : null)
+  const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
+  const keepMountedInPanel = isPanel
+  const externalPanelActions = useMemo(() => (
+        <SubpagePanelButton className="git-diff-close" onClick={requestClose} title={t('gitDiff.returnToTerminal')}>
+          {t('gitDiff.returnToTerminal')}
+        </SubpagePanelButton>
+  ), [requestClose, t])
+  const externalPanelShellState = useMemo<SubpagePanelShellState>(() => ({
+    current: 'diff',
+    onSelect: handleSelectSubpage,
+    workingDirectoryLabel: t('gitDiff.workingDirectory'),
+    workingDirectoryPath: displayedCwd && (!diffResult || diffResult.isGitRepo) ? displayedCwd : null,
+    actions: externalPanelActions
+  }), [diffResult, displayedCwd, externalPanelActions, handleSelectSubpage, t])
 
-  if (!isOpen) return null
+  useLayoutEffect(() => {
+    if (!isPanel || panelShellMode !== 'external' || !onPanelShellStateChange) return
+    if (!isOpen) {
+      onPanelShellStateChange(null)
+      return
+    }
+    onPanelShellStateChange(externalPanelShellState)
+    return () => {
+      onPanelShellStateChange(null)
+    }
+  }, [
+    externalPanelShellState,
+    isOpen,
+    isPanel,
+    onPanelShellStateChange,
+    panelShellMode
+  ])
+
+  if (!isOpen && !keepMountedInPanel) return null
 
   return (
-    <div className={overlayClassName} onClick={isPanel ? undefined : requestClose}>
+    <div
+      className={`${overlayClassName} ${isOpen ? 'is-open' : 'is-hidden'}`}
+      onClick={isPanel ? undefined : requestClose}
+      aria-hidden={!isOpen}
+    >
       <div
         className={modalClassName}
         style={modalStyle}
@@ -3302,31 +3386,55 @@ export function GitDiffViewer({
           </>
         )}
 
-        {/* Header */}
-        <div className="git-diff-header">
-          <h2 className="git-diff-title">{t('gitDiff.title')}</h2>
-          <div className="git-diff-header-actions">
-            <button className="git-diff-history" onClick={handleOpenHistory} title={t('gitDiff.openHistory')}>
-              {t('gitDiff.openHistory')}
-            </button>
-            <button className="git-diff-close" onClick={requestClose} title={t('gitDiff.returnToTerminal')}>
-              {t('gitDiff.returnToTerminal')}
-            </button>
+        {useSharedPanelHeader ? (
+          <SubpagePanelShell
+            current="diff"
+            onSelect={handleSelectSubpage}
+            workingDirectoryLabel={t('gitDiff.workingDirectory')}
+            workingDirectoryPath={displayedCwd && (!diffResult || diffResult.isGitRepo) ? displayedCwd : null}
+            actions={(
+              <SubpagePanelButton className="git-diff-close" onClick={requestClose} title={t('gitDiff.returnToTerminal')}>
+                {t('gitDiff.returnToTerminal')}
+              </SubpagePanelButton>
+            )}
+          >
+            <div className="git-diff-body">
+              {renderContent()}
+            </div>
+          </SubpagePanelShell>
+        ) : panelShellMode === 'external' && isPanel ? (
+          <div className="git-diff-body">
+            {renderContent()}
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Header */}
+            <div className="git-diff-header">
+              <div className="git-diff-header-main">
+                <h2 className="git-diff-title">{t('gitDiff.title')}</h2>
+                <SubpageSwitcher current="diff" onSelect={handleSelectSubpage} />
+              </div>
+              <div className="git-diff-header-actions">
+                <SubpagePanelButton className="git-diff-close" onClick={requestClose} title={t('gitDiff.returnToTerminal')}>
+                  {t('gitDiff.returnToTerminal')}
+                </SubpagePanelButton>
+              </div>
+            </div>
 
-        {/* working directory */}
-        {displayedCwd && (!diffResult || diffResult.isGitRepo) && (
-          <div className="git-diff-cwd-bar">
-            <span className="git-diff-cwd-label">{t('gitDiff.workingDirectory')}</span>
-            <span className="git-diff-cwd-path">{displayedCwd}</span>
-          </div>
+            {/* working directory */}
+            {displayedCwd && (!diffResult || diffResult.isGitRepo) && (
+              <div className="git-diff-cwd-bar">
+                <span className="git-diff-cwd-label">{t('gitDiff.workingDirectory')}</span>
+                <span className="git-diff-cwd-path">{displayedCwd}</span>
+              </div>
+            )}
+
+            {/* Body */}
+            <div className="git-diff-body">
+              {renderContent()}
+            </div>
+          </>
         )}
-
-        {/* Body */}
-        <div className="git-diff-body">
-          {renderContent()}
-        </div>
 
         {/* right click menu */}
         {contextMenu && (

@@ -446,6 +446,12 @@ Source set: ProjectEditor restore validation suite
 
 - `POP-01` to `POP-17`: file open position persistence, switching behavior, and reopen restoration
 
+### Phase 0.58: Subpage Navigation
+
+Source set: Diff / Editor / History navigation validation suite
+
+- `SN-01` to `SN-14`: unified top switcher visibility, active-state disabling, target-page state restore, selected-file handoff into Project Editor, and missing-file empty-state fallback
+
 ### Phase 0.7: ProjectEditor Multi-Terminal Scope
 
 Source set: ProjectEditor multi-terminal isolation validation suite

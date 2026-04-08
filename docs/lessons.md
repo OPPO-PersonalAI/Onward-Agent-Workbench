@@ -82,3 +82,20 @@
 - **Problem**: The intermediate implementation mixed real persistence with simulated drag-on-mount behavior and dangling references from earlier experiments. That made the code harder to reason about and increased the chance of renderer regressions.
 - **Cause**: The debugging flow tried to "force" the UI into the desired state instead of first fixing the measurement and persistence chain. Experimental scaffolding remained in the packaged app path for too long.
 - **Lesson**: When a UI fix starts accumulating simulated interactions or recovery hacks, stop and simplify. Fix the state source, delete experimental code paths, then rebuild and rerun the packaged end-to-end suite before reporting success.
+
+## 2026-04-08: Subpage navigation UI needs structural analysis before patching visuals
+
+### 1. Visual inconsistency in a shared header usually signals a structural split, not a missing CSS tweak
+- **Problem**: The first rounds kept adjusting individual button styles for `Diff`, `Editor`, `History`, and `ESC`, but the user still immediately saw mismatches. The `Save` button in `Editor` exposed that the top area was not truly unified.
+- **Cause**: The implementation only shared some CSS classes while each page still assembled its own header actions. That left multiple button structures and style sources alive at the same time.
+- **Lesson**: When multiple subpages are supposed to share one top bar, do not stop at "matching classes." Build a real shared header action system with shared button components and shared layout slots. If one button still needs page-local styling, the unification is not finished.
+
+### 2. When the user reports flashing during page switches, inspect the mount lifecycle before proposing cosmetic fixes
+- **Problem**: Early fixes reduced some flicker but `Diff -> History` and `Editor -> History` still flashed, because the content area briefly exposed an initialization gap.
+- **Cause**: The debugging process focused too much on visible styling and not enough on the actual switch lifecycle. The pages were still responsible for closing themselves before the target page fully opened, which created a body-level empty window during navigation.
+- **Lesson**: For flashing or redraw complaints, analyze the DOM and mount order first. Confirm whether the shared shell is stable, whether the body host is reused, and who controls open/close sequencing. Only add transition animation after the lifecycle gap is understood, and use the animation to mask a known initialization window rather than as a blind guess.
+
+### 3. Shared subpage navigation must be orchestrated from one host instead of by each page independently
+- **Problem**: Each page initially dispatched the target open event and then immediately closed itself. That made the switching behavior hard to reason about and easy to regress when adding more shared UI.
+- **Cause**: Navigation ownership remained distributed across `GitDiffViewer`, `GitHistoryViewer`, and `ProjectEditor`, even after the shell started becoming shared. That meant there was no single place to guarantee "open target first, then retire source."
+- **Lesson**: Once multiple subpages share a fixed shell, navigation should be centralized in the host container. Let the host coordinate subpage activation, body transitions, and teardown timing. Do not leave lifecycle ordering scattered across leaf pages.

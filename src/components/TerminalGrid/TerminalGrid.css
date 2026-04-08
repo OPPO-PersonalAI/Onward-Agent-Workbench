@@ -41,6 +41,47 @@
   user-select: none;
 }
 
+.terminal-grid-subpage-host {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.terminal-grid-subpage-host.is-hidden {
+  pointer-events: none;
+  background: transparent;
+}
+
+.terminal-grid-subpage-host > .subpage-panel-shell {
+  flex: 0 0 auto;
+}
+
+.terminal-grid-subpage-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  isolation: isolate;
+}
+
+.terminal-grid-subpage-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+  z-index: 1;
+}
+
+.terminal-grid-subpage-body.is-switching::after {
+  opacity: 0.18;
+}
+
 /* single window layout */
 .terminal-grid[data-layout="1"] {
   grid-template-columns: 1fr;

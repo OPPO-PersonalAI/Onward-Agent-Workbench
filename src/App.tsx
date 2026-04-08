@@ -14,7 +14,6 @@ import { PromptNotebook } from './components/PromptNotebook/PromptNotebook'
 import { TerminalGrid } from './components/TerminalGrid/TerminalGrid'
 import { Settings } from './components/Settings'
 import { ChangeLogModal } from './components/ChangeLogModal'
-import { ProjectEditor } from './components/ProjectEditor'
 import { useScheduleEngine } from './hooks/useScheduleEngine'
 import type { ScheduleNotification } from './hooks/useScheduleEngine'
 import {
@@ -28,6 +27,7 @@ import type { TerminalBatchIssue, TerminalBatchIssueReason } from './types/promp
 import type { CurrentChangelogResult, Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
+import type { ProjectEditorOpenEventDetail, ProjectEditorOpenRequest } from './types/subpage'
 import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { computeNextExecution } from './utils/schedule'
 import {
@@ -97,9 +97,14 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onTerminalRename,
   onPersistTerminalCwd,
   onOpenProjectEditor,
+  projectEditorTerminalId,
+  projectEditorCwd,
   focusRequest,
   shortcutAction,
-  projectEditorOpen
+  projectEditorOpen,
+  projectEditorOpenRequest,
+  onCloseProjectEditor,
+  onProjectEditorDirtyChange
 }: {
   tab: TabState
   isActive: boolean
@@ -107,9 +112,14 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onTerminalRename: (tabId: string, terminalId: string, newTitle: string) => void
   onPersistTerminalCwd: (terminalId: string, cwd: string | null) => void
   onOpenProjectEditor: (terminalId: string) => void
+  projectEditorTerminalId: string | null
+  projectEditorCwd: string | null
   focusRequest: TerminalFocusRequest | null
   shortcutAction: TerminalShortcutAction | null
   projectEditorOpen: boolean
+  projectEditorOpenRequest: ProjectEditorOpenRequest | null
+  onCloseProjectEditor: () => void
+  onProjectEditorDirtyChange: (dirty: boolean) => void
 }) {
   const { getTerminalDisplayName } = useAppState()
   const terminals: TerminalInfo[] = useMemo(() => {
@@ -157,6 +167,11 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       shortcutAction={actionForTab}
       focusRequest={focusRequestForTab}
       projectEditorOpen={projectEditorOpen}
+      projectEditorTerminalId={projectEditorTerminalId}
+      projectEditorCwd={projectEditorCwd}
+      projectEditorOpenRequest={projectEditorOpenRequest}
+      onCloseProjectEditor={onCloseProjectEditor}
+      onProjectEditorDirtyChange={onProjectEditorDirtyChange}
     />
   )
 })
@@ -826,8 +841,10 @@ function AppContent({
   const [projectEditorTerminalId, setProjectEditorTerminalId] = useState<string | null>(null)
   const [projectEditorCwd, setProjectEditorCwd] = useState<string | null>(null)
   const [projectEditorDirty, setProjectEditorDirty] = useState(false)
+  const [projectEditorOpenRequest, setProjectEditorOpenRequest] = useState<ProjectEditorOpenRequest | null>(null)
   const projectEditorDebugOpenedRef = useRef(false)
   const projectEditorProfileScenarioRef = useRef(false)
+  const projectEditorOpenRequestIdRef = useRef(0)
 
   const clearPanelBeforeSettings = useCallback(() => {
     panelBeforeSettingsByTabRef.current = {}
@@ -931,7 +948,13 @@ function AppContent({
     }
   }, [clearPanelBeforeSettings, getPanelBeforeSettings])
 
-  const handleOpenProjectEditor = useCallback(async (terminalId: string) => {
+  const handleOpenProjectEditor = useCallback(async (
+    terminalId: string,
+    options?: {
+      filePath?: string | null
+      repoRoot?: string | null
+    }
+  ) => {
     if (
       projectEditorOpen &&
       projectEditorTerminalId &&
@@ -945,15 +968,24 @@ function AppContent({
     const persistedCwd = state.tabs
       .flatMap((tab) => tab.terminals)
       .find((terminal) => terminal.id === terminalId)?.lastCwd ?? null
-    let cwd = persistedCwd
-    try {
-      cwd = await window.electronAPI.git.getTerminalCwd(terminalId) || persistedCwd
-    } catch {
-      cwd = persistedCwd
-    }
     setProjectEditorTerminalId(terminalId)
-    setProjectEditorCwd(cwd)
+    setProjectEditorCwd(persistedCwd)
     setProjectEditorOpen(true)
+    try {
+      const resolvedCwd = await window.electronAPI.git.getTerminalCwd(terminalId) || persistedCwd
+      setProjectEditorCwd(resolvedCwd)
+    } catch {
+      setProjectEditorCwd(persistedCwd)
+    }
+    if (typeof options?.filePath === 'string' && options.filePath.trim()) {
+      projectEditorOpenRequestIdRef.current += 1
+      setProjectEditorOpenRequest({
+        id: projectEditorOpenRequestIdRef.current,
+        terminalId,
+        filePath: options.filePath ?? null,
+        repoRoot: options.repoRoot ?? null
+      })
+    }
   }, [projectEditorOpen, projectEditorTerminalId, projectEditorDirty, state.tabs, t])
 
   // Debug profile: Automatically execute ProjectEditor <-> Git Diff loop to facilitate CPU sampling
@@ -1004,14 +1036,15 @@ function AppContent({
     void run()
   }, [activeTab, isLoaded])
 
-  // Debug profile: Allow external triggering to open ProjectEditor (for automation switching)
   useEffect(() => {
-    if (!window.electronAPI?.debug?.profile && !window.electronAPI?.debug?.autotest) return
     const handler = (event: Event) => {
-      const customEvent = event as CustomEvent<{ terminalId?: string }>
+      const customEvent = event as CustomEvent<ProjectEditorOpenEventDetail>
       const terminalId = customEvent.detail?.terminalId
       if (!terminalId) return
-      void handleOpenProjectEditor(terminalId)
+      void handleOpenProjectEditor(terminalId, {
+        filePath: customEvent.detail?.filePath ?? null,
+        repoRoot: customEvent.detail?.repoRoot ?? null
+      })
     }
     window.addEventListener('project-editor:open', handler as EventListener)
     return () => window.removeEventListener('project-editor:open', handler as EventListener)
@@ -1047,6 +1080,7 @@ function AppContent({
     setProjectEditorTerminalId(null)
     setProjectEditorCwd(null)
     setProjectEditorDirty(false)
+    setProjectEditorOpenRequest(null)
   }, [])
 
   // Register closeSettings callback to Context
@@ -1298,25 +1332,22 @@ function AppContent({
                 key={tab.id}
                 tab={tab}
                 isActive={tab.id === state.activeTabId}
-                onTerminalFocus={handleTerminalFocusWithTab}
-                onTerminalRename={handleTerminalRenameWithTab}
-                onPersistTerminalCwd={setTerminalLastCwd}
-                onOpenProjectEditor={handleOpenProjectEditor}
-                focusRequest={terminalFocusRequest}
-                shortcutAction={terminalShortcutAction}
-                projectEditorOpen={projectEditorOpen}
-              />
-            ))}
-            <ProjectEditor
-              isOpen={projectEditorOpen}
-              terminalId={projectEditorTerminalId}
-              cwd={projectEditorCwd}
-              onClose={handleCloseProjectEditor}
-              onDirtyChange={setProjectEditorDirty}
-              displayMode="panel"
+              onTerminalFocus={handleTerminalFocusWithTab}
+              onTerminalRename={handleTerminalRenameWithTab}
+              onPersistTerminalCwd={setTerminalLastCwd}
+              onOpenProjectEditor={handleOpenProjectEditor}
+              projectEditorTerminalId={projectEditorTerminalId}
+              projectEditorCwd={projectEditorCwd}
+              focusRequest={terminalFocusRequest}
+              shortcutAction={terminalShortcutAction}
+              projectEditorOpen={projectEditorOpen}
+              projectEditorOpenRequest={projectEditorOpenRequest}
+              onCloseProjectEditor={handleCloseProjectEditor}
+              onProjectEditorDirtyChange={setProjectEditorDirty}
             />
-          </div>
-        </main>
+          ))}
+        </div>
+      </main>
       </div>
       <ChangeLogModal
         isOpen={showChangeLog}

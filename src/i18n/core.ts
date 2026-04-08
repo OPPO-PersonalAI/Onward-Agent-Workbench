@@ -35,6 +35,10 @@ const en = {
   'common.relativePath': 'Relative path',
   'common.retry': 'Retry',
   'common.save': 'Save',
+  'subpageSwitcher.label': 'Subpage switcher',
+  'subpageSwitcher.diff': 'Diff',
+  'subpageSwitcher.editor': 'Editor',
+  'subpageSwitcher.history': 'History',
 
   'settings.title': 'Settings',
   'settings.close': 'Close settings',
@@ -668,6 +672,7 @@ const en = {
   'sqliteViewer.pagination.next': 'Next',
   'sqliteViewer.pagination.jump': 'Jump',
 
+  'gitHistory.title': 'Git History',
   'gitHistory.error.loadDiff': 'Failed to load commit diff',
   'gitHistory.loading': 'Loading...',
   'gitHistory.endReached': 'Reached the end',
@@ -981,6 +986,10 @@ const zhCN: LocaleTranslations = {
   'common.relativePath': '相对路径',
   'common.retry': '重试',
   'common.save': '保存',
+  'subpageSwitcher.label': '子页面切换',
+  'subpageSwitcher.diff': 'Diff',
+  'subpageSwitcher.editor': 'Editor',
+  'subpageSwitcher.history': 'History',
 
   'settings.title': '设置',
   'settings.close': '关闭设置',
@@ -1614,6 +1623,7 @@ const zhCN: LocaleTranslations = {
   'sqliteViewer.pagination.next': '下一页',
   'sqliteViewer.pagination.jump': '跳转',
 
+  'gitHistory.title': 'Git History',
   'gitHistory.error.loadDiff': '获取提交差异失败',
   'gitHistory.loading': '加载中...',
   'gitHistory.endReached': '已到末尾',
