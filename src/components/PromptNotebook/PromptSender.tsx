@@ -47,6 +47,8 @@ export const PromptSender = memo(function PromptSender({
   const handleSendAllAndExecuteRef = useRef<() => Promise<void>>(async () => {})
   const terminalRows = Math.max(1, Math.ceil(terminals.length / 2))
   const terminalGridStyle = { '--terminal-rows': terminalRows } as CSSProperties
+  const selectionIndicatorStyle = { '--selection-indicator-rows': terminalRows } as CSSProperties
+  const selectedCount = selectedTerminals.size
 
   terminalsRef.current = terminals
   selectedTerminalsRef.current = selectedTerminals
@@ -249,6 +251,11 @@ export const PromptSender = memo(function PromptSender({
         title: t.title || `Task`,
         isSelected: selectedTerminalsRef.current.has(t.id)
       })),
+      getSelectedCount: () => selectedTerminalsRef.current.size,
+      getSelectionIndicatorStates: () => terminalsRef.current.map((terminal) => ({
+        id: terminal.id,
+        isActive: selectedTerminalsRef.current.has(terminal.id)
+      })),
       getSelectedTerminalIds: () => Array.from(selectedTerminalsRef.current),
       getActionButtons: () => {
         const btns = document.querySelectorAll('.prompt-sender-btn')
@@ -363,38 +370,59 @@ export const PromptSender = memo(function PromptSender({
       </div>
 
       <div className="prompt-sender-actions">
-        <button
-          className="prompt-sender-btn prompt-sender-btn-send-execute"
-          onClick={() => { void handleSendAndExecute() }}
-          disabled={selectedTerminals.size === 0 || isSubmitting}
-          title={t('promptSender.title.sendAndExecute')}
-        >
-          {t('promptSender.button.sendAndExecute')}
-        </button>
-        <button
-          className="prompt-sender-btn prompt-sender-btn-execute"
-          onClick={() => { void handleExecute() }}
-          disabled={selectedTerminals.size === 0 || isSubmitting}
-          title={t('promptSender.title.execute')}
-        >
-          {t('promptSender.button.execute')}
-        </button>
-        <button
-          className="prompt-sender-btn prompt-sender-btn-send"
-          onClick={() => { void handleSendToSelected() }}
-          disabled={selectedTerminals.size === 0 || isSubmitting}
-          title={t('promptSender.title.send')}
-        >
-          {t('promptSender.button.send')}
-        </button>
-        <button
-          className="prompt-sender-btn prompt-sender-btn-send-all-execute"
-          onClick={() => { void handleSendAllAndExecute() }}
-          disabled={terminals.length === 0 || !promptContent || isSubmitting}
-          title={t('promptSender.title.sendAllAndExecute')}
-        >
-          {t('promptSender.button.sendAllAndExecute')}
-        </button>
+        {terminals.length > 0 && (
+          <div
+            className="prompt-sender-selection-indicator"
+            style={selectionIndicatorStyle}
+            role="status"
+            aria-live="polite"
+            aria-label={t('promptSender.selection.aria', { count: selectedCount })}
+          >
+            {terminals.map((terminal) => (
+              <span
+                key={terminal.id}
+                className={`prompt-sender-selection-cell${selectedTerminals.has(terminal.id) ? ' is-active' : ''}`}
+                data-terminal-id={terminal.id}
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="prompt-sender-action-buttons">
+          <button
+            className="prompt-sender-btn prompt-sender-btn-send-execute"
+            onClick={() => { void handleSendAndExecute() }}
+            disabled={selectedCount === 0 || isSubmitting}
+            title={t('promptSender.title.sendAndExecute')}
+          >
+            {t('promptSender.button.sendAndExecute')}
+          </button>
+          <button
+            className="prompt-sender-btn prompt-sender-btn-execute"
+            onClick={() => { void handleExecute() }}
+            disabled={selectedCount === 0 || isSubmitting}
+            title={t('promptSender.title.execute')}
+          >
+            {t('promptSender.button.execute')}
+          </button>
+          <button
+            className="prompt-sender-btn prompt-sender-btn-send"
+            onClick={() => { void handleSendToSelected() }}
+            disabled={selectedCount === 0 || isSubmitting}
+            title={t('promptSender.title.send')}
+          >
+            {t('promptSender.button.send')}
+          </button>
+          <button
+            className="prompt-sender-btn prompt-sender-btn-send-all-execute"
+            onClick={() => { void handleSendAllAndExecute() }}
+            disabled={terminals.length === 0 || !promptContent || isSubmitting}
+            title={t('promptSender.title.sendAllAndExecute')}
+          >
+            {t('promptSender.button.sendAllAndExecute')}
+          </button>
+        </div>
       </div>
 
       {selectionNotice && (

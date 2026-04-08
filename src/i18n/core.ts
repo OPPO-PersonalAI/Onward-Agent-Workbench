@@ -269,6 +269,10 @@ const en = {
   'promptSender.title.execute': 'Execute in selected terminals (send Enter)',
   'promptSender.title.send': 'Send to selected terminals',
   'promptSender.title.sendAllAndExecute': 'Send to all terminals and execute',
+  'promptSender.selection.label': 'Selected Tasks',
+  'promptSender.selection.none': 'No Task selected',
+  'promptSender.selection.aria': '{{count}} tasks selected',
+  'promptSender.selection.caption': 'Task',
 
   'scheduleNotification.catchUp': 'Catch up',
   'scheduleNotification.skip': 'Skip',
@@ -1130,6 +1134,10 @@ const zhCN: LocaleTranslations = {
   'promptSender.title.execute': '在选中的终端执行（发送回车）',
   'promptSender.title.send': '发送到选中的终端',
   'promptSender.title.sendAllAndExecute': '发送到所有终端并执行',
+  'promptSender.selection.label': '已选 Task',
+  'promptSender.selection.none': '未选择 Task',
+  'promptSender.selection.aria': '已选 {{count}} 个 Task',
+  'promptSender.selection.caption': 'Task',
 
   'scheduleNotification.catchUp': '补执行',
   'scheduleNotification.skip': '跳过',

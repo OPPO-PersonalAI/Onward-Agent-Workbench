@@ -67,6 +67,8 @@ export interface GitDiffDebugApi {
 
 export interface PromptSenderDebugApi {
   getTerminalCards: () => Array<{ id: string; title: string; isSelected: boolean }>
+  getSelectedCount: () => number
+  getSelectionIndicatorStates: () => Array<{ id: string; isActive: boolean }>
   getSelectedTerminalIds: () => string[]
   getActionButtons: () => Array<{ label: string; disabled: boolean }>
   getGridLayout: () => { columns: number; rows: number; totalCards: number }

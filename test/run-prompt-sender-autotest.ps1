@@ -52,7 +52,7 @@ if ($logContent -match "\[AutoTest\] FAIL") {
   exit 1
 }
 
-if ($logContent -notmatch "PS-09-send-and-execute-single-line") {
+if ($logContent -notmatch "PS-10-send-and-execute-single-line") {
   Write-Error "Prompt sender autotest did not complete. Log: $LogFile"
   Get-Content $LogFile -Tail 160
   exit 1
