@@ -1091,6 +1091,10 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
 }
 
 .project-editor-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background-color: var(--bg-2);
@@ -1098,8 +1102,14 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   color: var(--text-3);
 }
 
+.project-editor-preview-header-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .project-editor-preview-pending {
-  margin-left: 8px;
   color: var(--text-4);
 }
 
@@ -1271,6 +1281,22 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   padding: 0;
   display: block;
   color: var(--text-1);
+}
+
+.project-editor-preview-body.code-wrap-enabled code {
+  white-space: break-spaces;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.project-editor-preview-body.code-wrap-enabled pre {
+  overflow-x: hidden;
+}
+
+.project-editor-preview-body.code-wrap-enabled pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* highlight.js syntax highlighting (github-dark style) */

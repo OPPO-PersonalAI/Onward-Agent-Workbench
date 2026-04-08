@@ -185,7 +185,18 @@ export interface ProjectEditorDebugApi {
   } | null
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
+  setMarkdownPreviewVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean
+  isMarkdownCodeWrapEnabled?: () => boolean
+  setMarkdownCodeWrapEnabled?: (enabled: boolean) => void
+  getMarkdownCodeWrapState?: () => {
+    enabled: boolean
+    previewClassName: string | null
+    blockWhiteSpace: string | null
+    blockOverflowWrap: string | null
+    inlineWhiteSpace: string | null
+    inlineOverflowWrap: string | null
+  }
   setPreviewSearchOpen?: (open: boolean) => void
   isPreviewSearchOpen?: () => boolean
   isMarkdownRenderPending: () => boolean
@@ -198,9 +209,14 @@ export interface ProjectEditorDebugApi {
   }
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
+  getOutlineEffectiveTarget?: () => 'editor' | 'preview'
   isOutlineVisible?: () => boolean
+  setOutlineVisible?: (visible: boolean) => void
   getOutlineSymbolCount?: () => number
   getOutlineActiveItemName?: () => string | null
+  getOutlineScrollTop?: () => number
+  scrollOutlineToFraction?: (fraction: number) => boolean
+  clickOutlineItemByName?: (name: string) => boolean
   getPreviewActiveSlug?: () => string | null
   scrollPreviewToFraction?: (fraction: number) => boolean
   getPreviewScrollTop?: () => number

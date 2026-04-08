@@ -101,6 +101,14 @@
   color: var(--text-2);
 }
 
+.outline-panel-target-btn:disabled {
+  cursor: default;
+}
+
+.outline-panel-target-btn:disabled:not(.active) {
+  color: var(--text-4);
+}
+
 .outline-panel-target-btn.active {
   color: var(--text-1);
   font-weight: 500;

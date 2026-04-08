@@ -118,6 +118,7 @@ export interface ProjectEditorState {
   previewScrollAnchor?: { slug: string | null; ratio: number }
   fileTreeScrollTop?: number
   outlineScrollTop?: number
+  outlineScrollByFile?: Record<string, number>
 }
 
 /**
