@@ -4,13 +4,26 @@
       "tag": "v2.1.0-daily.20260408.1",
       "version": "2.1.0-daily.20260408.1",
       "channel": "daily",
-      "previousTag": "v2.1.0-daily.20260406.1",
+      "previousTag": "v2.1.0-daily.20260407.1",
       "publishedAt": "2026-04-08T13:27:21.262Z",
       "markdown": {
         "en": "en/daily/v2.1.0-daily.20260408.1.md"
       },
       "html": {
         "en": "html/en/daily/v2.1.0-daily.20260408.1.html"
+      }
+    },
+    {
+      "tag": "v2.1.0-daily.20260407.1",
+      "version": "2.1.0-daily.20260407.1",
+      "channel": "daily",
+      "previousTag": "v2.1.0-daily.20260406.1",
+      "publishedAt": "2026-04-07T12:47:18.312Z",
+      "markdown": {
+        "en": "en/daily/v2.1.0-daily.20260407.1.md"
+      },
+      "html": {
+        "en": "html/en/daily/v2.1.0-daily.20260407.1.html"
       }
     },
     {
