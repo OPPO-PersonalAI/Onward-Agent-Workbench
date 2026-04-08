@@ -135,6 +135,7 @@ export interface ProjectEditorState {
   outlineScrollTop?: number
   // Per-file state memory (keyed by normalized file path)
   fileStates?: Record<string, FileViewMemory>
+  outlineScrollByFile?: Record<string, number>
 }
 
 /**

@@ -1539,6 +1539,7 @@ export const TerminalGrid = memo(function TerminalGrid({
               displayMode="panel"
               panelShellMode="external"
               onPanelShellStateChange={handleDiffPanelShellStateChange}
+              taskTitle={terminals.find(t => t.id === gitDiffTerminalId)?.title}
             />
             <GitHistoryViewer
               isOpen={gitHistoryOpen}
@@ -1548,6 +1549,7 @@ export const TerminalGrid = memo(function TerminalGrid({
               displayMode="panel"
               panelShellMode="external"
               onPanelShellStateChange={handleHistoryPanelShellStateChange}
+              taskTitle={terminals.find(t => t.id === gitHistoryTerminalId)?.title}
             />
             <ProjectEditor
               isOpen={projectEditorOpenInGrid}
@@ -1559,6 +1561,7 @@ export const TerminalGrid = memo(function TerminalGrid({
               displayMode="panel"
               panelShellMode="external"
               onPanelShellStateChange={handleEditorPanelShellStateChange}
+              taskTitle={terminals.find(t => t.id === projectEditorTerminalId)?.title}
             />
           </div>
         </div>

@@ -96,6 +96,15 @@
   font-weight: 600;
   color: var(--text-1);
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-history-task-label {
+  font-weight: 400;
+  opacity: 0.6;
 }
 
 .git-history-header-actions {

@@ -74,6 +74,7 @@ interface GitDiffViewerProps {
   displayMode?: 'modal' | 'panel'
   panelShellMode?: 'internal' | 'external'
   onPanelShellStateChange?: (state: SubpagePanelShellState | null) => void
+  taskTitle?: string
 }
 
 type GitDiffTimingSnapshot = {
@@ -374,7 +375,8 @@ export function GitDiffViewer({
   cwdReadyAt = null,
   displayMode = 'modal',
   panelShellMode = 'internal',
-  onPanelShellStateChange
+  onPanelShellStateChange,
+  taskTitle
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
   const { getTerminalStyle } = useSettings()
@@ -3411,7 +3413,7 @@ export function GitDiffViewer({
             {/* Header */}
             <div className="git-diff-header">
               <div className="git-diff-header-main">
-                <h2 className="git-diff-title">{t('gitDiff.title')}</h2>
+                <h2 className="git-diff-title">{t('gitDiff.title')}{taskTitle && <span className="git-diff-task-label"> &middot; {taskTitle}</span>}</h2>
                 <SubpageSwitcher current="diff" onSelect={handleSelectSubpage} />
               </div>
               <div className="git-diff-header-actions">

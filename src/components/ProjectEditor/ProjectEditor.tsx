@@ -44,6 +44,7 @@ interface ProjectEditorProps {
   displayMode?: 'modal' | 'panel'
   panelShellMode?: 'internal' | 'external'
   onPanelShellStateChange?: (state: SubpagePanelShellState | null) => void
+  taskTitle?: string
 }
 
 interface TreeNode {
@@ -112,6 +113,7 @@ const STORAGE_KEY_MODAL_SIZE = 'project-editor-modal-size'
 const STORAGE_KEY_MARKDOWN_PREVIEW_RATIO = 'project-editor-markdown-preview-ratio'
 const STORAGE_KEY_MARKDOWN_PREVIEW_WIDTH = 'project-editor-markdown-preview-width'
 const STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE = 'project-editor-markdown-editor-visible'
+const STORAGE_KEY_MARKDOWN_CODE_WRAP = 'project-editor-markdown-code-wrap'
 const STORAGE_KEY_OUTLINE_VISIBLE = 'project-editor-outline-visible'
 const STORAGE_KEY_OUTLINE_WIDTH = 'project-editor-outline-width'
 const STORAGE_KEY_OUTLINE_TARGET = 'project-editor-outline-target'
@@ -288,6 +290,15 @@ type PreviewScrollMemory = {
   scrollTop: number
 }
 
+type MarkdownCodeWrapDebugState = {
+  enabled: boolean
+  previewClassName: string | null
+  blockWhiteSpace: string | null
+  blockOverflowWrap: string | null
+  inlineWhiteSpace: string | null
+  inlineOverflowWrap: string | null
+}
+
 function normalizeScopeCwd(value: string | null): string | null {
   if (!value) return null
   const trimmed = value.trim()
@@ -318,6 +329,26 @@ function getFileScrollKey(scope: ProjectEditorScope | null, filePath: string | n
 function getScrollScopeKey(scope: ProjectEditorScope | null): string | null {
   if (!scope) return null
   return JSON.stringify([scope.terminalId, scope.cwd])
+}
+
+function normalizeOutlineScrollByFile(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object') return {}
+  const result: Record<string, number> = {}
+  for (const [filePath, rawScrollTop] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof filePath !== 'string' || !filePath) continue
+    if (typeof rawScrollTop !== 'number' || !Number.isFinite(rawScrollTop)) continue
+    result[normalizePath(filePath)] = Math.max(0, rawScrollTop)
+  }
+  return result
+}
+
+function buildOutlineScrollByFileState(outlineScrollByFile: Map<string, number>): Record<string, number> {
+  const result: Record<string, number> = {}
+  for (const [filePath, scrollTop] of outlineScrollByFile.entries()) {
+    if (!filePath || typeof scrollTop !== 'number' || !Number.isFinite(scrollTop)) continue
+    result[filePath] = Math.max(0, scrollTop)
+  }
+  return result
 }
 
 function debugLog(...args: unknown[]) {
@@ -572,7 +603,8 @@ export function ProjectEditor({
   onDirtyChange,
   displayMode = 'modal',
   panelShellMode = 'internal',
-  onPanelShellStateChange
+  onPanelShellStateChange,
+  taskTitle
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
   const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
@@ -637,6 +669,11 @@ export function ProjectEditor({
     return saved === null ? true : saved === 'true'
   })
   const isMarkdownEditorVisibleRef = useRef(isMarkdownEditorVisible)
+  const [isMarkdownCodeWrapEnabled, setIsMarkdownCodeWrapEnabled] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_MARKDOWN_CODE_WRAP)
+    return saved === 'true'
+  })
+  const isMarkdownCodeWrapEnabledRef = useRef(isMarkdownCodeWrapEnabled)
   const [isMarkdownRenderEnabled, setIsMarkdownRenderEnabled] = useState(false)
   const [isDirty, setIsDirty] = useState(false)
   const [isLoadingFile, setIsLoadingFile] = useState(false)
@@ -756,6 +793,8 @@ export function ProjectEditor({
   const fileTreeContainerRef = useRef<HTMLDivElement | null>(null)
   const fileTreeScrollTopRef = useRef<Map<string, number>>(new Map())
   const outlineScrollTopRef = useRef<Map<string, number>>(new Map())
+  const outlineScrollByFileRef = useRef<Map<string, number>>(new Map())
+  const lastOutlineDomRestoreSignatureRef = useRef<string | null>(null)
   const isDraggingRef = useRef(false)
 
   const [modalSize, setModalSize] = useState(() => {
@@ -959,6 +998,10 @@ export function ProjectEditor({
   }, [isMarkdownEditorVisible])
 
   useEffect(() => {
+    isMarkdownCodeWrapEnabledRef.current = isMarkdownCodeWrapEnabled
+  }, [isMarkdownCodeWrapEnabled])
+
+  useEffect(() => {
     previewSearchOpenRef.current = previewSearchOpen
   }, [previewSearchOpen])
 
@@ -973,6 +1016,62 @@ export function ProjectEditor({
   useEffect(() => {
     outlineTargetRef.current = outlineTarget
   }, [outlineTarget])
+
+  const setMarkdownCodeWrapEnabledState = useCallback((enabled: boolean) => {
+    setIsMarkdownCodeWrapEnabled(enabled)
+    isMarkdownCodeWrapEnabledRef.current = enabled
+    localStorage.setItem(STORAGE_KEY_MARKDOWN_CODE_WRAP, String(enabled))
+  }, [])
+
+  const setOutlineTargetPreference = useCallback((target: OutlineTarget) => {
+    setOutlineTarget(target)
+    outlineTargetRef.current = target
+    localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
+  }, [])
+
+  const setOutlineVisibleState = useCallback((visible: boolean) => {
+    setIsOutlineVisible(visible)
+    isOutlineVisibleRef.current = visible
+    localStorage.setItem(STORAGE_KEY_OUTLINE_VISIBLE, String(visible))
+  }, [])
+
+  const setMarkdownPreviewOpenState = useCallback((visible: boolean) => {
+    setIsMarkdownPreviewOpen(visible)
+    isMarkdownPreviewOpenRef.current = visible
+    if (visible) {
+      const activePath = activeFilePathRef.current
+      if (
+        activePath &&
+        isMarkdownPath(activePath) &&
+        !isBinaryRef.current &&
+        !isImageRef.current &&
+        !isSqliteRef.current
+      ) {
+        beginPreviewRestore()
+        setIsMarkdownRenderEnabled(true)
+      }
+      return
+    }
+
+    setIsMarkdownRenderEnabled(false)
+    if (!isMarkdownEditorVisibleRef.current) {
+      setIsMarkdownEditorVisible(true)
+      isMarkdownEditorVisibleRef.current = true
+      localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, 'true')
+    }
+  }, [beginPreviewRestore])
+
+  const setMarkdownEditorVisibleState = useCallback((visible: boolean) => {
+    setIsMarkdownEditorVisible(visible)
+    isMarkdownEditorVisibleRef.current = visible
+    localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
+    if (!visible && !isMarkdownPreviewOpenRef.current) {
+      setIsMarkdownPreviewOpen(true)
+      isMarkdownPreviewOpenRef.current = true
+      beginPreviewRestore()
+      setIsMarkdownRenderEnabled(true)
+    }
+  }, [beginPreviewRestore])
 
   useEffect(() => {
     fileTreeWidthRef.current = fileTreeWidth
@@ -1003,6 +1102,26 @@ export function ProjectEditor({
     if (!selectedText) return
     event.clipboardData.setData('text/plain', selectedText)
     event.preventDefault()
+  }, [])
+
+  const getMarkdownCodeWrapDebugState = useCallback((): MarkdownCodeWrapDebugState => {
+    const preview = previewRef.current
+    const blockCode = preview?.querySelector('pre code') as HTMLElement | null
+    const inlineCode = Array.from(preview?.querySelectorAll('code') ?? []).find(
+      (element) => element.parentElement?.tagName !== 'PRE'
+    ) as HTMLElement | undefined
+
+    const blockStyle = blockCode ? window.getComputedStyle(blockCode) : null
+    const inlineStyle = inlineCode ? window.getComputedStyle(inlineCode) : null
+
+    return {
+      enabled: isMarkdownCodeWrapEnabledRef.current,
+      previewClassName: preview?.className ?? null,
+      blockWhiteSpace: blockStyle?.whiteSpace ?? null,
+      blockOverflowWrap: blockStyle?.overflowWrap ?? null,
+      inlineWhiteSpace: inlineStyle?.whiteSpace ?? null,
+      inlineOverflowWrap: inlineStyle?.overflowWrap ?? null
+    }
   }, [])
 
   const scanPreviewNearestSlug = useCallback((): string | null => {
@@ -1327,6 +1446,7 @@ export function ProjectEditor({
     const previewKey = getFileScrollKey(scope, currentActiveFilePath)
     const previewMem = previewKey ? previewScrollMemoryRef.current.get(previewKey) : undefined
     const currentOutlineScrollTop = outlineKey ? outlineScrollTopRef.current.get(outlineKey) : undefined
+    const outlineScrollByFile = buildOutlineScrollByFileState(outlineScrollByFileRef.current)
 
     return {
       rootPath: normalizedRootPath,
@@ -1359,6 +1479,7 @@ export function ProjectEditor({
         : undefined,
       fileTreeScrollTop: currentFileTreeScrollTop,
       outlineScrollTop: currentOutlineScrollTop,
+      outlineScrollByFile,
       // Per-file state memory
       fileStates: Object.keys(fileStates).length > 0 ? fileStates : undefined
     }
@@ -3340,9 +3461,36 @@ export function ProjectEditor({
       setModalSize(size)
       modalSizeRef.current = size
     }
+    // Write persisted scroll positions into memory refs for later application
+    const restoreScope = lastEditorScopeRef.current
+    if (stored.previewScrollAnchor && stored.activeFilePath) {
+      const pKey = getFileScrollKey(restoreScope, stored.activeFilePath)
+      if (pKey) {
+        previewScrollMemoryRef.current.set(pKey, {
+          scrollRatio: stored.previewScrollAnchor.ratio,
+          nearestHeadingSlug: stored.previewScrollAnchor.slug,
+          headingOffsetY: 0,
+          scrollTop: 0
+        })
+      }
+    }
+    const restoredOutlineScrollByFile = normalizeOutlineScrollByFile(stored.outlineScrollByFile)
+    if (Object.keys(restoredOutlineScrollByFile).length > 0) {
+      for (const [filePath, scrollTop] of Object.entries(restoredOutlineScrollByFile)) {
+        outlineScrollByFileRef.current.set(filePath, scrollTop)
+        const outlineKey = getFileScrollKey(restoreScope, filePath)
+        if (outlineKey) {
+          outlineScrollTopRef.current.set(outlineKey, scrollTop)
+        }
+      }
+    }
+    if (typeof stored.outlineScrollTop === 'number' && stored.activeFilePath) {
+      const oKey = getFileScrollKey(restoreScope, stored.activeFilePath)
+      if (oKey) outlineScrollTopRef.current.set(oKey, stored.outlineScrollTop)
+      outlineScrollByFileRef.current.set(stored.activeFilePath, Math.max(0, stored.outlineScrollTop))
+    }
     // Restore file tree scroll position
     if (typeof stored.fileTreeScrollTop === 'number') {
-      const restoreScope = lastEditorScopeRef.current
       const tKey = getScrollScopeKey(restoreScope)
       if (tKey) fileTreeScrollTopRef.current.set(tKey, stored.fileTreeScrollTop)
     }
@@ -3757,14 +3905,10 @@ export function ProjectEditor({
   const handleOutlineScrollCapture = useCallback((scrollTop: number) => {
     const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePathRef.current)
     if (key) outlineScrollTopRef.current.set(key, scrollTop)
+    const activePath = activeFilePathRef.current
+    if (activePath) outlineScrollByFileRef.current.set(activePath, Math.max(0, scrollTop))
     scheduleProjectStateSave()
   }, [scheduleProjectStateSave])
-
-  const setOutlineVisibleState = useCallback((visible: boolean) => {
-    setIsOutlineVisible(visible)
-    isOutlineVisibleRef.current = visible
-    localStorage.setItem(STORAGE_KEY_OUTLINE_VISIBLE, String(visible))
-  }, [])
 
   const getOutlineScrollContainer = useCallback(() => {
     const root = modalRef.current
@@ -3792,6 +3936,41 @@ export function ProjectEditor({
     handleOutlineScrollCapture(treeEl.scrollTop)
     return true
   }, [getOutlineScrollContainer, handleOutlineScrollCapture])
+
+  useEffect(() => {
+    if (!outlineShowInSplit || !activeFilePath) {
+      lastOutlineDomRestoreSignatureRef.current = null
+      return
+    }
+
+    const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+    const savedScrollTop = key ? outlineScrollTopRef.current.get(key) : undefined
+    if (typeof savedScrollTop !== 'number') return
+
+    const signature = `${activeFilePath}:${Math.round(savedScrollTop)}:${outlineSymbols.length}:${outlineShowInSplit}`
+    if (lastOutlineDomRestoreSignatureRef.current === signature) return
+    lastOutlineDomRestoreSignatureRef.current = signature
+
+    let firstFrame = 0
+    let secondFrame = 0
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const tree = modalRef.current?.querySelector('.outline-panel-tree') as HTMLElement | null
+        if (!tree) return
+        tree.scrollTop = Math.max(0, savedScrollTop)
+        handleOutlineScrollCapture(tree.scrollTop)
+      })
+    })
+
+    return () => {
+      if (firstFrame) {
+        window.cancelAnimationFrame(firstFrame)
+      }
+      if (secondFrame) {
+        window.cancelAnimationFrame(secondFrame)
+      }
+    }
+  }, [activeFilePath, handleOutlineScrollCapture, modalRef, outlineShowInSplit, outlineSymbols.length])
 
   useEffect(() => {
     if (!DEBUG_PROJECT_EDITOR) return
@@ -4117,36 +4296,20 @@ export function ProjectEditor({
       scrollFileBrowserToFraction,
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
-        setIsMarkdownEditorVisible(visible)
-        isMarkdownEditorVisibleRef.current = visible
-        localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
-        updateUIPreferences({ projectEditorMarkdownEditorVisible: visible })
-        if (!visible && !isMarkdownPreviewOpenRef.current) {
-          setIsMarkdownPreviewOpen(true)
-          isMarkdownPreviewOpenRef.current = true
-          markdownRenderSourceRef.current = fileContentRef.current
-          setMarkdownRenderSource(fileContentRef.current)
-          setIsMarkdownRenderEnabled(true)
-        }
+        setMarkdownEditorVisibleState(visible)
+      },
+      setMarkdownPreviewVisible: (visible: boolean) => {
+        setMarkdownPreviewOpenState(visible)
       },
       isMarkdownPreviewVisible: () => previewVisibleRef.current,
       setMarkdownPreviewOpen: (open: boolean) => {
-        setIsMarkdownPreviewOpen(open)
-        isMarkdownPreviewOpenRef.current = open
-        if (open && activeFilePathRef.current && isMarkdownPath(activeFilePathRef.current) && !isBinaryRef.current && !isImageRef.current && !isSqliteRef.current) {
-          markdownRenderSourceRef.current = fileContentRef.current
-          setMarkdownRenderSource(fileContentRef.current)
-          beginPreviewRestore()
-          setIsMarkdownRenderEnabled(true)
-          return
-        }
-        setIsMarkdownRenderEnabled(false)
-        if (!open && !isMarkdownEditorVisibleRef.current) {
-          setIsMarkdownEditorVisible(true)
-          isMarkdownEditorVisibleRef.current = true
-          localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, 'true')
-        }
+        setMarkdownPreviewOpenState(open)
       },
+      isMarkdownCodeWrapEnabled: () => isMarkdownCodeWrapEnabledRef.current,
+      setMarkdownCodeWrapEnabled: (enabled: boolean) => {
+        setMarkdownCodeWrapEnabledState(enabled)
+      },
+      getMarkdownCodeWrapState: () => getMarkdownCodeWrapDebugState(),
       setPreviewSearchOpen: (open: boolean) => {
         setPreviewSearchOpen(open)
         previewSearchOpenRef.current = open
@@ -4177,10 +4340,12 @@ export function ProjectEditor({
       getPreviewRestorePhase: () => previewRestorePhaseRef.current,
       getOutlineTarget: () => outlineTargetRef.current,
       setOutlineTarget: (target: 'editor' | 'preview') => {
-        setOutlineTarget(target)
-        outlineTargetRef.current = target
-        localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
-        updateUIPreferences({ projectEditorOutlineTarget: target })
+        setOutlineTargetPreference(target)
+      },
+      getOutlineEffectiveTarget: () => {
+        if (previewVisibleRef.current && !isMarkdownEditorVisibleRef.current) return 'preview'
+        if (isMarkdownEditorVisibleRef.current && !previewVisibleRef.current) return 'editor'
+        return outlineTargetRef.current
       },
       isOutlineVisible: () => outlineShowInSplitRef.current,
       setOutlineVisible: (visible: boolean) => {
@@ -4191,12 +4356,23 @@ export function ProjectEditor({
       getOutlineScrollTop: () => getOutlineScrollContainer()?.scrollTop ?? 0,
       getOutlineScrollHeight: () => getOutlineScrollContainer()?.scrollHeight ?? 0,
       scrollOutlineToFraction,
+      clickOutlineItemByName: (name: string) => {
+        const labels = modalRef.current?.querySelectorAll('.outline-panel-item-name') ?? []
+        for (const label of labels) {
+          if (label.textContent?.trim() !== name.trim()) continue
+          const item = label.closest('.outline-panel-item') as HTMLElement | null
+          item?.click()
+          return Boolean(item)
+        }
+        return false
+      },
       getPreviewActiveSlug: () => previewActiveSlugRef.current,
       scrollPreviewToFraction: (fraction: number) => {
         const preview = previewRef.current
         if (!preview) return false
         const maxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
         preview.scrollTop = fraction * maxScroll
+        preview.dispatchEvent(new Event('scroll'))
         capturePreviewScrollMemory()
         updatePreviewActiveSlug(scanPreviewNearestSlug())
         return true
@@ -4325,11 +4501,17 @@ export function ProjectEditor({
     capturePreviewScrollMemory,
     getOutlineScrollContainer,
     getImageFilePreviewState,
+    getMarkdownCodeWrapDebugState,
+    handleOutlineScrollCapture,
     isPreviewContentVisibleNow,
     scanPreviewNearestSlug,
     scheduleProjectStateSave,
     scrollFileBrowserToFraction,
     scrollOutlineToFraction,
+    setMarkdownCodeWrapEnabledState,
+    setMarkdownEditorVisibleState,
+    setMarkdownPreviewOpenState,
+    setOutlineTargetPreference,
     setOutlineVisibleState,
     updatePreviewActiveSlug
   ])
@@ -4442,36 +4624,20 @@ export function ProjectEditor({
       scrollFileBrowserToFraction,
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
-        setIsMarkdownEditorVisible(visible)
-        isMarkdownEditorVisibleRef.current = visible
-        localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(visible))
-        updateUIPreferences({ projectEditorMarkdownEditorVisible: visible })
-        if (!visible && !isMarkdownPreviewOpenRef.current) {
-          setIsMarkdownPreviewOpen(true)
-          isMarkdownPreviewOpenRef.current = true
-          markdownRenderSourceRef.current = fileContentRef.current
-          setMarkdownRenderSource(fileContentRef.current)
-          setIsMarkdownRenderEnabled(true)
-        }
+        setMarkdownEditorVisibleState(visible)
+      },
+      setMarkdownPreviewVisible: (visible: boolean) => {
+        setMarkdownPreviewOpenState(visible)
       },
       isMarkdownPreviewVisible: () => previewVisibleRef.current,
       setMarkdownPreviewOpen: (open: boolean) => {
-        setIsMarkdownPreviewOpen(open)
-        isMarkdownPreviewOpenRef.current = open
-        if (open && activeFilePathRef.current && isMarkdownPath(activeFilePathRef.current) && !isBinaryRef.current && !isImageRef.current && !isSqliteRef.current) {
-          markdownRenderSourceRef.current = fileContentRef.current
-          setMarkdownRenderSource(fileContentRef.current)
-          beginPreviewRestore()
-          setIsMarkdownRenderEnabled(true)
-          return
-        }
-        setIsMarkdownRenderEnabled(false)
-        if (!open && !isMarkdownEditorVisibleRef.current) {
-          setIsMarkdownEditorVisible(true)
-          isMarkdownEditorVisibleRef.current = true
-          localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, 'true')
-        }
+        setMarkdownPreviewOpenState(open)
       },
+      isMarkdownCodeWrapEnabled: () => isMarkdownCodeWrapEnabledRef.current,
+      setMarkdownCodeWrapEnabled: (enabled: boolean) => {
+        setMarkdownCodeWrapEnabledState(enabled)
+      },
+      getMarkdownCodeWrapState: () => getMarkdownCodeWrapDebugState(),
       setPreviewSearchOpen: (open: boolean) => {
         setPreviewSearchOpen(open)
         previewSearchOpenRef.current = open
@@ -4502,10 +4668,12 @@ export function ProjectEditor({
       getPreviewRestorePhase: () => previewRestorePhaseRef.current,
       getOutlineTarget: () => outlineTargetRef.current,
       setOutlineTarget: (target: 'editor' | 'preview') => {
-        setOutlineTarget(target)
-        outlineTargetRef.current = target
-        localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
-        updateUIPreferences({ projectEditorOutlineTarget: target })
+        setOutlineTargetPreference(target)
+      },
+      getOutlineEffectiveTarget: () => {
+        if (previewVisibleRef.current && !isMarkdownEditorVisibleRef.current) return 'preview'
+        if (isMarkdownEditorVisibleRef.current && !previewVisibleRef.current) return 'editor'
+        return outlineTargetRef.current
       },
       isOutlineVisible: () => outlineShowInSplitRef.current,
       setOutlineVisible: (visible: boolean) => {
@@ -4516,12 +4684,23 @@ export function ProjectEditor({
       getOutlineScrollTop: () => getOutlineScrollContainer()?.scrollTop ?? 0,
       getOutlineScrollHeight: () => getOutlineScrollContainer()?.scrollHeight ?? 0,
       scrollOutlineToFraction,
+      clickOutlineItemByName: (name: string) => {
+        const labels = modalRef.current?.querySelectorAll('.outline-panel-item-name') ?? []
+        for (const label of labels) {
+          if (label.textContent?.trim() !== name.trim()) continue
+          const item = label.closest('.outline-panel-item') as HTMLElement | null
+          item?.click()
+          return Boolean(item)
+        }
+        return false
+      },
       getPreviewActiveSlug: () => previewActiveSlugRef.current,
       scrollPreviewToFraction: (fraction: number) => {
         const preview = previewRef.current
         if (!preview) return false
         const maxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
         preview.scrollTop = fraction * maxScroll
+        preview.dispatchEvent(new Event('scroll'))
         capturePreviewScrollMemory()
         updatePreviewActiveSlug(scanPreviewNearestSlug())
         return true
@@ -4575,11 +4754,17 @@ export function ProjectEditor({
     capturePreviewScrollMemory,
     getOutlineScrollContainer,
     getImageFilePreviewState,
+    getMarkdownCodeWrapDebugState,
+    handleOutlineScrollCapture,
     isPreviewContentVisibleNow,
     scanPreviewNearestSlug,
     scheduleProjectStateSave,
     scrollFileBrowserToFraction,
     scrollOutlineToFraction,
+    setMarkdownCodeWrapEnabledState,
+    setMarkdownEditorVisibleState,
+    setMarkdownPreviewOpenState,
+    setOutlineTargetPreference,
     setOutlineVisibleState,
     updatePreviewActiveSlug
   ])
@@ -5725,26 +5910,7 @@ export function ProjectEditor({
                   <button
                     className="project-editor-action-btn project-editor-preview-toggle"
                     onClick={() => {
-	                      setIsMarkdownPreviewOpen((prev) => {
-	                        const next = !prev
-	                        if (next && activeFilePath && isMarkdownFile) {
-                            markdownRenderSourceRef.current = fileContentRef.current
-                            setMarkdownRenderSource(fileContentRef.current)
-	                          beginPreviewRestore()
-	                          setIsMarkdownRenderEnabled(true)
-	                        }
-                        if (!next) {
-                          setIsMarkdownRenderEnabled(false)
-                          if (!isMarkdownEditorVisibleRef.current) {
-                            setIsMarkdownEditorVisible(true)
-                            isMarkdownEditorVisibleRef.current = true
-                            localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, 'true')
-                            updateUIPreferences({ projectEditorMarkdownEditorVisible: true })
-                          }
-                        }
-                        isMarkdownPreviewOpenRef.current = next
-                        return next
-                      })
+                      setMarkdownPreviewOpenState(!isMarkdownPreviewOpenRef.current)
                     }}
                   >
                     {isMarkdownPreviewOpen ? t('projectEditor.closePreview') : t('projectEditor.openPreview')}
@@ -5754,21 +5920,7 @@ export function ProjectEditor({
                   <button
                     className="project-editor-action-btn project-editor-preview-toggle"
                     onClick={() => {
-                      setIsMarkdownEditorVisible((prev) => {
-                        const next = !prev
-                        isMarkdownEditorVisibleRef.current = next
-                        localStorage.setItem(STORAGE_KEY_MARKDOWN_EDITOR_VISIBLE, String(next))
-                        updateUIPreferences({ projectEditorMarkdownEditorVisible: next })
-	                        if (!next && !isMarkdownPreviewOpenRef.current) {
-	                          setIsMarkdownPreviewOpen(true)
-                            markdownRenderSourceRef.current = fileContentRef.current
-                            setMarkdownRenderSource(fileContentRef.current)
-	                          beginPreviewRestore()
-	                          isMarkdownPreviewOpenRef.current = true
-	                          setIsMarkdownRenderEnabled(true)
-                        }
-                        return next
-                      })
+                      setMarkdownEditorVisibleState(!isMarkdownEditorVisibleRef.current)
                     }}
                   >
                     {isMarkdownEditorVisible ? t('projectEditor.closeEdit') : t('projectEditor.openEdit')}
@@ -5778,13 +5930,7 @@ export function ProjectEditor({
                   <button
                     className="project-editor-action-btn project-editor-preview-toggle"
                     onClick={() => {
-                      setIsOutlineVisible((prev) => {
-                        const next = !prev
-                        isOutlineVisibleRef.current = next
-                        localStorage.setItem(STORAGE_KEY_OUTLINE_VISIBLE, String(next))
-                        updateUIPreferences({ projectEditorOutlineVisible: next })
-                        return next
-                      })
+                      setOutlineVisibleState(!isOutlineVisibleRef.current)
                     }}
                   >
                     {isOutlineVisible ? t('projectEditor.closeOutline') : t('projectEditor.openOutline')}
@@ -5852,7 +5998,10 @@ export function ProjectEditor({
                           isLoading={outlineLoading}
                           filePath={activeFilePath}
                           editor={editorRef.current}
-                          initialScrollTop={outlineScrollTopRef.current.get(getFileScrollKey(lastEditorScopeRef.current, activeFilePath) ?? '') ?? 0}
+                          initialScrollTop={(() => {
+                            const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+                            return key ? outlineScrollTopRef.current.get(key) : undefined
+                          })()}
                           onScrollCapture={handleOutlineScrollCapture}
                         />
                       </div>
@@ -5946,10 +6095,22 @@ export function ProjectEditor({
                       )}
                       <div className="project-editor-preview-pane" style={previewPaneStyle}>
                         <div className="project-editor-preview-header">
-                          {t('projectEditor.livePreview')}
-                          {markdownRenderPending && (
-                            <span className="project-editor-preview-pending">{t('projectEditor.rendering')}</span>
-                          )}
+                          <div className="project-editor-preview-header-main">
+                            <span>{t('projectEditor.livePreview')}</span>
+                            {markdownRenderPending && (
+                              <span className="project-editor-preview-pending">{t('projectEditor.rendering')}</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="project-editor-action-btn project-editor-preview-toggle"
+                            aria-pressed={isMarkdownCodeWrapEnabled}
+                            onClick={() => setMarkdownCodeWrapEnabledState(!isMarkdownCodeWrapEnabledRef.current)}
+                          >
+                            {isMarkdownCodeWrapEnabled
+                              ? t('projectEditor.disableCodeWrap')
+                              : t('projectEditor.enableCodeWrap')}
+                          </button>
                           {isMarkdownEditorVisible && (
                             <button
                               className="project-editor-preview-refresh-btn"
@@ -5973,7 +6134,7 @@ export function ProjectEditor({
                           renderedHtml={markdownRenderedHtml}
                         />
                         <div
-                          className={`project-editor-preview-body preview-phase-${previewRestorePhase}`}
+                          className={`project-editor-preview-body preview-phase-${previewRestorePhase}${isMarkdownCodeWrapEnabled ? ' code-wrap-enabled' : ''}`}
                           ref={previewRef}
                           onCopy={handlePreviewCopy}
                         >
@@ -6009,15 +6170,15 @@ export function ProjectEditor({
                           isMarkdown
                           previewRef={previewRef}
                           outlineTarget={outlineTarget}
+                          isEditorVisible={isMarkdownEditorVisible}
+                          isPreviewVisible={isMarkdownPreviewVisible}
                           previewActiveSlug={previewActiveSlug}
-                          initialScrollTop={outlineScrollTopRef.current.get(getFileScrollKey(lastEditorScopeRef.current, activeFilePath) ?? '') ?? 0}
+                          initialScrollTop={(() => {
+                            const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+                            return key ? outlineScrollTopRef.current.get(key) : undefined
+                          })()}
                           onScrollCapture={handleOutlineScrollCapture}
-                          onOutlineTargetChange={(target) => {
-                            setOutlineTarget(target)
-                            outlineTargetRef.current = target
-                            localStorage.setItem(STORAGE_KEY_OUTLINE_TARGET, target)
-        updateUIPreferences({ projectEditorOutlineTarget: target })
-                          }}
+                          onOutlineTargetChange={setOutlineTargetPreference}
                         />
                       </div>
                     </>

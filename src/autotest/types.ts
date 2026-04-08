@@ -67,6 +67,8 @@ export interface GitDiffDebugApi {
 
 export interface PromptSenderDebugApi {
   getTerminalCards: () => Array<{ id: string; title: string; isSelected: boolean }>
+  getSelectedCount: () => number
+  getSelectionIndicatorStates: () => Array<{ id: string; isActive: boolean }>
   getSelectedTerminalIds: () => string[]
   getActionButtons: () => Array<{ label: string; disabled: boolean }>
   getGridLayout: () => { columns: number; rows: number; totalCards: number }
@@ -212,8 +214,19 @@ export interface ProjectEditorDebugApi {
   scrollFileBrowserToFraction?: (fraction: number) => boolean
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
+  setMarkdownPreviewVisible?: (visible: boolean) => void
   isMarkdownPreviewVisible: () => boolean
   setMarkdownPreviewOpen?: (open: boolean) => void
+  isMarkdownCodeWrapEnabled?: () => boolean
+  setMarkdownCodeWrapEnabled?: (enabled: boolean) => void
+  getMarkdownCodeWrapState?: () => {
+    enabled: boolean
+    previewClassName: string | null
+    blockWhiteSpace: string | null
+    blockOverflowWrap: string | null
+    inlineWhiteSpace: string | null
+    inlineOverflowWrap: string | null
+  }
   setPreviewSearchOpen?: (open: boolean) => void
   isPreviewSearchOpen?: () => boolean
   isMarkdownRenderPending: () => boolean
@@ -226,6 +239,7 @@ export interface ProjectEditorDebugApi {
   }
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
+  getOutlineEffectiveTarget?: () => 'editor' | 'preview'
   isOutlineVisible?: () => boolean
   setOutlineVisible?: (visible: boolean) => void
   getOutlineSymbolCount?: () => number
@@ -233,6 +247,7 @@ export interface ProjectEditorDebugApi {
   getOutlineScrollTop?: () => number
   getOutlineScrollHeight?: () => number
   scrollOutlineToFraction?: (fraction: number) => boolean
+  clickOutlineItemByName?: (name: string) => boolean
   getPreviewActiveSlug?: () => string | null
   scrollPreviewToFraction?: (fraction: number) => boolean
   getPreviewScrollTop?: () => number

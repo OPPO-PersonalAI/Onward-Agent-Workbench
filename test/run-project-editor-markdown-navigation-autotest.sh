@@ -47,8 +47,8 @@ if grep -Eq "totalFailed: [1-9]" "$LOG_FILE"; then
   exit 1
 fi
 
-if ! grep -q "PMN-17-markdown-editor-restored" "$LOG_FILE"; then
-  echo "Missing PMN-17 result; the test may not have executed correctly" >&2
+if ! grep -q "PMN-44-markdown-editor-restored" "$LOG_FILE"; then
+  echo "Missing PMN-44 result; the test may not have executed correctly" >&2
   tail -n 40 "$LOG_FILE" >&2
   exit 1
 fi

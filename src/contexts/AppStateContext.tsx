@@ -115,12 +115,24 @@ function normalizeProjectEditorQuickFiles(paths: unknown): string[] {
   return results
 }
 
+function normalizeProjectEditorOutlineScrollByFile(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object') return {}
+  const result: Record<string, number> = {}
+  for (const [filePath, rawScrollTop] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof filePath !== 'string') continue
+    if (typeof rawScrollTop !== 'number' || !Number.isFinite(rawScrollTop)) continue
+    result[normalizeProjectCwd(filePath.trim())] = Math.max(0, rawScrollTop)
+  }
+  return result
+}
+
 function normalizeProjectEditorState(state: ProjectEditorState): ProjectEditorState {
   return {
     ...state,
     expandedDirs: Array.isArray(state.expandedDirs) ? state.expandedDirs : [],
     pinnedFiles: normalizeProjectEditorQuickFiles(state.pinnedFiles),
     recentFiles: normalizeProjectEditorQuickFiles(state.recentFiles),
+    outlineScrollByFile: normalizeProjectEditorOutlineScrollByFile(state.outlineScrollByFile),
     savedAt: typeof state.savedAt === 'number' ? state.savedAt : Date.now()
   }
 }

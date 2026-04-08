@@ -304,11 +304,12 @@ Source set: PromptSender UI validation suite
 - `PS-02`: two-column grid layout is preserved
 - `PS-03`: selecting a terminal updates selection state
 - `PS-04`: deselecting a terminal removes it from the selected set
-- `PS-05`: the four action buttons are present
-- `PS-06`: primary actions are disabled when no terminal is selected
-- `PS-07`: repeated rapid selection toggling does not crash
-- `PS-08`: rendered card count matches layout metadata
-- `PS-09`: single-line Send and execute still runs end to end
+- `PS-05`: selection summary shows the current selected Task count
+- `PS-06`: the four action buttons are present
+- `PS-07`: primary actions are disabled when no terminal is selected
+- `PS-08`: repeated rapid selection toggling does not crash
+- `PS-09`: rendered card count matches layout metadata
+- `PS-10`: single-line Send and execute still runs end to end
 
 ### Phase 1.1: Prompt Integrity
 

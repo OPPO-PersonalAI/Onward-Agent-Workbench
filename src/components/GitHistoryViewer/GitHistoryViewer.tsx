@@ -58,6 +58,7 @@ interface GitHistoryViewerProps {
   displayMode?: 'modal' | 'panel'
   panelShellMode?: 'internal' | 'external'
   onPanelShellStateChange?: (state: SubpagePanelShellState | null) => void
+  taskTitle?: string
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -158,7 +159,8 @@ export function GitHistoryViewer({
   cwd,
   displayMode = 'modal',
   panelShellMode = 'internal',
-  onPanelShellStateChange
+  onPanelShellStateChange,
+  taskTitle
 }: GitHistoryViewerProps) {
   const isPanel = displayMode === 'panel'
   const { settings } = useSettings()
@@ -1669,7 +1671,7 @@ export function GitHistoryViewer({
           <>
             <div className="git-history-header">
               <div className="git-history-header-main">
-                <h2 className="git-history-title">{t('gitHistory.title')}</h2>
+                <h2 className="git-history-title">{t('gitHistory.title')}{taskTitle && <span className="git-history-task-label"> &middot; {taskTitle}</span>}</h2>
                 <SubpageSwitcher current="history" onSelect={handleSelectSubpage} />
               </div>
               <div className="git-history-header-actions">

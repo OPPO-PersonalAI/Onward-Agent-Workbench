@@ -94,21 +94,64 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     }
   }
 
-  // PS-05: 4 operation buttons
+  // PS-05: Selection summary tracks the selected count
+  if (!cancelled()) {
+    const api = getApi()!
+    const cards = api.getTerminalCards()
+    if (cards.length > 0) {
+      api.deselectAllTerminals()
+      await sleep(100)
+      api.selectTerminal(cards[0].id)
+      if (cards[1]) {
+        api.selectTerminal(cards[1].id)
+      }
+      await sleep(200)
+      const selectedIds = api.getSelectedTerminalIds()
+      const selectedCount = api.getSelectedCount()
+      const indicatorStates = api.getSelectionIndicatorStates()
+      const indicatorCellIds = Array.from(document.querySelectorAll('.prompt-sender-selection-cell'))
+        .map(cell => (cell as HTMLElement).dataset.terminalId ?? '')
+      const expectedCount = Math.min(cards.length, 2)
+      const expectedActiveIds = cards.slice(0, expectedCount).map(card => card.id)
+      const activeIndicatorIds = indicatorStates.filter(state => state.isActive).map(state => state.id)
+      _assert(
+        'PS-05-selection-summary',
+        selectedCount === expectedCount
+          && selectedIds.length === expectedCount
+          && indicatorStates.length === cards.length
+          && indicatorCellIds.join('|') === cards.map(card => card.id).join('|')
+          && activeIndicatorIds.join('|') === expectedActiveIds.join('|'),
+        {
+        selectedIds,
+        selectedCount,
+        indicatorStates,
+        indicatorCellIds,
+        expectedActiveIds,
+        activeIndicatorIds,
+        expectedCount
+      })
+      api.deselectAllTerminals()
+      await sleep(100)
+    } else {
+      results.push({ name: 'PS-05-selection-summary', ok: false, detail: { reason: 'no terminals' } })
+    }
+  }
+
+  // PS-06: 4 operation buttons
   if (!cancelled()) {
     const api = getApi()!
     const buttons = api.getActionButtons()
     const expectedLabels = ['Send and execute', 'Execute', 'Send', 'Send all and execute']
     const labelsMatch = buttons.length === 4 &&
       buttons.every((btn, i) => btn.label.includes(expectedLabels[i].substring(0, 2)))
-    _assert('PS-05-action-buttons', buttons.length === 4 && labelsMatch, {
+    _assert('PS-06-action-buttons', buttons.length === 4 && labelsMatch, {
       count: buttons.length,
       labels: buttons.map(b => b.label),
       expected: expectedLabels
     })
   }
 
-  // PS-06: Button disabled when unselected
+  // PS-07: Button disabled when unselected
   if (!cancelled()) {
     const api = getApi()!
     api.deselectAllTerminals()
@@ -116,12 +159,12 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     const buttons = api.getActionButtons()
     // The first 3 buttons (Send and Execute, Execute, Send) should be disabled
     const first3Disabled = buttons.slice(0, 3).every(b => b.disabled)
-    _assert('PS-06-buttons-disabled', first3Disabled, {
+    _assert('PS-07-buttons-disabled', first3Disabled, {
       buttonStates: buttons.map(b => ({ label: b.label, disabled: b.disabled }))
     })
   }
 
-  // PS-07: Quickly select/cancel 20 times
+  // PS-08: Quickly select/cancel 20 times
   if (!cancelled()) {
     const api = getApi()!
     const cards = api.getTerminalCards()
@@ -143,23 +186,23 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
       const finalIds = api.getSelectedTerminalIds()
       const expected = lastState
       const actual = finalIds.includes(targetId)
-      _assert('PS-07-rapid-toggle', actual === expected, {
+      _assert('PS-08-rapid-toggle', actual === expected, {
         iterations: 20,
         expected,
         actual,
         finalIds
       })
     } else {
-      results.push({ name: 'PS-07-rapid-toggle', ok: false, detail: { reason: 'no terminals' } })
+      results.push({ name: 'PS-08-rapid-toggle', ok: false, detail: { reason: 'no terminals' } })
     }
   }
 
-  // PS-08: Multi-terminal layout detection (depends on the current number of terminals)
+  // PS-09: Multi-terminal layout detection (depends on the current number of terminals)
   if (!cancelled()) {
     const api = getApi()!
     const cards = api.getTerminalCards()
     const layout = api.getGridLayout()
-    _assert('PS-08-layout-consistency', layout.totalCards === cards.length, {
+    _assert('PS-09-layout-consistency', layout.totalCards === cards.length, {
       totalCards: layout.totalCards,
       actualCards: cards.length,
       columns: layout.columns,
@@ -167,7 +210,7 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     })
   }
 
-  // PS-09: Single-line send-and-execute still runs end to end
+  // PS-10: Single-line send-and-execute still runs end to end
   if (!cancelled()) {
     const notebookApi = getPromptNotebookApi()
     const terminalApi = getTerminalDebugApi()
@@ -202,7 +245,7 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
         return tail.includes(marker)
       }, platform === 'win32' ? 8000 : 5000, 100)
 
-      _assert('PS-09-send-and-execute-single-line', editorSynced && senderPromptReady && clicked && idle && executed, {
+      _assert('PS-10-send-and-execute-single-line', editorSynced && senderPromptReady && clicked && idle && executed, {
         targetId,
         marker,
         editorSynced,
@@ -221,7 +264,7 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
       await sleep(100)
     } else {
       results.push({
-        name: 'PS-09-send-and-execute-single-line',
+        name: 'PS-10-send-and-execute-single-line',
         ok: false,
         detail: { reason: 'debug api unavailable or no terminals' }
       })

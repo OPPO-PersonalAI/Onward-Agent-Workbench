@@ -89,7 +89,10 @@ export function useOutlineSymbols({
       timerRef.current = null
       const model = editor?.getModel() ?? null
 
-      void parseOutlineSymbols(content, filePath, model).then((result) => {
+      // Read live content from the editor model so the outline reflects
+      // in-progress edits, not the stale `content` state prop.
+      const currentContent = model?.getValue() ?? content
+      void parseOutlineSymbols(currentContent, filePath, model).then((result) => {
         if (currentToken !== tokenRef.current) return
         setSymbols(result)
         symbolsRef.current = result
@@ -97,6 +100,11 @@ export function useOutlineSymbols({
       })
     }, delay)
   }, [isVisible, filePath, content, editor])
+
+  // Keep a ref to the latest triggerParse so the model-content listener
+  // always calls the current version without needing it as a dependency.
+  const triggerParseRef = useRef(triggerParse)
+  triggerParseRef.current = triggerParse
 
   // Trigger parse on content/file/visibility change
   useEffect(() => {
@@ -108,6 +116,17 @@ export function useOutlineSymbols({
       }
     }
   }, [triggerParse])
+
+  // Re-parse when the editor model content changes (e.g., user deletes a heading).
+  // This complements the `content` prop dependency which only updates on file
+  // open/switch, not during live editing.
+  useEffect(() => {
+    if (!editor) return
+    const disposable = editor.onDidChangeModelContent(() => {
+      triggerParseRef.current()
+    })
+    return () => disposable.dispose()
+  }, [editor])
 
   // Reset on file switch
   useEffect(() => {

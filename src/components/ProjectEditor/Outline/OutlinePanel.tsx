@@ -21,6 +21,8 @@ interface OutlinePanelProps {
   isMarkdown?: boolean
   previewRef?: React.RefObject<HTMLDivElement | null>
   outlineTarget?: OutlineTarget
+  isEditorVisible?: boolean
+  isPreviewVisible?: boolean
   onOutlineTargetChange?: (target: OutlineTarget) => void
   previewActiveSlug?: string | null
   onScrollCapture?: (scrollTop: number) => void
@@ -144,6 +146,8 @@ export function OutlinePanel({
   isMarkdown = false,
   previewRef,
   outlineTarget = 'editor',
+  isEditorVisible = true,
+  isPreviewVisible = false,
   onOutlineTargetChange,
   previewActiveSlug,
   onScrollCapture,
@@ -156,6 +160,10 @@ export function OutlinePanel({
   const activeRef = useRef<HTMLDivElement>(null)
   const treeRef = useRef<HTMLDivElement>(null)
   const initialScrollAppliedRef = useRef(false)
+  const skipNextActiveRevealRef = useRef(typeof initialScrollTop === 'number')
+  const suppressActiveRevealUntilRef = useRef<number>(
+    typeof initialScrollTop === 'number' ? Number.POSITIVE_INFINITY : 0
+  )
 
   const totalCount = useMemo(() => countSymbols(symbols), [symbols])
   const showFilter = totalCount > FILTER_THRESHOLD
@@ -171,6 +179,18 @@ export function OutlinePanel({
     return buildSlugMap(collectHeadings(symbols))
   }, [isMarkdown, symbols])
 
+  const effectiveOutlineTarget = useMemo<OutlineTarget>(() => {
+    if (!isMarkdown) return 'editor'
+    if (isPreviewVisible && !isEditorVisible) return 'preview'
+    if (isEditorVisible && !isPreviewVisible) return 'editor'
+    return outlineTarget
+  }, [isEditorVisible, isMarkdown, isPreviewVisible, outlineTarget])
+
+  const isOutlineTargetLocked = useMemo(() => {
+    if (!isMarkdown) return false
+    return isPreviewVisible !== isEditorVisible
+  }, [isEditorVisible, isMarkdown, isPreviewVisible])
+
   const reverseSlugMap = useMemo(() => {
     const map = new Map<string, OutlineItem>()
     for (const [item, slug] of slugMap.entries()) {
@@ -180,11 +200,11 @@ export function OutlinePanel({
   }, [slugMap])
 
   const effectiveActiveItem = useMemo(() => {
-    if (isMarkdown && outlineTarget === 'preview' && previewActiveSlug) {
+    if (isMarkdown && effectiveOutlineTarget === 'preview' && previewActiveSlug) {
       return reverseSlugMap.get(previewActiveSlug) ?? null
     }
     return activeItem
-  }, [activeItem, isMarkdown, outlineTarget, previewActiveSlug, reverseSlugMap])
+  }, [activeItem, effectiveOutlineTarget, isMarkdown, previewActiveSlug, reverseSlugMap])
 
   // Reset filter on file switch
   useEffect(() => {
@@ -198,6 +218,13 @@ export function OutlinePanel({
       return
     }
     if (activeRef.current) {
+      if (skipNextActiveRevealRef.current) {
+        if (effectiveActiveItem) {
+          skipNextActiveRevealRef.current = false
+        }
+        return
+      }
+      if (performance.now() < suppressActiveRevealUntilRef.current) return
       activeRef.current.scrollIntoView({ block: 'nearest' })
     }
   }, [effectiveActiveItem, initialScrollTop])
@@ -214,19 +241,46 @@ export function OutlinePanel({
 
   useEffect(() => {
     initialScrollAppliedRef.current = false
-  }, [filePath])
+    skipNextActiveRevealRef.current = typeof initialScrollTop === 'number'
+    suppressActiveRevealUntilRef.current =
+      typeof initialScrollTop === 'number' ? Number.POSITIVE_INFINITY : 0
+  }, [filePath, initialScrollTop])
 
   useEffect(() => {
     if (initialScrollAppliedRef.current) return
-    if (typeof initialScrollTop !== 'number' || initialScrollTop <= 0) return
+    if (typeof initialScrollTop !== 'number') return
     if (!treeRef.current || symbols.length === 0) return
-    initialScrollAppliedRef.current = true
-    requestAnimationFrame(() => {
-      if (treeRef.current) {
-        treeRef.current.scrollTop = initialScrollTop
+    let frameId = 0
+    let attempts = 0
+    const targetScrollTop = Math.max(0, initialScrollTop)
+
+    const applyInitialScroll = () => {
+      const tree = treeRef.current
+      if (!tree) return
+
+      tree.scrollTop = targetScrollTop
+      const maxScrollTop = Math.max(0, tree.scrollHeight - tree.clientHeight)
+      const clampedTarget = Math.min(targetScrollTop, maxScrollTop)
+      const isApplied = Math.abs(tree.scrollTop - clampedTarget) <= 2
+
+      if (isApplied || attempts >= 4) {
+        initialScrollAppliedRef.current = true
+        onScrollCapture?.(tree.scrollTop)
+        suppressActiveRevealUntilRef.current = performance.now() + 320
+        return
       }
-    })
-  }, [initialScrollTop, symbols.length])
+
+      attempts += 1
+      frameId = requestAnimationFrame(applyInitialScroll)
+    }
+
+    frameId = requestAnimationFrame(applyInitialScroll)
+    return () => {
+      if (frameId) {
+        cancelAnimationFrame(frameId)
+      }
+    }
+  }, [initialScrollTop, onScrollCapture, symbols.length])
 
   const scrollPreviewToHeading = useCallback((item: OutlineItem) => {
     const container = previewRef?.current
@@ -238,14 +292,14 @@ export function OutlinePanel({
     const containerRect = container.getBoundingClientRect()
     const targetRect = target.getBoundingClientRect()
     const offsetTop = targetRect.top - containerRect.top + container.scrollTop
-    container.scrollTo({ top: offsetTop, behavior: 'smooth' })
+    container.scrollTop = offsetTop
     return true
   }, [previewRef, slugMap])
 
   const handleItemClick = useCallback(
     (item: OutlineItem) => {
       const isHeading = item.kind >= OutlineSymbolKind.Heading1 && item.kind <= OutlineSymbolKind.Heading6
-      if (isMarkdown && outlineTarget === 'preview' && isHeading && scrollPreviewToHeading(item)) {
+      if (isMarkdown && effectiveOutlineTarget === 'preview' && isHeading && scrollPreviewToHeading(item)) {
         return
       }
       if (!editor) return
@@ -253,7 +307,16 @@ export function OutlinePanel({
       editor.revealLineInCenter(item.startLine)
       editor.focus()
     },
-    [editor, isMarkdown, outlineTarget, scrollPreviewToHeading]
+    [editor, effectiveOutlineTarget, isMarkdown, scrollPreviewToHeading]
+  )
+
+  const handleOutlineTargetButtonClick = useCallback(
+    (target: OutlineTarget) => {
+      if (!onOutlineTargetChange) return
+      if (isOutlineTargetLocked) return
+      onOutlineTargetChange(target)
+    },
+    [isOutlineTargetLocked, onOutlineTargetChange]
   )
 
   const toggleCollapse = useCallback((key: string, e: React.MouseEvent) => {
@@ -350,20 +413,22 @@ export function OutlinePanel({
       {isMarkdown && onOutlineTargetChange && (
         <div className="outline-panel-target-bar">
           <span className="outline-panel-target-label">{t('outlinePanel.target.label')}</span>
-          <div className="outline-panel-target-seg" data-active={outlineTarget}>
+          <div className="outline-panel-target-seg" data-active={effectiveOutlineTarget}>
             <span className="outline-panel-target-indicator" />
             <button
               type="button"
-              className={`outline-panel-target-btn${outlineTarget === 'editor' ? ' active' : ''}`}
-              onClick={() => onOutlineTargetChange('editor')}
+              className={`outline-panel-target-btn${effectiveOutlineTarget === 'editor' ? ' active' : ''}`}
+              onClick={() => handleOutlineTargetButtonClick('editor')}
+              disabled={isOutlineTargetLocked}
               title={t('outlinePanel.target.editor.tooltip')}
             >
               {t('outlinePanel.target.editor')}
             </button>
             <button
               type="button"
-              className={`outline-panel-target-btn${outlineTarget === 'preview' ? ' active' : ''}`}
-              onClick={() => onOutlineTargetChange('preview')}
+              className={`outline-panel-target-btn${effectiveOutlineTarget === 'preview' ? ' active' : ''}`}
+              onClick={() => handleOutlineTargetButtonClick('preview')}
+              disabled={isOutlineTargetLocked}
               title={t('outlinePanel.target.preview.tooltip')}
             >
               {t('outlinePanel.target.preview')}

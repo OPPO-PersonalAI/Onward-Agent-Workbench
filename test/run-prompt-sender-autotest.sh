@@ -43,8 +43,8 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   exit 1
 fi
 
-if ! grep -q "PS-09-send-and-execute-single-line" "$LOG_FILE"; then
-  echo "Missing PS-09 result; the test may not have executed correctly" >&2
+if ! grep -q "PS-10-send-and-execute-single-line" "$LOG_FILE"; then
+  echo "Missing PS-10 result; the test may not have executed correctly" >&2
   tail -n 80 "$LOG_FILE" >&2
   exit 1
 fi
