@@ -49,7 +49,7 @@ interface TerminalGridProps {
   onTerminalFocus: (id: string) => void
   onTerminalRename: (id: string, newTitle: string) => void
   onPersistTerminalCwd: (terminalId: string, cwd: string | null) => void
-  onOpenProjectEditor: (terminalId: string) => void
+  onOpenProjectEditor: (terminalId: string, options?: { filePath?: string | null; repoRoot?: string | null }) => void
   tabId?: string
   hidden?: boolean
   shortcutAction?: TerminalShortcutAction | null

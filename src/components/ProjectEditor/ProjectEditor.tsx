@@ -139,6 +139,7 @@ const MAX_MARKDOWN_PREVIEW_WIDTH = 800
 
 const DEFAULT_OUTLINE_WIDTH = 220
 const MIN_OUTLINE_WIDTH = 160
+const MAX_OUTLINE_WIDTH = 400
 const MARKDOWN_RENDER_DEBOUNCE_MS = 300
 const MARKDOWN_RENDER_MAX_DEBOUNCE_MS = 1200
 const PROJECT_STATE_SAVE_DEBOUNCE_MS = 1200
@@ -781,7 +782,7 @@ export function ProjectEditor({
   const previewRevealFrameRef = useRef<number | null>(null)
   const previewRevealSettleFrameRef = useRef<number | null>(null)
   const fileTreeRestoreFrameRef = useRef<number | null>(null)
-  const outlineRestoreFrameRef = useRef<number | null>(null)
+
 
   const [fileTreeWidth, setFileTreeWidth] = useState(() => {
     const prefs = getUIPreferences()
@@ -5658,7 +5659,7 @@ export function ProjectEditor({
           <>
             <div className="project-editor-header">
               <div className="project-editor-header-main">
-                <div className="project-editor-title">{t('projectEditor.title')}</div>
+                <div className="project-editor-title">{t('projectEditor.title')}{taskTitle && <span className="project-editor-task-label"> &middot; {taskTitle}</span>}</div>
                 <SubpageSwitcher current="editor" onSelect={handleSelectSubpage} />
               </div>
               <div className="project-editor-header-actions">
