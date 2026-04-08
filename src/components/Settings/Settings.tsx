@@ -159,6 +159,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     terminals[0]?.id || ''
   )
   const [isDragging, setIsDragging] = useState(false)
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const updateActionButtonRef = useRef<HTMLButtonElement>(null)
   const debugActionCountsRef = useRef({ checkNow: 0, restartToUpdate: 0 })
@@ -458,6 +459,18 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       unsubscribe()
     }
   }, [])
+
+  useEffect(() => {
+    window.electronAPI.telemetry.getConsent().then((consent) => {
+      setTelemetryEnabled(consent === true)
+    })
+  }, [])
+
+  const handleTelemetryToggle = useCallback(() => {
+    const newValue = !telemetryEnabled
+    setTelemetryEnabled(newValue)
+    window.electronAPI.telemetry.setConsent(newValue)
+  }, [telemetryEnabled])
 
   useEffect(() => {
     if (debugUpdaterStatus || updaterStatus?.phase === 'downloaded') return
@@ -870,6 +883,30 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   {t('settings.terminal.createFirst')}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+
+        {/* Privacy & Telemetry Section */}
+        <div className="settings-section">
+          <div className="settings-section-title">{t('settings.section.telemetry')}</div>
+          <div className="settings-section-content">
+            <div className="settings-group">
+              <div className="settings-row">
+                <div className="settings-telemetry-info">
+                  <label className="settings-telemetry-toggle">
+                    <input
+                      type="checkbox"
+                      checked={telemetryEnabled}
+                      onChange={handleTelemetryToggle}
+                    />
+                    <span>{t('settings.telemetry.toggle')}</span>
+                  </label>
+                  <p className="settings-telemetry-description">
+                    {t('settings.telemetry.description')}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>

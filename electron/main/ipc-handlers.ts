@@ -14,6 +14,8 @@ import { getCommandPresetStorage, CommandPreset } from './command-preset-storage
 import { getCodingAgentConfigStorage, CodingAgentConfigInput, CodingAgentType } from './coding-agent-config-storage'
 import { getCodingAgentRuntimeInfo } from './coding-agent-runtime'
 import { getAppStateStorage, AppState } from './app-state-storage'
+import { getTelemetryService } from './telemetry/telemetry-service'
+import { getTelemetryConsent, setTelemetryConsent } from './telemetry/telemetry-consent'
 import {
   checkGitInstalled,
   getGitDiff,
@@ -392,6 +394,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       pending.resolve(result)
     }
   })
+  // --- Telemetry ---
+  ipcMain.handle('telemetry:track', (_, name: string, properties?: Record<string, string | number | boolean | null>) => {
+    getTelemetryService().track(name, properties ?? undefined)
+  })
+  ipcMain.handle('telemetry:get-consent', () => {
+    return getTelemetryConsent()
+  })
+  ipcMain.handle('telemetry:set-consent', (_, consent: boolean) => {
+    const instanceId = setTelemetryConsent(consent)
+    getTelemetryService().onConsentChanged(consent, instanceId)
+    return { instanceId }
+  })
+
   ipcMain.handle('debug:get-app-metrics', () => {
     return app.getAppMetrics()
   })
@@ -416,8 +431,24 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   ipcMain.handle('debug:get-git-runtime-metrics', () => {
     return gitRuntimeManager.getMetrics()
   })
+  ipcMain.handle('debug:read-telemetry-log', () => {
+    try {
+      const logPath = getTelemetryService().logFilePath
+      if (!logPath) return ''
+      const { readFileSync, existsSync } = require('fs')
+      if (!existsSync(logPath)) return ''
+      return readFileSync(logPath, 'utf-8')
+    } catch {
+      return ''
+    }
+  })
   ipcMain.handle('debug:quit', () => {
-    app.exit(0)
+    // Flush telemetry then exit — fire-and-forget with a short timeout
+    getTelemetryService().shutdown()
+      .catch(() => {})
+      .finally(() => app.exit(0))
+    // Fallback: force exit after 3 seconds if flush hangs
+    setTimeout(() => app.exit(0), 3000)
   })
 
   // Saved cwd for terminals running coding agents, so that
@@ -1429,9 +1460,13 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('settings:register-shortcuts')
   ipcMain.removeHandler('settings:check-shortcut-available')
   ipcMain.removeHandler('settings:check-shortcut-conflict')
+  ipcMain.removeHandler('telemetry:track')
+  ipcMain.removeHandler('telemetry:get-consent')
+  ipcMain.removeHandler('telemetry:set-consent')
   ipcMain.removeHandler('debug:get-app-metrics')
   ipcMain.removeHandler('debug:focus-window')
   ipcMain.removeHandler('debug:get-git-runtime-metrics')
+  ipcMain.removeHandler('debug:read-telemetry-log')
   ipcMain.removeHandler('debug:quit')
   ipcMain.removeAllListeners('debug:log')
   ipcMain.removeAllListeners('terminal:buffer-response')

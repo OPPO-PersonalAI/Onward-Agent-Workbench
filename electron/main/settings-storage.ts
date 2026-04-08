@@ -77,6 +77,10 @@ interface SettingsState {
   language: AppLocale
   /** Theme settings */
   theme: ThemeSettings
+  /** Telemetry consent: null = not yet asked, true = opted in, false = opted out */
+  telemetryConsent: boolean | null
+  /** Anonymous instance ID for telemetry (random UUID, regenerated on re-opt-in) */
+  telemetryInstanceId: string | null
   updatedAt: number
 }
 
@@ -102,7 +106,7 @@ const MIGRATION_THEME: ThemeSettings = {
 }
 
 // Current version number
-const CURRENT_VERSION = 4
+const CURRENT_VERSION = 5
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
@@ -162,6 +166,8 @@ function createDefaultSettingsState(): SettingsState {
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
     theme: DEFAULT_THEME,
+    telemetryConsent: null,
+    telemetryInstanceId: null,
     updatedAt: Date.now()
   }
 }
@@ -257,6 +263,17 @@ class SettingsStorage {
     const theme = this.validateTheme(state.theme, isExistingUser)
     const language = isAppLocale(state.language) ? state.language : DEFAULT_LOCALE
 
+    // Telemetry fields (added in v5).
+    // - Existing user upgrading from v4 or earlier: default to false (no consent dialog).
+    // - Brand-new install (no prior version): default to null (show consent dialog).
+    const isUpgradeFromPreTelemetry = typeof state.version === 'number' && state.version < 5
+    const telemetryConsent = typeof state.telemetryConsent === 'boolean'
+      ? state.telemetryConsent
+      : (isUpgradeFromPreTelemetry ? false : null)
+    const telemetryInstanceId = typeof state.telemetryInstanceId === 'string' && state.telemetryInstanceId.length > 0
+      ? state.telemetryInstanceId
+      : null
+
     return {
       version: CURRENT_VERSION,
       shortcuts,
@@ -266,6 +283,8 @@ class SettingsStorage {
       settingsPanelWidth,
       language,
       theme,
+      telemetryConsent,
+      telemetryInstanceId,
       updatedAt: state.updatedAt ?? Date.now()
     }
   }
@@ -491,6 +510,30 @@ class SettingsStorage {
       console.error('Failed to delete terminal style:', error)
       return false
     }
+  }
+
+  /**
+   * Get telemetry consent state (null = not asked yet)
+   */
+  getTelemetryConsent(): boolean | null {
+    return this.state.telemetryConsent
+  }
+
+  /**
+   * Get anonymous telemetry instance ID
+   */
+  getTelemetryInstanceId(): string | null {
+    return this.state.telemetryInstanceId
+  }
+
+  /**
+   * Set telemetry consent and instance ID atomically
+   */
+  setTelemetryConsent(consent: boolean, instanceId: string | null): void {
+    this.state.telemetryConsent = consent
+    this.state.telemetryInstanceId = consent ? instanceId : null
+    this.state.updatedAt = Date.now()
+    this.persist()
   }
 }
 

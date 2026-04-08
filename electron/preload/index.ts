@@ -1313,6 +1313,9 @@ const debugAPI: DebugAPI = {
   getGitRuntimeMetrics: () => {
     return ipcRenderer.invoke('debug:get-git-runtime-metrics')
   },
+  readTelemetryLog: () => {
+    return ipcRenderer.invoke('debug:read-telemetry-log') as Promise<string>
+  },
   quit: () => {
     return ipcRenderer.invoke('debug:quit')
   }
@@ -1428,6 +1431,14 @@ const codingAgentAPI: CodingAgentAPI = {
   launch: (payload: CodingAgentLaunchInput) => ipcRenderer.invoke('coding-agent:launch', payload)
 }
 
+const telemetryAPI = {
+  track: (name: string, properties?: Record<string, string | number | boolean | null>) => {
+    ipcRenderer.invoke('telemetry:track', name, properties)
+  },
+  getConsent: () => ipcRenderer.invoke('telemetry:get-consent') as Promise<boolean | null>,
+  setConsent: (consent: boolean) => ipcRenderer.invoke('telemetry:set-consent', consent) as Promise<{ instanceId: string | null }>
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   terminal: terminalAPI,
   prompt: promptAPI,
@@ -1444,6 +1455,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browser: browserAPI,
   codingAgentConfig: codingAgentConfigAPI,
   codingAgent: codingAgentAPI,
+  telemetry: telemetryAPI,
   debug: debugAPI,
   platform: process.platform as 'darwin' | 'win32' | 'linux'
 })

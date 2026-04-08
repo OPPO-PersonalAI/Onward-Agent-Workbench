@@ -1,0 +1,112 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.consent-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.consent-dialog {
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 28px 32px;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+}
+
+.consent-dialog-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.consent-dialog-description {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.consent-dialog-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.consent-dialog-list li {
+  margin: 0;
+}
+
+.consent-dialog-never {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.consent-dialog-list-never {
+  margin-bottom: 16px;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.consent-dialog-settings-hint {
+  margin: 0 0 20px;
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.consent-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.consent-dialog-btn {
+  padding: 7px 18px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.consent-dialog-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.consent-dialog-btn-decline {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text-secondary);
+}
+
+.consent-dialog-btn-decline:not(:disabled):hover {
+  background: color-mix(in srgb, var(--text) 15%, transparent);
+}
+
+.consent-dialog-btn-accept {
+  background: var(--accent);
+  color: #fff;
+}
+
+.consent-dialog-btn-accept:not(:disabled):hover {
+  opacity: 0.9;
+}

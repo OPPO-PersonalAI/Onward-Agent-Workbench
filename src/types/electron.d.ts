@@ -625,6 +625,7 @@ export interface DebugAPI {
   focusWindow: () => Promise<boolean>
   getAppMetrics: () => Promise<Record<string, unknown>[]>
   getGitRuntimeMetrics: () => Promise<GitRuntimeMetrics>
+  readTelemetryLog: () => Promise<string>
   quit: () => Promise<void>
 }
 
@@ -719,6 +720,13 @@ export interface CodingAgentAPI {
   launch: (payload: CodingAgentLaunchInput) => Promise<CodingAgentLaunchResult>
 }
 
+// Telemetry API
+export interface TelemetryAPI {
+  track: (name: string, properties?: Record<string, string | number | boolean | null>) => void
+  getConsent: () => Promise<boolean | null>
+  setConsent: (consent: boolean) => Promise<{ instanceId: string | null }>
+}
+
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
@@ -735,6 +743,7 @@ export interface ElectronAPI {
   browser: BrowserAPI
   codingAgentConfig: CodingAgentConfigAPI
   codingAgent: CodingAgentAPI
+  telemetry: TelemetryAPI
   debug: DebugAPI
   platform: 'darwin' | 'win32' | 'linux'
 }

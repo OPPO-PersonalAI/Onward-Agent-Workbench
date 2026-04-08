@@ -23,7 +23,11 @@ import { startApiServer, stopApiServer } from './api-server'
 import { tMain } from './localization'
 import { getUpdateService } from './update-service'
 import { getAppStateStorage } from './app-state-storage'
+import { getSettingsStorage } from './settings-storage'
 import { getTerminalCwd } from './git-utils'
+import { getTelemetryService } from './telemetry/telemetry-service'
+import { TELEMETRY_RESET_CONSENT } from './telemetry/telemetry-constants'
+import { startSessionHeartbeat, stopSessionHeartbeat, getSessionDurationMs } from './telemetry/telemetry-session-tracker'
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
@@ -76,12 +80,20 @@ export async function confirmQuit(): Promise<boolean> {
   return response === 1
 }
 
+// Flush telemetry before any quit path
+async function shutdownTelemetry(): Promise<void> {
+  stopSessionHeartbeat()
+  getTelemetryService().track('session/end', { durationMs: getSessionDurationMs() })
+  await getTelemetryService().shutdown()
+}
+
 // Exit the request entry in a unified manner to ensure that the confirmation box only pops up once
 export async function requestQuit(): Promise<void> {
   if (isQuitting) return
   if (await confirmQuit()) {
     isQuitting = true
     installUpdateOnQuit = false
+    await shutdownTelemetry()
     await persistTerminalCwdSnapshot()
     const shutdownResult = await ptyManager.shutdownAll()
     if (shutdownResult.timedOut > 0) {
@@ -106,6 +118,7 @@ export async function requestRestartToApplyUpdate(): Promise<{ success: boolean;
   isQuitting = true
   installUpdateOnQuit = true
 
+  await shutdownTelemetry()
   await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {
@@ -126,6 +139,7 @@ export async function requestQuitForDebug(): Promise<{ success: boolean; error?:
   isQuitting = true
   installUpdateOnQuit = false
 
+  await shutdownTelemetry()
   await persistTerminalCwdSnapshot()
   const shutdownResult = await ptyManager.shutdownAll()
   if (shutdownResult.timedOut > 0) {
@@ -283,6 +297,10 @@ function createWindow(displayName: string): void {
     })
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
       log('[Window] render-process-gone', details)
+      getTelemetryService().track('error/rendererCrash', {
+        reason: details.reason,
+        exitCode: details.exitCode
+      })
     })
     mainWindow.webContents.on('unresponsive', () => {
       log('[Window] renderer unresponsive')
@@ -344,6 +362,32 @@ function createWindow(displayName: string): void {
 app.whenReady().then(() => {
   const appInfo = initializeAppIdentity()
 
+  // Debug: reset telemetry consent
+  if (TELEMETRY_RESET_CONSENT) {
+    const isAutotest = process.env.ONWARD_AUTOTEST === '1'
+    if (isAutotest) {
+      // Autotest mode: enable telemetry with a fresh instanceId so events flow immediately
+      const { randomUUID } = require('crypto')
+      getSettingsStorage().setTelemetryConsent(true, randomUUID())
+      // Clear the local log file for a clean test run
+      const logPath = join(app.getPath('userData'), 'telemetry-events.jsonl')
+      try { require('fs').writeFileSync(logPath, '', 'utf-8') } catch {}
+      console.log('[Telemetry] Consent set to true for autotest (ONWARD_TELEMETRY_RESET_CONSENT=1)')
+    } else {
+      // Manual debug mode: reset to null so the consent dialog appears
+      getSettingsStorage().setTelemetryConsent(false, null)
+      const state = getSettingsStorage().get()
+      state.telemetryConsent = null
+      state.telemetryInstanceId = null
+      getSettingsStorage().save(state)
+      console.log('[Telemetry] Consent reset to null for debugging (ONWARD_TELEMETRY_RESET_CONSENT=1)')
+    }
+  }
+
+  // Initialize telemetry (reads consent from settings; no-op if not consented)
+  getTelemetryService().initialize()
+  getTelemetryService().track('session/start')
+
   // Set up the application menu (contains the Edit menu to enable standard editing shortcuts)
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(appInfo.displayName)))
 
@@ -367,6 +411,11 @@ app.whenReady().then(() => {
   }
 
   createWindow(appInfo.displayName)
+
+  // Start telemetry heartbeat with focus tracking (requires mainWindow)
+  if (mainWindow) {
+    startSessionHeartbeat(mainWindow)
+  }
 
   // Initialize system tray
   if (mainWindow) {

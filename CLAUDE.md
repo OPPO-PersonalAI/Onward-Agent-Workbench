@@ -64,6 +64,7 @@ For platform-related commands, always consider these three platforms:
     - Separator: `margin: 4px 6px`
 - Development principle: any subpage entered from the terminal entry point (such as Git Diff, Git History, or the Project Editor) must respond to ESC consistently and return to the terminal. Prefer reusing a shared ESC handling mechanism (for example, a common Hook) to avoid inconsistent implementations across pages.
 - Process management safety: when killing or searching for processes (e.g., `taskkill`, `Get-Process`, `pkill`), always use the exact process name — never use wildcards or partial matches. Using wildcards risks terminating unrelated processes.
+- Debug environment variables: when the user asks to add a debug switch for a specific feature, implement it as an `ONWARD_*` environment variable. Each variable controls exactly one concern, uses `1` to enable, is read once at startup, and logs a message when active. See `docs/debug-env-variables.md` for the full design, variable reference, and implementation guide.
 - Hard rule — Cross-platform development (Windows / macOS / Linux):
     - Every new feature and bug fix must be designed and validated for all three platforms from the start. Do not implement for one platform first and "port later."
     - When creating a new feature or fixing a bug, always consider macOS, Linux, and Windows compatibility at the same time. This is a mandatory execution requirement, not an optional follow-up check.

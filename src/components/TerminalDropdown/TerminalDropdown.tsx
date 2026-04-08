@@ -148,9 +148,12 @@ export function TerminalDropdown({
     }
   }, [isOpen, updateMenuPosition])
 
-  // Handling menu item clicks
-  const handleMenuItemClick = (action: () => void) => {
+  // Handling menu item clicks with telemetry
+  const handleMenuItemClick = (action: () => void, telemetryEvent?: string, telemetryAction?: string) => {
     closeMenu()
+    if (telemetryEvent && telemetryAction) {
+      window.electronAPI.telemetry.track(telemetryEvent, { action: telemetryAction })
+    }
     action()
   }
 
@@ -187,7 +190,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(onOpenWorkDir) }}
+            onClick={() => { handleMenuItemClick(onOpenWorkDir, 'dropdown/workspace', 'openDir') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -199,7 +202,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(onChangeWorkDir) }}
+            onClick={() => { handleMenuItemClick(onChangeWorkDir, 'dropdown/workspace', 'changeDir') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -218,7 +221,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(onOpenProjectEditor) }}
+            onClick={() => { handleMenuItemClick(onOpenProjectEditor, 'dropdown/development', 'editor') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -230,7 +233,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(onViewGitDiff) }}
+            onClick={() => { handleMenuItemClick(onViewGitDiff, 'dropdown/development', 'gitDiff') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -243,7 +246,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(onViewGitHistory) }}
+            onClick={() => { handleMenuItemClick(onViewGitHistory, 'dropdown/development', 'gitHistory') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -263,7 +266,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent('claude-code')) }}
+            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent('claude-code'), 'dropdown/tools', 'claudeCode') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -275,7 +278,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent('codex')) }}
+            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent('codex'), 'dropdown/tools', 'codex') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -287,7 +290,7 @@ export function TerminalDropdown({
           <button
             type="button"
             className={`terminal-dropdown-item${isBrowserOpen ? ' is-active' : ''}`}
-            onClick={() => { handleMenuItemClick(onToggleBrowser) }}
+            onClick={() => { handleMenuItemClick(onToggleBrowser, 'dropdown/tools', 'browser') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
