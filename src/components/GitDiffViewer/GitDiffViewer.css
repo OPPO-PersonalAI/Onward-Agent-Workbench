@@ -513,6 +513,16 @@ body.git-diff-resizing * {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  opacity: 1;
+  transition: opacity 0.15s ease-out;
+}
+
+/* Render-then-reveal: hide editor during diff computation and scroll restoration */
+.diff-phase-waiting-diff .git-diff-editor-container,
+.diff-phase-restoring-scroll .git-diff-editor-container {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
 }
 
 .git-diff-monaco {

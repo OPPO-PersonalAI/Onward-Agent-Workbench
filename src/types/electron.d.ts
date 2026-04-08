@@ -155,6 +155,11 @@ export interface ShellAPI {
   }>
 }
 
+export interface ClipboardAPI {
+  writeText: (text: string) => Promise<boolean>
+  readText: () => Promise<string>
+}
+
 export interface CommandPreset {
   id: string
   command: string
@@ -513,6 +518,7 @@ export interface GitAPI {
   notifyTerminalActivity: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalFocus: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalGitUpdate: (terminalId: string) => Promise<{ success: true }>
+  warmDiffCache: (cwd: string) => Promise<{ success: boolean }>
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => () => void
 }
 
@@ -780,6 +786,7 @@ export interface ElectronAPI {
   terminalConfig: TerminalConfigAPI
   dialog: DialogAPI
   shell: ShellAPI
+  clipboard: ClipboardAPI
   commandPreset: CommandPresetAPI
   appState: AppStateAPI
   git: GitAPI

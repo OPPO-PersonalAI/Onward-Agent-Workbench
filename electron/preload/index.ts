@@ -149,6 +149,11 @@ export interface ShellAPI {
   }>
 }
 
+export interface ClipboardAPI {
+  writeText: (text: string) => Promise<boolean>
+  readText: () => Promise<string>
+}
+
 export interface CommandPreset {
   id: string
   command: string
@@ -564,6 +569,7 @@ export interface GitAPI {
   notifyTerminalActivity: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalFocus: (terminalId: string) => Promise<{ success: true }>
   notifyTerminalGitUpdate: (terminalId: string) => Promise<{ success: true }>
+  warmDiffCache: (cwd: string) => Promise<{ success: boolean }>
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => () => void
 }
 
@@ -1054,6 +1060,15 @@ const shellAPI: ShellAPI = {
   }
 }
 
+const clipboardAPI: ClipboardAPI = {
+  writeText: (text: string) => {
+    return ipcRenderer.invoke('clipboard:write-text', text)
+  },
+  readText: () => {
+    return ipcRenderer.invoke('clipboard:read-text')
+  }
+}
+
 const commandPresetAPI: CommandPresetAPI = {
   load: () => {
     return ipcRenderer.invoke('command-preset:load')
@@ -1164,6 +1179,10 @@ const gitAPI: GitAPI = {
 
   notifyTerminalGitUpdate: (terminalId: string) => {
     return ipcRenderer.invoke('git:notify-terminal-git-update', terminalId)
+  },
+
+  warmDiffCache: (cwd: string) => {
+    return ipcRenderer.invoke('git:warm-diff-cache', cwd)
   },
 
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => {
@@ -1579,6 +1598,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalConfig: terminalConfigAPI,
   dialog: dialogAPI,
   shell: shellAPI,
+  clipboard: clipboardAPI,
   commandPreset: commandPresetAPI,
   appState: appStateAPI,
   git: gitAPI,

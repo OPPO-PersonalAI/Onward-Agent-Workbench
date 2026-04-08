@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { app, ipcMain, BrowserWindow, Menu, dialog, shell } from 'electron'
+import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron'
 import { join, resolve } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
@@ -851,6 +851,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return result
   })
 
+  ipcMain.handle('clipboard:write-text', async (_, text: string) => {
+    clipboard.writeText(text)
+    return true
+  })
+
+  ipcMain.handle('clipboard:read-text', async () => {
+    return clipboard.readText()
+  })
+
   browserViewManager.init(mainWindow)
 
   ipcMain.handle('browser:create', (_, id: string, url?: string) => {
@@ -1168,6 +1177,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   ipcMain.handle('git:notify-terminal-git-update', async (_event, terminalId: string) => {
     gitWatchManager?.notifyTerminalGitUpdate(terminalId)
     return { success: true }
+  })
+
+  // Background diff cache warming — pre-compute diff so opening the panel is instant
+  ipcMain.handle('git:warm-diff-cache', async (_, cwd: string) => {
+    try {
+      await getGitDiff(cwd, { scope: 'full' })
+      return { success: true }
+    } catch {
+      return { success: false }
+    }
   })
 
   // Project editor handlers
@@ -1501,6 +1520,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('dialog:saveTextFile')
   ipcMain.removeHandler('shell:open-path')
   ipcMain.removeHandler('shell:open-external')
+  ipcMain.removeHandler('clipboard:write-text')
+  ipcMain.removeHandler('clipboard:read-text')
   browserViewManager.destroyAll()
   ipcMain.removeHandler('browser:create')
   ipcMain.removeHandler('browser:destroy')

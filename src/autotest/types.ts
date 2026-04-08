@@ -146,7 +146,28 @@ export interface ScheduleDebugInfo {
 
 export interface PromptNotebookDebugApi {
   getPromptCount: () => number
-  getPrompts: () => Array<{ id: string; title: string; pinned: boolean; color?: string; lastUsedAt: number }>
+  getPrompts: () => Array<{ id: string; title: string; pinned: boolean; color?: string; lastUsedAt: number; taskNumbers: number[] }>
+  getVisiblePromptItems?: () => Array<{ id: string; title: string; color?: string; taskNumbers: number[] }>
+  getSelectedPromptId?: () => string | null
+  selectPrompt?: (promptId: string) => boolean
+  setPromptColor?: (promptId: string, color: 'red' | 'yellow' | 'green' | null) => boolean
+  copyPrompt?: (promptId: string) => Promise<boolean>
+  getColorFilterState?: () => {
+    enabled: boolean
+    activeColor: 'red' | 'yellow' | 'green' | null
+    counts: { red: number; yellow: number; green: number }
+  }
+  setColorFilter?: (color: 'red' | 'yellow' | 'green' | null) => boolean
+  getTaskFilterState?: () => {
+    enabled: boolean
+    activeTaskNumber: number | null
+    options: Array<{ taskNumber: number; count: number }>
+  }
+  setTaskFilter?: (taskNumber: number | null) => boolean
+  isFilterEnabled?: () => boolean
+  setFilterEnabled?: (enabled: boolean) => boolean
+  isTargetsEnabled?: () => boolean
+  setTargetsEnabled?: (enabled: boolean) => boolean
   getCleanupConfig: () => { autoEnabled: boolean; autoKeepDays: number; autoDeleteColored: boolean; lastAutoCleanupAt: number | null }
   getEditorContent: () => string
   getEditorHeight: () => number | null

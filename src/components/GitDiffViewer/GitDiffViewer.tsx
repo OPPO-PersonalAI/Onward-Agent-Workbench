@@ -118,6 +118,10 @@ type DiffViewAnchor = {
   scrollTop: number          // Editor scroll position
 }
 
+// Render-then-reveal state machine for eliminating diff scroll flash.
+// Mirrors the PreviewRestorePhase pattern used by Markdown preview.
+type DiffRevealPhase = 'idle' | 'waiting-diff' | 'restoring-scroll'
+
 type DiffViewMemoryEntry = {
   fileKey: string
   filePath: string
@@ -445,6 +449,9 @@ export function GitDiffViewer({
   const modifiedDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const selectedFileRef = useRef<GitFileStatus | null>(null)
   const lastSelectedFileRef = useRef<GitFileStatus | null>(null)
+  const [diffRevealPhase, setDiffRevealPhase] = useState<DiffRevealPhase>('idle')
+  const diffRevealPhaseRef = useRef<DiffRevealPhase>('idle')
+  const diffRevealTimeoutRef = useRef<number | null>(null)
   const [repoFilter, setRepoFilter] = useState<string | null>(null)
   const activeCwd = useMemo(() => diffResult?.cwd || cwd, [diffResult?.cwd, cwd])
   const getFileKey = useCallback((file: GitFileStatus, repoRoot = activeCwd || '') => {
@@ -466,6 +473,29 @@ export function GitDiffViewer({
     staged: t('gitDiff.changeType.staged'),
     untracked: t('gitDiff.changeType.untracked'),
   }), [t])
+  // Keep diffRevealPhase ref in sync with state
+  useEffect(() => { diffRevealPhaseRef.current = diffRevealPhase }, [diffRevealPhase])
+  const cancelDiffRevealTimeout = useCallback(() => {
+    if (diffRevealTimeoutRef.current !== null) {
+      window.clearTimeout(diffRevealTimeoutRef.current)
+      diffRevealTimeoutRef.current = null
+    }
+  }, [])
+  const enterDiffWaiting = useCallback(() => {
+    cancelDiffRevealTimeout()
+    setDiffRevealPhase('waiting-diff')
+    diffRevealPhaseRef.current = 'waiting-diff'
+    // Safety timeout: if onDidUpdateDiff never fires (large file, Monaco stall),
+    // trigger restoring-scroll so the useLayoutEffect still runs scroll restoration
+    // before revealing. 2000ms accommodates large diffs on slower machines.
+    diffRevealTimeoutRef.current = window.setTimeout(() => {
+      if (diffRevealPhaseRef.current === 'waiting-diff') {
+        setDiffRevealPhase('restoring-scroll')
+        diffRevealPhaseRef.current = 'restoring-scroll'
+      }
+    }, 2000)
+  }, [cancelDiffRevealTimeout])
+
   const isDraftDirty = selectedFileState?.draftContent !== undefined &&
     selectedFileState.draftContent !== selectedFileState.modifiedContent
   const hasAnyUnsavedDraft = useMemo(() => {
@@ -1003,7 +1033,17 @@ export function GitDiffViewer({
           fileName: headerTitle
         })
       }
-      setSelectedFile(matched || fallback || result.files[0])
+      // Guard: skip setSelectedFile when the same file is already selected
+      // (e.g., submodule stage-2 load arriving with unchanged file selection).
+      // This prevents unnecessary Monaco editor remount and visual flash.
+      const nextFile = matched || fallback || result.files[0]
+      const currentKey = selectedFileRef.current ? getFileKey(selectedFileRef.current) : null
+      const nextKey = nextFile ? buildFileKey(nextFile.repoRoot || repoRoot, nextFile) : null
+      if (nextKey !== currentKey) {
+        setSelectedFile(nextFile)
+      } else if (nextFile) {
+        selectedFileRef.current = nextFile
+      }
     } else {
       setSelectedFile(null)
       const memorySelectedKey = memoryStore.selectedFileKey
@@ -1089,7 +1129,14 @@ export function GitDiffViewer({
       const initialScope = stagedLoad ? 'root-only' : 'full'
       const initialResult = await window.electronAPI.git.getDiff(cwd, { scope: initialScope })
       if (loadTokenRef.current !== currentToken) return
-      applyLoadedDiffResult(initialResult, cwd, previousSelection)
+
+      // When submodules are still loading, defer UI update to avoid an
+      // intermediate flash (placeholder → root-only list → full list).
+      // Instead, show placeholder until the full result arrives.
+      const deferForSubmodules = stagedLoad && initialResult.success && initialResult.submodulesLoading
+      if (!deferForSubmodules) {
+        applyLoadedDiffResult(initialResult, cwd, previousSelection)
+      }
       debugLog('diff:load:done', {
         cwd: initialResult.cwd || cwd,
         token: currentToken,
@@ -1097,24 +1144,31 @@ export function GitDiffViewer({
         success: initialResult.success,
         fileCount: initialResult.files?.length ?? 0,
         duration: Math.round(performance.now() - start),
-        submodulesLoading: Boolean(initialResult.submodulesLoading)
+        submodulesLoading: Boolean(initialResult.submodulesLoading),
+        deferred: deferForSubmodules
       })
 
-      if (timingRef.current.diffLoadedAt === null) {
+      if (!deferForSubmodules && timingRef.current.diffLoadedAt === null) {
         timingRef.current = {
           ...timingRef.current,
           diffLoadedAt: performance.now()
         }
       }
 
-      if (stagedLoad && initialResult.success && initialResult.submodulesLoading) {
+      if (deferForSubmodules) {
         const fullResult = await window.electronAPI.git.getDiff(cwd, { scope: 'full' })
         if (loadTokenRef.current !== currentToken) return
         applyLoadedDiffResult(
           fullResult,
           cwd,
-          lastSelectedFileRef.current || selectedFileRef.current || previousSelection
+          previousSelection
         )
+        if (timingRef.current.diffLoadedAt === null) {
+          timingRef.current = {
+            ...timingRef.current,
+            diffLoadedAt: performance.now()
+          }
+        }
         debugLog('diff:load:done', {
           cwd: fullResult.cwd || cwd,
           token: currentToken,
@@ -1493,6 +1547,8 @@ export function GitDiffViewer({
           suppressScrollCaptureRef.current = false
         }, 0)
       }
+      // Begin render-then-reveal cycle for the new file
+      enterDiffWaiting()
     }
     if (memory) {
       const previousEntry = memory.entries[nextKey]
@@ -1508,7 +1564,7 @@ export function GitDiffViewer({
       memory.selectedFileKey = nextKey
     }
     setSelectedFile(file)
-  }, [captureDiffView, getFileKey, getMemoryStore, isDraftDirty, persistCurrentDiffSplitRatio, selectedFileKey, t])
+  }, [captureDiffView, enterDiffWaiting, getFileKey, getMemoryStore, isDraftDirty, persistCurrentDiffSplitRatio, selectedFileKey, t])
 
   const clearLineSelection = useCallback(() => {
     setSelectedLineRange(null)
@@ -1669,6 +1725,18 @@ export function GitDiffViewer({
       disposeDiffEditorBindings()
       diffEditorRef.current = editor
       monacoRef.current = monaco
+
+      // Begin render-then-reveal cycle: editor just mounted, hide until diff is computed
+      enterDiffWaiting()
+
+      // Transition from waiting-diff to restoring-scroll when Monaco finishes computing changes
+      diffEditorBindingDisposablesRef.current.push(editor.onDidUpdateDiff(() => {
+        if (diffRevealPhaseRef.current === 'waiting-diff') {
+          setDiffRevealPhase('restoring-scroll')
+          diffRevealPhaseRef.current = 'restoring-scroll'
+        }
+      }))
+
       // Reset decoration refs (the old editor was destroyed, the old collection is no longer valid)
       originalDecorationsRef.current = null
       modifiedDecorationsRef.current = null
@@ -1818,24 +1886,136 @@ export function GitDiffViewer({
         }
       })
 
-      scheduleDiffRestore(editor)
+      // Scroll restoration is now handled by the DiffRevealPhase useLayoutEffect
+      // when onDidUpdateDiff fires → restoring-scroll → synchronous scroll + reveal.
     },
-    [disposeDiffEditorBindings, handleDraftChange, scheduleDiffRestore, scheduleDiffSplitMeasurement]
+    [disposeDiffEditorBindings, enterDiffWaiting, handleDraftChange, scheduleDiffSplitMeasurement]
   )
 
+  // When the selected file changes (not draft edits), enter waiting-diff so the
+  // onDidUpdateDiff → restoring-scroll → reveal cycle can proceed.
+  // Intentionally depends only on selectedFileKey (not selectedFileState) to avoid
+  // re-entering the reveal cycle on every draft keystroke.
   useEffect(() => {
-    if (!isOpen || !selectedFileKey || !selectedFileState) return
-    if (selectedFileState.loading || selectedFileState.error || selectedFileState.isBinary || selectedFileState.isSvg) return
+    if (!isOpen || !selectedFileKey) return
     const editor = diffEditorRef.current
     if (!editor) return
-    scheduleDiffRestore(editor)
-  }, [isOpen, scheduleDiffRestore, selectedFileKey, selectedFileState])
+    if (diffRevealPhaseRef.current === 'idle') {
+      enterDiffWaiting()
+    }
+  }, [isOpen, enterDiffWaiting, selectedFileKey])
+
+  // Render-then-reveal: restore scroll position synchronously before paint,
+  // then transition to idle so CSS fade-in reveals the content.
+  useLayoutEffect(() => {
+    if (diffRevealPhase !== 'restoring-scroll') return
+
+    const editor = diffEditorRef.current
+    if (!editor) {
+      setDiffRevealPhase('idle')
+      diffRevealPhaseRef.current = 'idle'
+      return
+    }
+
+    suppressScrollCaptureRef.current = true
+
+    const file = selectedFileRef.current
+    const fileKey = file ? getFileKey(file) : null
+    const memory = getMemoryStore()
+    let scrollApplied = false
+
+    if (file && fileKey && memory) {
+      const entry = findMemoryEntry(memory, file, fileKey)
+      if (entry) {
+        const headerTitle = file.originalFilename && (file.status === 'R' || file.status === 'C')
+          ? `${file.originalFilename} → ${file.filename}`
+          : file.filename
+
+        if (file.status === 'D') {
+          diffRestoreAppliedRef.current = { cycle: diffRestoreCycleRef.current, fileKey }
+          setDiffRestoreNotice({
+            type: 'missing',
+            message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
+            fileName: headerTitle
+          })
+        } else {
+          // Check signature to detect content changes
+          const currentFileState = fileContentsRef.current[fileKey]
+          if (entry.signature && currentFileState && !currentFileState.isBinary) {
+            const currentSignature = buildDiffSignature(
+              currentFileState.originalContent ?? '',
+              currentFileState.draftContent ?? currentFileState.modifiedContent ?? ''
+            )
+            if (currentSignature !== entry.signature) {
+              diffRestoreAppliedRef.current = { cycle: diffRestoreCycleRef.current, fileKey }
+              setDiffRestoreNotice({
+                type: 'changed',
+                message: t('gitDiff.restore.changedLocation', { fileName: headerTitle }),
+                fileName: headerTitle
+              })
+              // Content changed — abort scroll restoration, let user land at first change
+              cancelDiffRevealTimeout()
+              setDiffRevealPhase('idle')
+              diffRevealPhaseRef.current = 'idle'
+              window.setTimeout(() => { suppressScrollCaptureRef.current = false }, 200)
+              return
+            }
+          }
+
+          // Apply saved scroll position
+          if (entry.scrollTop > 0) {
+            const modifiedEditor = editor.getModifiedEditor()
+            modifiedEditor.setScrollTop(entry.scrollTop)
+            restoredAnchorRef.current[fileKey] = {
+              line: entry.anchor?.line ?? null,
+              scrollTop: entry.scrollTop
+            }
+            scrollApplied = true
+          } else if (entry.anchor?.line) {
+            const modifiedEditor = editor.getModifiedEditor()
+            const lineCount = modifiedEditor.getModel()?.getLineCount() ?? 0
+            const targetLine = Math.max(1, Math.min(entry.anchor.line, lineCount || 1))
+            modifiedEditor.revealLineNearTop(targetLine)
+            restoredAnchorRef.current[fileKey] = {
+              line: targetLine,
+              scrollTop: 0
+            }
+            scrollApplied = true
+          }
+
+          diffRestoreAppliedRef.current = { cycle: diffRestoreCycleRef.current, fileKey }
+          setDiffRestoreNotice(null)
+        }
+      }
+    }
+
+    if (!scrollApplied) {
+      // No saved position: jump to first change
+      const changes = editor.getLineChanges()
+      if (changes && changes.length > 0) {
+        const firstChange = changes[0]
+        const targetLine = firstChange.modifiedStartLineNumber || firstChange.originalStartLineNumber || 1
+        editor.getModifiedEditor().revealLineNearTop(targetLine)
+      }
+    }
+
+    // Transition to idle — CSS fade-in reveals content
+    cancelDiffRevealTimeout()
+    setDiffRevealPhase('idle')
+    diffRevealPhaseRef.current = 'idle'
+
+    // Release scroll capture suppression after a brief delay
+    window.setTimeout(() => {
+      suppressScrollCaptureRef.current = false
+    }, 200)
+  }, [diffRevealPhase, cancelDiffRevealTimeout, findMemoryEntry, getFileKey, getMemoryStore, t])
 
   useEffect(() => {
     return () => {
       disposeDiffEditorBindings()
+      cancelDiffRevealTimeout()
     }
-  }, [disposeDiffEditorBindings])
+  }, [disposeDiffEditorBindings, cancelDiffRevealTimeout])
 
   const showEditMessage = useCallback((msg: { type: 'success' | 'error'; text: string }) => {
     setEditMessage(msg)
@@ -2858,7 +3038,7 @@ export function GitDiffViewer({
             </div>
           )}
         </div>
-        <div className="git-diff-detail-content">
+        <div className={`git-diff-detail-content${diffRevealPhase !== 'idle' ? ` diff-phase-${diffRevealPhase}` : ''}`}>
           {(!fileState || fileState.loading) && (
             <div className="git-diff-loading">
               <div className="git-diff-spinner" />

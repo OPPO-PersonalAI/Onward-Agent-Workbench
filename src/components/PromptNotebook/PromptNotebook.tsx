@@ -18,7 +18,21 @@ import { ScheduleNotificationBar } from './ScheduleNotification'
 import { useI18n } from '../../i18n/useI18n'
 import type { ImportPrepareResult } from '../../utils/prompt-io'
 import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
+import { buildPromptTaskHistorySummary } from './promptTaskHistory'
 import './PromptNotebook.css'
+
+type PromptColorFilter = 'red' | 'yellow' | 'green' | null
+
+interface PromptColorFilterStats {
+  red: number
+  yellow: number
+  green: number
+}
+
+interface PromptTaskFilterOption {
+  taskNumber: number
+  count: number
+}
 
 interface PromptNotebookProps {
   terminals: TerminalInfo[]
@@ -129,6 +143,10 @@ export const PromptNotebook = memo(function PromptNotebook({
   const { t, locale } = useI18n()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [filterEnabled, setFilterEnabled] = useState(false)
+  const [targetsEnabled, setTargetsEnabled] = useState(false)
+  const [activeColorFilter, setActiveColorFilter] = useState<PromptColorFilter>(null)
+  const [activeTaskFilter, setActiveTaskFilter] = useState<number | null>(null)
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const saveMessageTimerRef = useRef<number>(0)
 
@@ -148,6 +166,14 @@ export const PromptNotebook = memo(function PromptNotebook({
         window.clearTimeout(saveMessageTimerRef.current)
       }
     }
+  }, [])
+
+  const writeClipboardText = useCallback(async (text: string) => {
+    if (window.electronAPI?.clipboard?.writeText) {
+      await window.electronAPI.clipboard.writeText(text)
+      return
+    }
+    await navigator.clipboard.writeText(text)
   }, [])
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null)
   const [appendContent, setAppendContent] = useState('')
@@ -191,6 +217,69 @@ export const PromptNotebook = memo(function PromptNotebook({
     return prompts.find(p => p.id === selectedId) || null
   }, [prompts, selectedId])
 
+  const promptTaskHistory = useMemo(() => buildPromptTaskHistorySummary(prompts), [prompts])
+
+  const promptMatchesTaskFilter = useCallback((promptId: string, taskNumber: number) => {
+    return promptTaskHistory.promptTaskNumbers.get(promptId)?.includes(taskNumber) ?? false
+  }, [promptTaskHistory])
+
+  const searchMatchedPrompts = useMemo(() => {
+    if (!searchKeyword.trim()) return prompts
+    const keyword = searchKeyword.toLowerCase()
+    return prompts.filter(p =>
+      p.title.toLowerCase().includes(keyword) ||
+      p.content.toLowerCase().includes(keyword)
+    )
+  }, [prompts, searchKeyword])
+
+  const filteredPrompts = useMemo(() => {
+    return searchMatchedPrompts.filter((prompt) => {
+      if (filterEnabled && activeColorFilter && prompt.color !== activeColorFilter) {
+        return false
+      }
+      if (filterEnabled && activeTaskFilter !== null && !promptMatchesTaskFilter(prompt.id, activeTaskFilter)) {
+        return false
+      }
+      return true
+    })
+  }, [searchMatchedPrompts, filterEnabled, activeColorFilter, activeTaskFilter, promptMatchesTaskFilter])
+
+  const colorFilterStats = useMemo<PromptColorFilterStats>(() => {
+    const stats: PromptColorFilterStats = { red: 0, yellow: 0, green: 0 }
+    searchMatchedPrompts.forEach((prompt) => {
+      if (filterEnabled && activeTaskFilter !== null && !promptMatchesTaskFilter(prompt.id, activeTaskFilter)) {
+        return
+      }
+      if (prompt.color === 'red') stats.red += 1
+      if (prompt.color === 'yellow') stats.yellow += 1
+      if (prompt.color === 'green') stats.green += 1
+    })
+    return stats
+  }, [searchMatchedPrompts, filterEnabled, activeTaskFilter, promptMatchesTaskFilter])
+
+  const taskFilterOptions = useMemo<PromptTaskFilterOption[]>(() => {
+    return promptTaskHistory.allTaskNumbers.map((taskNumber) => {
+      let count = 0
+      searchMatchedPrompts.forEach((prompt) => {
+        if (filterEnabled && activeColorFilter && prompt.color !== activeColorFilter) {
+          return
+        }
+        if (promptMatchesTaskFilter(prompt.id, taskNumber)) {
+          count += 1
+        }
+      })
+      return { taskNumber, count }
+    })
+  }, [promptTaskHistory.allTaskNumbers, searchMatchedPrompts, filterEnabled, activeColorFilter, promptMatchesTaskFilter])
+
+  const setFilterEnabledWithReset = useCallback((nextEnabled: boolean) => {
+    setFilterEnabled(nextEnabled)
+    if (!nextEnabled) {
+      setActiveColorFilter(null)
+      setActiveTaskFilter(null)
+    }
+  }, [])
+
   // Sync selection and edit state after cleanup
   useEffect(() => {
     if (selectedId && !prompts.some(p => p.id === selectedId)) {
@@ -230,8 +319,81 @@ export const PromptNotebook = memo(function PromptNotebook({
         title: p.title,
         pinned: p.pinned,
         color: p.color ?? undefined,
-        lastUsedAt: p.lastUsedAt
+        lastUsedAt: p.lastUsedAt,
+        taskNumbers: promptTaskHistory.promptTaskNumbers.get(p.id) ?? []
       })),
+      getVisiblePromptItems: () => filteredPrompts.map(p => ({
+        id: p.id,
+        title: p.title,
+        color: p.color ?? undefined,
+        taskNumbers: promptTaskHistory.promptTaskNumbers.get(p.id) ?? []
+      })),
+      getSelectedPromptId: () => selectedId,
+      selectPrompt: (promptId: string) => {
+        if (!prompts.some(prompt => prompt.id === promptId)) return false
+        setSelectedId(promptId)
+        return true
+      },
+      setPromptColor: (promptId: string, color: PromptColorFilter) => {
+        if (color !== null && color !== 'red' && color !== 'yellow' && color !== 'green') {
+          return false
+        }
+        const prompt = prompts.find(item => item.id === promptId)
+        if (!prompt) return false
+        onUpdatePrompt({ ...prompt, color }, true)
+        return true
+      },
+      copyPrompt: async (promptId: string) => {
+        const prompt = prompts.find(item => item.id === promptId)
+        if (!prompt) return false
+        try {
+          await writeClipboardText(prompt.content)
+          showSaveMessage({ type: 'success', text: t('promptNotebook.copySuccess') })
+          return true
+        } catch (error) {
+          console.error('Failed to copy Prompt content:', error)
+          showSaveMessage({ type: 'error', text: t('promptNotebook.copyFailed') })
+          return false
+        }
+      },
+      getColorFilterState: () => ({
+        enabled: filterEnabled,
+        activeColor: activeColorFilter,
+        counts: colorFilterStats
+      }),
+      setColorFilter: (color: PromptColorFilter) => {
+        if (color !== null && color !== 'red' && color !== 'yellow' && color !== 'green') {
+          return false
+        }
+        if (color !== null) {
+          setFilterEnabled(true)
+        }
+        setActiveColorFilter(color)
+        return true
+      },
+      getTaskFilterState: () => ({
+        enabled: filterEnabled,
+        activeTaskNumber: activeTaskFilter,
+        options: taskFilterOptions
+      }),
+      setTaskFilter: (taskNumber: number | null) => {
+        if (taskNumber !== null && !Number.isFinite(taskNumber)) return false
+        if (taskNumber !== null) {
+          setFilterEnabled(true)
+        }
+        setActiveTaskFilter(taskNumber)
+        return true
+      },
+      isFilterEnabled: () => filterEnabled,
+      setFilterEnabled: (nextEnabled: boolean) => {
+        setFilterEnabledWithReset(nextEnabled)
+        return true
+      },
+      isTargetsEnabled: () => targetsEnabled,
+      setTargetsEnabled: (nextEnabled: boolean) => {
+        setTargetsEnabled(nextEnabled)
+        return true
+      },
       getCleanupConfig: () => ({
         autoEnabled: promptCleanup.autoEnabled,
         autoKeepDays: promptCleanup.autoKeepDays,
@@ -338,7 +500,32 @@ export const PromptNotebook = memo(function PromptNotebook({
         delete (window as any).__onwardPromptNotebookDebug
       }
     }
-  }, [prompts, promptCleanup, promptEditorHeight, onAddPrompt, scheduleMap, tabId, terminals, onAddSchedule, onUpdateSchedule, onDeleteSchedule])
+  }, [
+    prompts,
+    promptCleanup,
+    promptEditorHeight,
+    onAddPrompt,
+    scheduleMap,
+    tabId,
+    terminals,
+    onAddSchedule,
+    onUpdateSchedule,
+    onDeleteSchedule,
+    promptTaskHistory,
+    filteredPrompts,
+    selectedId,
+    onUpdatePrompt,
+    showSaveMessage,
+    writeClipboardText,
+    t,
+    filterEnabled,
+    targetsEnabled,
+    activeColorFilter,
+    colorFilterStats,
+    activeTaskFilter,
+    taskFilterOptions,
+    setFilterEnabledWithReset
+  ])
 
   // Get the content to be sent: use the editor content first, otherwise use the selected Prompt content
   const contentToSend = useMemo(() => {
@@ -359,16 +546,6 @@ export const PromptNotebook = memo(function PromptNotebook({
       sendHistory: sendRecords
     })
   }, [editorContent, editorTitle, onAddPrompt])
-
-  // Filter Prompt (Search)
-  const filteredPrompts = useMemo(() => {
-    if (!searchKeyword.trim()) return prompts
-    const keyword = searchKeyword.toLowerCase()
-    return prompts.filter(p =>
-      p.title.toLowerCase().includes(keyword) ||
-      p.content.toLowerCase().includes(keyword)
-    )
-  }, [prompts, searchKeyword])
 
   // Create new Prompt (commit)
   const handleSubmit = useCallback((title: string, content: string, color?: 'red' | 'yellow' | 'green' | null) => {
@@ -572,6 +749,34 @@ export const PromptNotebook = memo(function PromptNotebook({
     if (!prompt) return
     onUpdatePrompt({ ...prompt, color }, true)
   }, [prompts, onUpdatePrompt])
+
+  const handleToggleColorFilter = useCallback((color: Exclude<PromptColorFilter, null>) => {
+    setFilterEnabled(true)
+    setActiveColorFilter((prev) => prev === color ? null : color)
+  }, [])
+
+  const handleToggleTaskFilter = useCallback((taskNumber: number) => {
+    setFilterEnabled(true)
+    setActiveTaskFilter((prev) => prev === taskNumber ? null : taskNumber)
+  }, [])
+
+  const handleToggleFilterEnabled = useCallback((nextEnabled: boolean) => {
+    setFilterEnabledWithReset(nextEnabled)
+  }, [setFilterEnabledWithReset])
+
+  const handleToggleTargetsEnabled = useCallback((nextEnabled: boolean) => {
+    setTargetsEnabled(nextEnabled)
+  }, [])
+
+  const handleCopyPrompt = useCallback(async (prompt: Prompt) => {
+    try {
+      await writeClipboardText(prompt.content)
+      showSaveMessage({ type: 'success', text: t('promptNotebook.copySuccess') })
+    } catch (error) {
+      console.error('Failed to copy Prompt content:', error)
+      showSaveMessage({ type: 'error', text: t('promptNotebook.copyFailed') })
+    }
+  }, [showSaveMessage, t, writeClipboardText])
 
   // Scheduled task operations
   const handleSetSchedule = useCallback((prompt: Prompt) => {
@@ -848,12 +1053,23 @@ export const PromptNotebook = memo(function PromptNotebook({
           prompts={filteredPrompts}
           selectedId={selectedId}
           searchKeyword={searchKeyword}
+          filterEnabled={filterEnabled}
+          targetsEnabled={targetsEnabled}
+          activeColorFilter={activeColorFilter}
+          colorFilterStats={colorFilterStats}
+          activeTaskFilter={activeTaskFilter}
+          taskFilterOptions={taskFilterOptions}
+          promptTaskNumbers={promptTaskHistory.promptTaskNumbers}
           onSelect={handleSelect}
           onDoubleClick={handleDoubleClick}
           onDelete={handleDelete}
           onTogglePin={handleTogglePin}
           onAppend={handleAppend}
           onColorChange={handleColorChange}
+          onToggleFilterEnabled={handleToggleFilterEnabled}
+          onToggleTargetsEnabled={handleToggleTargetsEnabled}
+          onToggleColorFilter={handleToggleColorFilter}
+          onToggleTaskFilter={handleToggleTaskFilter}
           globalPromptIds={globalPromptIds}
           onReorderPinned={onReorderPinnedPrompts}
           autoCleanupEnabled={promptCleanup.autoEnabled}
@@ -869,6 +1085,7 @@ export const PromptNotebook = memo(function PromptNotebook({
           onPauseSchedule={handlePauseSchedule}
           onResumeSchedule={handleResumeSchedule}
           onViewSendHistory={handleViewSendHistory}
+          onCopyPrompt={handleCopyPrompt}
         />
 
         {/* input area */}

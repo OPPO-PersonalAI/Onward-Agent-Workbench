@@ -163,6 +163,7 @@ export const PromptSender = memo(function PromptSender({
 
     try {
       const result = await runner()
+      setSelectedTerminals(new Set())
       const sentOnlyCount = result.sentOnlyIds.length
       const failedCount = result.failedIds.length
       const unsafeMultilineCount = result.issues.filter(
