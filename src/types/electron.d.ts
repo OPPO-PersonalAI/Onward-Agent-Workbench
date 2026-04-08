@@ -677,6 +677,7 @@ export interface DebugAPI {
   feedbackReset: () => Promise<void>
   feedbackSetMockIssues: (issues: FeedbackDebugRemoteIssue[]) => Promise<void>
   feedbackGetLastOpenedUrl: () => Promise<string | null>
+  readTelemetryLog: () => Promise<string>
   quit: () => Promise<void>
 }
 
@@ -780,6 +781,13 @@ export interface CodingAgentAPI {
   launch: (payload: CodingAgentLaunchInput) => Promise<CodingAgentLaunchResult>
 }
 
+// Telemetry API
+export interface TelemetryAPI {
+  track: (name: string, properties?: Record<string, string | number | boolean | null>) => void
+  getConsent: () => Promise<boolean | null>
+  setConsent: (consent: boolean) => Promise<{ instanceId: string | null }>
+}
+
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
@@ -799,6 +807,7 @@ export interface ElectronAPI {
   feedback: FeedbackAPI
   codingAgentConfig: CodingAgentConfigAPI
   codingAgent: CodingAgentAPI
+  telemetry: TelemetryAPI
   debug: DebugAPI
   platform: 'darwin' | 'win32' | 'linux'
 }

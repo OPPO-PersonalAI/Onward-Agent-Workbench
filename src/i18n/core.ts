@@ -941,7 +941,23 @@ const en = {
   'projectEditor.restore.previousFileDeletedNotice': 'The previously opened file was deleted: {{path}}',
   'projectEditor.restore.previousFileDeletedStatus': 'The previously opened file was deleted',
   'projectEditor.restore.fileMissingNotice': 'File was deleted or does not exist: {{path}}',
-  'projectEditor.restore.fileMissingStatus': 'File was deleted or does not exist'
+  'projectEditor.restore.fileMissingStatus': 'File was deleted or does not exist',
+
+  'telemetry.consent.title': 'Help improve Onward',
+  'telemetry.consent.description': 'Share anonymous usage data to help us improve Onward. We collect:',
+  'telemetry.consent.collect.features': 'Feature usage (which features you use)',
+  'telemetry.consent.collect.performance': 'Performance metrics (startup time, response speed)',
+  'telemetry.consent.collect.crashes': 'Crash reports (error details)',
+  'telemetry.consent.neverCollect': 'We NEVER collect:',
+  'telemetry.consent.never.files': 'File contents or paths',
+  'telemetry.consent.never.commands': 'Terminal commands or output',
+  'telemetry.consent.never.personal': 'Personal information',
+  'telemetry.consent.settingsHint': 'You can change this anytime in Settings.',
+  'telemetry.consent.accept': 'Yes, share data',
+  'telemetry.consent.decline': 'No thanks',
+  'settings.section.telemetry': 'Privacy & Telemetry',
+  'settings.telemetry.toggle': 'Share anonymous usage data',
+  'settings.telemetry.description': 'Help improve Onward by sharing anonymous usage data, performance metrics, and crash reports. No personal information is collected.'
 } as const satisfies TranslationDictionary
 
 export type TranslationKey = keyof typeof en
@@ -1871,7 +1887,23 @@ const zhCN: LocaleTranslations = {
   'projectEditor.restore.previousFileDeletedNotice': '上一次打开的文件已被删除：{{path}}',
   'projectEditor.restore.previousFileDeletedStatus': '上一次打开的文件已被删除',
   'projectEditor.restore.fileMissingNotice': '文件已删除或不存在：{{path}}',
-  'projectEditor.restore.fileMissingStatus': '文件已删除或不存在'
+  'projectEditor.restore.fileMissingStatus': '文件已删除或不存在',
+
+  'telemetry.consent.title': '帮助改进 Onward',
+  'telemetry.consent.description': '分享匿名使用数据以帮助我们改进 Onward。我们收集：',
+  'telemetry.consent.collect.features': '功能使用情况（您使用了哪些功能）',
+  'telemetry.consent.collect.performance': '性能指标（启动时间、响应速度）',
+  'telemetry.consent.collect.crashes': '崩溃报告（错误详情）',
+  'telemetry.consent.neverCollect': '我们绝不收集：',
+  'telemetry.consent.never.files': '文件内容或路径',
+  'telemetry.consent.never.commands': '终端命令或输出',
+  'telemetry.consent.never.personal': '个人信息',
+  'telemetry.consent.settingsHint': '您可以随时在设置中更改此选项。',
+  'telemetry.consent.accept': '是，分享数据',
+  'telemetry.consent.decline': '不了，谢谢',
+  'settings.section.telemetry': '隐私与遥测',
+  'settings.telemetry.toggle': '分享匿名使用数据',
+  'settings.telemetry.description': '通过分享匿名使用数据、性能指标和崩溃报告来帮助改进 Onward。不会收集任何个人信息。'
 }
 
 const translations: Record<AppLocale, LocaleTranslations> = {

@@ -42,6 +42,7 @@ import {
   type ImportPrepareResult
 } from './utils/prompt-io'
 import { useI18n } from './i18n/useI18n'
+import { ConsentDialog } from './components/ConsentDialog/ConsentDialog'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
 import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/focus-coordinator'
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
@@ -398,6 +399,19 @@ function AppContent({
 
   const { registerCloseSettings, registerTryCloseSettingsOnSwitch } = usePromptActions()
 
+  // Telemetry consent state: null = not asked, true/false = answered
+  const [telemetryConsent, setTelemetryConsentState] = useState<boolean | null | 'loading'>('loading')
+
+  useEffect(() => {
+    window.electronAPI.telemetry.getConsent().then((consent) => {
+      setTelemetryConsentState(consent)
+    })
+  }, [])
+
+  const handleTelemetryConsent = useCallback((consent: boolean) => {
+    setTelemetryConsentState(consent)
+  }, [])
+
   const buildTerminalIssue = useCallback((
     terminalId: string,
     status: TerminalBatchIssue['status'],
@@ -634,15 +648,18 @@ function AppContent({
 
   // Send command to specified terminal
   const handleSendToTerminals = useCallback(async (terminalIds: string[], content: string) => {
+    window.electronAPI.telemetry.track('prompt/use', { action: 'send' })
     return sendContentToTerminals(terminalIds, content, 'send')
   }, [sendContentToTerminals])
 
   // Execute command in terminal (send carriage return)
   const handleExecuteOnTerminals = useCallback(async (terminalIds: string[]) => {
+    window.electronAPI.telemetry.track('prompt/use', { action: 'execute' })
     return writeToTerminals(terminalIds, '\r', 'execute')
   }, [writeToTerminals])
 
   const handleSendAndExecuteOnTerminals = useCallback(async (terminalIds: string[], content: string) => {
+    window.electronAPI.telemetry.track('prompt/use', { action: 'sendAndExecute' })
     const sendResult = await sendContentToTerminals(terminalIds, content, 'send-and-execute:send')
     const deliveredIds = getDeliveredTerminalIds(sendResult)
     if (deliveredIds.length === 0) {
@@ -1220,6 +1237,9 @@ function AppContent({
 
   return (
     <div className="app">
+      {telemetryConsent === null && (
+        <ConsentDialog onConsent={handleTelemetryConsent} />
+      )}
       <TabBar />
       <div className="app-body">
         <Sidebar
@@ -1492,22 +1512,27 @@ function SettingsProviderWithHandler() {
         break
       }
       case 'terminalGitDiff': {
+        window.electronAPI.telemetry.track('dropdown/development', { action: 'gitDiff' })
         dispatchTerminalAction('gitDiff')
         break
       }
       case 'terminalGitHistory': {
+        window.electronAPI.telemetry.track('dropdown/development', { action: 'gitHistory' })
         dispatchTerminalAction('gitHistory')
         break
       }
       case 'terminalChangeWorkDir': {
+        window.electronAPI.telemetry.track('dropdown/workspace', { action: 'changeDir' })
         dispatchTerminalAction('changeWorkDir')
         break
       }
       case 'terminalOpenWorkDir': {
+        window.electronAPI.telemetry.track('dropdown/workspace', { action: 'openDir' })
         dispatchTerminalAction('openWorkDir')
         break
       }
       case 'terminalProjectEditor': {
+        window.electronAPI.telemetry.track('dropdown/development', { action: 'editor' })
         dispatchTerminalAction('projectEditor')
         break
       }

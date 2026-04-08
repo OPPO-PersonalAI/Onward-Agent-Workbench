@@ -45,6 +45,7 @@ import { testChangeLog } from './test-change-log'
 import { testFeedback } from './test-feedback'
 import { testFeedbackUi } from './test-feedback-ui'
 import { testFeedbackPersistenceSeed, testFeedbackPersistenceVerify } from './test-feedback-persistence'
+import { testTelemetry } from './test-telemetry'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -239,6 +240,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testChangeLog(ctx)
       collectSuiteResults('ChangeLog', results)
       await sleep(300)
+    }
+
+    if (!ctx.cancelled() && shouldRun('telemetry')) {
+      log('phase0.88:begin')
+      const results = await testTelemetry(ctx)
+      collectSuiteResults('Telemetry', results)
+      await sleep(400)
     }
 
     if (!ctx.cancelled() && shouldRun('file-watch')) {
