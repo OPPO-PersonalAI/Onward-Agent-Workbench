@@ -86,6 +86,7 @@ jobs:
         env:
           ONWARD_TAG: ${{ steps.tag.outputs.version }}
           ONWARD_RELEASE_OS: ${{ matrix.release_os }}
+          NODE_OPTIONS: '--max-old-space-size=4096'
         run: rm -rf out release && pnpm dist:release
 
       - name: Upload build artifacts
