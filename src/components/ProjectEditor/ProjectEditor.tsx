@@ -24,21 +24,26 @@ import {
   resolveStoredProjectEditorState,
   shouldKeepPendingRestoreState
 } from './projectEditorRestoreUtils'
+import { SubpagePanelButton, SubpagePanelShell, SubpageSwitcher, type SubpagePanelShellState } from '../SubpageSwitcher'
 import { OutlinePanel, type OutlineTarget } from './Outline/OutlinePanel'
 import { countSymbols } from './Outline/outlineParser'
 import { useOutlineSymbols } from './Outline/useOutlineSymbols'
 import { SearchPanel } from './GlobalSearch/SearchPanel'
 import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import { SqliteViewer } from './SqliteViewer'
+import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import './ProjectEditor.css'
 
 interface ProjectEditorProps {
   isOpen: boolean
   terminalId: string | null
   cwd: string | null
+  openRequest?: ProjectEditorOpenRequest | null
   onClose: () => void
   onDirtyChange?: (dirty: boolean) => void
   displayMode?: 'modal' | 'panel'
+  panelShellMode?: 'internal' | 'external'
+  onPanelShellStateChange?: (state: SubpagePanelShellState | null) => void
 }
 
 interface TreeNode {
@@ -94,6 +99,13 @@ type ContextMenuState = {
 
 type SaveSource = 'toolbar' | 'global-shortcut' | 'editor-shortcut' | 'debug-toolbar'
 type PreviewRestorePhase = 'idle' | 'waiting-html' | 'restoring-layout' | 'revealing'
+type OpenMissingBehavior = 'retain-selection' | 'empty-state'
+type OpenFileSource = 'user' | 'restore' | 'debug'
+type OpenFileOptions = {
+  trackRecent?: boolean
+  cursorPosition?: { lineNumber: number; column?: number } | null
+  missingBehavior?: OpenMissingBehavior
+}
 
 const STORAGE_KEY_FILE_TREE_WIDTH = 'project-editor-file-tree-width'
 const STORAGE_KEY_MODAL_SIZE = 'project-editor-modal-size'
@@ -140,6 +152,41 @@ const DEBUG_PROJECT_EDITOR = Boolean(window.electronAPI?.debug?.enabled)
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/')
+}
+
+function trimTrailingPathSeparators(value: string): string {
+  if (/^[A-Za-z]:\/$/.test(value)) return value
+  return value.replace(/\/+$/, '')
+}
+
+function normalizeComparablePath(value: string): string {
+  const normalized = trimTrailingPathSeparators(normalizePath(value))
+  return window.electronAPI.platform === 'win32'
+    ? normalized.toLowerCase()
+    : normalized
+}
+
+function resolveNavigationFilePath(params: {
+  editorRoot: string
+  filePath: string
+  repoRoot: string | null
+}): string | null {
+  const normalizedRoot = trimTrailingPathSeparators(normalizePath(params.editorRoot))
+  const normalizedFilePath = normalizePath(params.filePath).replace(/^\/+/, '')
+  const normalizedRepoRoot = params.repoRoot
+    ? trimTrailingPathSeparators(normalizePath(params.repoRoot))
+    : normalizedRoot
+  if (!normalizedRoot || !normalizedFilePath || !normalizedRepoRoot) return null
+
+  const absoluteTargetPath = trimTrailingPathSeparators(`${normalizedRepoRoot}/${normalizedFilePath}`)
+  const comparableRoot = normalizeComparablePath(normalizedRoot)
+  const comparableTarget = normalizeComparablePath(absoluteTargetPath)
+
+  if (comparableTarget === comparableRoot) return null
+  if (!comparableTarget.startsWith(`${comparableRoot}/`)) return null
+
+  const relativePath = absoluteTargetPath.slice(normalizedRoot.length + 1)
+  return relativePath || null
 }
 
 function normalizeQuickFilePaths(paths: readonly string[] | null | undefined, maxCount: number): string[] {
@@ -520,11 +567,15 @@ export function ProjectEditor({
   isOpen,
   terminalId: _terminalId,
   cwd,
+  openRequest = null,
   onClose,
   onDirtyChange,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  panelShellMode = 'internal',
+  onPanelShellStateChange
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
+  const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
   const { getTerminalStyle } = useSettings()
   const { locale, t } = useI18n()
   const {
@@ -626,6 +677,7 @@ export function ProjectEditor({
   const profileRunRef = useRef(false)
   const autotestRunRef = useRef(false)
   const openGitDiffRef = useRef<(source?: 'user' | 'debug') => Promise<void>>(async () => {})
+  const lastHandledOpenRequestRef = useRef<number | null>(null)
 
   const originalContentRef = useRef('')
   const originalModelVersionRef = useRef<number | null>(null)
@@ -1545,6 +1597,59 @@ export function ProjectEditor({
     if (DEBUG_PROJECT_EDITOR) {
       debugLog('reset:done', { activeFilePath: null })
     }
+  }, [cancelFileTreeRestoreFrame, cancelMarkdownIdle, resetPreviewRestoreState])
+
+  const clearActiveFileState = useCallback((options?: { preserveMissingNotice?: boolean }) => {
+    cancelFileTreeRestoreFrame()
+    cancelMarkdownIdle()
+    resetPreviewRestoreState()
+    markdownWorkerLatestIdRef.current = 0
+    markdownWorkerRequestIdRef.current = 0
+    markdownApplyRequestIdRef.current += 1
+    markdownPendingPayloadRef.current = null
+    markdownWorkerOwnerRef.current = null
+    editorScrollDisposableRef.current?.dispose()
+    editorScrollDisposableRef.current = null
+    editorCursorDisposableRef.current?.dispose()
+    editorCursorDisposableRef.current = null
+    editorModelDisposableRef.current?.dispose()
+    editorModelDisposableRef.current = null
+    pendingViewStateRef.current = null
+    pendingViewStatePathRef.current = null
+    pendingViewStateFallbackRef.current = null
+    pendingCursorRef.current = null
+    originalContentRef.current = ''
+    originalModelVersionRef.current = null
+    fileContentRef.current = ''
+    openFileTokenRef.current += 1
+    activeFilePathRef.current = null
+    isBinaryRef.current = false
+    isImageRef.current = false
+    isSqliteRef.current = false
+    editorSaveCommandIdRef.current = null
+    markdownWorkerInFlightRef.current = false
+    markdownWorkerQueuedRef.current = false
+    setSelectedPath(null)
+    setActiveFilePath(null)
+    setFileContent('')
+    setIsBinary(false)
+    setIsImage(false)
+    setIsSqlite(false)
+    setImagePreviewUrl(null)
+    setIsDirty(false)
+    setIsLoadingFile(false)
+    setIsMarkdownRenderEnabled(false)
+    setMarkdownImageMap({})
+    markdownImageMapRef.current = {}
+    setMarkdownImagePaths([])
+    setMarkdownRenderedHtml('')
+    setMarkdownRenderPending(false)
+    setMarkdownRenderSource('')
+    if (!options?.preserveMissingNotice) {
+      setMissingFileNotice(null)
+    }
+    void window.electronAPI.project.unwatchAllImageFiles()
+    watchedImagePathsRef.current = new Set()
   }, [cancelFileTreeRestoreFrame, cancelMarkdownIdle, resetPreviewRestoreState])
 
   const scheduleMarkdownApply = useCallback((payload: { html: string; imagePaths: string[] }) => {
@@ -2489,8 +2594,8 @@ export function ProjectEditor({
 
   const openFile = useCallback(async (
     path: string,
-    source: 'user' | 'restore' | 'debug' = 'user',
-    options?: { trackRecent?: boolean; cursorPosition?: { lineNumber: number; column?: number } | null }
+    source: OpenFileSource = 'user',
+    options?: OpenFileOptions
   ) => {
     const currentActiveFilePath = activeFilePathRef.current
     if (source === 'user') {
@@ -2568,29 +2673,33 @@ export function ProjectEditor({
       const errorMessage = result.error || t('projectEditor.error.readFile')
       if (isMissingFileError(errorMessage)) {
         const missingNotice = buildMissingFileNotice(path, source, locale)
+        if (options?.missingBehavior === 'empty-state') {
+          clearActiveFileState({ preserveMissingNotice: true })
+        } else {
+          setActiveFilePath(path)
+          activeFilePathRef.current = path
+          setSelectedPath(path)
+          setIsBinary(false)
+          isBinaryRef.current = false
+          setIsImage(false)
+          isImageRef.current = false
+          setIsSqlite(false)
+          isSqliteRef.current = false
+          setImagePreviewUrl(null)
+          setFileContent('')
+          fileContentRef.current = ''
+          originalContentRef.current = ''
+          originalModelVersionRef.current = null
+          setIsDirty(false)
+          setIsMarkdownRenderEnabled(false)
+          pendingViewStateRef.current = null
+          pendingViewStatePathRef.current = null
+          pendingViewStateFallbackRef.current = null
+        }
         setMissingFileNotice({
           path,
           message: missingNotice.notice
         })
-        setActiveFilePath(path)
-        activeFilePathRef.current = path
-        setSelectedPath(path)
-        setIsBinary(false)
-        isBinaryRef.current = false
-        setIsImage(false)
-        isImageRef.current = false
-        setIsSqlite(false)
-        isSqliteRef.current = false
-        setImagePreviewUrl(null)
-        setFileContent('')
-        fileContentRef.current = ''
-        originalContentRef.current = ''
-        originalModelVersionRef.current = null
-        setIsDirty(false)
-        setIsMarkdownRenderEnabled(false)
-        pendingViewStateRef.current = null
-        pendingViewStatePathRef.current = null
-        pendingViewStateFallbackRef.current = null
         removeQuickFileEntries(path)
         showStatus('error', missingNotice.status)
         debugLog('openFile:missing', { path, error: errorMessage })
@@ -2731,6 +2840,7 @@ export function ProjectEditor({
     applyPendingCursorPosition,
     applyPendingViewState,
     beginPreviewRestore,
+    clearActiveFileState,
     confirmDiscardChanges,
     isMarkdownPreviewOpen,
     removeQuickFileEntries,
@@ -2959,6 +3069,40 @@ export function ProjectEditor({
     setSearchResults([])
     void loadRoot(cwd)
   }, [cwd, isOpen, loadRoot, resetActiveFileState, t])
+
+  useEffect(() => {
+    if (!isOpen || !openRequest) return
+    if (lastHandledOpenRequestRef.current === openRequest.id) return
+    if (!_terminalId || openRequest.terminalId !== _terminalId) return
+    if (!rootPath) return
+    if (cwd && normalizeComparablePath(rootPath) !== normalizeComparablePath(cwd)) return
+
+    lastHandledOpenRequestRef.current = openRequest.id
+
+    if (!openRequest.filePath) return
+
+    const navigationPath = resolveNavigationFilePath({
+      editorRoot: rootPath,
+      filePath: openRequest.filePath,
+      repoRoot: openRequest.repoRoot
+    })
+
+    if (!navigationPath) {
+      const missingNotice = buildMissingFileNotice(openRequest.filePath, 'user', locale)
+      clearActiveFileState({ preserveMissingNotice: true })
+      setMissingFileNotice({
+        path: openRequest.filePath,
+        message: missingNotice.notice
+      })
+      showStatus('error', missingNotice.status)
+      return
+    }
+
+    void openFile(navigationPath, 'user', {
+      trackRecent: true,
+      missingBehavior: 'empty-state'
+    })
+  }, [clearActiveFileState, cwd, isOpen, locale, openFile, openRequest, rootPath, showStatus, _terminalId])
 
   useEffect(() => {
     const currentScope = buildProjectEditorScope(_terminalId, cwd ?? rootRef.current ?? null)
@@ -3876,14 +4020,12 @@ export function ProjectEditor({
       })
     }
     resetActiveFileState()
-    onClose()
     const terminalId = _terminalId
-    window.setTimeout(() => {
-      if (DEBUG_PROJECT_EDITOR) {
-        debugLog('gitdiff:open:dispatch', { terminalId })
-      }
-      window.dispatchEvent(new CustomEvent('git-diff:open', { detail: { terminalId } }))
-    }, 0)
+    if (DEBUG_PROJECT_EDITOR) {
+      debugLog('gitdiff:open:dispatch', { terminalId })
+    }
+    const detail: SubpageNavigateEventDetail = { terminalId, target: 'diff' }
+    window.dispatchEvent(new CustomEvent('subpage:navigate', { detail }))
   }, [
     _terminalId,
     activeFilePath,
@@ -3892,10 +4034,49 @@ export function ProjectEditor({
     isIndexing,
     isMarkdownRenderAllowed,
     markdownRenderPending,
-    onClose,
     persistProjectEditorState,
     resetActiveFileState
   ])
+
+  const handleOpenGitHistory = useCallback(async (source: 'user' | 'debug' = 'user') => {
+    if (!_terminalId) return
+    if (DEBUG_PROJECT_EDITOR) {
+      debugLog('githistory:open:start', {
+        source,
+        terminalId: _terminalId,
+        activeFilePath,
+        isDirty: dirtyRef.current,
+        isIndexing
+      })
+    }
+    const canClose = source === 'debug' || window.electronAPI.debug.profile ? true : await confirmDiscardChanges()
+    if (!canClose) return
+    if (lastEditorScopeRef.current) {
+      persistProjectEditorState(lastEditorScopeRef.current)
+    }
+    skipClosePersistRef.current = true
+    resetActiveFileState()
+    const terminalId = _terminalId
+    const detail: SubpageNavigateEventDetail = { terminalId, target: 'history' }
+    window.dispatchEvent(new CustomEvent('subpage:navigate', { detail }))
+  }, [
+    _terminalId,
+    activeFilePath,
+    confirmDiscardChanges,
+    isIndexing,
+    persistProjectEditorState,
+    resetActiveFileState
+  ])
+
+  const handleSelectSubpage = useCallback((target: SubpageId) => {
+    if (target === 'diff') {
+      void handleOpenGitDiff('user')
+      return
+    }
+    if (target === 'history') {
+      void handleOpenGitHistory('user')
+    }
+  }, [handleOpenGitDiff, handleOpenGitHistory])
 
   useEffect(() => {
     openGitDiffRef.current = handleOpenGitDiff
@@ -5169,11 +5350,74 @@ export function ProjectEditor({
     return renderTree(tree)
   }, [renderTree, t, tree])
 
-  if (!isOpen) return null
+  const keepMountedInPanel = isPanel
+  const editorStatusMeta = useMemo(() => (
+    statusMessage || (markdownRenderPending && isMarkdownPreviewVisible)
+      ? (
+        <div className="project-editor-status-group">
+          {markdownRenderPending && isMarkdownPreviewVisible && (
+            <span className="project-editor-status pending">{t('projectEditor.rendering')}</span>
+          )}
+          {statusMessage && (
+            <span className={`project-editor-status ${statusMessage.type}`}>
+              {statusMessage.text}
+            </span>
+          )}
+        </div>
+      )
+      : null
+  ), [isMarkdownPreviewVisible, markdownRenderPending, statusMessage, t])
+  const externalPanelActions = useMemo(() => (
+    <>
+      <SubpagePanelButton
+        className="project-editor-save"
+        onClick={() => void handleSaveRef.current('toolbar')}
+        disabled={!activeFilePath || !isDirty || isBinary || isImage || isSqlite}
+      >
+        {t('common.save')}
+      </SubpagePanelButton>
+      <SubpagePanelButton
+        className="project-editor-secondary"
+        onClick={() => void handleRequestClose()}
+        title={t('projectEditor.returnToTerminal')}
+      >
+        {t('projectEditor.returnToTerminal')}
+      </SubpagePanelButton>
+    </>
+  ), [activeFilePath, handleRequestClose, isBinary, isDirty, isImage, isSqlite, t])
+  const externalPanelShellState = useMemo<SubpagePanelShellState>(() => ({
+    current: 'editor',
+    onSelect: handleSelectSubpage,
+    workingDirectoryLabel: t('projectEditor.workingDirectory'),
+    workingDirectoryPath: rootPath || null,
+    metaExtra: editorStatusMeta,
+    actions: externalPanelActions
+  }), [editorStatusMeta, externalPanelActions, handleSelectSubpage, rootPath, t])
+
+  useLayoutEffect(() => {
+    if (!isPanel || panelShellMode !== 'external' || !onPanelShellStateChange) return
+    if (!isOpen) {
+      onPanelShellStateChange(null)
+      return
+    }
+    onPanelShellStateChange(externalPanelShellState)
+    return () => {
+      onPanelShellStateChange(null)
+    }
+  }, [
+    externalPanelShellState,
+    isOpen,
+    isPanel,
+    onPanelShellStateChange,
+    panelShellMode
+  ])
+
+  if (!isOpen && !keepMountedInPanel) return null
 
   return (
     <div
-      className={`project-editor-overlay ${isPanel ? 'panel' : ''}`}
+      className={`project-editor-overlay ${isPanel ? 'panel' : ''} ${isOpen ? 'is-open' : 'is-hidden'}`}
+      aria-hidden={!isOpen}
       onClick={() => {
         if (!isPanel) {
           void handleRequestClose()
@@ -5199,49 +5443,64 @@ export function ProjectEditor({
           </>
         )}
 
-        <div className="project-editor-header">
-          <div className="project-editor-title">{t('projectEditor.title')}</div>
-          <div className="project-editor-header-actions">
-            <button
-              className="project-editor-secondary"
-              onClick={() => void handleOpenGitDiff('user')}
-              disabled={!_terminalId}
-            >
-              {t('projectEditor.openGitDiff')}
-            </button>
-            <button
-              className="project-editor-save"
-              onClick={() => void handleSaveRef.current('toolbar')}
-              disabled={!activeFilePath || !isDirty || isBinary || isImage || isSqlite}
-            >
-              {t('common.save')}
-            </button>
-            <button
-              className="project-editor-secondary"
-              onClick={() => void handleRequestClose()}
-              title={t('projectEditor.returnToTerminal')}
-            >
-              {t('projectEditor.returnToTerminal')}
-            </button>
-          </div>
-        </div>
-
-        <div className="project-editor-root">
-          <span className="project-editor-root-label">{t('projectEditor.workingDirectory')}</span>
-          <span className="project-editor-root-path" title={rootPath || ''}>{rootPath || '-'}</span>
-          {(statusMessage || (markdownRenderPending && isMarkdownPreviewVisible)) && (
-            <div className="project-editor-status-group">
-              {markdownRenderPending && isMarkdownPreviewVisible && (
-                <span className="project-editor-status pending">{t('projectEditor.rendering')}</span>
-              )}
-              {statusMessage && (
-                <span className={`project-editor-status ${statusMessage.type}`}>
-                  {statusMessage.text}
-                </span>
-              )}
+        {useSharedPanelHeader ? (
+          <SubpagePanelShell
+            current="editor"
+            onSelect={handleSelectSubpage}
+            workingDirectoryLabel={t('projectEditor.workingDirectory')}
+            workingDirectoryPath={rootPath || null}
+            metaExtra={editorStatusMeta}
+            actions={(
+              <>
+                <SubpagePanelButton
+                  className="project-editor-save"
+                  onClick={() => void handleSaveRef.current('toolbar')}
+                  disabled={!activeFilePath || !isDirty || isBinary || isImage || isSqlite}
+                >
+                  {t('common.save')}
+                </SubpagePanelButton>
+                <SubpagePanelButton
+                  className="project-editor-secondary"
+                  onClick={() => void handleRequestClose()}
+                  title={t('projectEditor.returnToTerminal')}
+                >
+                  {t('projectEditor.returnToTerminal')}
+                </SubpagePanelButton>
+              </>
+            )}
+          />
+        ) : panelShellMode === 'external' && isPanel ? null : (
+          <>
+            <div className="project-editor-header">
+              <div className="project-editor-header-main">
+                <div className="project-editor-title">{t('projectEditor.title')}</div>
+                <SubpageSwitcher current="editor" onSelect={handleSelectSubpage} />
+              </div>
+              <div className="project-editor-header-actions">
+                <SubpagePanelButton
+                  className="project-editor-save"
+                  onClick={() => void handleSaveRef.current('toolbar')}
+                  disabled={!activeFilePath || !isDirty || isBinary || isImage || isSqlite}
+                >
+                  {t('common.save')}
+                </SubpagePanelButton>
+                <SubpagePanelButton
+                  className="project-editor-secondary"
+                  onClick={() => void handleRequestClose()}
+                  title={t('projectEditor.returnToTerminal')}
+                >
+                  {t('projectEditor.returnToTerminal')}
+                </SubpagePanelButton>
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="project-editor-root">
+              <span className="project-editor-root-label">{t('projectEditor.workingDirectory')}</span>
+              <span className="project-editor-root-path" title={rootPath || ''}>{rootPath || '-'}</span>
+              {editorStatusMeta}
+            </div>
+          </>
+        )}
 
         <div className="project-editor-body">
           <div className="project-editor-sidebar" style={{ width: fileTreeWidth }}>
@@ -5545,10 +5804,12 @@ export function ProjectEditor({
                       className="project-editor-missing-btn primary"
                       onClick={() => {
                         setMissingFileNotice(null)
-                        resetActiveFileState()
+                        if (activeFilePath) {
+                          clearActiveFileState()
+                        }
                       }}
                     >
-                      {t('projectEditor.closeFile')}
+                      {activeFilePath ? t('projectEditor.closeFile') : t('common.close')}
                     </button>
                     <button
                       className="project-editor-missing-btn"

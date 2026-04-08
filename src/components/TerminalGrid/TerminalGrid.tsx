@@ -9,6 +9,8 @@ import { LayoutMode, TerminalInfo, TerminalShortcutAction, TerminalFocusRequest 
 import { TerminalDropdown } from '../TerminalDropdown'
 import { GitDiffViewer } from '../GitDiffViewer'
 import { GitHistoryViewer } from '../GitHistoryViewer'
+import { ProjectEditor } from '../ProjectEditor'
+import { SubpagePanelShell, type SubpagePanelShellState } from '../SubpageSwitcher'
 import { CodingAgentModal } from '../CodingAgentModal'
 import type { CodingAgentType } from '../../types/electron'
 import { BrowserPanel } from '../BrowserPanel/BrowserPanel'
@@ -20,6 +22,7 @@ import type { TerminalDebugApi } from '../../autotest/types'
 import { perfMonitor } from '../../utils/perf-monitor'
 import { useI18n } from '../../i18n/useI18n'
 import { buildChangeDirectoryCommand } from '../../utils/terminal-command'
+import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
 
@@ -52,6 +55,11 @@ interface TerminalGridProps {
   shortcutAction?: TerminalShortcutAction | null
   focusRequest?: TerminalFocusRequest | null
   projectEditorOpen?: boolean
+  projectEditorTerminalId?: string | null
+  projectEditorCwd?: string | null
+  projectEditorOpenRequest?: ProjectEditorOpenRequest | null
+  onCloseProjectEditor?: () => void
+  onProjectEditorDirtyChange?: (dirty: boolean) => void
 }
 
 interface TerminalGitInfo {
@@ -81,7 +89,12 @@ export const TerminalGrid = memo(function TerminalGrid({
   hidden = false,
   shortcutAction = null,
   focusRequest = null,
-  projectEditorOpen = false
+  projectEditorOpen = false,
+  projectEditorTerminalId = null,
+  projectEditorCwd = null,
+  projectEditorOpenRequest = null,
+  onCloseProjectEditor,
+  onProjectEditorDirtyChange
 }: TerminalGridProps) {
   // Performance instrumentation: track render count
   perfMonitor.recordReactRender()
@@ -128,6 +141,8 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [gitHistoryOpen, setGitHistoryOpen] = useState(false)
   const [gitHistoryTerminalId, setGitHistoryTerminalId] = useState<string | null>(null)
   const [gitHistoryCwd, setGitHistoryCwd] = useState<string | null>(null)
+  const [activeSubpage, setActiveSubpage] = useState<SubpageId | null>(null)
+  const [panelShellStates, setPanelShellStates] = useState<Partial<Record<SubpageId, SubpagePanelShellState>>>({})
 
   // Coding Agent launch modal state
   const [codingAgentModalOpen, setCodingAgentModalOpen] = useState(false)
@@ -138,14 +153,96 @@ export const TerminalGrid = memo(function TerminalGrid({
   const copyNoticeTimerRef = useRef<number | null>(null)
   const lastShortcutTokenRef = useRef<number | null>(null)
   const gitDiffOpenTokenRef = useRef(0)
+  const gitHistoryOpenTokenRef = useRef(0)
   const [terminalStatuses, setTerminalStatuses] = useState<Record<string, TerminalSessionStatus>>({})
-  const globalOverlayActive = gitDiffOpen || gitHistoryOpen || projectEditorOpen
+  const projectEditorOpenInGrid = projectEditorOpen
+    && Boolean(projectEditorTerminalId && terminals.some(term => term.id === projectEditorTerminalId))
+  const globalOverlayActive = gitDiffOpen || gitHistoryOpen || projectEditorOpenInGrid
+  const anySubpageOpen = globalOverlayActive
   const [browserOpenTerminals, setBrowserOpenTerminals] = useState<Set<string>>(new Set())
   const [lastBrowserUrls, setLastBrowserUrls] = useState<Record<string, string>>({})
+  const [isSubpageSwitching, setIsSubpageSwitching] = useState(false)
 
   // Terminal context menu state
   const [termCtxMenu, setTermCtxMenu] = useState<{ x: number; y: number; terminalId: string; hasSelection: boolean } | null>(null)
   const contextMenuListeners = useRef<Map<string, (e: MouseEvent) => void>>(new Map())
+  const previousSubpageOpenRef = useRef({ diff: false, history: false, editor: false })
+  const previousActiveSubpageRef = useRef<SubpageId | null>(null)
+  const subpageSwitchTimerRef = useRef<number | null>(null)
+
+  const updatePanelShellState = useCallback((subpage: SubpageId, state: SubpagePanelShellState | null) => {
+    setPanelShellStates((prev) => {
+      if (state == null) {
+        if (!(subpage in prev)) return prev
+        const next = { ...prev }
+        delete next[subpage]
+        return next
+      }
+      if (prev[subpage] === state) {
+        return prev
+      }
+      return { ...prev, [subpage]: state }
+    })
+  }, [])
+
+  const handleDiffPanelShellStateChange = useCallback((state: SubpagePanelShellState | null) => {
+    updatePanelShellState('diff', state)
+  }, [updatePanelShellState])
+
+  const handleEditorPanelShellStateChange = useCallback((state: SubpagePanelShellState | null) => {
+    updatePanelShellState('editor', state)
+  }, [updatePanelShellState])
+
+  const handleHistoryPanelShellStateChange = useCallback((state: SubpagePanelShellState | null) => {
+    updatePanelShellState('history', state)
+  }, [updatePanelShellState])
+
+  useEffect(() => {
+    const previous = previousSubpageOpenRef.current
+    if (gitDiffOpen && !previous.diff) {
+      setActiveSubpage('diff')
+    }
+    if (gitHistoryOpen && !previous.history) {
+      setActiveSubpage('history')
+    }
+    if (projectEditorOpenInGrid && !previous.editor) {
+      setActiveSubpage('editor')
+    }
+    if (!gitDiffOpen && !gitHistoryOpen && !projectEditorOpenInGrid) {
+      setActiveSubpage(null)
+    }
+    previousSubpageOpenRef.current = {
+      diff: gitDiffOpen,
+      history: gitHistoryOpen,
+      editor: projectEditorOpenInGrid
+    }
+  }, [gitDiffOpen, gitHistoryOpen, projectEditorOpenInGrid])
+
+  const activePanelShellState = activeSubpage ? panelShellStates[activeSubpage] ?? null : null
+
+  useEffect(() => {
+    const previous = previousActiveSubpageRef.current
+    previousActiveSubpageRef.current = activeSubpage
+    if (!activeSubpage || !previous || previous === activeSubpage) {
+      return
+    }
+    setIsSubpageSwitching(true)
+    if (subpageSwitchTimerRef.current !== null) {
+      window.clearTimeout(subpageSwitchTimerRef.current)
+    }
+    subpageSwitchTimerRef.current = window.setTimeout(() => {
+      setIsSubpageSwitching(false)
+      subpageSwitchTimerRef.current = null
+    }, 180)
+  }, [activeSubpage])
+
+  useEffect(() => {
+    return () => {
+      if (subpageSwitchTimerRef.current !== null) {
+        window.clearTimeout(subpageSwitchTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     hiddenRef.current = hidden
@@ -898,13 +995,47 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [editingId])
 
+  const closeGitDiffPanel = useCallback((restoreFocus: boolean) => {
+    debugLog('gitdiff:close', { restoreFocus })
+    gitDiffOpenTokenRef.current += 1
+    const openedFrom = gitDiffTerminalId
+    setGitDiffOpen(false)
+    setGitDiffTerminalId(null)
+    setGitDiffCwd(null)
+    setGitDiffCwdPending(false)
+    setGitDiffOpenRequestedAt(null)
+    setGitDiffCwdReadyAt(null)
+    if (!restoreFocus) return
+    requestAnimationFrame(() => {
+      const tid = openedFrom ?? activeTerminalIdRef.current
+      if (tid) terminalSessionManager.focusIfNeeded(tid)
+    })
+  }, [gitDiffTerminalId])
+
+  const closeGitHistoryPanel = useCallback((restoreFocus: boolean) => {
+    gitHistoryOpenTokenRef.current += 1
+    const openedFrom = gitHistoryTerminalId
+    setGitHistoryOpen(false)
+    setGitHistoryTerminalId(null)
+    setGitHistoryCwd(null)
+    if (!restoreFocus) return
+    requestAnimationFrame(() => {
+      const tid = openedFrom ?? activeTerminalIdRef.current
+      if (tid) terminalSessionManager.focusIfNeeded(tid)
+    })
+  }, [gitHistoryTerminalId])
+
   // View Git Diff — open the shell immediately, then resolve the best cwd for diff loading
-  const handleViewGitDiff = useCallback(async (terminalId: string) => {
+  const handleViewGitDiff = useCallback(async (
+    terminalId: string,
+    options?: { closeOtherSubpages?: boolean }
+  ) => {
     const currentToken = ++gitDiffOpenTokenRef.current
     const requestedAt = performance.now()
     const terminalInfo = terminalInfos[terminalId]
     const persistedCwd = getPersistedTerminalCwd(terminalId)
     const initialCwd = terminalInfo?.repoRoot || terminalInfo?.cwd || persistedCwd
+    const closeOtherSubpages = options?.closeOtherSubpages ?? true
     debugLog('gitdiff:view:start', {
       terminalId,
       initialCwd,
@@ -917,8 +1048,11 @@ export const TerminalGrid = memo(function TerminalGrid({
     setGitDiffCwdReadyAt(initialCwd ? requestedAt : null)
     setGitDiffCwd(initialCwd)
     setGitDiffCwdPending(!initialCwd)
+    setActiveSubpage('diff')
     setGitDiffOpen(true)
-    setGitHistoryOpen(false)
+    if (closeOtherSubpages) {
+      setGitHistoryOpen(false)
+    }
     if (initialCwd) return
 
     try {
@@ -940,40 +1074,46 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [getPersistedTerminalCwd, terminalInfos])
 
-  const handleViewGitHistory = useCallback(async (terminalId: string) => {
+  const handleViewGitHistory = useCallback(async (
+    terminalId: string,
+    options?: { closeOtherSubpages?: boolean }
+  ) => {
+    const currentToken = ++gitHistoryOpenTokenRef.current
     const persistedCwd = getPersistedTerminalCwd(terminalId)
-    let terminalCwd = terminalInfos[terminalId]?.cwd || persistedCwd
-    if (!terminalCwd) {
-      terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
-    }
-    // Resolve to git repo root so the path format matches what getHistory returns
-    // (git uses forward slashes; raw terminal CWD on Windows uses backslashes)
-    const cwd = terminalCwd
-      ? await window.electronAPI.git.resolveRepoRoot(terminalCwd)
-      : terminalCwd
+    const terminalInfo = terminalInfos[terminalId]
+    const initialCwd = terminalInfo?.repoRoot || terminalInfo?.cwd || persistedCwd
+    const closeOtherSubpages = options?.closeOtherSubpages ?? true
     setGitHistoryTerminalId(terminalId)
-    setGitHistoryCwd(cwd)
+    setGitHistoryCwd(initialCwd)
+    setActiveSubpage('history')
     setGitHistoryOpen(true)
-    setGitDiffOpen(false)
+    if (closeOtherSubpages) {
+      setGitDiffOpen(false)
+    }
+    if (terminalInfo?.repoRoot) {
+      return
+    }
+
+    try {
+      let terminalCwd = terminalInfo?.cwd || initialCwd
+      if (!terminalCwd) {
+        terminalCwd = await window.electronAPI.git.getTerminalCwd(terminalId)
+      }
+      if (gitHistoryOpenTokenRef.current !== currentToken) return
+      const resolvedRepoRoot = terminalCwd
+        ? await window.electronAPI.git.resolveRepoRoot(terminalCwd)
+        : terminalCwd
+      if (gitHistoryOpenTokenRef.current !== currentToken) return
+      setGitHistoryCwd(resolvedRepoRoot || terminalCwd || persistedCwd)
+    } catch {
+      if (gitHistoryOpenTokenRef.current !== currentToken) return
+      setGitHistoryCwd(initialCwd || persistedCwd)
+    }
   }, [getPersistedTerminalCwd, terminalInfos])
 
-  // Close the Git Diff viewer
   const handleCloseGitDiff = useCallback(() => {
-    debugLog('gitdiff:close')
-    gitDiffOpenTokenRef.current += 1
-    const openedFrom = gitDiffTerminalId
-    setGitDiffOpen(false)
-    setGitDiffTerminalId(null)
-    setGitDiffCwd(null)
-    setGitDiffCwdPending(false)
-    setGitDiffOpenRequestedAt(null)
-    setGitDiffCwdReadyAt(null)
-    // Restore focus to the terminal that opened the diff viewer
-    requestAnimationFrame(() => {
-      const tid = openedFrom ?? activeTerminalIdRef.current
-      if (tid) terminalSessionManager.focusIfNeeded(tid)
-    })
-  }, [gitDiffTerminalId])
+    closeGitDiffPanel(true)
+  }, [closeGitDiffPanel])
 
   useEffect(() => {
     const handleOpenGitDiff = (event: Event) => {
@@ -1009,6 +1149,58 @@ export const TerminalGrid = memo(function TerminalGrid({
   }, [handleViewGitHistory, hidden, terminals])
 
   useEffect(() => {
+    const handleSubpageNavigate = (event: Event) => {
+      if (hidden) return
+      const customEvent = event as CustomEvent<SubpageNavigateEventDetail>
+      const terminalId = customEvent.detail?.terminalId
+      const target = customEvent.detail?.target
+      if (!terminalId || !target) return
+      if (!terminals.some(term => term.id === terminalId)) return
+
+      const closeNonTargetSubpages = () => {
+        if (target !== 'diff') {
+          closeGitDiffPanel(false)
+        }
+        if (target !== 'history') {
+          closeGitHistoryPanel(false)
+        }
+        if (target !== 'editor') {
+          onCloseProjectEditor?.()
+        }
+      }
+
+      if (target === 'diff') {
+        void handleViewGitDiff(terminalId, { closeOtherSubpages: false })
+      } else if (target === 'history') {
+        void handleViewGitHistory(terminalId, { closeOtherSubpages: false })
+      } else {
+        void onOpenProjectEditor(terminalId, {
+          filePath: customEvent.detail?.filePath ?? null,
+          repoRoot: customEvent.detail?.repoRoot ?? null
+        })
+      }
+
+      requestAnimationFrame(() => {
+        closeNonTargetSubpages()
+      })
+    }
+
+    window.addEventListener('subpage:navigate', handleSubpageNavigate as EventListener)
+    return () => {
+      window.removeEventListener('subpage:navigate', handleSubpageNavigate as EventListener)
+    }
+  }, [
+    closeGitDiffPanel,
+    closeGitHistoryPanel,
+    handleViewGitDiff,
+    handleViewGitHistory,
+    hidden,
+    onCloseProjectEditor,
+    onOpenProjectEditor,
+    terminals
+  ])
+
+  useEffect(() => {
     const handleOpenBrowserEvent = (event: Event) => {
       if (hidden) return
       const customEvent = event as CustomEvent<{ terminalId?: string; url?: string }>
@@ -1025,16 +1217,8 @@ export const TerminalGrid = memo(function TerminalGrid({
   }, [handleOpenBrowser, hidden, terminals])
 
   const handleCloseGitHistory = useCallback(() => {
-    const openedFrom = gitHistoryTerminalId
-    setGitHistoryOpen(false)
-    setGitHistoryTerminalId(null)
-    setGitHistoryCwd(null)
-    // Restore focus to the terminal that opened the history viewer
-    requestAnimationFrame(() => {
-      const tid = openedFrom ?? activeTerminalIdRef.current
-      if (tid) terminalSessionManager.focusIfNeeded(tid)
-    })
-  }, [gitHistoryTerminalId])
+    closeGitHistoryPanel(true)
+  }, [closeGitHistoryPanel])
 
   // Coding Agent handlers
   const handleOpenCodingAgent = useCallback((terminalId: string, agentType: CodingAgentType) => {
@@ -1314,25 +1498,56 @@ export const TerminalGrid = memo(function TerminalGrid({
       </div>
 
       {!hidden && (
-        <GitDiffViewer
-          isOpen={gitDiffOpen}
-          onClose={handleCloseGitDiff}
-          terminalId={gitDiffTerminalId || ''}
-          cwd={gitDiffCwd}
-          cwdPending={gitDiffCwdPending}
-          openRequestedAt={gitDiffOpenRequestedAt}
-          cwdReadyAt={gitDiffCwdReadyAt}
-          displayMode="panel"
-        />
-      )}
-      {!hidden && (
-        <GitHistoryViewer
-          isOpen={gitHistoryOpen}
-          onClose={handleCloseGitHistory}
-          terminalId={gitHistoryTerminalId || ''}
-          cwd={gitHistoryCwd}
-          displayMode="panel"
-        />
+        <div
+          className={`terminal-grid-subpage-host ${anySubpageOpen ? 'is-open' : 'is-hidden'}`}
+          data-active-subpage={activeSubpage ?? ''}
+          aria-hidden={!anySubpageOpen}
+        >
+          {anySubpageOpen && activePanelShellState && (
+            <SubpagePanelShell
+              current={activePanelShellState.current}
+              onSelect={activePanelShellState.onSelect}
+              actions={activePanelShellState.actions}
+              workingDirectoryLabel={activePanelShellState.workingDirectoryLabel}
+              workingDirectoryPath={activePanelShellState.workingDirectoryPath}
+              metaExtra={activePanelShellState.metaExtra}
+            />
+          )}
+          <div className={`terminal-grid-subpage-body ${isSubpageSwitching ? 'is-switching' : ''}`}>
+            <GitDiffViewer
+              isOpen={gitDiffOpen}
+              onClose={handleCloseGitDiff}
+              terminalId={gitDiffTerminalId || ''}
+              cwd={gitDiffCwd}
+              cwdPending={gitDiffCwdPending}
+              openRequestedAt={gitDiffOpenRequestedAt}
+              cwdReadyAt={gitDiffCwdReadyAt}
+              displayMode="panel"
+              panelShellMode="external"
+              onPanelShellStateChange={handleDiffPanelShellStateChange}
+            />
+            <GitHistoryViewer
+              isOpen={gitHistoryOpen}
+              onClose={handleCloseGitHistory}
+              terminalId={gitHistoryTerminalId || ''}
+              cwd={gitHistoryCwd}
+              displayMode="panel"
+              panelShellMode="external"
+              onPanelShellStateChange={handleHistoryPanelShellStateChange}
+            />
+            <ProjectEditor
+              isOpen={projectEditorOpenInGrid}
+              terminalId={projectEditorOpenInGrid ? projectEditorTerminalId : null}
+              cwd={projectEditorOpenInGrid ? projectEditorCwd : null}
+              openRequest={projectEditorOpenRequest}
+              onClose={onCloseProjectEditor ?? (() => {})}
+              onDirtyChange={onProjectEditorDirtyChange}
+              displayMode="panel"
+              panelShellMode="external"
+              onPanelShellStateChange={handleEditorPanelShellStateChange}
+            />
+          </div>
+        </div>
       )}
       {codingAgentModalOpen && (
         <CodingAgentModal

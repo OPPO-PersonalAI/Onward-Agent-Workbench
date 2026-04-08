@@ -1,0 +1,36 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.subpage-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  background: transparent;
+}
+
+.subpage-switcher-button {
+  min-width: 84px;
+}
+
+.subpage-switcher-button:hover:not(:disabled) {
+}
+
+.subpage-switcher-button.active {
+}
+
+.subpage-switcher-button:disabled {
+}
+
+@media (max-width: 900px) {
+  .subpage-switcher {
+    width: 100%;
+  }
+
+  .subpage-switcher-button {
+    flex: 1;
+    min-width: 0;
+  }
+}

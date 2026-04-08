@@ -20,6 +20,24 @@
   align-items: stretch;
   justify-content: stretch;
   z-index: 20;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease, visibility 0s linear 0.16s;
+}
+
+.project-editor-overlay.panel.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.16s ease;
+}
+
+.project-editor-overlay.panel.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease, visibility 0s linear 0.16s;
 }
 
 .project-editor-modal {
@@ -65,9 +83,23 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background-color: var(--bg-2);
+}
+
+.project-editor-header.shared-panel-header {
+  justify-content: space-between;
+}
+
+.project-editor-header-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .project-editor-title {
@@ -80,41 +112,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 
-.project-editor-secondary {
-  border: 1px solid var(--border-strong);
-  background-color: transparent;
-  color: var(--text-2);
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--font-sm);
-}
-
-.project-editor-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.project-editor-secondary:hover:not(:disabled) {
-  color: var(--text-1);
-  border-color: var(--accent);
-}
-
-.project-editor-save {
-  border: 1px solid var(--border-strong);
-  background-color: var(--bg-1);
-  color: var(--text-1);
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--font-sm);
-}
-
-.project-editor-save:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+@media (max-width: 900px) {
+  .project-editor-header-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
 }
 
 .project-editor-close {
