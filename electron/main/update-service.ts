@@ -560,9 +560,12 @@ export class UpdateService {
     const installDir = resolveCurrentInstallPath()
     if (!installDir) return
 
-    const stagingRoot = join(tmpdir(), `onward-update-${Date.now()}`)
+    // Use a short staging path to avoid Windows 260-char path length limit
+    // during zip extraction (deep node_modules paths inside the archive).
+    const stagingId = Date.now().toString(36)
+    const stagingRoot = join(process.env.TEMP || tmpdir(), `ou-${stagingId}`)
     mkdirSync(stagingRoot, { recursive: true })
-    const scriptPath = join(stagingRoot, 'install-update.ps1')
+    const scriptPath = join(stagingRoot, 'up.ps1')
     const logPath = resolveUpdateLogPath()
     const execPath = app.getPath('exe')
 
@@ -583,8 +586,8 @@ export class UpdateService {
       `$parentPid = ${process.pid}`,
       `$stagingRoot = ${powershellEscape(stagingRoot)}`,
       `$logPath = ${powershellEscape(logPath)}`,
-      '$extractRoot = Join-Path $stagingRoot "extracted"',
-      '$backupPath = "$installDir.onward-backup"',
+      '$extractRoot = Join-Path $stagingRoot "e"',
+      '$backupPath = "${installDir}.bak"',
       '',
       'function Write-Log($msg) {',
       '    $dir = Split-Path $logPath -Parent',
@@ -657,11 +660,18 @@ export class UpdateService {
     ].join('\n')
 
     writeFileSync(scriptPath, scriptContent, { encoding: 'utf-8' })
-    spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+
+    // Use full path to powershell.exe to avoid PATH resolution issues during app quit
+    const psPath = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true
-    }).unref()
+    })
+    child.on('error', (err) => {
+      console.error('[UpdateService] Failed to spawn PowerShell update helper:', err.message)
+    })
+    child.unref()
   }
 }
 
