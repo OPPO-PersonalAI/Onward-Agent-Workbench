@@ -84,6 +84,27 @@ class TelemetryService {
   }
 
   /**
+   * Track an event and send it to Azure immediately (bypasses daily aggregation).
+   * Use sparingly for critical diagnostics like update failures.
+   */
+  trackImmediate(name: string, properties?: Record<string, string | number | boolean | null>): void {
+    if (!this.instanceId) return
+    const sanitized = properties ? this.sanitizeProperties(properties) : undefined
+
+    this.writeLocal(name, sanitized)
+
+    if (this.client) {
+      this.client.trackEvent({
+        name,
+        properties: { ...this.commonProperties, ...(sanitized ?? {}) }
+      })
+      try {
+        this.client.flush()
+      } catch {}
+    }
+  }
+
+  /**
    * Try to upload daily summary if the day has rolled over.
    * Called from heartbeat timer.
    */

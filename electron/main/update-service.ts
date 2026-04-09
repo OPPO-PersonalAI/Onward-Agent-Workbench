@@ -13,6 +13,7 @@ import { Readable } from 'stream'
 import { spawn, execSync } from 'child_process'
 import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
 import { compareVersions } from './update-version'
+import { getTelemetryService } from './telemetry/telemetry-service'
 
 export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
@@ -63,6 +64,47 @@ const RELAUNCH_ENV_KEYS = [
 const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
 const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000
+const LOG_PREFIX = '[UpdateService]'
+
+/** Track when update failure telemetry was last sent (keyed by date string). */
+let lastFailureTelemetryDate = ''
+
+function trackUpdateEvent(
+  name: string,
+  properties: Record<string, string | number | boolean | null>
+): void {
+  const telemetry = getTelemetryService()
+  telemetry.track(name, { ...properties, platform: process.platform })
+}
+
+function trackUpdateFailure(
+  phase: string,
+  error: string,
+  properties: Record<string, string | number | boolean | null> = {}
+): void {
+  const today = new Date().toISOString().slice(0, 10)
+  const telemetry = getTelemetryService()
+
+  // Always log locally
+  telemetry.track('update/error', {
+    phase,
+    error,
+    platform: process.platform,
+    ...properties
+  })
+
+  // Send to Azure immediately, but at most once per day
+  if (lastFailureTelemetryDate !== today) {
+    lastFailureTelemetryDate = today
+    telemetry.trackImmediate('update/error', {
+      phase,
+      error,
+      platform: process.platform,
+      ...properties
+    })
+    console.log(`${LOG_PREFIX} Update failure telemetry sent for ${today}`)
+  }
+}
 
 function readPackageMetadata(): Record<string, unknown> | null {
   try {
@@ -322,14 +364,20 @@ export class UpdateService {
   private async ensureDownloaded(manifest: UpdateManifest): Promise<DownloadedUpdate> {
     const archivePath = this.getDownloadPath(manifest)
     if (!existsSync(archivePath)) {
+      console.log(`${LOG_PREFIX} Downloading: ${manifest.artifactUrl}`)
       await downloadFile(manifest.artifactUrl, archivePath)
+      console.log(`${LOG_PREFIX} Download saved to: ${archivePath}`)
+    } else {
+      console.log(`${LOG_PREFIX} Archive already exists, verifying checksum: ${archivePath}`)
     }
 
     const checksum = hashFileSha256(archivePath)
     if (checksum.toLowerCase() !== manifest.sha256.toLowerCase()) {
+      console.error(`${LOG_PREFIX} Checksum mismatch: expected=${manifest.sha256}, got=${checksum}`)
       rmSync(archivePath, { force: true })
       throw new Error('Downloaded update failed checksum verification.')
     }
+    console.log(`${LOG_PREFIX} Checksum verified: ${checksum}`)
 
     return {
       manifest,
@@ -343,12 +391,55 @@ export class UpdateService {
     this.cleanupDownloadedArchives()
     this.emitStatus()
 
+    console.log(`${LOG_PREFIX} Initialized: supported=${this.status.supported}, version=${this.status.currentVersion}, os=${this.status.currentReleaseOs}, channel=${this.status.currentChannel}`)
+
+    // Check install log from previous update attempt and report result via telemetry
+    this.reportPreviousInstallResult()
+
     if (!this.status.supported) return
 
     void this.checkNow()
     this.intervalHandle = setInterval(() => {
       void this.checkNow()
     }, this.checkIntervalMs)
+  }
+
+  /**
+   * Read the install log left by the previous update helper script.
+   * If the log indicates a failure, report it via telemetry.
+   * The log is cleared after reading to avoid duplicate reports.
+   */
+  private reportPreviousInstallResult(): void {
+    const logPath = resolveUpdateLogPath()
+    if (!existsSync(logPath)) return
+
+    try {
+      const content = readFileSync(logPath, 'utf-8').trim()
+      if (!content) return
+
+      const lines = content.split('\n').filter(Boolean)
+      const lastLine = lines[lines.length - 1] || ''
+      const success = lastLine.includes('installed successfully')
+      const failed = lastLine.includes('install failed')
+
+      if (success) {
+        console.log(`${LOG_PREFIX} Previous update installed successfully`)
+        trackUpdateEvent('update/installComplete', { result: 'success' })
+      } else if (failed) {
+        // Extract error from the log line: "YYYY-MM-DD HH:MM:SS Update install failed: <error>"
+        const errorMatch = /install failed:\s*(.+)$/i.exec(lastLine)
+        const errorDetail = errorMatch ? errorMatch[1] : 'unknown'
+        console.error(`${LOG_PREFIX} Previous update install failed: ${errorDetail}`)
+        trackUpdateFailure('install', errorDetail, {
+          installLog: lines.slice(-5).join('\n')
+        })
+      }
+
+      // Clear the log after reading
+      writeFileSync(logPath, '', 'utf-8')
+    } catch {
+      // Non-blocking: log read failure is not critical
+    }
   }
 
   stop(): void {
@@ -379,6 +470,7 @@ export class UpdateService {
   }
 
   private async checkNowInternal(): Promise<UpdateStatus> {
+    console.log(`${LOG_PREFIX} Starting update check (current: ${this.status.currentVersion})`)
     this.setStatus({
       phase: 'checking',
       error: null
@@ -388,6 +480,7 @@ export class UpdateService {
       const manifest = await this.fetchManifest()
       const lastCheckedAt = Date.now()
       const isNewer = compareVersions(manifest.version, this.status.currentVersion) > 0
+      console.log(`${LOG_PREFIX} Manifest fetched: version=${manifest.version}, isNewer=${isNewer}`)
 
       if (!isNewer) {
         if (this.downloadedUpdate && this.downloadedUpdate.manifest.version === manifest.version) {
@@ -404,6 +497,8 @@ export class UpdateService {
 
         this.downloadedUpdate = null
         this.cleanupDownloadedArchives()
+        console.log(`${LOG_PREFIX} Already up-to-date`)
+        trackUpdateEvent('update/check', { result: 'up-to-date', currentVersion: this.status.currentVersion })
         return this.setStatus({
           phase: 'up-to-date',
           targetVersion: null,
@@ -414,6 +509,13 @@ export class UpdateService {
           error: null
         })
       }
+
+      console.log(`${LOG_PREFIX} New version available: ${manifest.version}, downloading...`)
+      trackUpdateEvent('update/check', {
+        result: 'new-version',
+        currentVersion: this.status.currentVersion,
+        targetVersion: manifest.version
+      })
 
       this.setStatus({
         phase: 'downloading',
@@ -427,6 +529,11 @@ export class UpdateService {
 
       this.downloadedUpdate = await this.ensureDownloaded(manifest)
       this.cleanupDownloadedArchives([manifest.version])
+      console.log(`${LOG_PREFIX} Download complete: ${manifest.artifactName}`)
+      trackUpdateEvent('update/downloaded', {
+        targetVersion: manifest.version,
+        artifactName: manifest.artifactName
+      })
 
       return this.setStatus({
         phase: 'downloaded',
@@ -438,10 +545,17 @@ export class UpdateService {
         error: null
       })
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const failedPhase = this.status.phase === 'downloading' ? 'download' : 'check'
+      console.error(`${LOG_PREFIX} Update ${failedPhase} failed: ${errorMessage}`)
+      trackUpdateFailure(failedPhase, errorMessage, {
+        currentVersion: this.status.currentVersion,
+        targetVersion: this.status.targetVersion
+      })
       return this.setStatus({
         phase: this.downloadedUpdate ? 'downloaded' : 'error',
         lastCheckedAt: Date.now(),
-        error: error instanceof Error ? error.message : String(error)
+        error: errorMessage
       })
     }
   }
@@ -471,6 +585,13 @@ export class UpdateService {
 
   installDownloadedUpdateOnQuit(): void {
     if (!this.downloadedUpdate) return
+
+    const targetVersion = this.downloadedUpdate.manifest.version
+    console.log(`${LOG_PREFIX} Installing update on quit: ${this.status.currentVersion} → ${targetVersion}`)
+    trackUpdateEvent('update/installStart', {
+      currentVersion: this.status.currentVersion,
+      targetVersion
+    })
 
     if (process.platform === 'darwin') {
       this.installDownloadedUpdateOnQuitMacOS()
@@ -516,7 +637,12 @@ export class UpdateService {
       '    mv "$BACKUP_PATH" "$APP_PATH"',
       '  fi',
       '}',
-      'trap \'log "Update install failed."; restore_backup\' EXIT',
+      'handle_error() {',
+      '  local exit_code=$?',
+      '  log "Update install failed: exit code $exit_code (last command at line $1)"',
+      '  restore_backup',
+      '}',
+      'trap \'handle_error $LINENO\' EXIT',
       'log "Starting update install helper."',
       'for _ in $(seq 1 120); do',
       '  if ! kill -0 "$PARENT_PID" 2>/dev/null; then',
@@ -539,6 +665,7 @@ export class UpdateService {
       'mv "$NEW_APP_PATH" "$APP_PATH"',
       'trap - EXIT',
       'rm -rf "$BACKUP_PATH" "$EXTRACT_ROOT"',
+      'log "Update installed successfully."',
       'log "Relaunching updated app."',
       'if [ -n "$RELAUNCH_ENV_ASSIGNMENTS" ]; then',
       '  eval "/usr/bin/env $RELAUNCH_ENV_ASSIGNMENTS \\"$EXEC_PATH\\"" >/dev/null 2>&1 &',
