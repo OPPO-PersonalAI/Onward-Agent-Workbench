@@ -40,6 +40,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Enforce branch constraint
+        shell: bash
+        run: |
+          # Extract channel from tag (e.g. "daily" from v2.1.0-daily.20260409.1)
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-([a-z]+)\. ]]; then
+            CHANNEL="${BASH_REMATCH[1]}"
+          else
+            CHANNEL="daily"
+          fi
+
+          # Dev channel: any branch is allowed
+          if [[ "$CHANNEL" == "dev" ]]; then
+            echo "Dev channel tag — branch constraint skipped."
+            exit 0
+          fi
+
+          # Daily/Stable channel: tagged commit must be on master
+          if git merge-base --is-ancestor "${{ github.sha }}" origin/master; then
+            echo "Tag commit is on master — OK."
+          else
+            echo "::error::Daily channel tags must be created from the master branch."
+            echo "This tag ($TAG) points to a commit not on master."
+            echo "Use a dev channel tag (e.g. v2.1.0-dev.20260409.1) for non-master branches."
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

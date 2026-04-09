@@ -94,6 +94,7 @@ The app supports two update channels with different tag formats and auto-update 
 | **Dev** | `v2.1.0-dev.20260409.1` | No | No | Development/debug builds, manual update only |
 
 - **Hard rule**: Before pushing any tag that triggers a CI build, always ask the user which channel to target (daily or dev). Use the `/push-daily-build` skill which handles channel selection automatically.
+- **Branch constraint (enforced by CI)**: Daily channel tags must be created from the `master` branch. The CI workflow will reject daily tags whose commit is not on master. Only Dev channel tags are allowed on non-master branches.
 - Both channels produce full artifacts and publish manifests to gh-pages (under `updates/daily/` or `updates/dev/` respectively).
 - Dev channel users see "Manual check required" in Settings and must click Check → Download → Restart manually.
 - Daily channel users receive automatic background checks and downloads.

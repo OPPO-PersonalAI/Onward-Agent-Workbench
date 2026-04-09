@@ -9,7 +9,7 @@ import { join, normalize, resolve, sep } from 'path'
 import { getAppInfo } from './app-info'
 
 export type ChangelogLocale = 'en' | 'zh-CN'
-export type ChangelogChannel = 'daily' | 'stable'
+export type ChangelogChannel = 'daily' | 'dev' | 'stable'
 export type ChangelogReadReason = 'no-tag' | 'index-missing' | 'entry-missing' | 'file-missing' | 'invalid-index' | 'read-failed'
 
 export interface ChangelogEntry {
@@ -48,7 +48,7 @@ function normalizeLocale(value: string | null | undefined): ChangelogLocale {
 }
 
 function normalizeChannel(value: unknown): ChangelogChannel | null {
-  return value === 'daily' || value === 'stable' ? value : null
+  return value === 'daily' || value === 'dev' || value === 'stable' ? value : null
 }
 
 function getChangelogRoot(): string {
