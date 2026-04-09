@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260408.1",
-  "tag": "v2.1.0-daily.20260408.1",
+  "version": "2.1.0-daily.20260409.1",
+  "tag": "v2.1.0-daily.20260409.1",
   "platform": "macos",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260408.1-macos-x64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260408.1/Onward.2-v2.1.0-daily.20260408.1-macos-x64.zip",
-  "sha256": "a76d093e0c4ce5f0b502fd4abeafe58f3e58c8f750487c553923d7567109427e",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260408.1\n\nChanges since `v2.1.0-daily.20260406.1`.\n\n## New Features\n- Add telemetry with Azure Application Insights integration: consent dialog, settings toggle, daily aggregation, and local event logging\n- Unify subpage navigation shell: shared SubpageSwitcher for Diff, Editor, and History with centralized lifecycle management\n- Show task identity label in fullscreen Diff, Editor, and History headers\n- Improve prompt history with task filter, color filter, task pills, and copy prompt support\n- Add selection indicator grid in PromptSender aligned with terminal task positions\n- Improve markdown preview outline navigation with scroll memory, code wrapping toggle, and effective target fallback\n- Add GitHub-backed feedback workflow with sidebar UI, rating, history, and persistence\n\n## Bug Fixes\n- Eliminate Git Diff scroll flash with render-then-reveal pattern and background diff cache pre-computation\n- Reset terminal selection after prompt send action\n- Fix outline panel not updating during live editing\n- Fix stale image cache in Markdown preview with auto-refresh and manual refresh button\n- Fix terminal PATH resolution and UI state restoration on upgrade\n- Fix state persistence across upgrades and add window state restoration\n- Unify project editor file memory persistence and sidebar scroll state\n\n## Improvements\n- Unify dropdown styling across shared UI components\n- Refine settings select spacing and notice generation\n- Upgrade runtime and toolchain dependencies for security fixes\n- Redesign sidebar icons and unify ChangeLog overlay\n",
-  "publishedAt": "2026-04-08T13:46:18.184Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260409.1-macos-x64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.1/Onward.2-v2.1.0-daily.20260409.1-macos-x64.zip",
+  "sha256": "83afca32b2ee689a3d8de36eec48ae816d23e00fdf2f48a42979f1d2dc424536",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.1\n\nChanges since `v2.1.0-daily.20260408.1`.\n\n## New Features\n- Add Windows platform auto-update support with PowerShell-based update installer\n- Add Windows build target to GitHub Actions CI/CD pipeline\n\n## Improvements\n- Configure NSIS installer for per-user installation without UAC elevation\n- Extend Electron and electron-builder cache paths for cross-platform CI builds\n- Fix cross-platform shell compatibility in test utilities\n",
+  "publishedAt": "2026-04-09T10:00:15.842Z"
 }
