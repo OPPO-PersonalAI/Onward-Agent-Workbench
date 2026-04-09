@@ -105,10 +105,17 @@ function resolveUpdateBaseUrl(pkg: Record<string, unknown> | null, repository: {
   return `https://raw.githubusercontent.com/${repository.owner}/${repository.name}/gh-pages/updates`
 }
 
-function resolveCurrentBundlePath(): string | null {
-  if (process.platform !== 'darwin') return null
+function resolveCurrentInstallPath(): string | null {
   const exePath = app.getPath('exe')
-  return dirname(dirname(dirname(exePath)))
+  if (process.platform === 'darwin') {
+    // macOS: exe is at Foo.app/Contents/MacOS/Foo, install path is Foo.app
+    return dirname(dirname(dirname(exePath)))
+  }
+  if (process.platform === 'win32') {
+    // Windows NSIS per-user: exe is at %LOCALAPPDATA%\Programs\Onward 2\Onward 2.exe
+    return dirname(exePath)
+  }
+  return null
 }
 
 function hashFileSha256(filePath: string): string {
@@ -120,6 +127,10 @@ function hashFileSha256(filePath: string): string {
 
 function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
+}
+
+function powershellEscape(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 function resolveUpdateLogPath(): string {
@@ -197,11 +208,13 @@ export class UpdateService {
     const repository = parseRepositoryOwnerAndName(pkg)
     const baseUrl = resolveUpdateBaseUrl(pkg, repository)
     const arch = normalizeArch(process.arch)
+    const isSupportedPlatform =
+      (process.platform === 'darwin' && appInfo.releaseOs === 'macos') ||
+      (process.platform === 'win32' && appInfo.releaseOs === 'windows')
     const supported =
       appInfo.isPackaged &&
       appInfo.buildChannel === 'prod' &&
-      process.platform === 'darwin' &&
-      appInfo.releaseOs === 'macos' &&
+      isSupportedPlatform &&
       (appInfo.releaseChannel === 'daily' || appInfo.releaseChannel === 'stable') &&
       arch !== null &&
       Boolean(baseUrl)
@@ -441,7 +454,7 @@ export class UpdateService {
   }
 
   canInstallDownloadedUpdate(): boolean {
-    return process.platform === 'darwin' && Boolean(this.downloadedUpdate)
+    return (process.platform === 'darwin' || process.platform === 'win32') && Boolean(this.downloadedUpdate)
   }
 
   requestRestartToUpdate(): { success: boolean; error?: string } {
@@ -457,9 +470,17 @@ export class UpdateService {
   }
 
   installDownloadedUpdateOnQuit(): void {
-    if (!this.downloadedUpdate || process.platform !== 'darwin') return
+    if (!this.downloadedUpdate) return
 
-    const bundlePath = resolveCurrentBundlePath()
+    if (process.platform === 'darwin') {
+      this.installDownloadedUpdateOnQuitMacOS()
+    } else if (process.platform === 'win32') {
+      this.installDownloadedUpdateOnQuitWindows()
+    }
+  }
+
+  private installDownloadedUpdateOnQuitMacOS(): void {
+    const bundlePath = resolveCurrentInstallPath()
     if (!bundlePath) return
 
     const stagingRoot = join(tmpdir(), `onward-update-${Date.now()}`)
@@ -479,7 +500,7 @@ export class UpdateService {
       'set -eu',
       `APP_PATH=${shellEscape(bundlePath)}`,
       `EXEC_PATH=${shellEscape(app.getPath('exe'))}`,
-      `ARCHIVE_PATH=${shellEscape(this.downloadedUpdate.archivePath)}`,
+      `ARCHIVE_PATH=${shellEscape(this.downloadedUpdate!.archivePath)}`,
       `PARENT_PID=${process.pid}`,
       `STAGING_ROOT=${shellEscape(stagingRoot)}`,
       `LOG_PATH=${shellEscape(logPath)}`,
@@ -532,6 +553,114 @@ export class UpdateService {
     spawn('/bin/sh', [scriptPath], {
       detached: true,
       stdio: 'ignore'
+    }).unref()
+  }
+
+  private installDownloadedUpdateOnQuitWindows(): void {
+    const installDir = resolveCurrentInstallPath()
+    if (!installDir) return
+
+    const stagingRoot = join(tmpdir(), `onward-update-${Date.now()}`)
+    mkdirSync(stagingRoot, { recursive: true })
+    const scriptPath = join(stagingRoot, 'install-update.ps1')
+    const logPath = resolveUpdateLogPath()
+    const execPath = app.getPath('exe')
+
+    const envSetStatements = RELAUNCH_ENV_KEYS
+      .map((key) => {
+        const value = process.env[key]
+        if (!value) return null
+        return `$env:${key} = ${powershellEscape(value)}`
+      })
+      .filter((value): value is string => Boolean(value))
+      .join('\n')
+
+    const scriptContent = [
+      '$ErrorActionPreference = "Stop"',
+      `$installDir = ${powershellEscape(installDir)}`,
+      `$execPath = ${powershellEscape(execPath)}`,
+      `$archivePath = ${powershellEscape(this.downloadedUpdate!.archivePath)}`,
+      `$parentPid = ${process.pid}`,
+      `$stagingRoot = ${powershellEscape(stagingRoot)}`,
+      `$logPath = ${powershellEscape(logPath)}`,
+      '$extractRoot = Join-Path $stagingRoot "extracted"',
+      '$backupPath = "$installDir.onward-backup"',
+      '',
+      'function Write-Log($msg) {',
+      '    $dir = Split-Path $logPath -Parent',
+      '    if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }',
+      '    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"',
+      '    Add-Content -Path $logPath -Value "$ts $msg" -ErrorAction SilentlyContinue',
+      '}',
+      '',
+      'try {',
+      '    Write-Log "Starting Windows update install helper."',
+      '',
+      '    # Wait for parent process to exit',
+      '    try {',
+      '        $proc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue',
+      '        if ($proc) {',
+      '            Write-Log "Waiting for parent process ($parentPid) to exit."',
+      '            $proc.WaitForExit(120000) | Out-Null',
+      '        }',
+      '    } catch { }',
+      '    Write-Log "Parent process exited."',
+      '',
+      '    # Clean previous staging and backup',
+      '    if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }',
+      '    if (Test-Path $backupPath) { Remove-Item $backupPath -Recurse -Force }',
+      '',
+      '    # Extract archive',
+      '    Write-Log "Extracting update archive."',
+      '    Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force',
+      '',
+      '    # Detect extracted content: single subdirectory or flat contents',
+      '    $extractedItems = Get-ChildItem $extractRoot',
+      '    if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {',
+      '        $sourceDir = $extractedItems[0].FullName',
+      '    } else {',
+      '        $sourceDir = $extractRoot',
+      '    }',
+      '',
+      '    # Backup current installation',
+      '    Write-Log "Backing up current installation."',
+      '    Rename-Item -Path $installDir -NewName (Split-Path $backupPath -Leaf) -Force',
+      '',
+      '    # Install update',
+      '    Write-Log "Installing update."',
+      '    if ($sourceDir -ne $extractRoot) {',
+      '        Move-Item -Path $sourceDir -Destination $installDir -Force',
+      '    } else {',
+      '        New-Item -Path $installDir -ItemType Directory -Force | Out-Null',
+      '        Get-ChildItem $extractRoot | Move-Item -Destination $installDir -Force',
+      '    }',
+      '',
+      '    # Set environment variables and relaunch',
+      '    Write-Log "Relaunching updated app."',
+      envSetStatements,
+      '    Start-Process -FilePath $execPath',
+      '',
+      '    # Cleanup',
+      '    Remove-Item $backupPath -Recurse -Force -ErrorAction SilentlyContinue',
+      '    Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue',
+      '    Remove-Item $archivePath -Force -ErrorAction SilentlyContinue',
+      '',
+      '    Write-Log "Update installed successfully."',
+      '} catch {',
+      '    Write-Log "Update install failed: $_"',
+      '    # Restore backup if installation dir is gone',
+      '    if (-not (Test-Path $installDir) -and (Test-Path $backupPath)) {',
+      '        Rename-Item -Path $backupPath -NewName (Split-Path $installDir -Leaf) -Force',
+      '        Write-Log "Restored backup after failure."',
+      '    }',
+      '}'
+    ].join('\n')
+
+    writeFileSync(scriptPath, scriptContent, { encoding: 'utf-8' })
+    spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
     }).unref()
   }
 }

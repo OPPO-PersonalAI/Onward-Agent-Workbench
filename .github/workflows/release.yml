@@ -27,10 +27,10 @@ jobs:
           - os: macos-15-intel  # Intel (x64)
             arch: x64
             release_os: macos
-          # Windows and Linux - uncomment when ready:
-          # - os: windows-latest
-          #   arch: x64
-          #   release_os: windows
+          - os: windows-latest
+            arch: x64
+            release_os: windows
+          # Linux - uncomment when ready:
           # - os: ubuntu-latest
           #   arch: x64
           #   release_os: linux
@@ -68,6 +68,8 @@ jobs:
           path: |
             ~/Library/Caches/electron
             ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
           key: ${{ runner.os }}-${{ matrix.arch }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-electron-
@@ -87,6 +89,7 @@ jobs:
           ONWARD_TAG: ${{ steps.tag.outputs.version }}
           ONWARD_RELEASE_OS: ${{ matrix.release_os }}
           NODE_OPTIONS: '--max-old-space-size=4096'
+        shell: bash
         run: rm -rf out release && pnpm dist:release
 
       - name: Upload build artifacts
@@ -96,6 +99,7 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+            release/*.exe
           if-no-files-found: error
 
   publish:
@@ -146,13 +150,16 @@ jobs:
               --prerelease
           else
             gh release create "$RELEASE_TAG" \
-              dist-artifacts/*.dmg \
-              dist-artifacts/*.zip \
               --title "Daily Build $RELEASE_TAG" \
               --notes-file "$NOTES_FILE" \
               --prerelease
           fi
-          gh release upload "$RELEASE_TAG" dist-artifacts/*.dmg dist-artifacts/*.zip --clobber
+          # Upload all platform artifacts (dmg, zip, exe)
+          for ext in dmg zip exe; do
+            if compgen -G "dist-artifacts/*.$ext" > /dev/null; then
+              gh release upload "$RELEASE_TAG" dist-artifacts/*.$ext --clobber
+            fi
+          done
 
       - name: Publish update manifests to gh-pages branch
         env:

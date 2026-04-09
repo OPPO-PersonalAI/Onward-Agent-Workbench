@@ -52,7 +52,10 @@ export function shellEscape(value) {
 }
 
 export async function runShellCommand(command, options = {}) {
-  const child = spawn('/bin/zsh', ['-lc', command], {
+  const shellArgs = process.platform === 'win32'
+    ? ['cmd.exe', ['/c', command]]
+    : ['/bin/zsh', ['-lc', command]]
+  const child = spawn(shellArgs[0], shellArgs[1], {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
     stdio: options.stdio ?? 'inherit'
