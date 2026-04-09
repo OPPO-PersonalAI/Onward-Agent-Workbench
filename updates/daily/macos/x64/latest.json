@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260409.4",
-  "tag": "v2.1.0-daily.20260409.4",
+  "version": "2.1.0-daily.20260409.5",
+  "tag": "v2.1.0-daily.20260409.5",
   "platform": "macos",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260409.4-macos-x64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.4/Onward.2-v2.1.0-daily.20260409.4-macos-x64.zip",
-  "sha256": "92ad43c966cf48ec479d16879496f6d5e177f845c536faef8bc3596d13ec8f24",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.4\n\nChanges since `v2.1.0-daily.20260409.3`.\n\n## Improvements\n- End-to-end auto-update verification build for Windows platform\n",
-  "publishedAt": "2026-04-09T11:37:31.604Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260409.5-macos-x64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.5/Onward.2-v2.1.0-daily.20260409.5-macos-x64.zip",
+  "sha256": "814314d5c109c160c10659687afe8be28927ef119d209c753f1da26aa16d054a",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.5\n\nChanges since `v2.1.0-daily.20260409.4`.\n\n## Bug Fixes\n- Fix Windows auto-update: use batch launcher for reliable PowerShell spawn during app quit\n",
+  "publishedAt": "2026-04-09T12:15:25.654Z"
 }
