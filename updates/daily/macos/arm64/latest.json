@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260409.1",
-  "tag": "v2.1.0-daily.20260409.1",
+  "version": "2.1.0-daily.20260409.2",
+  "tag": "v2.1.0-daily.20260409.2",
   "platform": "macos",
   "arch": "arm64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260409.1-macos-arm64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.1/Onward.2-v2.1.0-daily.20260409.1-macos-arm64.zip",
-  "sha256": "e013157d6b55f01e244c3304b4115de994e5ce2e906fe17c81fb7c99bb9fcda0",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.1\n\nChanges since `v2.1.0-daily.20260408.1`.\n\n## New Features\n- Add Windows platform auto-update support with PowerShell-based update installer\n- Add Windows build target to GitHub Actions CI/CD pipeline\n\n## Improvements\n- Configure NSIS installer for per-user installation without UAC elevation\n- Extend Electron and electron-builder cache paths for cross-platform CI builds\n- Fix cross-platform shell compatibility in test utilities\n",
-  "publishedAt": "2026-04-09T10:00:15.658Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260409.2-macos-arm64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.2/Onward.2-v2.1.0-daily.20260409.2-macos-arm64.zip",
+  "sha256": "f1d3ec26962c5fa92d082c82ec90b057e6bb963f87d3500f150848cb43f623e5",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.2\n\nChanges since `v2.1.0-daily.20260409.1`.\n\n## Improvements\n- Auto-update verification build for Windows platform testing\n",
+  "publishedAt": "2026-04-09T10:20:59.503Z"
 }
