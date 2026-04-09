@@ -10,7 +10,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { spawn } from 'child_process'
+import { spawn, execSync } from 'child_process'
 import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
 import { compareVersions } from './update-version'
 
@@ -661,17 +661,26 @@ export class UpdateService {
 
     writeFileSync(scriptPath, scriptContent, { encoding: 'utf-8' })
 
-    // Use full path to powershell.exe to avoid PATH resolution issues during app quit
+    // Write a batch launcher that starts PowerShell in a fully independent process.
+    // Using cmd.exe /c start ensures the PowerShell process survives Electron's
+    // will-quit teardown, which can silently kill detached child processes.
     const psPath = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    })
-    child.on('error', (err) => {
-      console.error('[UpdateService] Failed to spawn PowerShell update helper:', err.message)
-    })
-    child.unref()
+    const batPath = join(stagingRoot, 'up.bat')
+    const batContent = `@echo off\r\nstart "" /min "${psPath}" -ExecutionPolicy Bypass -File "${scriptPath}"\r\n`
+    writeFileSync(batPath, batContent, { encoding: 'utf-8' })
+
+    try {
+      execSync(`"${batPath}"`, { windowsHide: true, stdio: 'ignore', timeout: 5000 })
+    } catch {
+      // Fallback: try direct spawn
+      const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      })
+      child.on('error', () => {})
+      child.unref()
+    }
   }
 }
 
