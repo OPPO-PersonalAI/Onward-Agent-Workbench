@@ -1,6 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 OPPO -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
+- Hard rule: **Never create git commits automatically.** Only commit when the user explicitly asks. This applies to all branches without exception.
+
 For platform-related commands, always consider these three platforms:
 1. macOS
 2. Linux
@@ -81,6 +83,20 @@ For platform-related commands, always consider these three platforms:
     2. What changes were made to which files?
     3. Finally, how do you evaluate this round of feature iteration? Is the repository change a very good / elegant design, or only a temporary patch-style solution?
     4. What would be a better follow-up improvement direction? Check whether any technical debt remains in the current repository?
+
+## Release Channels and Tag Convention
+
+The app supports two update channels with different tag formats and auto-update behavior:
+
+| Channel | Tag format | Auto-check | Auto-download | Example |
+|---------|-----------|------------|---------------|---------|
+| **Daily** | `v2.1.0-daily.20260409.1` | Every hour | Yes | Production releases for all users |
+| **Dev** | `v2.1.0-dev.20260409.1` | No | No | Development/debug builds, manual update only |
+
+- **Hard rule**: Before pushing any tag that triggers a CI build, always ask the user which channel to target (daily or dev). Use the `/push-daily-build` skill which handles channel selection automatically.
+- Both channels produce full artifacts and publish manifests to gh-pages (under `updates/daily/` or `updates/dev/` respectively).
+- Dev channel users see "Manual check required" in Settings and must click Check → Download → Restart manually.
+- Daily channel users receive automatic background checks and downloads.
 
 ## Performance Regression Testing
 

@@ -15,25 +15,37 @@ The user may provide:
 - **date** — The date stamp (e.g., `20260405`). If omitted, use today's date in `YYYYMMDD` format.
 - **sequence** — The sequence number (e.g., `1`, `2`). If omitted, auto-detect: find existing tags for the same version+date and increment. Default to `1` if none exist.
 
-The resulting tag format is: `v{VERSION}-daily.{DATE}.{SEQ}`
-
-Example: `v2.1.0-daily.20260405.1`
+The resulting tag format depends on the chosen channel:
+- **Daily**: `v{VERSION}-daily.{DATE}.{SEQ}` — e.g., `v2.1.0-daily.20260405.1`
+- **Dev**: `v{VERSION}-dev.{DATE}.{SEQ}` — e.g., `v2.1.0-dev.20260405.1`
 
 ## Execution Flow
+
+### Phase 0: Channel Selection
+
+**Before any other action**, ask the user which channel to publish to:
+
+> Which update channel should this build target?
+> - **Daily** — Production release. All daily-channel users will receive this update automatically.
+> - **Dev** — Development/debug build. Users must manually check and download. Use this for testing CI pipelines, auto-update flow debugging, or feature validation.
+
+If the user says dev/debug/test, set `CHANNEL=dev`. The tag prefix becomes `-dev.` instead of `-daily.`.
+If the user says daily/production/release (or doesn't specify), set `CHANNEL=daily`.
 
 ### Phase 1: Pre-flight Checks
 
 ```bash
-# 1. Confirm on master branch
+# 1. Confirm current branch
 git branch --show-current
-# Must be "master". If not, stop and warn the user.
+# For daily channel: must be "master". If not, stop and warn the user.
+# For dev channel: any branch is allowed. Inform the user of the current branch.
 
 # 2. Check for uncommitted changes
 git status --short
 # If dirty, warn the user and ask whether to proceed.
 
 # 3. Check if there are commits to push
-git log origin/master..HEAD --oneline
+git log origin/{BRANCH}..HEAD --oneline
 # If no commits, inform the user — they may only want to create a tag on HEAD.
 ```
 
@@ -53,7 +65,8 @@ If there are existing tags for the same version+date, increment the sequence num
 
 Present the resolved tag to the user for confirmation before proceeding:
 
-> Tag to create: `v2.1.0-daily.20260405.1`
+> Channel: **{CHANNEL}**
+> Tag to create: `v2.1.0-{CHANNEL}.20260405.1`
 > Commits to push: 12
 > Proceed?
 
@@ -144,13 +157,12 @@ After the build succeeds, verify all outputs:
 # 1. GitHub Release exists and has artifacts
 gh release view {TAG}
 
-# 2. arm64 manifest is updated
-curl -s "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates/daily/macos/arm64/latest.json"
+# 2. Manifests are updated (use the correct channel: daily or dev)
+curl -s "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates/{CHANNEL}/macos/arm64/latest.json"
+curl -s "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates/{CHANNEL}/macos/x64/latest.json"
+curl -s "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates/{CHANNEL}/windows/x64/latest.json"
 
-# 3. x64 manifest is updated
-curl -s "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates/daily/macos/x64/latest.json"
-
-# 4. Download links are accessible (expect HTTP 302)
+# 3. Download links are accessible (expect HTTP 302)
 curl -sI "{ARTIFACT_URL}" | head -3
 ```
 
@@ -158,12 +170,11 @@ Verify the following conditions:
 
 | Check | Expected |
 |---|---|
-| GitHub Release title | `Daily Build {TAG}` |
-| Release assets | 4 files: arm64 dmg+zip, x64 dmg+zip |
-| GitHub Release notes | Matches `resources/changelog/en/daily/{TAG}.md` |
+| GitHub Release title | `{CHANNEL_LABEL} {TAG}` (Daily Build or Dev Build) |
+| Release assets | 6 files: macOS arm64 dmg+zip, macOS x64 dmg+zip, Windows x64 exe+zip |
 | arm64 manifest version | Matches the tag version |
 | x64 manifest version | Matches the tag version |
-| Manifest `releaseNotes` | Matches the approved English Change Log |
+| windows manifest version | Matches the tag version |
 | Artifact download URL | HTTP 302 (redirect to CDN) |
 
 ### Phase 8: Report

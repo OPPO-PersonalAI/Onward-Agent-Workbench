@@ -69,7 +69,7 @@ function getReleaseOsName() {
 }
 
 function parseSemverReleaseTag(tag) {
-  const match = /^v(\d+)\.(\d+)\.(\d+)(?:-(daily)\.(\d{8})\.(\d+))?$/.exec(tag)
+  const match = /^v(\d+)\.(\d+)\.(\d+)(?:-(daily|dev)\.(\d{8})\.(\d+))?$/.exec(tag)
   if (!match) {
     return null
   }
@@ -100,7 +100,7 @@ function parseSemverReleaseTag(tag) {
   return {
     tag,
     version: tag.slice(1),
-    releaseChannel: prereleaseType === 'daily' ? 'daily' : 'stable',
+    releaseChannel: prereleaseType === 'daily' ? 'daily' : prereleaseType === 'dev' ? 'dev' : 'stable',
     major,
     minor,
     patch,
@@ -124,7 +124,7 @@ function parseReleaseTag(tag) {
   const match = /^v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$/.exec(tag)
   if (!match) {
     console.error(`Error: Invalid tag format "${tag}".`)
-    console.error('Expected format: v2.1.0, v2.1.0-daily.20260402.1, v2026.04.01, or v2026.04.01.2')
+    console.error('Expected format: v2.1.0, v2.1.0-daily.20260402.1, v2.1.0-dev.20260402.1, v2026.04.01, or v2026.04.01.2')
     process.exit(1)
   }
 

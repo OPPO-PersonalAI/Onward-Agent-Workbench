@@ -550,9 +550,9 @@ export interface ProjectAPI {
 import type { SettingsState, ShortcutAction, SettingsAPI } from './settings.d.ts'
 
 export type { SettingsState, ShortcutAction }
-export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
-export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
 export interface AppInfo {
   buildChannel: 'dev' | 'prod'

@@ -683,6 +683,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await getUpdateService().checkNow()
   })
 
+  ipcMain.handle('updater:download-now', async () => {
+    return await getUpdateService().downloadNow()
+  })
+
   ipcMain.handle('updater:restart-to-update', async () => {
     if (!options.onRestartToApplyUpdate) {
       return { success: false, error: 'Restart action is unavailable.' }
@@ -1530,6 +1534,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('app:read-notice')
   ipcMain.removeHandler('updater:get-status')
   ipcMain.removeHandler('updater:check-now')
+  ipcMain.removeHandler('updater:download-now')
   ipcMain.removeHandler('updater:restart-to-update')
   ipcMain.removeHandler('updater:dismiss-banner')
   ipcMain.removeHandler('terminal:create')

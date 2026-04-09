@@ -168,10 +168,13 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const debugCheckTimerRef = useRef<number | null>(null)
   const debugRestartTimerRef = useRef<number | null>(null)
   const effectiveUpdaterStatus = debugUpdaterStatus ?? updaterStatus
+  const isDevChannel = effectiveUpdaterStatus?.currentChannel === 'dev'
   const updateStatusKey: TranslationKey = (() => {
     switch (effectiveUpdaterStatus?.phase) {
       case 'checking':
         return 'settings.update.statusValue.checking'
+      case 'available':
+        return 'settings.update.statusValue.available'
       case 'downloading':
         return 'settings.update.statusValue.downloading'
       case 'downloaded':
@@ -183,7 +186,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       case 'error':
         return 'settings.update.statusValue.error'
       default:
-        return 'settings.update.statusValue.idle'
+        return isDevChannel ? 'settings.update.statusValue.idle.dev' : 'settings.update.statusValue.idle'
     }
   })()
   const updateActionKey: TranslationKey = (() => {
@@ -194,6 +197,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       return 'settings.update.action.checking'
     }
     switch (effectiveUpdaterStatus?.phase) {
+      case 'available':
+        return 'settings.update.action.download'
       case 'downloading':
         return 'settings.update.action.downloading'
       case 'downloaded':
@@ -286,7 +291,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     }
     return null
   }, [actionError, effectiveUpdaterStatus, formatUpdateTimestamp, t])
-  const targetChannelValue = appInfo?.releaseChannel === 'stable' ? 'stable' : 'daily'
+  const targetChannelValue = appInfo?.releaseChannel === 'stable' ? 'stable' : appInfo?.releaseChannel === 'dev' ? 'dev' : 'daily'
   const isUpdateDetailError = Boolean(actionError) || effectiveUpdaterStatus?.phase === 'error'
   const isUpdateDetailSuccess = effectiveUpdaterStatus?.phase === 'up-to-date'
   const updateStatusLabel = t(updateStatusKey)
@@ -415,6 +420,17 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     }
   }, [debugUpdaterStatus, effectiveUpdaterStatus, isAutotest, isUpdateActionDisabled])
 
+  const handleDownloadNow = useCallback(async () => {
+    if (!effectiveUpdaterStatus || effectiveUpdaterStatus.phase !== 'available') return
+    setActionError(null)
+    try {
+      const status = await window.electronAPI.updater.downloadNow()
+      setUpdaterStatus(status)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [effectiveUpdaterStatus])
+
   const handleUpdateAction = useCallback(async () => {
     if (!effectiveUpdaterStatus || isUpdateActionDisabled) {
       return
@@ -423,8 +439,12 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       await handleRestartToUpdate()
       return
     }
+    if (effectiveUpdaterStatus.phase === 'available') {
+      await handleDownloadNow()
+      return
+    }
     await handleCheckNow()
-  }, [effectiveUpdaterStatus, handleCheckNow, handleRestartToUpdate, isUpdateActionDisabled])
+  }, [effectiveUpdaterStatus, handleCheckNow, handleDownloadNow, handleRestartToUpdate, isUpdateActionDisabled])
 
   // Handle drag start
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -657,6 +677,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                         data-testid="settings-update-channel-select"
                       >
                         <option value="daily">{t('settings.update.channel.daily')}</option>
+                        <option value="dev">{t('settings.update.channel.dev')}</option>
                         <option value="stable">{t('settings.update.channel.stable')}</option>
                       </select>
                     </div>

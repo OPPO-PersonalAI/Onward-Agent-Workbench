@@ -753,6 +753,7 @@ export interface UpdaterStatus {
 export interface UpdaterAPI {
   getStatus: () => Promise<UpdaterStatus>
   checkNow: () => Promise<UpdaterStatus>
+  downloadNow: () => Promise<UpdaterStatus>
   restartToUpdate: () => Promise<{ success: boolean; error?: string }>
   dismissBanner: () => Promise<UpdaterStatus>
   onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void
@@ -1400,6 +1401,9 @@ const updaterAPI: UpdaterAPI = {
   },
   checkNow: () => {
     return ipcRenderer.invoke('updater:check-now')
+  },
+  downloadNow: () => {
+    return ipcRenderer.invoke('updater:download-now')
   },
   restartToUpdate: () => {
     return ipcRenderer.invoke('updater:restart-to-update')

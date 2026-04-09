@@ -137,20 +137,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NOTES_FILE="resources/changelog/en/daily/${RELEASE_TAG}.md"
-          if [[ ! -f "$NOTES_FILE" ]]; then
-            echo "Missing Change Log file: $NOTES_FILE" >&2
+          # Extract channel from tag (e.g. "daily" from v2.1.0-daily.20260409.1)
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(([a-z]+)\.[0-9]{8}\.[0-9]+)$ ]]; then
+            CHANNEL="${BASH_REMATCH[2]}"
+          else
+            CHANNEL="daily"
+          fi
+          # Capitalize first letter for display label
+          CHANNEL_LABEL="$(echo "$CHANNEL" | sed 's/./\U&/') Build"
+          # Search for changelog: try channel-specific dir first, then daily/ as fallback
+          NOTES_FILE=""
+          for dir in "$CHANNEL" daily; do
+            candidate="resources/changelog/en/${dir}/${RELEASE_TAG}.md"
+            if [[ -f "$candidate" ]]; then
+              NOTES_FILE="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$NOTES_FILE" ]]; then
+            echo "Missing Change Log file for ${RELEASE_TAG} (searched: ${CHANNEL}/, daily/)" >&2
             exit 1
           fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
-              --title "Daily Build $RELEASE_TAG" \
+              --title "$CHANNEL_LABEL $RELEASE_TAG" \
               --notes-file "$NOTES_FILE" \
               --draft=false \
               --prerelease
           else
             gh release create "$RELEASE_TAG" \
-              --title "Daily Build $RELEASE_TAG" \
+              --title "$CHANNEL_LABEL $RELEASE_TAG" \
               --notes-file "$NOTES_FILE" \
               --prerelease
           fi

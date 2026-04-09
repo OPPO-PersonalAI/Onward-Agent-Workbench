@@ -22,12 +22,13 @@ function getRequiredEnv(name) {
 }
 
 function parseReleaseTag(tag) {
-  const semverMatch = /^v(\d+\.\d+\.\d+(?:-(daily)\.(\d{8})\.(\d+))?)$/.exec(tag)
+  const semverMatch = /^v(\d+\.\d+\.\d+(?:-(daily|dev)\.(\d{8})\.(\d+))?)$/.exec(tag)
   if (semverMatch) {
+    const channel = semverMatch[2]
     return {
       tag,
       version: semverMatch[1],
-      releaseChannel: semverMatch[2] === 'daily' ? 'daily' : 'stable'
+      releaseChannel: channel === 'daily' ? 'daily' : channel === 'dev' ? 'dev' : 'stable'
     }
   }
 
@@ -66,11 +67,19 @@ function buildAssetUrl(repository, tag, fileName) {
 }
 
 function readReleaseNotes(changelogRoot, release) {
-  const notesPath = join(changelogRoot, 'en', release.releaseChannel, `${release.tag}.md`)
-  if (!existsSync(notesPath)) {
-    fail(`Missing Change Log file "${notesPath}". Generate and commit the changelog before publishing.`)
+  // Dev channel changelogs are stored alongside daily changelogs with a -dev tag suffix.
+  // Try the exact tag first, then fall back to the daily directory with a base tag name.
+  const candidates = [
+    join(changelogRoot, 'en', release.releaseChannel, `${release.tag}.md`),
+    join(changelogRoot, 'en', 'daily', `${release.tag}.md`),
+    join(changelogRoot, 'en', 'daily', `${release.tag.replace(/-dev\./, '-daily.')}.md`)
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return readFileSync(candidate, 'utf-8')
+    }
   }
-  return readFileSync(notesPath, 'utf-8')
+  fail(`Missing Change Log file. Searched:\n${candidates.map(p => `  - ${p}`).join('\n')}\nGenerate and commit the changelog before publishing.`)
 }
 
 const repository = getRequiredEnv('ONWARD_GITHUB_REPOSITORY')

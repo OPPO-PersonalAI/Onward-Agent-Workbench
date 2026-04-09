@@ -15,7 +15,7 @@ import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
 import { compareVersions } from './update-version'
 import { getTelemetryService } from './telemetry/telemetry-service'
 
-export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
 export interface UpdateStatus {
   phase: UpdatePhase
@@ -241,6 +241,7 @@ export class UpdateService {
   private checkingPromise: Promise<UpdateStatus> | null = null
   private intervalHandle: NodeJS.Timeout | null = null
   private downloadedUpdate: DownloadedUpdate | null = null
+  private pendingManifest: UpdateManifest | null = null
   private installRequested = false
   private readonly checkIntervalMs = resolveUpdateCheckIntervalMs()
 
@@ -257,7 +258,7 @@ export class UpdateService {
       appInfo.isPackaged &&
       appInfo.buildChannel === 'prod' &&
       isSupportedPlatform &&
-      (appInfo.releaseChannel === 'daily' || appInfo.releaseChannel === 'stable') &&
+      (appInfo.releaseChannel === 'daily' || appInfo.releaseChannel === 'dev' || appInfo.releaseChannel === 'stable') &&
       arch !== null &&
       Boolean(baseUrl)
 
@@ -398,6 +399,10 @@ export class UpdateService {
 
     if (!this.status.supported) return
 
+    // DEV channel: updates are manual only — no auto-check, no auto-download.
+    // User must click Check Now → Download → Restart in the Settings UI.
+    if (this.status.currentChannel === 'dev') return
+
     void this.checkNow()
     this.intervalHandle = setInterval(() => {
       void this.checkNow()
@@ -510,40 +515,30 @@ export class UpdateService {
         })
       }
 
-      console.log(`${LOG_PREFIX} New version available: ${manifest.version}, downloading...`)
+      console.log(`${LOG_PREFIX} New version available: ${manifest.version}`)
       trackUpdateEvent('update/check', {
         result: 'new-version',
         currentVersion: this.status.currentVersion,
         targetVersion: manifest.version
       })
 
-      this.setStatus({
-        phase: 'downloading',
-        targetVersion: manifest.version,
-        targetTag: manifest.tag,
-        downloadedFileName: manifest.artifactName,
-        bannerDismissed: false,
-        lastCheckedAt,
-        error: null
-      })
+      // DEV channel: stop at 'available' and wait for user to manually trigger download.
+      if (this.status.currentChannel === 'dev') {
+        this.pendingManifest = manifest
+        console.log(`${LOG_PREFIX} Dev channel: waiting for manual download`)
+        return this.setStatus({
+          phase: 'available',
+          targetVersion: manifest.version,
+          targetTag: manifest.tag,
+          downloadedFileName: null,
+          bannerDismissed: false,
+          lastCheckedAt,
+          error: null
+        })
+      }
 
-      this.downloadedUpdate = await this.ensureDownloaded(manifest)
-      this.cleanupDownloadedArchives([manifest.version])
-      console.log(`${LOG_PREFIX} Download complete: ${manifest.artifactName}`)
-      trackUpdateEvent('update/downloaded', {
-        targetVersion: manifest.version,
-        artifactName: manifest.artifactName
-      })
-
-      return this.setStatus({
-        phase: 'downloaded',
-        targetVersion: manifest.version,
-        targetTag: manifest.tag,
-        downloadedFileName: manifest.artifactName,
-        bannerDismissed: false,
-        lastCheckedAt,
-        error: null
-      })
+      // Daily/Stable channel: auto-download immediately.
+      return this.downloadAndApply(manifest, lastCheckedAt)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       const failedPhase = this.status.phase === 'downloading' ? 'download' : 'check'
@@ -555,6 +550,64 @@ export class UpdateService {
       return this.setStatus({
         phase: this.downloadedUpdate ? 'downloaded' : 'error',
         lastCheckedAt: Date.now(),
+        error: errorMessage
+      })
+    }
+  }
+
+  private async downloadAndApply(manifest: UpdateManifest, lastCheckedAt: number): Promise<UpdateStatus> {
+    this.setStatus({
+      phase: 'downloading',
+      targetVersion: manifest.version,
+      targetTag: manifest.tag,
+      downloadedFileName: manifest.artifactName,
+      bannerDismissed: false,
+      lastCheckedAt,
+      error: null
+    })
+
+    this.downloadedUpdate = await this.ensureDownloaded(manifest)
+    this.cleanupDownloadedArchives([manifest.version])
+    console.log(`${LOG_PREFIX} Download complete: ${manifest.artifactName}`)
+    trackUpdateEvent('update/downloaded', {
+      targetVersion: manifest.version,
+      artifactName: manifest.artifactName
+    })
+
+    return this.setStatus({
+      phase: 'downloaded',
+      targetVersion: manifest.version,
+      targetTag: manifest.tag,
+      downloadedFileName: manifest.artifactName,
+      bannerDismissed: false,
+      lastCheckedAt,
+      error: null
+    })
+  }
+
+  /**
+   * Manually trigger download of the available update (DEV channel only).
+   * Only valid when phase is 'available' and a pending manifest exists.
+   */
+  async downloadNow(): Promise<UpdateStatus> {
+    if (this.status.phase !== 'available' || !this.pendingManifest) {
+      return this.getStatus()
+    }
+
+    const manifest = this.pendingManifest
+    this.pendingManifest = null
+
+    try {
+      return await this.downloadAndApply(manifest, this.status.lastCheckedAt ?? Date.now())
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error(`${LOG_PREFIX} Download failed: ${errorMessage}`)
+      trackUpdateFailure('download', errorMessage, {
+        currentVersion: this.status.currentVersion,
+        targetVersion: manifest.version
+      })
+      return this.setStatus({
+        phase: 'error',
         error: errorMessage
       })
     }

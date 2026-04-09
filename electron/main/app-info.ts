@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, existsSync, copyFileSync, mkdirSync } from '
 import { dirname, join } from 'path'
 
 export type BuildChannel = 'dev' | 'prod'
-export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
 
 export interface AppInfo {
@@ -61,7 +61,7 @@ function normalizeReleaseOs(value: unknown): ReleaseOs {
 }
 
 function normalizeReleaseChannel(value: unknown): ReleaseChannel {
-  if (value === 'daily' || value === 'stable') {
+  if (value === 'daily' || value === 'dev' || value === 'stable') {
     return value
   }
   return 'unknown'
