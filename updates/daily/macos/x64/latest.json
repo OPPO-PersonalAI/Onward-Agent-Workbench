@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260409.3",
-  "tag": "v2.1.0-daily.20260409.3",
+  "version": "2.1.0-daily.20260409.4",
+  "tag": "v2.1.0-daily.20260409.4",
   "platform": "macos",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260409.3-macos-x64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.3/Onward.2-v2.1.0-daily.20260409.3-macos-x64.zip",
-  "sha256": "ef9f40c5ce901264a5c2d6ae5a988f01d7818e14758580c7d894ffd8c538ce02",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.3\n\nChanges since `v2.1.0-daily.20260409.2`.\n\n## Bug Fixes\n- Fix Windows auto-update: use short staging paths to avoid MAX_PATH limit during zip extraction\n- Fix PowerShell spawn using full system path for reliable process launch during app quit\n",
-  "publishedAt": "2026-04-09T11:00:06.066Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260409.4-macos-x64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.4/Onward.2-v2.1.0-daily.20260409.4-macos-x64.zip",
+  "sha256": "92ad43c966cf48ec479d16879496f6d5e177f845c536faef8bc3596d13ec8f24",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.4\n\nChanges since `v2.1.0-daily.20260409.3`.\n\n## Improvements\n- End-to-end auto-update verification build for Windows platform\n",
+  "publishedAt": "2026-04-09T11:37:31.604Z"
 }
