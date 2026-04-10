@@ -47,6 +47,7 @@ import { testFeedback } from './test-feedback'
 import { testFeedbackUi } from './test-feedback-ui'
 import { testFeedbackPersistenceSeed, testFeedbackPersistenceVerify } from './test-feedback-persistence'
 import { testTelemetry } from './test-telemetry'
+import { testSubpageViewstateRestore } from './test-subpage-viewstate-restore'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -203,6 +204,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.58:begin')
       const results = await testSubpageNavigation(ctx)
       collectSuiteResults('SubpageNavigation', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('subpage-viewstate-restore')) {
+      log('phase0.59:begin')
+      const results = await testSubpageViewstateRestore(ctx)
+      collectSuiteResults('SubpageViewstateRestore', results)
       await sleep(500)
     }
 
