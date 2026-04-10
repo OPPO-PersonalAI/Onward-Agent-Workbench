@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260409.6",
-  "tag": "v2.1.0-daily.20260409.6",
+  "version": "2.1.0-daily.20260410.1",
+  "tag": "v2.1.0-daily.20260410.1",
   "platform": "macos",
   "arch": "arm64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260409.6-macos-arm64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260409.6/Onward.2-v2.1.0-daily.20260409.6-macos-arm64.zip",
-  "sha256": "da4abc81a51fa771c0ba18d14d2e6e30df5987bb53a3b29b8d6a0cb057e43c3d",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260409.6\n\nChanges since `v2.1.0-daily.20260409.5`.\n\n## Improvements\n- End-to-end GitHub CI auto-update verification build\n",
-  "publishedAt": "2026-04-09T12:27:20.571Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260410.1-macos-arm64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260410.1/Onward.2-v2.1.0-daily.20260410.1-macos-arm64.zip",
+  "sha256": "79bb5ab667b5169d818a518c092f8069bcc88f2df7592bff8cfbd275f34d35c1",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260410.1\n\nChanges since `v2.1.0-daily.20260408.1`.\n\n## New Features\n- implement Daily/Dev dual-channel auto-update system\n\n## Bug Fixes\n- add Windows auto-update and GitHub Actions Windows build support\n- resolve Windows auto-update failures with short staging paths\n- use batch launcher for reliable PowerShell spawn during app quit\n- add update telemetry logging and failure reporting\n- enforce branch constraint for daily channel tags\n",
+  "publishedAt": "2026-04-10T04:51:01.842Z"
 }
