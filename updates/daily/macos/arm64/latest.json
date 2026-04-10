@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260410.1",
-  "tag": "v2.1.0-daily.20260410.1",
+  "version": "2.1.0-daily.20260410.2",
+  "tag": "v2.1.0-daily.20260410.2",
   "platform": "macos",
   "arch": "arm64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260410.1-macos-arm64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260410.1/Onward.2-v2.1.0-daily.20260410.1-macos-arm64.zip",
-  "sha256": "79bb5ab667b5169d818a518c092f8069bcc88f2df7592bff8cfbd275f34d35c1",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260410.1\n\nChanges since `v2.1.0-daily.20260408.1`.\n\n## New Features\n- implement Daily/Dev dual-channel auto-update system\n\n## Bug Fixes\n- add Windows auto-update and GitHub Actions Windows build support\n- resolve Windows auto-update failures with short staging paths\n- use batch launcher for reliable PowerShell spawn during app quit\n- add update telemetry logging and failure reporting\n- enforce branch constraint for daily channel tags\n",
-  "publishedAt": "2026-04-10T04:51:01.842Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260410.2-macos-arm64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260410.2/Onward.2-v2.1.0-daily.20260410.2-macos-arm64.zip",
+  "sha256": "71fad5599cb974b8585a887bcbc9c3a6cdd2507f7293625c50500426823a35d6",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260410.2\n\nChanges since `v2.1.0-daily.20260410.1`.\n\n## New Features\n- Add Mermaid diagram rendering to Markdown preview\n- Add auto-refresh for Git Diff viewer when files change externally\n- Display git submodule changes in diff viewer\n- Add expand/collapse for unchanged regions in Git History diff view\n- Enable text word-wrap for file list in GitDiff and GitHistory panels\n- Enable text word-wrap for file tree and outline panel in Editor\n- Unify file path copy UX with shared usePathCopy hook\n- Add row labels to Prompt History filter panel and rename Targets to Task\n- Add download expiration cleanup and cross-session recovery for auto-update\n\n## Bug Fixes\n- Resolve infinite refresh loop in Feedback History view\n- Prevent telemetry consent from being overwritten by stale renderer saves\n- Restore task title display in SubpagePanelShell header\n- Recover terminal rendering after WebGL context loss\n- Improve UI state persistence across restarts and upgrades\n- Preserve Pin/Recent and cursor position across Editor↔Diff↔History subpage switches\n- Align task labels to the left in Prompt History list\n",
+  "publishedAt": "2026-04-10T13:27:44.733Z"
 }
