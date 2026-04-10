@@ -518,6 +518,7 @@ export function GitDiffViewer({
     if (selectedFileState.loading) return t('gitDiff.editDisabled.fileLoading')
     if (selectedFileState.error) return t('gitDiff.editDisabled.readFailed')
     if (selectedFileState.isBinary) return t('gitDiff.editDisabled.binary')
+    if (selectedFile.isSubmoduleEntry) return t('gitDiff.editDisabled.submodule')
     if (selectedFile.status === 'D') return t('gitDiff.editDisabled.deleted')
     if (selectedFile.changeType === 'staged') return t('gitDiff.editDisabled.staged')
     return ''
@@ -1437,7 +1438,8 @@ export function GitDiffViewer({
           filename: file.filename,
           status: file.status,
           originalFilename: file.originalFilename,
-          changeType: file.changeType
+          changeType: file.changeType,
+          isSubmoduleEntry: file.isSubmoduleEntry
         }, file.repoRoot)
 
         if (!result.success) {
@@ -2113,7 +2115,8 @@ export function GitDiffViewer({
       const result: GitFileActionResult = await window.electronAPI.git.discardFile(activeCwd, {
         filename: selectedFile.filename,
         changeType: selectedFile.changeType,
-        status: selectedFile.status
+        status: selectedFile.status,
+        isSubmoduleEntry: selectedFile.isSubmoduleEntry
       }, selectedFile.repoRoot)
       if (!result.success) {
         setActionMessage({ type: 'error', text: result.error || t('gitDiff.error.discardFailed') })
@@ -2410,7 +2413,7 @@ export function GitDiffViewer({
     !isDraftDirty &&
     selectedFile.changeType !== 'untracked' &&
     selectedFile.status !== 'D'
-  const canShowLineActionPanel = Boolean(selectedFile && !isImageVisualPreview)
+  const canShowLineActionPanel = Boolean(selectedFile && !isImageVisualPreview && !selectedFile.isSubmoduleEntry)
   const canShowFileActionPanel = Boolean(selectedFile)
   const canShowEditActionPanel = Boolean(!isImageVisualPreview && (isDraftDirty || editMessage))
   const diffFontSize = getTerminalStyle(terminalId)?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
@@ -2955,6 +2958,9 @@ export function GitDiffViewer({
             >
               [{statusText[selectedFile.status]}]
             </span>
+            {selectedFile.isSubmoduleEntry && (
+              <span className="git-diff-submodule-badge" title={t('gitDiff.status.submodule')}>S</span>
+            )}
             <span className="git-diff-change-type">
               {changeTypeText[selectedFile.changeType]}
             </span>
@@ -3278,6 +3284,14 @@ export function GitDiffViewer({
                       >
                         {file.status}
                       </span>
+                      {file.isSubmoduleEntry && (
+                        <span
+                          className="git-diff-submodule-badge"
+                          title={t('gitDiff.status.submodule')}
+                        >
+                          S
+                        </span>
+                      )}
                       {hasMultipleRepos && file.repoLabel && (
                         <span className="git-diff-repo-badge" title={file.repoRoot || ''}>
                           {file.repoLabel}
