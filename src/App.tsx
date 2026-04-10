@@ -27,7 +27,7 @@ import type { TerminalBatchIssue, TerminalBatchIssueReason } from './types/promp
 import type { CurrentChangelogResult, Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
-import type { ProjectEditorOpenEventDetail, ProjectEditorOpenRequest } from './types/subpage'
+import type { ProjectEditorOpenEventDetail, ProjectEditorOpenRequest, SubpageId } from './types/subpage'
 import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { computeNextExecution } from './utils/schedule'
 import {
@@ -121,7 +121,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onCloseProjectEditor: () => void
   onProjectEditorDirtyChange: (dirty: boolean) => void
 }) {
-  const { getTerminalDisplayName } = useAppState()
+  const { getTerminalDisplayName, updateTabById } = useAppState()
   const terminals: TerminalInfo[] = useMemo(() => {
     return tab.terminals.map((t, index) => ({
       id: t.id,
@@ -139,6 +139,10 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   const handleTerminalRename = useCallback((terminalId: string, newTitle: string) => {
     onTerminalRename(tab.id, terminalId, newTitle)
   }, [tab.id, onTerminalRename])
+
+  const handleActiveSubpageChange = useCallback((subpage: SubpageId | null, terminalId: string | null) => {
+    updateTabById(tab.id, { activeSubpage: subpage, subpageTerminalId: terminalId })
+  }, [tab.id, updateTabById])
 
   const actionForTab = useMemo(() => {
     if (!shortcutAction) return null
@@ -172,6 +176,9 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       projectEditorOpenRequest={projectEditorOpenRequest}
       onCloseProjectEditor={onCloseProjectEditor}
       onProjectEditorDirtyChange={onProjectEditorDirtyChange}
+      initialActiveSubpage={tab.activeSubpage}
+      initialSubpageTerminalId={tab.subpageTerminalId}
+      onActiveSubpageChange={handleActiveSubpageChange}
     />
   )
 })
@@ -1253,6 +1260,21 @@ function AppContent({
     handleSendAndExecuteOnTerminals,
     handleSendToTerminals
   ])
+
+  // Restore project editor subpage after app restart
+  const editorSubpageRestoredRef = useRef(false)
+  useEffect(() => {
+    if (editorSubpageRestoredRef.current) return
+    if (!isLoaded || !activeTab) return
+    if (activeTab.activeSubpage !== 'editor') return
+    const terminalId = activeTab.subpageTerminalId || activeTab.activeTerminalId || activeTab.terminals[0]?.id
+    if (!terminalId) return
+    editorSubpageRestoredRef.current = true
+    const persistedCwd = activeTab.terminals.find(t => t.id === terminalId)?.lastCwd ?? null
+    setProjectEditorTerminalId(terminalId)
+    setProjectEditorCwd(persistedCwd)
+    setProjectEditorOpen(true)
+  }, [isLoaded, activeTab])
 
   // Wait for loading to complete
   if (!isLoaded || !activeTab) {

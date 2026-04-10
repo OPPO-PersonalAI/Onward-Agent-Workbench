@@ -5,7 +5,7 @@
 
 import { app } from 'electron'
 import { readFileSync, readdirSync, existsSync, copyFileSync, mkdirSync } from 'fs'
-import { dirname, join } from 'path'
+import { join } from 'path'
 
 export type BuildChannel = 'dev' | 'prod'
 export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
@@ -134,16 +134,11 @@ export function getAppInfo(): AppInfo {
 }
 
 function getDevUserDataPath(displayName: string): string {
-  const exePath = app.getPath('exe')
-  const dataDirName = `${displayName}-data`
-
-  if (process.platform === 'darwin') {
-    const appBundlePath = dirname(dirname(dirname(exePath)))
-    const appBundleParent = dirname(appBundlePath)
-    return join(appBundleParent, dataDirName)
-  }
-
-  return join(dirname(exePath), dataDirName)
+  // Store dev build data under a stable appData path so that
+  // `rm -rf release && pnpm dist:dev` does not destroy user state.
+  // Each branch gets its own subdirectory to avoid cross-branch interference.
+  const branch = displayName.replace(/^Onward 2-/, '') || 'default'
+  return join(app.getPath('appData'), 'Onward 2-dev', branch)
 }
 
 /**

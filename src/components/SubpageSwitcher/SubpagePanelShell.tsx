@@ -15,6 +15,7 @@ interface SubpagePanelShellProps {
   workingDirectoryLabel: string
   workingDirectoryPath: string | null
   metaExtra?: ReactNode
+  taskTitle?: string
   children?: ReactNode
 }
 
@@ -25,6 +26,7 @@ export interface SubpagePanelShellState {
   workingDirectoryLabel: string
   workingDirectoryPath: string | null
   metaExtra?: ReactNode
+  taskTitle?: string
 }
 
 export function SubpagePanelShell({
@@ -34,12 +36,18 @@ export function SubpagePanelShell({
   workingDirectoryLabel,
   workingDirectoryPath,
   metaExtra,
+  taskTitle,
   children
 }: SubpagePanelShellProps) {
   return (
     <div className="subpage-panel-shell" data-subpage-panel-shell="true">
       <div className="subpage-panel-shell-header">
         <SubpageSwitcher current={current} onSelect={onSelect} />
+        {taskTitle && (
+          <div className="subpage-panel-shell-task-title" title={taskTitle}>
+            {taskTitle}
+          </div>
+        )}
         {actions && <div className="subpage-panel-shell-actions">{actions}</div>}
       </div>
       <div className="subpage-panel-shell-meta">

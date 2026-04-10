@@ -60,6 +60,9 @@ interface TerminalGridProps {
   projectEditorOpenRequest?: ProjectEditorOpenRequest | null
   onCloseProjectEditor?: () => void
   onProjectEditorDirtyChange?: (dirty: boolean) => void
+  initialActiveSubpage?: SubpageId | null
+  initialSubpageTerminalId?: string | null
+  onActiveSubpageChange?: (subpage: SubpageId | null, terminalId: string | null) => void
 }
 
 interface TerminalGitInfo {
@@ -94,7 +97,10 @@ export const TerminalGrid = memo(function TerminalGrid({
   projectEditorCwd = null,
   projectEditorOpenRequest = null,
   onCloseProjectEditor,
-  onProjectEditorDirtyChange
+  onProjectEditorDirtyChange,
+  initialActiveSubpage = null,
+  initialSubpageTerminalId = null,
+  onActiveSubpageChange
 }: TerminalGridProps) {
   // Performance instrumentation: track render count
   perfMonitor.recordReactRender()
@@ -142,7 +148,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [gitHistoryOpen, setGitHistoryOpen] = useState(false)
   const [gitHistoryTerminalId, setGitHistoryTerminalId] = useState<string | null>(null)
   const [gitHistoryCwd, setGitHistoryCwd] = useState<string | null>(null)
-  const [activeSubpage, setActiveSubpage] = useState<SubpageId | null>(null)
+  const [activeSubpage, setActiveSubpage] = useState<SubpageId | null>(initialActiveSubpage)
   const [panelShellStates, setPanelShellStates] = useState<Partial<Record<SubpageId, SubpagePanelShellState>>>({})
 
   // Coding Agent launch modal state
@@ -244,6 +250,43 @@ export const TerminalGrid = memo(function TerminalGrid({
       }
     }
   }, [])
+
+  // Persist activeSubpage and its owning terminal back to TabState
+  useEffect(() => {
+    let terminalId: string | null = null
+    if (activeSubpage === 'diff') {
+      terminalId = gitDiffTerminalId
+    } else if (activeSubpage === 'history') {
+      terminalId = gitHistoryTerminalId
+    } else if (activeSubpage === 'editor') {
+      terminalId = projectEditorTerminalId
+    }
+    onActiveSubpageChange?.(activeSubpage, terminalId)
+  }, [activeSubpage, gitDiffTerminalId, gitHistoryTerminalId, projectEditorTerminalId, onActiveSubpageChange])
+
+  // Restore the last active subpage (diff/history) after app restart.
+  // The editor subpage is restored by the parent via the projectEditorOpen prop.
+  // Use the persisted subpageTerminalId so the correct CWD is loaded,
+  // falling back to activeTerminalId only if the persisted ID is missing.
+  const subpageRestoredRef = useRef(false)
+  useEffect(() => {
+    if (subpageRestoredRef.current) return
+    if (!initialActiveSubpage || initialActiveSubpage === 'editor') return
+    const restoreTerminalId = initialSubpageTerminalId || activeTerminalId
+    if (!restoreTerminalId) return
+    subpageRestoredRef.current = true
+    // Defer so terminal info and refs are settled after mount
+    const timer = window.setTimeout(() => {
+      if (initialActiveSubpage === 'diff') {
+        handleViewGitDiff(restoreTerminalId)
+      } else if (initialActiveSubpage === 'history') {
+        handleViewGitHistory(restoreTerminalId)
+      }
+    }, 0)
+    return () => window.clearTimeout(timer)
+    // Only run once on mount with initial values
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTerminalId])
 
   useEffect(() => {
     hiddenRef.current = hidden
@@ -1525,6 +1568,7 @@ export const TerminalGrid = memo(function TerminalGrid({
               workingDirectoryLabel={activePanelShellState.workingDirectoryLabel}
               workingDirectoryPath={activePanelShellState.workingDirectoryPath}
               metaExtra={activePanelShellState.metaExtra}
+              taskTitle={activePanelShellState.taskTitle}
             />
           )}
           <div className={`terminal-grid-subpage-body ${isSubpageSwitching ? 'is-switching' : ''}`}>

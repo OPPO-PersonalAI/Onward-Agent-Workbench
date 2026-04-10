@@ -1093,9 +1093,13 @@ const appStateAPI: AppStateAPI = {
     return ipcRenderer.invoke('app-state:save', state)
   },
 
-  onFlushPendingState: (callback: () => void) => {
-    ipcRenderer.on('app-state:flush-pending', () => {
-      callback()
+  onFlushPendingState: (callback: () => void | Promise<void>) => {
+    ipcRenderer.on('app-state:flush-pending', async () => {
+      try {
+        await callback()
+      } catch (error) {
+        console.error('[AppState] flush callback failed:', error)
+      }
       ipcRenderer.send('app-state:flush-done')
     })
   }

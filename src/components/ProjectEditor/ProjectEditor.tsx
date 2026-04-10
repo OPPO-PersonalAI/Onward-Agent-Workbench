@@ -5577,8 +5577,9 @@ export function ProjectEditor({
     workingDirectoryLabel: t('projectEditor.workingDirectory'),
     workingDirectoryPath: rootPath || null,
     metaExtra: editorStatusMeta,
-    actions: externalPanelActions
-  }), [editorStatusMeta, externalPanelActions, handleSelectSubpage, rootPath, t])
+    actions: externalPanelActions,
+    taskTitle
+  }), [editorStatusMeta, externalPanelActions, handleSelectSubpage, rootPath, t, taskTitle])
 
   useLayoutEffect(() => {
     if (!isPanel || panelShellMode !== 'external' || !onPanelShellStateChange) return
@@ -5636,6 +5637,7 @@ export function ProjectEditor({
             workingDirectoryLabel={t('projectEditor.workingDirectory')}
             workingDirectoryPath={rootPath || null}
             metaExtra={editorStatusMeta}
+            taskTitle={taskTitle}
             actions={(
               <>
                 <SubpagePanelButton

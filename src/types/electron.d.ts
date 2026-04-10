@@ -185,7 +185,7 @@ import type {
 export interface AppStateAPI {
   load: () => Promise<AppState>
   save: (state: AppState) => Promise<boolean>
-  onFlushPendingState: (callback: () => void) => void
+  onFlushPendingState: (callback: () => void | Promise<void>) => void
 }
 
 export type GitChangeType = 'unstaged' | 'staged' | 'untracked'
