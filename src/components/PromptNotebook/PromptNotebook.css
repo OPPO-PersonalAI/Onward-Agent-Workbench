@@ -509,7 +509,6 @@ body.dragging-prompt * {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding-left: 14px;
 }
 
 .prompt-item-task-pill {
