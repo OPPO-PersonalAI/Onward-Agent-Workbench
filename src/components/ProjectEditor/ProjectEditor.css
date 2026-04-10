@@ -299,7 +299,7 @@
 
 .project-editor-tree-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-start;
   gap: 8px;
   padding: 6px 8px;
@@ -318,10 +318,11 @@
 
 .project-editor-tree-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   min-width: 0;
   flex: 1;
+  line-height: 1.4;
 }
 
 .project-editor-tree-toggle {
@@ -330,6 +331,8 @@
   justify-content: center;
   width: 14px;
   height: 14px;
+  flex-shrink: 0;
+  margin-top: 3px;
   color: var(--text-3);
   transition: transform 0.15s ease;
 }
@@ -341,12 +344,16 @@
 .project-editor-tree-spacer {
   width: 14px;
   height: 14px;
+  flex-shrink: 0;
+  margin-top: 3px;
 }
 
 .project-editor-tree-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  margin-top: 4px;
   color: var(--text-3);
 }
 
@@ -355,9 +362,8 @@
 }
 
 .project-editor-tree-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .project-editor-tree-loading {
