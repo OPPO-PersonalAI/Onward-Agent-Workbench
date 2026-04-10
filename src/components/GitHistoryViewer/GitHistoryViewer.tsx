@@ -5,8 +5,8 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { DiffEditor } from '@monaco-editor/react'
-import { PatchDiff } from '@pierre/diffs/react'
-import { parsePatchFiles } from '@pierre/diffs'
+import { PatchDiff, MultiFileDiff } from '@pierre/diffs/react'
+import { parsePatchFiles, getFiletypeFromFileName } from '@pierre/diffs'
 import type {
   GitHistoryResult,
   GitCommitInfo,
@@ -366,6 +366,16 @@ export function GitHistoryViewer({
     theme: 'pierre-dark' as const,
     themeType: 'dark' as const
   }), [diffStyle])
+  const multiFileDiffOptions = useMemo(() => ({
+    diffStyle,
+    diffIndicators: 'classic' as const,
+    lineDiffType: 'word' as const,
+    overflow: 'wrap' as const,
+    disableFileHeader: true,
+    theme: 'pierre-dark' as const,
+    themeType: 'dark' as const,
+    expandUnchanged: false,
+  }), [diffStyle])
   const imageTextDiffOptions = useMemo(() => ({
     renderSideBySide: true,
     readOnly: true,
@@ -583,6 +593,56 @@ export function GitHistoryViewer({
     }
   }, [t])
 
+  // Try file content first (for MultiFileDiff with expand support),
+  // silently fall back to patch-based diff for large or binary files
+  const loadTextFileDiffContent = useCallback(async (base: string, head: string, file: GitHistoryFile) => {
+    const cwdToUse = activeCwdRef.current
+    if (!cwdToUse) return
+    const cacheKey = buildFileContentKey(base, head, file)
+    if (fileContentCacheRef.current.has(cacheKey)) {
+      const cached = fileContentCacheRef.current.get(cacheKey)
+      if (cached && cached.success && !cached.isBinary) {
+        setSelectedFileContent(cached)
+        return
+      }
+      void loadPatchForFile(base, head, file)
+      return
+    }
+    const token = ++fileContentTokenRef.current
+    setDiffLoading(true)
+    setDiffError(null)
+    let loaded = false
+    try {
+      const result: GitHistoryFileContentResult = await window.electronAPI.git.getHistoryFileContent(cwdToUse, {
+        base,
+        head,
+        file: {
+          filename: file.filename,
+          originalFilename: file.originalFilename,
+          status: file.status
+        }
+      })
+      if (token !== fileContentTokenRef.current) return
+      if (result.success && !result.isBinary) {
+        fileContentCacheRef.current.set(cacheKey, result)
+        setSelectedFileContent(result)
+        loaded = true
+        return
+      }
+      fileContentCacheRef.current.set(cacheKey, result)
+    } catch {
+      if (token !== fileContentTokenRef.current) return
+    } finally {
+      if (token === fileContentTokenRef.current && loaded) {
+        setDiffLoading(false)
+      }
+    }
+    if (token === fileContentTokenRef.current) {
+      setDiffLoading(false)
+      void loadPatchForFile(base, head, file)
+    }
+  }, [t, loadPatchForFile])
+
   const switchRepo = useCallback((repoRoot: string | null) => {
     isSwitchingRepoRef.current = true
     fileCacheRef.current.clear()
@@ -767,15 +827,22 @@ export function GitHistoryViewer({
     }
     if (selectedFile.isImage) {
       ++patchTokenRef.current
+      ++fileContentTokenRef.current
       setDiffPatch('')
       setSelectedFileContent(null)
       void loadFileContentForHistory(selectionInfo.base, selectionInfo.head, selectedFile)
       return
     }
+    ++patchTokenRef.current
     ++fileContentTokenRef.current
+    setDiffPatch('')
     setSelectedFileContent(null)
-    void loadPatchForFile(selectionInfo.base, selectionInfo.head, selectedFile)
-  }, [selectedFile, selectionInfo.isContiguous, selectionInfo.base, selectionInfo.head, loadFileContentForHistory, loadPatchForFile, isOpen])
+    if (hideWhitespace) {
+      void loadPatchForFile(selectionInfo.base, selectionInfo.head, selectedFile)
+    } else {
+      void loadTextFileDiffContent(selectionInfo.base, selectionInfo.head, selectedFile)
+    }
+  }, [selectedFile, selectionInfo.isContiguous, selectionInfo.base, selectionInfo.head, loadFileContentForHistory, loadPatchForFile, loadTextFileDiffContent, isOpen, hideWhitespace])
 
   useEffect(() => {
     if (!isOpen) return
@@ -1438,6 +1505,35 @@ export function GitHistoryViewer({
         )
       }
       return renderImagePreview(selectedFileContent, selectedFile)
+    }
+    if (!hideWhitespace && selectedFileContent && !selectedFileContent.isBinary) {
+      const lang = getFiletypeFromFileName(selectedFileContent.filename)
+      const oldFile = {
+        name: selectedFile.originalFilename || selectedFileContent.filename,
+        contents: selectedFileContent.originalContent,
+        lang,
+      }
+      const newFile = {
+        name: selectedFileContent.filename,
+        contents: selectedFileContent.modifiedContent,
+        lang,
+      }
+      return (
+        <div className="git-history-diff-view" style={{ fontSize: `${diffFontSize}px` }}>
+          <div className="git-history-diff-scroll" onScroll={handleDiffScroll} ref={diffScrollRef}>
+            <MultiFileDiff
+              oldFile={oldFile}
+              newFile={newFile}
+              options={multiFileDiffOptions}
+              className="git-history-patch"
+              style={{
+                fontSize: `${diffFontSize}px`,
+                lineHeight: `${Math.round(diffFontSize * 1.5)}px`
+              }}
+            />
+          </div>
+        </div>
+      )
     }
     if (!diffPatch) {
       return (
