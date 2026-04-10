@@ -1159,7 +1159,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   // Save file content to workspace
   ipcMain.handle('git:save-file-content', async (_, cwd: string, filename: string, content: string) => {
-    return await saveGitFileContent(cwd, filename, content)
+    const result = await saveGitFileContent(cwd, filename, content)
+    if (result.success && fileWatchManager) {
+      const repoRoot = await resolveRepoRoot(cwd)
+      const fullPath = resolveInRoot(resolve(repoRoot), filename)
+      if (fullPath) {
+        fileWatchManager.suppressNext(fullPath)
+      }
+    }
+    return result
   })
 
   ipcMain.handle('git:stage-file', async (_, cwd: string, filename: string, repoRoot?: string) => {

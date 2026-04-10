@@ -26,6 +26,7 @@ import {
   type SvgViewMode
 } from '../GitImagePreview/GitImagePreview'
 import { usePathCopy } from '../../hooks/usePathCopy'
+import { useGitDiffFileWatch } from './useGitDiffFileWatch'
 import '../../hooks/usePathCopy.css'
 import './GitDiffViewer.css'
 
@@ -162,7 +163,7 @@ type GitDiffDebugApi = {
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
   isSelectedReady: () => boolean
-  getRestoreNotice: () => { type: 'missing' | 'changed'; message: string; fileName?: string } | null
+  getRestoreNotice: () => { type: 'changed'; message: string; fileName?: string } | null
   getScrollTop: () => number
   getFirstVisibleLine: () => number
   scrollToFraction: (fraction: number) => boolean
@@ -403,7 +404,7 @@ export function GitDiffViewer({
   const diffScrollCaptureTimerRef = useRef<number | null>(null)
   const suppressScrollCaptureRef = useRef(false)
   const [diffRestoreNotice, setDiffRestoreNotice] = useState<{
-    type: 'missing' | 'changed'
+    type: 'changed'
     message: string
     fileName?: string
   } | null>(null)
@@ -454,6 +455,8 @@ export function GitDiffViewer({
   const diffEditorBindingDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const diffSplitMeasureFrameRef = useRef<number | null>(null)
   const isDraftDirtyRef = useRef(false)
+  const autoRefreshInFlightRef = useRef(false)
+  const autoRefreshQueuedRef = useRef(false)
   const originalDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const modifiedDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const selectedFileRef = useRef<GitFileStatus | null>(null)
@@ -1007,29 +1010,6 @@ export function GitDiffViewer({
         ? result.files.find((file) => file.filename === previous.filename &&
           (file.originalFilename ?? '') === (previous.originalFilename ?? ''))
         : null
-      if ((memorySelectedKey || memoryEntry) && !memoryMatched) {
-        const headerTitle = memoryEntry
-          ? (memoryEntry.originalFilename
-            ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-            : memoryEntry.filePath)
-          : (previous?.originalFilename && (previous.status === 'R' || previous.status === 'C')
-            ? `${previous.originalFilename} → ${previous.filename}`
-            : (previous?.filename || t('gitDiff.unknownFile')))
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
-      } else if (previous && !matched && !fallback) {
-        const headerTitle = previous.originalFilename && (previous.status === 'R' || previous.status === 'C')
-          ? `${previous.originalFilename} → ${previous.filename}`
-          : previous.filename
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
-      }
       // Guard: skip setSelectedFile when the same file is already selected
       // (e.g., submodule stage-2 load arriving with unchanged file selection).
       // This prevents unnecessary Monaco editor remount and visual flash.
@@ -1043,19 +1023,6 @@ export function GitDiffViewer({
       }
     } else {
       setSelectedFile(null)
-      const memorySelectedKey = memoryStore.selectedFileKey
-      const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
-      const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
-      if (!result.submodulesLoading && memoryEntry) {
-        const headerTitle = memoryEntry.originalFilename
-          ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-          : memoryEntry.filePath
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
-      }
     }
     if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
       setRepoFilter(null)
@@ -1522,6 +1489,91 @@ export function GitDiffViewer({
   }, [selectedFile, ensureFileContent])
 
   useEffect(() => { isDraftDirtyRef.current = isDraftDirty }, [isDraftDirty])
+
+  // --- Auto-refresh when the working-tree file changes externally ---
+  const handleAutoRefresh = useCallback(async (changeType: 'changed' | 'deleted') => {
+    if (!activeCwd) return
+
+    // File deleted externally — refresh the diff list so the sidebar
+    // reflects the removal. No content reload needed.
+    if (changeType === 'deleted') {
+      debugLog('auto-refresh:file-deleted')
+      void loadDiff({ silent: true, force: true })
+      return
+    }
+
+    // changeType === 'changed'
+    if (!selectedFile) return
+
+    // Don't overwrite unsaved user edits.
+    if (isDraftDirtyRef.current) {
+      debugLog('auto-refresh:skip:draft-dirty')
+      return
+    }
+
+    if (autoRefreshInFlightRef.current) {
+      autoRefreshQueuedRef.current = true
+      return
+    }
+
+    autoRefreshInFlightRef.current = true
+    suppressScrollCaptureRef.current = true
+    debugLog('auto-refresh:start', selectedFile.filename)
+
+    try {
+      // Capture current scroll position before reload.
+      const editor = diffEditorRef.current
+      const scrollTop = editor?.getModifiedEditor().getScrollTop() ?? 0
+
+      // Force-reload original + modified content from git.
+      await ensureFileContent(selectedFile, true)
+
+      // Update the signature in the memory store so the reveal phase
+      // does not show "content changed completely".
+      const memory = getMemoryStore()
+      const fileKey = selectedFileKey
+      if (memory && fileKey) {
+        const entry = memory.entries[fileKey]
+        const fileState = fileContentsRef.current[fileKey]
+        if (entry && fileState && !fileState.isBinary) {
+          entry.signature = buildDiffSignature(
+            fileState.originalContent ?? '',
+            fileState.draftContent ?? fileState.modifiedContent ?? ''
+          )
+          entry.scrollTop = scrollTop
+        }
+      }
+
+      // Restore scroll position after Monaco processes the new content.
+      requestAnimationFrame(() => {
+        const currentEditor = diffEditorRef.current?.getModifiedEditor()
+        if (currentEditor && scrollTop > 0) {
+          currentEditor.setScrollTop(scrollTop)
+        }
+        suppressScrollCaptureRef.current = false
+      })
+
+      // Also refresh the diff file list so sidebar stats (+/- counts)
+      // stay up-to-date with the actual content.
+      void loadDiff({ silent: true, force: true })
+
+      debugLog('auto-refresh:done', selectedFile.filename)
+    } finally {
+      autoRefreshInFlightRef.current = false
+      if (autoRefreshQueuedRef.current) {
+        autoRefreshQueuedRef.current = false
+        setTimeout(() => void handleAutoRefresh('changed'), 0)
+      }
+    }
+  }, [selectedFile, selectedFileKey, activeCwd, ensureFileContent, getMemoryStore, loadDiff])
+
+  useGitDiffFileWatch({
+    isOpen,
+    selectedFile,
+    repoRoot: selectedFile?.repoRoot || activeCwd || null,
+    onFileChanged: handleAutoRefresh
+  })
+
   const handleFileSelect = useCallback((file: GitFileStatus) => {
     const nextKey = getFileKey(file)
     const memory = getMemoryStore()
@@ -1637,11 +1689,6 @@ export function GitDiffViewer({
         : file.filename
       if (file.status === 'D') {
         diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
         suppressScrollCaptureRef.current = false
         return
       }
@@ -1930,11 +1977,6 @@ export function GitDiffViewer({
 
         if (file.status === 'D') {
           diffRestoreAppliedRef.current = { cycle: diffRestoreCycleRef.current, fileKey }
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
         } else {
           // Check signature to detect content changes
           const currentFileState = fileContentsRef.current[fileKey]
