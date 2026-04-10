@@ -210,6 +210,39 @@
   color: var(--text-2);
 }
 
+/* Mermaid diagram rendering */
+.change-log-markdown .mermaid-diagram {
+  margin: 16px 0;
+  overflow-x: auto;
+  border-radius: 6px;
+  background-color: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 12px;
+  text-align: center;
+}
+.change-log-markdown .mermaid-diagram.mermaid-rendered .mermaid-source {
+  display: none;
+}
+.change-log-markdown .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  background: transparent !important;
+}
+.change-log-markdown .mermaid-diagram.mermaid-error {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+.change-log-markdown .mermaid-diagram .mermaid-error-message {
+  color: #ef4444;
+  font-size: 0.85em;
+  margin-top: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.change-log-markdown .mermaid-diagram:not(.mermaid-rendered):not(.mermaid-error) .mermaid-source {
+  opacity: 0.6;
+}
+
 @media (max-width: 768px) {
   .change-log-modal-overlay {
     padding: 12px;

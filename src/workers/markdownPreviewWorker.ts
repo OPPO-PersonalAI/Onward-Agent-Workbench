@@ -188,7 +188,19 @@ marked.use({
   ]
 })
 
+const MERMAID_LANGS = new Set(['mermaid', 'mmd'])
+let mermaidCounter = 0
+
 function renderHighlightedCodeBlock(text: string, lang?: string): string {
+  if (lang && MERMAID_LANGS.has(lang.toLowerCase())) {
+    const id = `mermaid-${mermaidCounter++}`
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+    return `<div class="mermaid-diagram" data-mermaid-id="${id}"><pre class="mermaid-source"><code class="language-mermaid">${escaped}</code></pre></div>\n`
+  }
   const language = lang && hljs.getLanguage(lang) ? lang : undefined
   const highlighted = language
     ? hljs.highlight(text, { language }).value
@@ -311,6 +323,7 @@ const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobal
 ctx.addEventListener('message', (event: MessageEvent<MarkdownRenderRequest>) => {
   const payload = event.data
   if (!payload) return
+  mermaidCounter = 0
   const imagePaths = new Set<string>()
   const imageMap = payload.imageMap ?? {}
 

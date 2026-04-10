@@ -5,11 +5,12 @@
 
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react'
 import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { marked, type Tokens } from 'marked'
 import type { CurrentChangelogResult } from '../../types/electron.d.ts'
 import type { ChangeLogDebugApi } from '../../autotest/types'
 import { useI18n } from '../../i18n/useI18n'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
+import { buildMermaidPlaceholder, isMermaidLang, renderMermaidDiagrams } from '../../utils/mermaidRenderer'
 import './ChangeLogModal.css'
 
 interface ChangeLogModalProps {
@@ -58,16 +59,37 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
     }
   }, [isOpen])
 
+  const contentRef = useRef<HTMLDivElement>(null)
+
   const renderedHtml = useMemo(() => {
     if (!result?.success) return ''
     if (result.html) return result.html
     if (!result.content) return ''
+    let counter = 0
+    const renderer = new marked.Renderer()
+    const defaultCode = renderer.code.bind(renderer)
+    renderer.code = function code(token: Tokens.Code): string {
+      if (isMermaidLang(token.lang)) {
+        return buildMermaidPlaceholder(token.text, `changelog-mermaid-${counter++}`)
+      }
+      return defaultCode(token)
+    }
     const parsed = marked.parse(result.content, {
       async: false,
-      gfm: true
+      gfm: true,
+      renderer
     }) as string
     return DOMPurify.sanitize(parsed)
   }, [result])
+
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el || !renderedHtml) return
+    if (el.querySelectorAll('.mermaid-diagram[data-mermaid-id]').length === 0) return
+    const signal = { cancelled: false }
+    void renderMermaidDiagrams(el, signal, t('mermaid.syntaxError'))
+    return () => { signal.cancelled = true }
+  }, [renderedHtml, t])
 
   const currentTag = result?.tag ?? null
   const unavailableMessage = getUnavailableMessage(result, t)
@@ -178,6 +200,7 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
             <div className="change-log-modal-state">{t('changeLog.loading')}</div>
           ) : result?.success ? (
             <div
+              ref={contentRef}
               className="change-log-markdown"
               dangerouslySetInnerHTML={{ __html: renderedHtml }}
               onClick={handleContentClick}
