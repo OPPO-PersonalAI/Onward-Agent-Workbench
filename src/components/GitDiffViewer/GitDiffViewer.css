@@ -343,12 +343,13 @@ body.git-diff-resizing * {
 
 .git-diff-file-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
   transition: background-color 0.15s ease;
   border-bottom: 1px solid var(--border);
+  line-height: 1.4;
 }
 
 .git-diff-file-item:hover {
@@ -367,15 +368,15 @@ body.git-diff-resizing * {
   width: 14px;
   text-align: center;
   flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .git-diff-file-name {
   flex: 1;
   font-size: var(--font-sm);
   color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .git-diff-file-stats {
@@ -385,6 +386,7 @@ body.git-diff-resizing * {
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
   flex-shrink: 0;
   align-items: center;
+  margin-top: 1px;
 }
 
 .git-diff-stat-add {
@@ -559,6 +561,8 @@ body.git-diff-resizing * {
   font-size: 10px;
   line-height: 1;
   margin-left: 6px;
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .git-diff-detail-actions-row {
@@ -1389,6 +1393,7 @@ body.git-diff-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-top: 1px;
 }
 
 .git-diff-superproject-hint {

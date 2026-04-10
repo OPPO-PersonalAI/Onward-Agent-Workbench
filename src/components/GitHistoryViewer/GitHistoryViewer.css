@@ -439,11 +439,12 @@ body.git-history-v-resizing {
 
 .git-history-file-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  line-height: 1.4;
 }
 
 .git-history-file-item:hover {
@@ -465,6 +466,7 @@ body.git-history-v-resizing {
   font-weight: 600;
   background-color: var(--bg-2);
   color: var(--text-2);
+  flex-shrink: 0;
 }
 
 .git-history-file-status.status-A {
@@ -489,9 +491,7 @@ body.git-history-v-resizing {
   min-width: 0;
   font-size: var(--font-sm);
   color: var(--text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
 }
 
 .git-history-file-stats {
@@ -499,6 +499,7 @@ body.git-history-v-resizing {
   gap: 6px;
   font-size: var(--font-xs);
   color: var(--text-3);
+  flex-shrink: 0;
 }
 
 .git-history-file-add {
