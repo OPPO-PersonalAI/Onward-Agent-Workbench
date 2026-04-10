@@ -1692,8 +1692,10 @@ export function ProjectEditor({
     markdownWorkerQueuedRef.current = false
     setSelectedPath(null)
     setActiveFilePath(null)
-    setPinnedFiles([])
-    setRecentFiles([])
+    // NOTE: pinnedFiles and recentFiles are persistent metadata scoped to the
+    // editor session — they must NOT be cleared here.  Callers that genuinely
+    // need to reset them (e.g. the root effect when cwd changes or when the
+    // editor closes) do so explicitly after this function returns.
     setDraggingPinnedPath(null)
     setDraggingQuickPath(null)
     setDraggingQuickSource(null)
@@ -3173,6 +3175,8 @@ export function ProjectEditor({
       hasRestoredStateRef.current = false
       restoringStateRef.current = false
       resetActiveFileState()
+      setPinnedFiles([])
+      setRecentFiles([])
       setTree([])
       setContextMenu(null)
       setSearchOpen(false)
@@ -3295,6 +3299,11 @@ export function ProjectEditor({
 
   useEffect(() => {
     if (!isOpen) return
+    // During subpage navigation (Editor→Diff/History) or explicit close,
+    // the caller already persisted the correct state before calling
+    // resetActiveFileState().  Suppress the auto-save to prevent the now-empty
+    // transient state from overwriting the already-persisted snapshot.
+    if (skipClosePersistRef.current) return
     if (restoringStateRef.current) return
     if (!hasRestoredStateRef.current && !activeFilePath && pinnedFiles.length === 0 && recentFiles.length === 0) return
     scheduleProjectStateSave()

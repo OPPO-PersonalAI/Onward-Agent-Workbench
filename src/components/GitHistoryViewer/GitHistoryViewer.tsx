@@ -1074,9 +1074,14 @@ export function GitHistoryViewer({
       return
     }
     if (target === 'editor') {
-      handleOpenEditor()
+      // SubpageSwitcher is a view switch — let Editor restore its own state
+      // rather than overriding it with History's selected file.
+      if (!terminalId) return
+      window.dispatchEvent(new CustomEvent<SubpageNavigateEventDetail>('subpage:navigate', {
+        detail: { terminalId, target: 'editor' }
+      }))
     }
-  }, [handleJumpToDiff, handleOpenEditor])
+  }, [handleJumpToDiff, terminalId])
 
   const renderCommitSummary = () => {
     if (selectionInfo.selectedCommits.length === 0) {

@@ -2229,13 +2229,23 @@ export function GitDiffViewer({
 
   const handleSelectSubpage = useCallback((target: SubpageId) => {
     if (target === 'editor') {
-      handleOpenEditor()
+      // SubpageSwitcher is a view switch — let Editor restore its own state
+      // rather than overriding it with the Diff's selected file.
+      if (!terminalId) return
+      if (!confirmCloseWithDraft()) return
+      persistCurrentDiffSplitRatio()
+      captureDiffView()
+      detachDiffEditor()
+      setDiffRestoreNotice(null)
+      window.dispatchEvent(new CustomEvent<SubpageNavigateEventDetail>('subpage:navigate', {
+        detail: { terminalId, target: 'editor' }
+      }))
       return
     }
     if (target === 'history') {
       handleOpenHistory()
     }
-  }, [handleOpenEditor, handleOpenHistory])
+  }, [captureDiffView, confirmCloseWithDraft, detachDiffEditor, handleOpenHistory, persistCurrentDiffSplitRatio, terminalId])
 
   useSubpageEscape({ isOpen, onEscape: requestClose })
   const lineSelectionInfo = useMemo<LineSelectionInfo | null>(() => {

@@ -324,11 +324,15 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
     const selected = getGitDiffApi()?.getSelectedFile?.()
     return Boolean(selected?.filename === 'existing.md')
   }, 8000)
+  // Switching back to Editor via SubpageSwitcher should restore the
+  // Editor's own previous state (editor-only.md), NOT open the Diff's
+  // selected file.
   const clickedEditorFromDiff = clickSubpageButton('editor')
-  const diffToEditorOpened = clickedEditorFromDiff && await waitForProjectEditorFile('diff-existing', 'existing.md')
-  _assert('SN-06-diff-to-editor-opens-selected-file', selectedExistingInDiff && diffToEditorOpened, {
+  const diffToEditorOpened = clickedEditorFromDiff && await waitForProjectEditorFile('diff-restores-editor-state', 'editor-only.md')
+  _assert('SN-06-diff-to-editor-restores-editor-state', selectedExistingInDiff && diffToEditorOpened, {
     selectedExistingInDiff,
     clickedEditorFromDiff,
+    expected: 'editor-only.md',
     activeFilePath: getProjectEditorApi()?.getActiveFilePath?.() ?? null
   })
   if (cancelled()) return results
@@ -391,10 +395,13 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
   })
   if (cancelled()) return results
 
+  // Switching back to Editor via SubpageSwitcher should restore the
+  // Editor's own previous state, NOT open History's selected file.
   const clickedEditorFromHistory = clickSubpageButton('editor')
-  const historyToEditorOpened = clickedEditorFromHistory && await waitForProjectEditorFile('history-existing', 'existing.md')
-  _assert('SN-11-history-to-editor-opens-selected-file', historyToEditorOpened, {
+  const historyToEditorOpened = clickedEditorFromHistory && await waitForProjectEditorFile('history-restores-editor-state', 'editor-only.md')
+  _assert('SN-11-history-to-editor-restores-editor-state', historyToEditorOpened, {
     clickedEditorFromHistory,
+    expected: 'editor-only.md',
     activeFilePath: getProjectEditorApi()?.getActiveFilePath?.() ?? null
   })
   if (cancelled()) return results
@@ -411,6 +418,9 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
   })
   if (!historyOpenedFromEditor || cancelled()) return results
 
+  // SN-13 / SN-14: SubpageSwitcher no longer passes the Diff/History
+  // selected file to Editor.  Switching back should restore Editor's own
+  // state regardless of what is selected in Diff/History.
   const selectedDeleteCommit = getGitHistoryApi()?.selectCommitByIndex(0) === true
   const deleteFilesLoaded = await waitFor('subpage-navigation-history-deleted-file', () => {
     const api = getGitHistoryApi()
@@ -419,41 +429,37 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
   const selectedDeletedHistoryFile = await selectHistoryFileByPath('deleted', 'history-deleted.md')
   await sleep(500)
   const clickedEditorMissingFromHistory = clickSubpageButton('editor')
-  const historyMissingOpened = clickedEditorMissingFromHistory && await waitForProjectEditorFile('history-missing', null)
-  const historyMissingNotice = getProjectEditorApi()?.getMissingFileNotice?.() ?? null
-  _assert('SN-13-history-to-editor-missing-file-opens-empty-state', Boolean(
+  const historyDeletedRestored = clickedEditorMissingFromHistory && await waitForProjectEditorFile('history-deleted-restore', 'editor-only.md')
+  _assert('SN-13-history-deleted-file-does-not-override-editor', Boolean(
     selectedDeleteCommit &&
     deleteFilesLoaded &&
     selectedDeletedHistoryFile &&
-    historyMissingOpened &&
-    historyMissingNotice?.path === 'history-deleted.md'
+    historyDeletedRestored
   ), {
     selectedDeleteCommit,
     deleteFilesLoaded,
     selectedDeletedHistoryFile,
-    historyMissingNotice
+    expected: 'editor-only.md',
+    activeFilePath: getProjectEditorApi()?.getActiveFilePath?.() ?? null
   })
   if (cancelled()) return results
 
-  await getProjectEditorApi()?.openFileByPathAsUser?.('editor-only.md', { trackRecent: true })
-  await waitForProjectEditorFile('editor-only-before-diff-missing', 'editor-only.md')
   const clickedDiffForMissing = clickSubpageButton('diff')
   const diffOpenedForMissing = clickedDiffForMissing && await waitForGitDiffOpen('missing')
   const diffDeletedReady = await waitForDiffFile('deleted', 'diff-deleted.md')
   const selectedDeletedDiffFile = diffDeletedReady && getGitDiffApi()?.selectFileByPath('diff-deleted.md') === true
   await sleep(500)
   const clickedEditorMissingFromDiff = clickSubpageButton('editor')
-  const diffMissingOpened = clickedEditorMissingFromDiff && await waitForProjectEditorFile('diff-missing', null)
-  const diffMissingNotice = getProjectEditorApi()?.getMissingFileNotice?.() ?? null
-  _assert('SN-14-diff-to-editor-missing-file-opens-empty-state', Boolean(
+  const diffDeletedRestored = clickedEditorMissingFromDiff && await waitForProjectEditorFile('diff-deleted-restore', 'editor-only.md')
+  _assert('SN-14-diff-deleted-file-does-not-override-editor', Boolean(
     diffOpenedForMissing &&
     selectedDeletedDiffFile &&
-    diffMissingOpened &&
-    diffMissingNotice?.path === 'diff-deleted.md'
+    diffDeletedRestored
   ), {
     diffOpenedForMissing,
     selectedDeletedDiffFile,
-    diffMissingNotice
+    expected: 'editor-only.md',
+    activeFilePath: getProjectEditorApi()?.getActiveFilePath?.() ?? null
   })
 
   if (getGitHistoryApi()?.isOpen()) {
