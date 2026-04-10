@@ -226,10 +226,21 @@ body.dragging-prompt * {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
 }
 
 .prompt-list-filter-group.task {
   gap: 5px;
+}
+
+.prompt-list-filter-row-label {
+  font-size: 11px;
+  color: var(--text-2);
+  user-select: none;
+  display: flex;
+  align-items: center;
+  line-height: 24px;
+  margin-right: 2px;
 }
 
 .prompt-list-filter-btn {

@@ -1418,6 +1418,39 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   color: #ffa657;
 }
 
+/* Mermaid diagram rendering */
+.project-editor-preview-body .mermaid-diagram {
+  margin: 16px 0;
+  overflow-x: auto;
+  border-radius: 6px;
+  background-color: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 12px;
+  text-align: center;
+}
+.project-editor-preview-body .mermaid-diagram.mermaid-rendered .mermaid-source {
+  display: none;
+}
+.project-editor-preview-body .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  background: transparent !important;
+}
+.project-editor-preview-body .mermaid-diagram.mermaid-error {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+.project-editor-preview-body .mermaid-diagram .mermaid-error-message {
+  color: #ef4444;
+  font-size: 0.85em;
+  margin-top: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.project-editor-preview-body .mermaid-diagram:not(.mermaid-rendered):not(.mermaid-error) .mermaid-source {
+  opacity: 0.6;
+}
+
 .project-editor-preview-body img {
   max-width: 100%;
   height: auto;

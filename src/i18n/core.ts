@@ -395,7 +395,9 @@ const en = {
   'promptList.appendToEditor': 'Append to editor',
   'promptList.copyPrompt': 'Copy Prompt',
   'promptList.filter.toggle': 'Filter',
-  'promptList.targets.toggle': 'Targets',
+  'promptList.targets.toggle': 'Task',
+  'promptList.filter.markLabel': 'Mark:',
+  'promptList.filter.taskLabel': 'Task:',
   'promptList.viewSendHistory': 'View send history ({{count}})',
   'promptList.filter.color.red': 'Filter red Prompts',
   'promptList.filter.color.yellow': 'Filter yellow Prompts',
@@ -979,7 +981,8 @@ const en = {
   'telemetry.consent.decline': 'No thanks',
   'settings.section.telemetry': 'Privacy & Telemetry',
   'settings.telemetry.toggle': 'Share anonymous usage data',
-  'settings.telemetry.description': 'Help improve Onward by sharing anonymous usage data, performance metrics, and crash reports. No personal information is collected.'
+  'settings.telemetry.description': 'Help improve Onward by sharing anonymous usage data, performance metrics, and crash reports. No personal information is collected.',
+  'mermaid.syntaxError': 'Diagram syntax error'
 } as const satisfies TranslationDictionary
 
 export type TranslationKey = keyof typeof en
@@ -1363,7 +1366,9 @@ const zhCN: LocaleTranslations = {
   'promptList.appendToEditor': '追加到输入框',
   'promptList.copyPrompt': '复制 Prompt',
   'promptList.filter.toggle': 'Filter',
-  'promptList.targets.toggle': 'Targets',
+  'promptList.targets.toggle': 'Task',
+  'promptList.filter.markLabel': 'Mark：',
+  'promptList.filter.taskLabel': 'Task：',
   'promptList.viewSendHistory': '查看发送记录 ({{count}})',
   'promptList.filter.color.red': '筛选红色 Prompt',
   'promptList.filter.color.yellow': '筛选黄色 Prompt',
@@ -1947,7 +1952,8 @@ const zhCN: LocaleTranslations = {
   'telemetry.consent.decline': '不了，谢谢',
   'settings.section.telemetry': '隐私与遥测',
   'settings.telemetry.toggle': '分享匿名使用数据',
-  'settings.telemetry.description': '通过分享匿名使用数据、性能指标和崩溃报告来帮助改进 Onward。不会收集任何个人信息。'
+  'settings.telemetry.description': '通过分享匿名使用数据、性能指标和崩溃报告来帮助改进 Onward。不会收集任何个人信息。',
+  'mermaid.syntaxError': '图表语法错误'
 }
 
 const translations: Record<AppLocale, LocaleTranslations> = {

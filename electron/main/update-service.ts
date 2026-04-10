@@ -12,7 +12,7 @@ import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { spawn, execSync } from 'child_process'
 import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
-import { compareVersions } from './update-version'
+import { compareVersions, parseVersion } from './update-version'
 import { getTelemetryService } from './telemetry/telemetry-service'
 
 export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
@@ -350,16 +350,162 @@ export class UpdateService {
     return join(app.getPath('userData'), 'updates', manifest.version, manifest.artifactName)
   }
 
-  private cleanupDownloadedArchives(keepVersions: string[] = []): void {
+  private saveManifestFile(manifest: UpdateManifest): void {
+    const versionDir = join(resolveUpdatesRootPath(), manifest.version)
+    mkdirSync(versionDir, { recursive: true })
+    writeFileSync(join(versionDir, 'manifest.json'), JSON.stringify(manifest), 'utf-8')
+  }
+
+  private loadManifestFile(version: string): UpdateManifest | null {
+    const manifestPath = join(resolveUpdatesRootPath(), version, 'manifest.json')
+    if (!existsSync(manifestPath)) return null
+    try {
+      return JSON.parse(readFileSync(manifestPath, 'utf-8')) as UpdateManifest
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Clean up stale downloads and recover the latest pending update on startup.
+   *
+   * Expiration rules:
+   * 1. Versions ≤ currentVersion are expired (already installed or older) → delete
+   * 2. Among versions > currentVersion, try to recover from newest to oldest
+   * 3. On first successful recovery, delete all remaining older candidates
+   * 4. Each candidate is verified (channel/platform/arch + manifest + checksum);
+   *    corrupt/incomplete/incompatible files are removed.
+   *
+   * The verify-before-delete order ensures that a corrupt newest version does
+   * not cause valid older versions to be discarded prematurely.
+   */
+  private cleanupAndRecoverPendingUpdate(): void {
     const updatesRoot = resolveUpdatesRootPath()
     if (!existsSync(updatesRoot)) return
 
-    const keepVersionSet = new Set(keepVersions)
+    const currentVersion = this.status.currentVersion
+    const pendingVersions: string[] = []
+    let cleanedCount = 0
+
     for (const entry of readdirSync(updatesRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
-      if (keepVersionSet.has(entry.name)) continue
-      rmSync(join(updatesRoot, entry.name), { recursive: true, force: true })
+      const version = entry.name
+
+      // Skip directories that are not valid version strings
+      try {
+        parseVersion(version)
+      } catch {
+        rmSync(join(updatesRoot, version), { recursive: true, force: true })
+        cleanedCount++
+        continue
+      }
+
+      if (compareVersions(version, currentVersion) <= 0) {
+        rmSync(join(updatesRoot, version), { recursive: true, force: true })
+        console.log(`${LOG_PREFIX} Cleaned up expired download: ${version}`)
+        cleanedCount++
+      } else {
+        pendingVersions.push(version)
+      }
     }
+
+    if (pendingVersions.length === 0) {
+      if (cleanedCount > 0) {
+        console.log(`${LOG_PREFIX} Startup cleanup: removed ${cleanedCount} stale download(s), no pending updates`)
+      }
+      return
+    }
+
+    // Sort descending — try newest first, fall back to older candidates
+    pendingVersions.sort((a, b) => compareVersions(b, a))
+
+    // Try candidates in descending order. Only delete superseded versions
+    // AFTER a successful recovery (verify-before-delete).
+    let recoveredIndex = -1
+    for (let i = 0; i < pendingVersions.length; i++) {
+      if (this.recoverPendingUpdate(pendingVersions[i])) {
+        recoveredIndex = i
+        break
+      }
+      // recoverPendingUpdate already cleaned up the failed candidate
+      cleanedCount++
+    }
+
+    // Delete remaining untried candidates that are older than the recovered one
+    if (recoveredIndex >= 0) {
+      for (let i = recoveredIndex + 1; i < pendingVersions.length; i++) {
+        rmSync(join(updatesRoot, pendingVersions[i]), { recursive: true, force: true })
+        console.log(`${LOG_PREFIX} Cleaned up superseded download: ${pendingVersions[i]}`)
+        cleanedCount++
+      }
+    }
+
+    if (cleanedCount > 0) {
+      const recovered = recoveredIndex >= 0 ? pendingVersions[recoveredIndex] : 'none'
+      console.log(`${LOG_PREFIX} Startup cleanup: removed ${cleanedCount} stale download(s), recovered: ${recovered}`)
+    }
+  }
+
+  /**
+   * Attempt to recover a previously downloaded update from disk.
+   * Validates channel/platform/arch compatibility, manifest integrity, and
+   * archive checksum. Removes the version directory on any failure.
+   * @returns true if recovery succeeded, false if the candidate was invalid.
+   */
+  private recoverPendingUpdate(version: string): boolean {
+    const versionDir = join(resolveUpdatesRootPath(), version)
+    const manifest = this.loadManifestFile(version)
+
+    if (!manifest) {
+      rmSync(versionDir, { recursive: true, force: true })
+      console.log(`${LOG_PREFIX} Removed unverifiable download (no manifest): ${version}`)
+      return false
+    }
+
+    // Reject archives from a different channel, platform, or architecture.
+    // Prod builds across release channels (daily/dev/stable) share the same
+    // userData directory, so a channel switch can leave foreign archives behind.
+    const arch = normalizeArch(process.arch)
+    if (manifest.channel !== this.status.currentChannel ||
+        manifest.platform !== this.status.currentReleaseOs ||
+        !arch || manifest.arch !== arch) {
+      rmSync(versionDir, { recursive: true, force: true })
+      console.log(
+        `${LOG_PREFIX} Removed incompatible download: ${version}` +
+        ` (channel=${String(manifest.channel)}, platform=${String(manifest.platform)}, arch=${String(manifest.arch)})`)
+      return false
+    }
+
+    const archivePath = join(versionDir, manifest.artifactName)
+    if (!existsSync(archivePath)) {
+      rmSync(versionDir, { recursive: true, force: true })
+      console.log(`${LOG_PREFIX} Removed incomplete download (archive missing): ${version}`)
+      return false
+    }
+
+    try {
+      const checksum = hashFileSha256(archivePath)
+      if (checksum.toLowerCase() !== manifest.sha256.toLowerCase()) {
+        rmSync(versionDir, { recursive: true, force: true })
+        console.log(`${LOG_PREFIX} Removed corrupted download (checksum mismatch): ${version}`)
+        return false
+      }
+    } catch {
+      rmSync(versionDir, { recursive: true, force: true })
+      console.log(`${LOG_PREFIX} Removed unreadable download: ${version}`)
+      return false
+    }
+
+    this.downloadedUpdate = { manifest, archivePath }
+    this.setStatus({
+      phase: 'downloaded',
+      targetVersion: manifest.version,
+      targetTag: manifest.tag,
+      downloadedFileName: manifest.artifactName,
+      error: null
+    })
+    console.log(`${LOG_PREFIX} Recovered pending update: ${version} (${manifest.artifactName})`)
+    return true
   }
 
   private async ensureDownloaded(manifest: UpdateManifest): Promise<DownloadedUpdate> {
@@ -380,6 +526,9 @@ export class UpdateService {
     }
     console.log(`${LOG_PREFIX} Checksum verified: ${checksum}`)
 
+    // Persist manifest alongside the archive for cross-session recovery
+    this.saveManifestFile(manifest)
+
     return {
       manifest,
       archivePath
@@ -389,7 +538,7 @@ export class UpdateService {
   start(mainWindow: BrowserWindow): void {
     this.mainWindow = mainWindow
     this.status = this.createInitialStatus()
-    this.cleanupDownloadedArchives()
+    this.cleanupAndRecoverPendingUpdate()
     this.emitStatus()
 
     console.log(`${LOG_PREFIX} Initialized: supported=${this.status.supported}, version=${this.status.currentVersion}, os=${this.status.currentReleaseOs}, channel=${this.status.currentChannel}`)
@@ -489,7 +638,6 @@ export class UpdateService {
 
       if (!isNewer) {
         if (this.downloadedUpdate && this.downloadedUpdate.manifest.version === manifest.version) {
-          this.cleanupDownloadedArchives([manifest.version])
           return this.setStatus({
             phase: 'downloaded',
             targetVersion: manifest.version,
@@ -501,7 +649,6 @@ export class UpdateService {
         }
 
         this.downloadedUpdate = null
-        this.cleanupDownloadedArchives()
         console.log(`${LOG_PREFIX} Already up-to-date`)
         trackUpdateEvent('update/check', { result: 'up-to-date', currentVersion: this.status.currentVersion })
         return this.setStatus({
@@ -522,8 +669,30 @@ export class UpdateService {
         targetVersion: manifest.version
       })
 
+      // If we already have this version downloaded and verified (e.g., recovered
+      // from a previous session), skip re-download and confirm downloaded state.
+      if (this.downloadedUpdate && this.downloadedUpdate.manifest.version === manifest.version) {
+        console.log(`${LOG_PREFIX} Update already downloaded, skipping re-download: ${manifest.version}`)
+        return this.setStatus({
+          phase: 'downloaded',
+          targetVersion: manifest.version,
+          targetTag: manifest.tag,
+          downloadedFileName: this.downloadedUpdate.manifest.artifactName,
+          bannerDismissed: false,
+          lastCheckedAt,
+          error: null
+        })
+      }
+
       // DEV channel: stop at 'available' and wait for user to manually trigger download.
       if (this.status.currentChannel === 'dev') {
+        // Clear any stale downloaded update superseded by the newer available version.
+        // Without this, downloadedUpdate would reference an older version while
+        // the UI shows the newer version as "available", causing an inconsistency
+        // where requestRestartToUpdate() could install the wrong version.
+        if (this.downloadedUpdate) {
+          this.downloadedUpdate = null
+        }
         this.pendingManifest = manifest
         console.log(`${LOG_PREFIX} Dev channel: waiting for manual download`)
         return this.setStatus({
@@ -547,8 +716,21 @@ export class UpdateService {
         currentVersion: this.status.currentVersion,
         targetVersion: this.status.targetVersion
       })
+      // If a previously downloaded update is still valid on disk, restore its
+      // state so the UI shows the correct (actually downloaded) version, not
+      // the version whose download just failed.
+      if (this.downloadedUpdate) {
+        return this.setStatus({
+          phase: 'downloaded',
+          targetVersion: this.downloadedUpdate.manifest.version,
+          targetTag: this.downloadedUpdate.manifest.tag,
+          downloadedFileName: this.downloadedUpdate.manifest.artifactName,
+          lastCheckedAt: Date.now(),
+          error: errorMessage
+        })
+      }
       return this.setStatus({
-        phase: this.downloadedUpdate ? 'downloaded' : 'error',
+        phase: 'error',
         lastCheckedAt: Date.now(),
         error: errorMessage
       })
@@ -567,7 +749,6 @@ export class UpdateService {
     })
 
     this.downloadedUpdate = await this.ensureDownloaded(manifest)
-    this.cleanupDownloadedArchives([manifest.version])
     console.log(`${LOG_PREFIX} Download complete: ${manifest.artifactName}`)
     trackUpdateEvent('update/downloaded', {
       targetVersion: manifest.version,

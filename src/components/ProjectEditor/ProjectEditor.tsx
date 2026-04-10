@@ -34,6 +34,7 @@ import { SqliteViewer } from './SqliteViewer'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import { usePathCopy } from '../../hooks/usePathCopy'
 import '../../hooks/usePathCopy.css'
+import { renderMermaidDiagrams } from '../../utils/mermaidRenderer'
 import './ProjectEditor.css'
 
 interface ProjectEditorProps {
@@ -3862,6 +3863,16 @@ export function ProjectEditor({
     })
     return () => window.cancelAnimationFrame(frame)
   }, [isMarkdownRenderAllowed, markdownRenderedHtml, scanPreviewNearestSlug, updatePreviewActiveSlug])
+
+  useEffect(() => {
+    if (!isMarkdownRenderAllowed || !markdownRenderedHtml) return
+    const preview = previewRef.current
+    if (!preview) return
+    if (preview.querySelectorAll('.mermaid-diagram[data-mermaid-id]').length === 0) return
+    const signal = { cancelled: false }
+    void renderMermaidDiagrams(preview, signal, t('mermaid.syntaxError'))
+    return () => { signal.cancelled = true }
+  }, [isMarkdownRenderAllowed, markdownRenderedHtml, t])
 
   useEffect(() => {
     if (!isMarkdownRenderAllowed) return
