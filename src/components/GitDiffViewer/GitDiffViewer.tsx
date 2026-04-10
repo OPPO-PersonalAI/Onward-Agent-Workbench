@@ -3340,8 +3340,9 @@ export function GitDiffViewer({
     onSelect: handleSelectSubpage,
     workingDirectoryLabel: t('gitDiff.workingDirectory'),
     workingDirectoryPath: displayedCwd && (!diffResult || diffResult.isGitRepo) ? displayedCwd : null,
-    actions: externalPanelActions
-  }), [diffResult, displayedCwd, externalPanelActions, handleSelectSubpage, t])
+    actions: externalPanelActions,
+    taskTitle
+  }), [diffResult, displayedCwd, externalPanelActions, handleSelectSubpage, t, taskTitle])
 
   useLayoutEffect(() => {
     if (!isPanel || panelShellMode !== 'external' || !onPanelShellStateChange) return
@@ -3394,6 +3395,7 @@ export function GitDiffViewer({
             onSelect={handleSelectSubpage}
             workingDirectoryLabel={t('gitDiff.workingDirectory')}
             workingDirectoryPath={displayedCwd && (!diffResult || diffResult.isGitRepo) ? displayedCwd : null}
+            taskTitle={taskTitle}
             actions={(
               <SubpagePanelButton className="git-diff-close" onClick={requestClose} title={t('gitDiff.returnToTerminal')}>
                 {t('gitDiff.returnToTerminal')}

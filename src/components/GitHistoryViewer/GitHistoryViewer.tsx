@@ -1496,8 +1496,9 @@ export function GitHistoryViewer({
     onSelect: handleSelectSubpage,
     workingDirectoryLabel: t('gitHistory.cwd'),
     workingDirectoryPath: historyWorkingDirectory,
-    actions: externalPanelActions
-  }), [externalPanelActions, handleSelectSubpage, historyWorkingDirectory, t])
+    actions: externalPanelActions,
+    taskTitle
+  }), [externalPanelActions, handleSelectSubpage, historyWorkingDirectory, t, taskTitle])
   const historyBody = (
     <>
       {historyResult?.superprojectRoot && !selectedRepoRoot && (
@@ -1655,6 +1656,7 @@ export function GitHistoryViewer({
             onSelect={handleSelectSubpage}
             workingDirectoryLabel={t('gitHistory.cwd')}
             workingDirectoryPath={historyWorkingDirectory}
+            taskTitle={taskTitle}
             actions={(
               <>
                 <SubpagePanelButton className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>

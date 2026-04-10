@@ -1525,6 +1525,7 @@ export const TerminalGrid = memo(function TerminalGrid({
               workingDirectoryLabel={activePanelShellState.workingDirectoryLabel}
               workingDirectoryPath={activePanelShellState.workingDirectoryPath}
               metaExtra={activePanelShellState.metaExtra}
+              taskTitle={activePanelShellState.taskTitle}
             />
           )}
           <div className={`terminal-grid-subpage-body ${isSubpageSwitching ? 'is-switching' : ''}`}>
