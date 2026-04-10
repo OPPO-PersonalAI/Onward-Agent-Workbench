@@ -25,6 +25,8 @@ import {
   type ImageDisplayMode,
   type SvgViewMode
 } from '../GitImagePreview/GitImagePreview'
+import { usePathCopy } from '../../hooks/usePathCopy'
+import '../../hooks/usePathCopy.css'
 import './GitDiffViewer.css'
 
 const DEBUG_GIT_DIFF = Boolean(window.electronAPI?.debug?.enabled)
@@ -426,7 +428,6 @@ export function GitDiffViewer({
   const editMessageTimerRef = useRef<number>(0)
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetFile: GitFileStatus } | null>(null)
-  const [copyMessage, setCopyMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [imageDisplayMode, setImageDisplayMode] = useState<ImageDisplayMode>(() => {
     const prefs = getUIPreferences()
     const p = prefs.gitDiffImageDisplayMode
@@ -556,21 +557,8 @@ export function GitDiffViewer({
     return normalized
   }, [updateUIPreferences])
 
-  // ---Copy function ---
-  const copyToClipboard = useCallback(async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopyMessage({ type: 'success', text: t('common.copied', { label, text }) })
-    } catch {
-      setCopyMessage({ type: 'error', text: t('gitDiff.copyFailed') })
-    }
-  }, [t])
-
-  useEffect(() => {
-    if (!copyMessage) return
-    const timer = window.setTimeout(() => setCopyMessage(null), 2000)
-    return () => window.clearTimeout(timer)
-  }, [copyMessage])
+  // --- Path copy (shared hook) ---
+  const { copyMessage, copyToClipboard, flashCopyFeedback } = usePathCopy(t, 'gitDiff.copyFailed')
 
   const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!selectedFile) return
@@ -579,8 +567,9 @@ export function GitDiffViewer({
     const relativePath = selectedFile.filename
     const pathToCopy = isAbsolute ? `${rootCwd}/${relativePath}` : relativePath
     const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
-    await copyToClipboard(pathToCopy, label)
-  }, [selectedFile, activeCwd, copyToClipboard, t])
+    const ok = await copyToClipboard(pathToCopy, label)
+    if (ok) flashCopyFeedback(e)
+  }, [selectedFile, activeCwd, copyToClipboard, flashCopyFeedback, t])
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: GitFileStatus) => {
     e.preventDefault()
@@ -2969,7 +2958,7 @@ export function GitDiffViewer({
               <span className="git-diff-file-dirty">{t('gitDiff.unsaved')}</span>
             )}
             {copyMessage && (
-              <span className={`git-diff-toast-message git-diff-copy-message ${copyMessage.type}`}>
+              <span className={`path-copy-toast ${copyMessage.type}`}>
                 {copyMessage.text}
               </span>
             )}
@@ -3450,21 +3439,21 @@ export function GitDiffViewer({
               onClick={() => void copyContextMenuPath(contextMenu.targetFile, 'name')}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11zM5 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H8.5v7a.5.5 0 0 1-1 0V6H5.5a.5.5 0 0 1-.5-.5z" /></svg>
-              <span>{t('common.name')}</span>
+              <span>{t('common.copyName')}</span>
             </button>
             <button
               className="git-diff-context-item"
               onClick={() => void copyContextMenuPath(contextMenu.targetFile, 'relative')}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><circle cx="5" cy="11.5" r="1" /><path d="M7 10a.5.5 0 0 1 .354.146l2 2a.5.5 0 0 1-.708.708L7 11.207l-1.646 1.647a.5.5 0 0 1-.708-.708l2-2A.5.5 0 0 1 7 10z" /></svg>
-              <span>{t('common.relativePath')}</span>
+              <span>{t('common.copyRelativePath')}</span>
             </button>
             <button
               className="git-diff-context-item"
               onClick={() => void copyContextMenuPath(contextMenu.targetFile, 'absolute')}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><path d="M8.5 9a.5.5 0 0 0-.894-.447l-2 4a.5.5 0 1 0 .894.447l2-4z" /></svg>
-              <span>{t('common.absolutePath')}</span>
+              <span>{t('common.copyAbsolutePath')}</span>
             </button>
           </div>
         )}

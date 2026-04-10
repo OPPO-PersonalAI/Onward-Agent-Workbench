@@ -210,6 +210,7 @@
   color: var(--text-2);
 }
 
+
 .project-editor-body {
   flex: 1;
   min-height: 0;
@@ -589,7 +590,8 @@ body.project-editor-preview-resizing * {
 }
 
 .project-editor-editor-filename {
-  cursor: pointer;
+  cursor: text;
+  user-select: text;
 }
 
 .project-editor-editor-filename.dirty {

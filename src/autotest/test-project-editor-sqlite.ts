@@ -83,7 +83,7 @@ export async function testProjectEditorSqlite(ctx: AutotestContext): Promise<Tes
   const hasCopyMenuItems = (requirePinAction: boolean) => {
     const labels = getContextMenuLabels()
     const hasPinAction = labels.includes(t('projectEditor.context.pin')) || labels.includes(t('projectEditor.context.unpin'))
-    const hasCoreItems = labels.includes(t('common.name')) && labels.includes(t('common.relativePath')) && labels.includes(t('common.absolutePath'))
+    const hasCoreItems = labels.includes(t('common.copyName')) && labels.includes(t('common.copyRelativePath')) && labels.includes(t('common.copyAbsolutePath'))
     return requirePinAction ? (hasCoreItems && hasPinAction) : hasCoreItems
   }
 
