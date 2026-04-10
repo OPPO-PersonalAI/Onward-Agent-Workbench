@@ -446,11 +446,7 @@ app.whenReady().then(() => {
       console.log('[Telemetry] Consent set to true for autotest (ONWARD_TELEMETRY_RESET_CONSENT=1)')
     } else {
       // Manual debug mode: reset to null so the consent dialog appears
-      getSettingsStorage().setTelemetryConsent(false, null)
-      const state = getSettingsStorage().get()
-      state.telemetryConsent = null
-      state.telemetryInstanceId = null
-      getSettingsStorage().save(state)
+      getSettingsStorage().setTelemetryConsent(null, null)
       console.log('[Telemetry] Consent reset to null for debugging (ONWARD_TELEMETRY_RESET_CONSENT=1)')
     }
   }

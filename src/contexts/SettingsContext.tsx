@@ -83,7 +83,7 @@ function createDefaultShortcuts(): ShortcutConfig {
  */
 function createDefaultSettings(): SettingsState {
   return {
-    version: 4,
+    version: 5,
     shortcuts: createDefaultShortcuts(),
     terminalStyles: {},
     globalTerminalStyle: createDefaultGlobalTerminalStyle(),
@@ -91,6 +91,8 @@ function createDefaultSettings(): SettingsState {
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
     theme: DEFAULT_THEME_SETTINGS,
+    telemetryConsent: null,
+    telemetryInstanceId: null,
     updatedAt: Date.now()
   }
 }

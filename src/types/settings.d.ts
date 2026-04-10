@@ -72,6 +72,10 @@ export interface SettingsState {
   language: AppLocale
   /** Theme settings */
   theme: ThemeSettings
+  /** Telemetry consent: null = not yet asked, true = opted in, false = opted out */
+  telemetryConsent: boolean | null
+  /** Anonymous instance ID for telemetry (random UUID, regenerated on re-opt-in) */
+  telemetryInstanceId: string | null
   updatedAt: number
 }
 
