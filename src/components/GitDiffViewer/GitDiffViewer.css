@@ -511,7 +511,8 @@ body.git-diff-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: text;
+  user-select: text;
 }
 
 .git-diff-copy-message {
@@ -755,22 +756,6 @@ body.git-diff-resizing * {
   border-radius: 999px;
 }
 
-.git-diff-toast-message {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.git-diff-toast-message.success {
-  color: var(--text-3);
-  background-color: rgba(148, 163, 184, 0.14);
-}
-
-.git-diff-toast-message.error {
-  color: var(--danger);
-  background-color: rgba(239, 68, 68, 0.16);
-}
 
 .git-diff-edit-btn.active {
   color: #a7f3d0;

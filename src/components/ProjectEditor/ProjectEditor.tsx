@@ -32,6 +32,8 @@ import { SearchPanel } from './GlobalSearch/SearchPanel'
 import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import { SqliteViewer } from './SqliteViewer'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
+import { usePathCopy } from '../../hooks/usePathCopy'
+import '../../hooks/usePathCopy.css'
 import './ProjectEditor.css'
 
 interface ProjectEditorProps {
@@ -2245,24 +2247,17 @@ export function ProjectEditor({
     }, 2000)
   }, [])
 
-  const copyToClipboard = useCallback(async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      showStatus('success', t('common.copied', { label, text }))
-      return true
-    } catch {
-      showStatus('error', t('projectEditor.copyFailed'))
-      return false
-    }
-  }, [showStatus, t])
+  // --- Path copy (shared hook) ---
+  const { copyMessage: pathCopyMessage, copyToClipboard, showCopyError, flashCopyFeedback } = usePathCopy(t, 'projectEditor.copyFailed')
 
   const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!activeFilePath || !rootPath) return
     const isAbsolute = e.altKey
     const pathToCopy = isAbsolute ? `${rootPath}/${activeFilePath}` : activeFilePath
     const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
-    await copyToClipboard(pathToCopy, label)
-  }, [activeFilePath, copyToClipboard, rootPath, t])
+    const ok = await copyToClipboard(pathToCopy, label)
+    if (ok) flashCopyFeedback(e)
+  }, [activeFilePath, copyToClipboard, flashCopyFeedback, rootPath, t])
 
   const resolveAbsolutePath = useCallback((relativePath: string): string | null => {
     const root = rootRef.current ?? rootPath
@@ -2282,7 +2277,7 @@ export function ProjectEditor({
         ? getBaseName(targetPath)
         : (root ? getBaseName(normalizePath(root)) : '')
       if (!text) {
-        showStatus('error', t('projectEditor.copyFailed'))
+        showCopyError(t('projectEditor.copyFailed'))
         return
       }
       await copyToClipboard(text, t('common.name'))
@@ -2297,11 +2292,11 @@ export function ProjectEditor({
 
     const absolutePath = resolveAbsolutePath(targetPath)
     if (!absolutePath) {
-      showStatus('error', t('projectEditor.absolutePathUnavailable'))
+      showCopyError(t('projectEditor.absolutePathUnavailable'))
       return
     }
     await copyToClipboard(absolutePath, t('common.absolutePath'))
-  }, [copyToClipboard, resolveAbsolutePath, rootPath, showStatus, t])
+  }, [copyToClipboard, resolveAbsolutePath, rootPath, showCopyError, t])
 
   const touchRecentFile = useCallback((path: string) => {
     setRecentFiles((prev) => prependRecentFile(prev, path, MAX_RECENT_FILES))
@@ -5901,6 +5896,11 @@ export function ProjectEditor({
                 ) : (
                   <span className="project-editor-editor-placeholder">{t('projectEditor.selectFile')}</span>
                 )}
+                {pathCopyMessage && (
+                  <span className={`path-copy-toast ${pathCopyMessage.type}`}>
+                    {pathCopyMessage.text}
+                  </span>
+                )}
               </div>
               <div className="project-editor-editor-controls">
                 <div className="project-editor-editor-meta">
@@ -6325,7 +6325,7 @@ export function ProjectEditor({
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11zM5 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H8.5v7a.5.5 0 0 1-1 0V6H5.5a.5.5 0 0 1-.5-.5z" /></svg>
-                  <span>{t('common.name')}</span>
+                  <span>{t('common.copyName')}</span>
                 </button>
                 <button
                   className="project-editor-context-item"
@@ -6335,7 +6335,7 @@ export function ProjectEditor({
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><circle cx="5" cy="11.5" r="1" /><path d="M7 10a.5.5 0 0 1 .354.146l2 2a.5.5 0 0 1-.708.708L7 11.207l-1.646 1.647a.5.5 0 0 1-.708-.708l2-2A.5.5 0 0 1 7 10z" /></svg>
-                  <span>{t('common.relativePath')}</span>
+                  <span>{t('common.copyRelativePath')}</span>
                 </button>
                 <button
                   className="project-editor-context-item"
@@ -6345,7 +6345,7 @@ export function ProjectEditor({
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><path d="M8.5 9a.5.5 0 0 0-.894-.447l-2 4a.5.5 0 1 0 .894.447l2-4z" /></svg>
-                  <span>{t('common.absolutePath')}</span>
+                  <span>{t('common.copyAbsolutePath')}</span>
                 </button>
                 {contextMenu.targetType === 'file' && (
                   <button

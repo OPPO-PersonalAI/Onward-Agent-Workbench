@@ -563,6 +563,55 @@ body.git-history-resizing .git-history-file-resizer::after {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
+  user-select: text;
+}
+
+
+.git-history-context-menu {
+  min-width: 160px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: var(--shadow-1);
+  z-index: 1100;
+  animation: git-history-context-fade-in 0.15s ease;
+}
+
+@keyframes git-history-context-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.git-history-context-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  border-radius: 6px;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.git-history-context-item:hover {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.git-history-context-item svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.git-history-context-item:hover svg {
+  color: var(--text-2);
 }
 
 .git-history-diff-content {

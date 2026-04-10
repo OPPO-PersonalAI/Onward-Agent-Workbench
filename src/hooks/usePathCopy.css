@@ -1,0 +1,32 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Shared toast for copy feedback (used by GitDiffViewer, ProjectEditor, GitHistoryViewer) */
+.path-copy-toast {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.path-copy-toast.success {
+  color: var(--success);
+  background-color: rgba(34, 197, 94, 0.16);
+}
+
+.path-copy-toast.error {
+  color: var(--danger);
+  background-color: rgba(239, 68, 68, 0.16);
+}
+
+/* Shared flash highlight after double-click copy */
+.copy-flash {
+  background-color: rgba(34, 197, 94, 0.25);
+  border-radius: 4px;
+  transition: background-color 0.3s ease;
+}

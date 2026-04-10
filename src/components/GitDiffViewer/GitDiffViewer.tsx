@@ -25,6 +25,9 @@ import {
   type ImageDisplayMode,
   type SvgViewMode
 } from '../GitImagePreview/GitImagePreview'
+import { usePathCopy } from '../../hooks/usePathCopy'
+import { useGitDiffFileWatch } from './useGitDiffFileWatch'
+import '../../hooks/usePathCopy.css'
 import './GitDiffViewer.css'
 
 const DEBUG_GIT_DIFF = Boolean(window.electronAPI?.debug?.enabled)
@@ -160,7 +163,7 @@ type GitDiffDebugApi = {
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
   isSelectedReady: () => boolean
-  getRestoreNotice: () => { type: 'missing' | 'changed'; message: string; fileName?: string } | null
+  getRestoreNotice: () => { type: 'changed'; message: string; fileName?: string } | null
   getScrollTop: () => number
   getFirstVisibleLine: () => number
   scrollToFraction: (fraction: number) => boolean
@@ -401,7 +404,7 @@ export function GitDiffViewer({
   const diffScrollCaptureTimerRef = useRef<number | null>(null)
   const suppressScrollCaptureRef = useRef(false)
   const [diffRestoreNotice, setDiffRestoreNotice] = useState<{
-    type: 'missing' | 'changed'
+    type: 'changed'
     message: string
     fileName?: string
   } | null>(null)
@@ -426,7 +429,6 @@ export function GitDiffViewer({
   const editMessageTimerRef = useRef<number>(0)
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetFile: GitFileStatus } | null>(null)
-  const [copyMessage, setCopyMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [imageDisplayMode, setImageDisplayMode] = useState<ImageDisplayMode>(() => {
     const prefs = getUIPreferences()
     const p = prefs.gitDiffImageDisplayMode
@@ -453,6 +455,8 @@ export function GitDiffViewer({
   const diffEditorBindingDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const diffSplitMeasureFrameRef = useRef<number | null>(null)
   const isDraftDirtyRef = useRef(false)
+  const autoRefreshInFlightRef = useRef(false)
+  const autoRefreshQueuedRef = useRef(false)
   const originalDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const modifiedDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const selectedFileRef = useRef<GitFileStatus | null>(null)
@@ -557,21 +561,8 @@ export function GitDiffViewer({
     return normalized
   }, [updateUIPreferences])
 
-  // ---Copy function ---
-  const copyToClipboard = useCallback(async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopyMessage({ type: 'success', text: t('common.copied', { label, text }) })
-    } catch {
-      setCopyMessage({ type: 'error', text: t('gitDiff.copyFailed') })
-    }
-  }, [t])
-
-  useEffect(() => {
-    if (!copyMessage) return
-    const timer = window.setTimeout(() => setCopyMessage(null), 2000)
-    return () => window.clearTimeout(timer)
-  }, [copyMessage])
+  // --- Path copy (shared hook) ---
+  const { copyMessage, copyToClipboard, flashCopyFeedback } = usePathCopy(t, 'gitDiff.copyFailed')
 
   const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!selectedFile) return
@@ -580,8 +571,9 @@ export function GitDiffViewer({
     const relativePath = selectedFile.filename
     const pathToCopy = isAbsolute ? `${rootCwd}/${relativePath}` : relativePath
     const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
-    await copyToClipboard(pathToCopy, label)
-  }, [selectedFile, activeCwd, copyToClipboard, t])
+    const ok = await copyToClipboard(pathToCopy, label)
+    if (ok) flashCopyFeedback(e)
+  }, [selectedFile, activeCwd, copyToClipboard, flashCopyFeedback, t])
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: GitFileStatus) => {
     e.preventDefault()
@@ -1019,29 +1011,6 @@ export function GitDiffViewer({
         ? result.files.find((file) => file.filename === previous.filename &&
           (file.originalFilename ?? '') === (previous.originalFilename ?? ''))
         : null
-      if ((memorySelectedKey || memoryEntry) && !memoryMatched) {
-        const headerTitle = memoryEntry
-          ? (memoryEntry.originalFilename
-            ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-            : memoryEntry.filePath)
-          : (previous?.originalFilename && (previous.status === 'R' || previous.status === 'C')
-            ? `${previous.originalFilename} → ${previous.filename}`
-            : (previous?.filename || t('gitDiff.unknownFile')))
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
-      } else if (previous && !matched && !fallback) {
-        const headerTitle = previous.originalFilename && (previous.status === 'R' || previous.status === 'C')
-          ? `${previous.originalFilename} → ${previous.filename}`
-          : previous.filename
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
-      }
       // Guard: skip setSelectedFile when the same file is already selected
       // (e.g., submodule stage-2 load arriving with unchanged file selection).
       // This prevents unnecessary Monaco editor remount and visual flash.
@@ -1055,19 +1024,6 @@ export function GitDiffViewer({
       }
     } else {
       setSelectedFile(null)
-      const memorySelectedKey = memoryStore.selectedFileKey
-      const memoryEntryByKey = memorySelectedKey ? memoryStore.entries[memorySelectedKey] : null
-      const memoryEntry = memoryEntryByKey ?? getLatestMemoryEntry(memoryStore.entries)
-      if (!result.submodulesLoading && memoryEntry) {
-        const headerTitle = memoryEntry.originalFilename
-          ? `${memoryEntry.originalFilename} → ${memoryEntry.filePath}`
-          : memoryEntry.filePath
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.fileMissing', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
-      }
     }
     if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
       setRepoFilter(null)
@@ -1535,6 +1491,91 @@ export function GitDiffViewer({
   }, [selectedFile, ensureFileContent])
 
   useEffect(() => { isDraftDirtyRef.current = isDraftDirty }, [isDraftDirty])
+
+  // --- Auto-refresh when the working-tree file changes externally ---
+  const handleAutoRefresh = useCallback(async (changeType: 'changed' | 'deleted') => {
+    if (!activeCwd) return
+
+    // File deleted externally — refresh the diff list so the sidebar
+    // reflects the removal. No content reload needed.
+    if (changeType === 'deleted') {
+      debugLog('auto-refresh:file-deleted')
+      void loadDiff({ silent: true, force: true })
+      return
+    }
+
+    // changeType === 'changed'
+    if (!selectedFile) return
+
+    // Don't overwrite unsaved user edits.
+    if (isDraftDirtyRef.current) {
+      debugLog('auto-refresh:skip:draft-dirty')
+      return
+    }
+
+    if (autoRefreshInFlightRef.current) {
+      autoRefreshQueuedRef.current = true
+      return
+    }
+
+    autoRefreshInFlightRef.current = true
+    suppressScrollCaptureRef.current = true
+    debugLog('auto-refresh:start', selectedFile.filename)
+
+    try {
+      // Capture current scroll position before reload.
+      const editor = diffEditorRef.current
+      const scrollTop = editor?.getModifiedEditor().getScrollTop() ?? 0
+
+      // Force-reload original + modified content from git.
+      await ensureFileContent(selectedFile, true)
+
+      // Update the signature in the memory store so the reveal phase
+      // does not show "content changed completely".
+      const memory = getMemoryStore()
+      const fileKey = selectedFileKey
+      if (memory && fileKey) {
+        const entry = memory.entries[fileKey]
+        const fileState = fileContentsRef.current[fileKey]
+        if (entry && fileState && !fileState.isBinary) {
+          entry.signature = buildDiffSignature(
+            fileState.originalContent ?? '',
+            fileState.draftContent ?? fileState.modifiedContent ?? ''
+          )
+          entry.scrollTop = scrollTop
+        }
+      }
+
+      // Restore scroll position after Monaco processes the new content.
+      requestAnimationFrame(() => {
+        const currentEditor = diffEditorRef.current?.getModifiedEditor()
+        if (currentEditor && scrollTop > 0) {
+          currentEditor.setScrollTop(scrollTop)
+        }
+        suppressScrollCaptureRef.current = false
+      })
+
+      // Also refresh the diff file list so sidebar stats (+/- counts)
+      // stay up-to-date with the actual content.
+      void loadDiff({ silent: true, force: true })
+
+      debugLog('auto-refresh:done', selectedFile.filename)
+    } finally {
+      autoRefreshInFlightRef.current = false
+      if (autoRefreshQueuedRef.current) {
+        autoRefreshQueuedRef.current = false
+        setTimeout(() => void handleAutoRefresh('changed'), 0)
+      }
+    }
+  }, [selectedFile, selectedFileKey, activeCwd, ensureFileContent, getMemoryStore, loadDiff])
+
+  useGitDiffFileWatch({
+    isOpen,
+    selectedFile,
+    repoRoot: selectedFile?.repoRoot || activeCwd || null,
+    onFileChanged: handleAutoRefresh
+  })
+
   const handleFileSelect = useCallback((file: GitFileStatus) => {
     const nextKey = getFileKey(file)
     const memory = getMemoryStore()
@@ -1650,11 +1691,6 @@ export function GitDiffViewer({
         : file.filename
       if (file.status === 'D') {
         diffRestoreAppliedRef.current = { cycle: currentCycle, fileKey }
-        setDiffRestoreNotice({
-          type: 'missing',
-          message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
-          fileName: headerTitle
-        })
         suppressScrollCaptureRef.current = false
         return
       }
@@ -1943,11 +1979,6 @@ export function GitDiffViewer({
 
         if (file.status === 'D') {
           diffRestoreAppliedRef.current = { cycle: diffRestoreCycleRef.current, fileKey }
-          setDiffRestoreNotice({
-            type: 'missing',
-            message: t('gitDiff.restore.deletedLocation', { fileName: headerTitle }),
-            fileName: headerTitle
-          })
         } else {
           // Check signature to detect content changes
           const currentFileState = fileContentsRef.current[fileKey]
@@ -2975,7 +3006,7 @@ export function GitDiffViewer({
               <span className="git-diff-file-dirty">{t('gitDiff.unsaved')}</span>
             )}
             {copyMessage && (
-              <span className={`git-diff-toast-message git-diff-copy-message ${copyMessage.type}`}>
+              <span className={`path-copy-toast ${copyMessage.type}`}>
                 {copyMessage.text}
               </span>
             )}
@@ -3466,21 +3497,21 @@ export function GitDiffViewer({
               onClick={() => void copyContextMenuPath(contextMenu.targetFile, 'name')}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11zM5 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H8.5v7a.5.5 0 0 1-1 0V6H5.5a.5.5 0 0 1-.5-.5z" /></svg>
-              <span>{t('common.name')}</span>
+              <span>{t('common.copyName')}</span>
             </button>
             <button
               className="git-diff-context-item"
               onClick={() => void copyContextMenuPath(contextMenu.targetFile, 'relative')}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><circle cx="5" cy="11.5" r="1" /><path d="M7 10a.5.5 0 0 1 .354.146l2 2a.5.5 0 0 1-.708.708L7 11.207l-1.646 1.647a.5.5 0 0 1-.708-.708l2-2A.5.5 0 0 1 7 10z" /></svg>
-              <span>{t('common.relativePath')}</span>
+              <span>{t('common.copyRelativePath')}</span>
             </button>
             <button
               className="git-diff-context-item"
               onClick={() => void copyContextMenuPath(contextMenu.targetFile, 'absolute')}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><path d="M8.5 9a.5.5 0 0 0-.894-.447l-2 4a.5.5 0 1 0 .894.447l2-4z" /></svg>
-              <span>{t('common.absolutePath')}</span>
+              <span>{t('common.copyAbsolutePath')}</span>
             </button>
           </div>
         )}

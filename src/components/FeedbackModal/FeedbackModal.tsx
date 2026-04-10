@@ -25,8 +25,6 @@ interface FeedbackModalProps {
 
 type FeedbackTab = 'submit' | 'history'
 
-const PENDING_POLL_INTERVAL_MS = 15_000
-
 function StarIcon({ active }: { active: boolean }) {
   return (
     <svg viewBox="0 0 24 24" className={`feedback-star-icon ${active ? 'active' : ''}`} aria-hidden="true">
@@ -76,6 +74,7 @@ export function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
   const { t, locale } = useI18n()
   const modalRef = useRef<HTMLDivElement>(null)
   const hasPreloadedHistoryRef = useRef(false)
+  const hasSyncedOnOpenRef = useRef(false)
   const [activeTab, setActiveTab] = useState<FeedbackTab>('submit')
   const [rating, setRating] = useState<FeedbackRating>(0)
   const [type, setType] = useState<FeedbackType>('bug')
@@ -100,8 +99,6 @@ export function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
   }, [locale])
 
   const historyRecords = feedbackState?.records ?? []
-  const hasPendingRecord = historyRecords.some((record) => record.syncStatus === 'pending_submission')
-
   const loadHistory = useCallback(async () => {
     setHistoryError(null)
     setIsLoadingHistory(true)
@@ -151,22 +148,23 @@ export function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
 
   useEffect(() => {
     if (!isOpen) {
+      hasSyncedOnOpenRef.current = false
       return
     }
     const frameId = window.requestAnimationFrame(() => {
       modalRef.current?.focus()
     })
-    const timer = window.setTimeout(() => {
-      if (!feedbackState && !isLoadingHistory) {
-        void loadHistory()
+    if (hasSyncedOnOpenRef.current) {
+      return () => {
+        window.cancelAnimationFrame(frameId)
       }
-      void syncHistory(false)
-    }, 0)
+    }
+    hasSyncedOnOpenRef.current = true
+    void syncHistory(false)
     return () => {
       window.cancelAnimationFrame(frameId)
-      window.clearTimeout(timer)
     }
-  }, [feedbackState, isLoadingHistory, isOpen, loadHistory, syncHistory])
+  }, [isOpen, syncHistory])
 
   useEffect(() => {
     if (!feedbackState) {
@@ -175,19 +173,6 @@ export function FeedbackModal({ isOpen, onClose }: FeedbackModalProps) {
     setPublicConsentAccepted(feedbackState.preferences.publicConsentAccepted)
   }, [feedbackState])
 
-  useEffect(() => {
-    if (!isOpen || !hasPendingRecord) {
-      return
-    }
-
-    const timer = window.setInterval(() => {
-      void syncHistory(false)
-    }, PENDING_POLL_INTERVAL_MS)
-
-    return () => {
-      window.clearInterval(timer)
-    }
-  }, [hasPendingRecord, isOpen, syncHistory])
 
   const resetForm = useCallback(() => {
     setRating(0)

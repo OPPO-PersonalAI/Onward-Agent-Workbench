@@ -31,6 +31,8 @@ import {
   type ImageDisplayMode,
   type SvgViewMode
 } from '../GitImagePreview/GitImagePreview'
+import { usePathCopy } from '../../hooks/usePathCopy'
+import '../../hooks/usePathCopy.css'
 import './GitHistoryViewer.css'
 
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
@@ -210,6 +212,7 @@ export function GitHistoryViewer({
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
   const [diffOptionsOpen, setDiffOptionsOpen] = useState(false)
   const diffOptionsRef = useRef<HTMLDivElement | null>(null)
+  const [fileContextMenu, setFileContextMenu] = useState<{ x: number; y: number; targetFile: GitHistoryFile } | null>(null)
 
   const [fileListWidth, setFileListWidth] = useState(() => {
     const prefs = getUIPreferences()
@@ -355,6 +358,50 @@ export function GitHistoryViewer({
 
   const selectedCommit = selectionInfo.selectedCommits[0] ?? null
   const oldestCommit = selectionInfo.selectedCommits[selectionInfo.selectedCommits.length - 1] ?? null
+
+  // --- Path copy (shared hook) ---
+  const { copyMessage, copyToClipboard, flashCopyFeedback } = usePathCopy(t, 'gitHistory.copyFailed')
+
+  const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
+    if (!selectedFile) return
+    const rootCwd = activeCwd || ''
+    const isAbsolute = e.altKey
+    const relativePath = selectedFile.filename
+    const pathToCopy = isAbsolute ? `${rootCwd}/${relativePath}` : relativePath
+    const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
+    const ok = await copyToClipboard(pathToCopy, label)
+    if (ok) flashCopyFeedback(e)
+  }, [selectedFile, activeCwd, copyToClipboard, flashCopyFeedback, t])
+
+  const handleFileContextMenu = useCallback((e: React.MouseEvent, file: GitHistoryFile) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setFileContextMenu({ x: e.clientX, y: e.clientY, targetFile: file })
+  }, [])
+
+  const closeFileContextMenu = useCallback(() => {
+    setFileContextMenu(null)
+  }, [])
+
+  const copyContextMenuPath = useCallback(async (file: GitHistoryFile, kind: 'name' | 'relative' | 'absolute') => {
+    const rootCwd = activeCwd || ''
+    if (kind === 'name') {
+      const name = file.filename.split('/').pop() || file.filename
+      await copyToClipboard(name, t('common.name'))
+    } else if (kind === 'relative') {
+      await copyToClipboard(file.filename, t('common.relativePath'))
+    } else {
+      await copyToClipboard(`${rootCwd}/${file.filename}`, t('common.absolutePath'))
+    }
+    closeFileContextMenu()
+  }, [activeCwd, closeFileContextMenu, copyToClipboard, t])
+
+  useEffect(() => {
+    if (!fileContextMenu) return
+    const handleMouseDown = () => setFileContextMenu(null)
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [fileContextMenu])
 
   const diffFontSize = settings?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
   const diffOptions = useMemo(() => ({
@@ -1259,6 +1306,7 @@ export function GitHistoryViewer({
               key={`${file.filename}-${file.status}`}
               className={`git-history-file-item ${isSelected ? 'selected' : ''}`}
               onClick={() => setSelectedFile(file)}
+              onContextMenu={(e) => handleFileContextMenu(e, file)}
               title={renameText}
             >
               <span className={`git-history-file-status ${statusClass}`}>
@@ -1605,11 +1653,20 @@ export function GitHistoryViewer({
                         <span className={`git-history-file-status status-${selectedFile.status}`}>
                           {selectedFile.status}
                         </span>
-                        <span className="git-history-diff-file-name">
+                        <span
+                          className="git-history-diff-file-name"
+                          title={t('gitHistory.filenameCopyHint')}
+                          onDoubleClick={handleFilenameDblClick}
+                        >
                           {selectedFile.originalFilename
                             ? `${selectedFile.originalFilename} → ${selectedFile.filename}`
                             : selectedFile.filename}
                         </span>
+                        {copyMessage && (
+                          <span className={`path-copy-toast ${copyMessage.type}`}>
+                            {copyMessage.text}
+                          </span>
+                        )}
                       </>
                     )}
                   </div>
@@ -1623,6 +1680,35 @@ export function GitHistoryViewer({
           </div>
         </div>
       </div>
+      {fileContextMenu && (
+        <div
+          className="git-history-context-menu"
+          style={{ position: 'fixed', left: fileContextMenu.x, top: fileContextMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            className="git-history-context-item"
+            onClick={() => void copyContextMenuPath(fileContextMenu.targetFile, 'name')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11zM5 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H8.5v7a.5.5 0 0 1-1 0V6H5.5a.5.5 0 0 1-.5-.5z" /></svg>
+            <span>{t('common.copyName')}</span>
+          </button>
+          <button
+            className="git-history-context-item"
+            onClick={() => void copyContextMenuPath(fileContextMenu.targetFile, 'relative')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><circle cx="5" cy="11.5" r="1" /><path d="M7 10a.5.5 0 0 1 .354.146l2 2a.5.5 0 0 1-.708.708L7 11.207l-1.646 1.647a.5.5 0 0 1-.708-.708l2-2A.5.5 0 0 1 7 10z" /></svg>
+            <span>{t('common.copyRelativePath')}</span>
+          </button>
+          <button
+            className="git-history-context-item"
+            onClick={() => void copyContextMenuPath(fileContextMenu.targetFile, 'absolute')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1H3.5A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V6h-4a1 1 0 0 1-1-1V1zm1 0v4h4L10 1z" /><path d="M8.5 9a.5.5 0 0 0-.894-.447l-2 4a.5.5 0 1 0 .894.447l2-4z" /></svg>
+            <span>{t('common.copyAbsolutePath')}</span>
+          </button>
+        </div>
+      )}
     </>
   )
 
