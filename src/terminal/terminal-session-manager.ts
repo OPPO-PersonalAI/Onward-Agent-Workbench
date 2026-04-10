@@ -903,9 +903,16 @@ export class TerminalSessionManager {
     try {
       const webglAddon = new WebglAddon()
       webglAddon.onContextLoss(() => {
+        console.warn(`[TerminalSession ${session.id}] WebGL context lost, attempting recovery`)
         webglAddon.dispose()
         session.webglAddon = undefined
         perfMonitor.decrementWebglContextCount()
+        // Delay re-creation so xterm.js finishes its internal renderer fallback
+        setTimeout(() => {
+          if (session.status !== 'disposed' && session.visible && session.open) {
+            this.ensureWebglAddon(session)
+          }
+        }, 100)
       })
       session.terminal.loadAddon(webglAddon)
       session.webglAddon = webglAddon
@@ -933,8 +940,16 @@ export class TerminalSessionManager {
       try {
         const webglAddon = new WebglAddon()
         webglAddon.onContextLoss(() => {
+          console.warn(`[TerminalSession ${session.id}] WebGL context lost during attach, attempting recovery`)
           webglAddon.dispose()
+          session.webglAddon = undefined
           perfMonitor.decrementWebglContextCount()
+          // Delay re-creation so xterm.js finishes its internal renderer fallback
+          setTimeout(() => {
+            if (session.status !== 'disposed' && session.visible && session.open) {
+              this.ensureWebglAddon(session)
+            }
+          }, 100)
         })
         session.terminal.loadAddon(webglAddon)
         session.webglAddon = webglAddon
