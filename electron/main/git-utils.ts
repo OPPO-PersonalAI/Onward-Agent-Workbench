@@ -102,6 +102,7 @@ export interface GitFileStatus {
   changeType: GitChangeType
   repoRoot?: string
   repoLabel?: string
+  isSubmoduleEntry?: boolean
 }
 
 // Git Diff results
@@ -1161,6 +1162,9 @@ function parseStatusPorcelainV2Z(output: string): GitFileStatus[] {
     const xy = record.slice(2, 4)
     const indexStatus = xy.charAt(0)
     const worktreeStatus = xy.charAt(1)
+    // Porcelain v2 sub field (positions 5-8): N... for non-submodule, S<c><m><u> for submodule
+    const sub = record.slice(5, 9)
+    const isSubmoduleEntry = sub.charAt(0) === 'S'
     const filename = getFieldAfterSpaceCount(
       record,
       type === '1' ? 8 : type === '2' ? 9 : 10
@@ -1181,7 +1185,8 @@ function parseStatusPorcelainV2Z(output: string): GitFileStatus[] {
         status: normalizeGitStatusCode(indexStatus),
         additions: 0,
         deletions: 0,
-        changeType: 'staged'
+        changeType: 'staged',
+        ...(isSubmoduleEntry ? { isSubmoduleEntry: true } : {})
       })
     }
 
@@ -1192,7 +1197,8 @@ function parseStatusPorcelainV2Z(output: string): GitFileStatus[] {
         status: normalizeGitStatusCode(worktreeStatus),
         additions: 0,
         deletions: 0,
-        changeType: 'unstaged'
+        changeType: 'unstaged',
+        ...(isSubmoduleEntry ? { isSubmoduleEntry: true } : {})
       })
     }
 
@@ -1673,7 +1679,7 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
       if (result.status === 'fulfilled' && !result.value.error) {
         let repoFiles = result.value.files
         if (!repo.isSubmodule && submodulePaths.size > 0) {
-          repoFiles = repoFiles.filter((file) => !submodulePaths.has(file.filename))
+          repoFiles = repoFiles.filter((file) => !submodulePaths.has(file.filename) || file.isSubmoduleEntry)
         }
         files.push(...repoFiles)
         repos.push({
@@ -2237,9 +2243,141 @@ export async function getGitHistoryFileContent(
   }
 }
 
+async function getSubmoduleEntryContent(
+  repoRoot: string,
+  gitExecutable: string,
+  submodulePath: string,
+  status: GitStatusCode,
+  changeType: GitChangeType
+): Promise<GitFileContentResult> {
+  const gitPath = toGitPath(repoRoot, submodulePath)
+  if (!gitPath) {
+    return {
+      success: false, cwd: repoRoot, filename: submodulePath,
+      originalContent: '', modifiedContent: '', isBinary: false,
+      error: 'Invalid submodule path.'
+    }
+  }
+
+  try {
+    let originalHash = ''
+    let modifiedHash = ''
+
+    if (status === 'A') {
+      // Newly added submodule — no original
+      if (changeType === 'staged') {
+        const indexResult = await execFileAsync(gitExecutable, ['ls-files', '--stage', '--', gitPath], {
+          cwd: repoRoot, timeout: EXEC_TIMEOUT, env: getExecEnv()
+        })
+        const indexOut = typeof indexResult.stdout === 'string' ? indexResult.stdout : indexResult.stdout.toString('utf-8')
+        modifiedHash = indexOut.split(/\s+/)[1] || ''
+      } else {
+        const subFullPath = resolve(repoRoot, gitPath)
+        try {
+          const headResult = await execFileAsync(gitExecutable, ['rev-parse', 'HEAD'], {
+            cwd: subFullPath, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          modifiedHash = (typeof headResult.stdout === 'string' ? headResult.stdout : headResult.stdout.toString('utf-8')).trim()
+        } catch {
+          modifiedHash = '(unknown)'
+        }
+      }
+    } else if (status === 'D') {
+      // Deleted submodule — no modified
+      // For staged deletes, the base is HEAD; for unstaged deletes (e.g., AD/MD), the base is the index
+      if (changeType === 'staged') {
+        try {
+          const headResult = await execFileAsync(gitExecutable, ['ls-tree', 'HEAD', '--', gitPath], {
+            cwd: repoRoot, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          const headOut = typeof headResult.stdout === 'string' ? headResult.stdout : headResult.stdout.toString('utf-8')
+          originalHash = headOut.split(/\s+/)[2] || ''
+        } catch {
+          originalHash = '(unknown)'
+        }
+      } else {
+        try {
+          const indexResult = await execFileAsync(gitExecutable, ['ls-files', '--stage', '--', gitPath], {
+            cwd: repoRoot, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          const indexOut = typeof indexResult.stdout === 'string' ? indexResult.stdout : indexResult.stdout.toString('utf-8')
+          originalHash = indexOut.split(/\s+/)[1] || ''
+        } catch {
+          originalHash = '(unknown)'
+        }
+      }
+    } else {
+      // Modified submodule (commit changed, modified content, etc.)
+      if (changeType === 'staged') {
+        // Original = HEAD, Modified = index
+        try {
+          const headResult = await execFileAsync(gitExecutable, ['ls-tree', 'HEAD', '--', gitPath], {
+            cwd: repoRoot, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          const headOut = typeof headResult.stdout === 'string' ? headResult.stdout : headResult.stdout.toString('utf-8')
+          originalHash = headOut.split(/\s+/)[2] || ''
+        } catch {
+          originalHash = '(unknown)'
+        }
+        try {
+          const indexResult = await execFileAsync(gitExecutable, ['ls-files', '--stage', '--', gitPath], {
+            cwd: repoRoot, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          const indexOut = typeof indexResult.stdout === 'string' ? indexResult.stdout : indexResult.stdout.toString('utf-8')
+          modifiedHash = indexOut.split(/\s+/)[1] || ''
+        } catch {
+          modifiedHash = '(unknown)'
+        }
+      } else {
+        // Original = index, Modified = worktree submodule HEAD
+        try {
+          const indexResult = await execFileAsync(gitExecutable, ['ls-files', '--stage', '--', gitPath], {
+            cwd: repoRoot, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          const indexOut = typeof indexResult.stdout === 'string' ? indexResult.stdout : indexResult.stdout.toString('utf-8')
+          originalHash = indexOut.split(/\s+/)[1] || ''
+        } catch {
+          originalHash = '(unknown)'
+        }
+        const subFullPath = resolve(repoRoot, gitPath)
+        try {
+          const headResult = await execFileAsync(gitExecutable, ['rev-parse', 'HEAD'], {
+            cwd: subFullPath, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          modifiedHash = (typeof headResult.stdout === 'string' ? headResult.stdout : headResult.stdout.toString('utf-8')).trim()
+          // Check if submodule working tree is dirty
+          const statusResult = await execFileAsync(gitExecutable, ['status', '--porcelain'], {
+            cwd: subFullPath, timeout: EXEC_TIMEOUT, env: getExecEnv()
+          })
+          const statusOut = typeof statusResult.stdout === 'string' ? statusResult.stdout : statusResult.stdout.toString('utf-8')
+          if (statusOut.trim()) {
+            modifiedHash += '-dirty'
+          }
+        } catch {
+          modifiedHash = '(unknown)'
+        }
+      }
+    }
+
+    const originalContent = originalHash ? `Subproject commit ${originalHash}\n` : ''
+    const modifiedContent = modifiedHash ? `Subproject commit ${modifiedHash}\n` : ''
+
+    return {
+      success: true, cwd: repoRoot, filename: submodulePath,
+      originalContent, modifiedContent, isBinary: false
+    }
+  } catch (error) {
+    return {
+      success: false, cwd: repoRoot, filename: submodulePath,
+      originalContent: '', modifiedContent: '', isBinary: false,
+      error: `Failed to read submodule content: ${String(error)}`
+    }
+  }
+}
+
 export async function getGitFileContent(
   cwd: string,
-  file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>,
+  file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType' | 'isSubmoduleEntry'>,
   overrideRepoRoot?: string
 ): Promise<GitFileContentResult> {
   const gitInstalled = await checkGitInstalled()
@@ -2274,6 +2412,11 @@ export async function getGitFileContent(
   const filename = file.filename
   const changeType: GitChangeType = file.changeType || 'unstaged'
   const originalTarget = file.status === 'R' && file.originalFilename ? file.originalFilename : filename
+
+  // Handle submodule entries: show Subproject commit hash diff
+  if (file.isSubmoduleEntry) {
+    return getSubmoduleEntryContent(repoRoot, gitExecutable, filename, file.status, changeType)
+  }
 
   let originalContent = ''
   let modifiedContent = ''
@@ -2645,7 +2788,7 @@ export async function unstageGitFile(
 
 export async function discardGitFile(
   cwd: string,
-  file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>,
+  file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status' | 'isSubmoduleEntry'>,
   overrideRepoRoot?: string
 ): Promise<GitFileActionResult> {
   const gitExecutable = await resolveGitExecutable()
@@ -2670,6 +2813,16 @@ export async function discardGitFile(
 
     if (file.changeType === 'untracked' || file.status === '?') {
       await execFileAsync(gitExecutable, ['clean', '-f', '--', gitPath], {
+        cwd: repoRoot,
+        timeout: EXEC_TIMEOUT,
+        env: getExecEnv()
+      })
+      return { success: true, filename: file.filename }
+    }
+
+    // Submodule entries need git submodule update --force instead of git checkout
+    if (file.isSubmoduleEntry) {
+      await execFileAsync(gitExecutable, ['submodule', 'update', '--init', '--force', '--', gitPath], {
         cwd: repoRoot,
         timeout: EXEC_TIMEOUT,
         env: getExecEnv()

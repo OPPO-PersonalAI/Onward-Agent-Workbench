@@ -1377,6 +1377,18 @@ body.git-diff-resizing * {
   color: var(--accent);
 }
 
+.git-diff-submodule-badge {
+  flex-shrink: 0;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  background: rgba(78, 201, 176, 0.15);
+  color: #4ec9b0;
+  margin-right: 2px;
+  line-height: 16px;
+}
+
 .git-diff-repo-badge {
   flex-shrink: 0;
   padding: 0 4px;

@@ -1153,7 +1153,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
 
   // Get Git file content for diff view
-  ipcMain.handle('git:get-file-content', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {
+  ipcMain.handle('git:get-file-content', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType' | 'isSubmoduleEntry'>, repoRoot?: string) => {
     return await getGitFileContent(cwd, file, repoRoot)
   })
 
@@ -1170,7 +1170,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return await unstageGitFile(cwd, filename, repoRoot)
   })
 
-  ipcMain.handle('git:discard-file', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => {
+  ipcMain.handle('git:discard-file', async (_, cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status' | 'isSubmoduleEntry'>, repoRoot?: string) => {
     return await discardGitFile(cwd, file, repoRoot)
   })
 

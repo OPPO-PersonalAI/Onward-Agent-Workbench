@@ -554,11 +554,11 @@ export interface GitAPI {
   getHistory: (cwd: string, options?: { limit?: number; skip?: number }) => Promise<GitHistoryResult>
   getHistoryDiff: (cwd: string, options: GitHistoryDiffOptions) => Promise<GitHistoryDiffResult>
   getHistoryFileContent: (cwd: string, options: GitHistoryFileContentOptions) => Promise<GitHistoryFileContentResult>
-  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => Promise<GitFileContentResult>
+  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType' | 'isSubmoduleEntry'>, repoRoot?: string) => Promise<GitFileContentResult>
   saveFileContent: (cwd: string, filename: string, content: string) => Promise<GitFileSaveResult>
   stageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
   unstageFile: (cwd: string, filename: string, repoRoot?: string) => Promise<GitFileActionResult>
-  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => Promise<GitFileActionResult>
+  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status' | 'isSubmoduleEntry'>, repoRoot?: string) => Promise<GitFileActionResult>
   getSubmodules: (cwd: string) => Promise<GitSubmoduleInfo[]>
   updateIndexContent: (cwd: string, filename: string, content: string) => Promise<GitFileActionResult>
   checkInstalled: () => Promise<boolean>
@@ -1122,7 +1122,7 @@ const gitAPI: GitAPI = {
     return ipcRenderer.invoke('git:get-history-file-content', cwd, options)
   },
 
-  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType'>, repoRoot?: string) => {
+  getFileContent: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'status' | 'originalFilename' | 'changeType' | 'isSubmoduleEntry'>, repoRoot?: string) => {
     return ipcRenderer.invoke('git:get-file-content', cwd, file, repoRoot)
   },
 
@@ -1138,7 +1138,7 @@ const gitAPI: GitAPI = {
     return ipcRenderer.invoke('git:unstage-file', cwd, filename, repoRoot)
   },
 
-  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status'>, repoRoot?: string) => {
+  discardFile: (cwd: string, file: Pick<GitFileStatus, 'filename' | 'changeType' | 'status' | 'isSubmoduleEntry'>, repoRoot?: string) => {
     return ipcRenderer.invoke('git:discard-file', cwd, file, repoRoot)
   },
 

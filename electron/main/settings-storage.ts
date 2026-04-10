@@ -412,12 +412,20 @@ class SettingsStorage {
   }
 
   /**
-   * Save complete settings
+   * Save complete settings.
+   * Telemetry fields are preserved from the current in-memory state because
+   * they are managed exclusively through setTelemetryConsent(). The renderer's
+   * SettingsContext may hold a stale snapshot, so accepting its telemetry
+   * values here would overwrite a newer consent decision.
    */
   save(settings: SettingsState): boolean {
     try {
+      const validated = this.validateState(settings)
+      // Preserve telemetry state — only setTelemetryConsent() may modify these
+      validated.telemetryConsent = this.state.telemetryConsent
+      validated.telemetryInstanceId = this.state.telemetryInstanceId
       this.state = {
-        ...this.validateState(settings),
+        ...validated,
         updatedAt: Date.now()
       }
       this.persist()
@@ -527,9 +535,10 @@ class SettingsStorage {
   }
 
   /**
-   * Set telemetry consent and instance ID atomically
+   * Set telemetry consent and instance ID atomically.
+   * Accepts null to reset consent to the "not yet asked" state (debug use only).
    */
-  setTelemetryConsent(consent: boolean, instanceId: string | null): void {
+  setTelemetryConsent(consent: boolean | null, instanceId: string | null): void {
     this.state.telemetryConsent = consent
     this.state.telemetryInstanceId = consent ? instanceId : null
     this.state.updatedAt = Date.now()
