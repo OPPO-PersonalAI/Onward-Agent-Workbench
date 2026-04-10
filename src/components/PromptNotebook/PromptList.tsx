@@ -620,6 +620,7 @@ export const PromptList = memo(function PromptList({
         {filterEnabled && (
           <div className="prompt-list-filters">
           <div className="prompt-list-filter-group">
+            <span className="prompt-list-filter-row-label">{t('promptList.filter.markLabel')}</span>
             {COLORS.map(({ key, hex }) => {
               const count = colorFilterStats[key]
               const isActive = activeColorFilter === key
@@ -640,6 +641,7 @@ export const PromptList = memo(function PromptList({
           </div>
           {taskFilterOptions.length > 0 && (
             <div className="prompt-list-filter-group task">
+              <span className="prompt-list-filter-row-label">{t('promptList.filter.taskLabel')}</span>
               {taskFilterOptions.map(({ taskNumber, count }) => {
                 const isActive = activeTaskFilter === taskNumber
                 return (
