@@ -431,7 +431,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Flush all pending debounced saves immediately (called before app quit/update)
   useEffect(() => {
-    window.electronAPI.appState.onFlushPendingState(() => {
+    window.electronAPI.appState.onFlushPendingState(async () => {
       // Cancel all pending timers
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
@@ -491,8 +491,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         finalState.updatedAt = Date.now()
       }
 
-      // Always save current state to ensure nothing is lost
-      window.electronAPI.appState.save(finalState)
+      // Await save to ensure data is written to disk before quit proceeds
+      await window.electronAPI.appState.save(finalState)
     })
   }, [])
 
@@ -1240,11 +1240,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [state.uiPreferences])
 
   const updateUIPreferences = useCallback((updates: Partial<UIPreferences>) => {
-    updateState(prev => ({
-      ...prev,
-      uiPreferences: { ...(prev.uiPreferences ?? {}), ...updates }
-    }))
-  }, [updateState])
+    // UIPreferences writes are infrequent (drag-end events) but high-value.
+    // Save immediately without going through the 500ms debounce to ensure
+    // layout preferences survive sudden quits or update-restarts.
+    setState(prev => {
+      const newState = {
+        ...prev,
+        uiPreferences: { ...(prev.uiPreferences ?? {}), ...updates },
+        updatedAt: Date.now()
+      }
+      stateRef.current = newState
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = null
+      }
+      window.electronAPI.appState.save(newState)
+      return newState
+    })
+  }, [])
 
   const value: AppStateContextValue = useMemo(() => ({
     state,

@@ -110,6 +110,8 @@ interface TabState {
   terminals: PersistedTerminalState[]
   localPrompts: LocalPrompt[]
   editorDraft?: EditorDraft
+  activeSubpage?: 'diff' | 'editor' | 'history' | null
+  subpageTerminalId?: string | null
 }
 
 /**
@@ -292,7 +294,9 @@ class AppStateStorage {
       if (existsSync(this.storagePath)) {
         const data = readFileSync(this.storagePath, 'utf-8')
         const parsed = JSON.parse(data) as AppState
-        return this.validateState(parsed)
+        const validated = this.validateState(parsed)
+        this.logUIPreferences('load', validated.uiPreferences)
+        return validated
       }
 
       // Try migrating from the old format
@@ -654,7 +658,13 @@ class AppStateStorage {
       localPrompts: Array.isArray(tab.localPrompts)
         ? tab.localPrompts.map(p => ({ ...normalizePromptTimestamp(p), pinned: false } as LocalPrompt))
         : [],
-      editorDraft
+      editorDraft,
+      activeSubpage: tab.activeSubpage === 'diff' || tab.activeSubpage === 'editor' || tab.activeSubpage === 'history'
+        ? tab.activeSubpage
+        : null,
+      subpageTerminalId: typeof tab.subpageTerminalId === 'string' && tab.subpageTerminalId
+        ? tab.subpageTerminalId
+        : null
     }
   }
 
@@ -769,6 +779,25 @@ class AppStateStorage {
     }
   }
 
+  /**
+   * Log UIPreferences summary for diagnostics.
+   * Helps verify that layout preferences survive save/load round-trips.
+   */
+  private logUIPreferences(phase: 'load' | 'save', prefs: UIPreferences | undefined): void {
+    if (!prefs || Object.keys(prefs).length === 0) {
+      console.log(`[AppState] ${phase}: uiPreferences is empty`)
+      return
+    }
+    const summary: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(prefs)) {
+      // Omit large nested objects, keep scalar values and simple shapes
+      if (value !== undefined && value !== null) {
+        summary[key] = typeof value === 'object' ? '{...}' : value
+      }
+    }
+    console.log(`[AppState] ${phase}: uiPreferences =`, JSON.stringify(summary))
+  }
+
   getTerminalLastCwd(terminalId: string): string | null {
     for (const tab of this.state.tabs) {
       const terminal = tab.terminals.find((item) => item.id === terminalId)
@@ -845,6 +874,7 @@ class AppStateStorage {
         ...this.validateState(state),
         updatedAt: Date.now()
       }
+      this.logUIPreferences('save', this.state.uiPreferences)
       this.persist()
       return true
     } catch (error) {

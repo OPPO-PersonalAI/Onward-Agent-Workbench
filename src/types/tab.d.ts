@@ -192,6 +192,10 @@ export interface TabState {
   localPrompts: LocalPrompt[]
   /** Editor draft (auto-save) */
   editorDraft?: EditorDraft
+  /** Last active subpage so it can be restored after restart */
+  activeSubpage?: 'diff' | 'editor' | 'history' | null
+  /** Terminal that owns the active subpage (used for correct CWD on restore) */
+  subpageTerminalId?: string | null
 }
 
 /**
