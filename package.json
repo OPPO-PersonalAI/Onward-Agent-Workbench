@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OPPO-PersonalAI/Onward.git"
+    "url": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench.git"
   },
   "onward": {
     "updateManifestBaseUrl": "https://raw.githubusercontent.com/OPPO-PersonalAI/Onward/gh-pages/updates"
