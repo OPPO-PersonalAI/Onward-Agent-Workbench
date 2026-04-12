@@ -11,7 +11,6 @@ The desktop workspace where AI agents write code in parallel — and you lead th
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#installation)
-[![Release](https://img.shields.io/github/v/release/OPPO-PersonalAI/Onward-Agent-Workbench?label=download)](https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/latest)
 
 </div>
 
@@ -20,8 +19,6 @@ The desktop workspace where AI agents write code in parallel — and you lead th
 <p align="center">
   <img src="docs/assets/screenshot-overview.png" alt="Onward Agent Workbench — multi-agent parallel workspace" width="900"/>
 </p>
-
-https://github.com/user-attachments/assets/53258d2b-0866-49a5-b222-12b2e4ef0b57
 
 ---
 
@@ -61,8 +58,6 @@ Agents write code in parallel. You stay in control.
 
 ### 3. Task-Level Full Editor
 
-<table><tr><td width="55%">
-
 After agents finish writing code, you need to review what changed. Each task gets its own integrated editor with full inspection capabilities.
 
 - **Git Diff viewer** — side-by-side visual comparison of all changes
@@ -73,11 +68,11 @@ After agents finish writing code, you need to review what changed. Each task get
 
 One workspace per task. Complete visibility into what every agent did.
 
-</td><td>
+---
 
-<img src="docs/assets/screenshot-editor.png" alt="Task-level editor with Git Diff and code view" width="400"/>
+## See It in Action
 
-</td></tr></table>
+https://github.com/user-attachments/assets/53258d2b-0866-49a5-b222-12b2e4ef0b57
 
 ---
 
@@ -150,10 +145,6 @@ xattr -cr "/Applications/Onward 2.app"
 - [Node.js](https://nodejs.org/) >= 20
 - [pnpm](https://pnpm.io/) >= 9
 - Python 3 (required by `node-gyp` for native modules)
-- Platform build tools:
-  - **macOS**: Xcode Command Line Tools
-  - **Windows**: Visual Studio Build Tools with C++ workload
-
 ### Setup
 
 ```bash
