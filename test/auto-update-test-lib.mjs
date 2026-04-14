@@ -96,6 +96,10 @@ export function spawnApp(executablePath, options = {}) {
     getStdout: () => stdout,
     getStderr: () => stderr,
     waitForExit: () => new Promise((resolve, reject) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve({ code: child.exitCode, signal: child.signalCode })
+        return
+      }
       child.on('error', reject)
       child.on('exit', (code, signal) => resolve({ code, signal }))
     })

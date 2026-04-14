@@ -5,7 +5,7 @@
 
 ## Overview
 
-Onward uses a custom updater path for macOS Daily builds.
+Onward uses a custom updater path for macOS and Windows packaged builds.
 
 This is intentionally different from Electron's official `autoUpdater` path because the current product plan does not include macOS code signing. The official Electron update flow for macOS depends on signed builds, so this repository uses a repository-hosted manifest plus a local installer helper instead.
 
@@ -13,8 +13,9 @@ This is intentionally different from Electron's official `autoUpdater` path beca
 
 Current implementation:
 
-- Supports `Daily` builds only
-- Supports `macOS` only
+- Supports `Daily` automatic checks/downloads
+- Supports `Dev` manual checks/downloads
+- Supports macOS and Windows install helpers
 - Checks for updates at startup
 - Checks again every 1 hour
 - Downloads updates in the background
@@ -25,7 +26,6 @@ Current implementation:
 Reserved for later:
 
 - Stable channel switching
-- Windows updater implementation
 - Linux updater implementation
 - Signed macOS update path
 
@@ -49,6 +49,7 @@ Static update manifests are published to the `gh-pages` branch under:
 
 - `updates/daily/macos/arm64/latest.json`
 - `updates/daily/macos/x64/latest.json`
+- `updates/daily/windows/x64/latest.json`
 
 Each manifest includes:
 
@@ -79,6 +80,8 @@ Current download behavior is intentionally conservative:
 - If a download is interrupted and leaves a partial file behind, the next verification pass will fail checksum validation
 - A checksum failure deletes the broken archive and the next check starts a fresh full download
 - After a newer version downloads successfully, older cached version directories are removed
+- Windows restart-to-update writes a `pending-update.json` marker with the archive checksum so the next startup can retry once if the helper was killed before applying the update
+- Failed Windows helper attempts clear the marker, restore the backup when possible, and relaunch the existing app instead of trapping the user in a startup loop
 
 This means the current implementation prioritizes correctness and simple recovery over bandwidth efficiency.
 
@@ -88,12 +91,17 @@ This means the current implementation prioritizes correctness and simple recover
 2. Service resolves current `channel / os / arch`
 3. Service fetches the matching `latest.json`
 4. Service compares `manifest.version` with the packaged app version
-5. If newer, the `.zip` archive is downloaded to `~/Library/Application Support/Onward 2/updates/<version>/`
+5. If newer, the `.zip` archive is downloaded to the app `userData` updates directory under `updates/<version>/`
 6. The SHA-256 checksum is verified
 7. Renderer receives updater status over IPC
 8. Title bar shows a persistent update banner
 9. User clicks `Restart app`
-10. A detached shell helper replaces the `.app` bundle after the main process exits and relaunches the app
+10. A platform helper replaces the installed app after the main process exits and relaunches the app
+
+Platform install behavior:
+
+- macOS extracts the downloaded archive, expects a top-level `.app`, replaces the current bundle, and relaunches it.
+- Windows launches a PowerShell helper through WMI first, with batch and detached-spawn fallbacks. The helper verifies the archive checksum, takes an install lock, renames the current install directory to a backup, moves the extracted update into place, clears the pending marker on success or failure, and restores/relaunches the existing app when installation fails.
 
 ## UI Behavior
 
@@ -158,13 +166,15 @@ Current known limits:
 - The updater does not yet support HTTP range resume / breakpoint continuation
 - Replacing an app bundle inside a protected system directory may fail without sufficient permissions
 - The helper currently expects the update archive to extract to a top-level `.app`
-- Windows and Linux are reserved but not implemented yet
+- Windows updates require PowerShell and may be blocked by enterprise policy if WMI process creation is disabled; the implementation falls back to batch and detached spawn
+- The Windows helper expects the archive to contain the packaged app root with the same executable filename as the current install
+- Linux is reserved but not implemented yet
 
 ## Future Direction
 
 Recommended next steps:
 
 1. Add Stable manifests and a Stable release workflow
-2. Persist downloaded update state across crashes
+2. Add HTTP range resume / breakpoint continuation for large update archives
 3. Add automated integration tests for manifest parsing and download verification
-4. Add platform-specific installer helpers for Windows and Linux
+4. Add a platform-specific installer helper for Linux
