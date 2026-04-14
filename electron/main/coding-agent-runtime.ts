@@ -6,11 +6,10 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { platform, homedir } from 'os'
-import { join, delimiter } from 'path'
+import { join, delimiter, isAbsolute } from 'path'
+import { accessSync, constants } from 'fs'
 
 const execFileAsync = promisify(execFile)
-
-export type CodingAgentType = 'claude-code' | 'codex'
 
 export interface CodingAgentRuntimeInfo {
   success: boolean
@@ -18,13 +17,9 @@ export interface CodingAgentRuntimeInfo {
   error?: string
 }
 
-const AGENT_EXECUTABLE: Record<CodingAgentType, string> = {
-  'claude-code': 'claude',
-  'codex': 'codex'
-}
-
-const AGENT_INSTALL_HINT: Record<CodingAgentType, string> = {
-  'claude-code': 'npm install -g @anthropic-ai/claude-code',
+// Known agent commands with install hints
+const KNOWN_INSTALL_HINTS: Record<string, string> = {
+  'claude': 'npm install -g @anthropic-ai/claude-code',
   'codex': 'npm install -g @openai/codex'
 }
 
@@ -55,32 +50,62 @@ function getNormalizedEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-// Resolve the agent executable via `which` (unix) / `where` (win)
+// Check whether a command string looks like an absolute path
+function isAbsolutePath(cmd: string): boolean {
+  if (isAbsolute(cmd)) return true
+  // Windows drive-letter paths like C:\... or D:/...
+  if (platform() === 'win32' && /^[A-Za-z]:[/\\]/.test(cmd)) return true
+  return false
+}
+
+// Validate that an absolute path points to an existing, executable file
+function validateAbsolutePath(filePath: string): CodingAgentRuntimeInfo {
+  try {
+    const mode = platform() === 'win32' ? constants.R_OK : constants.R_OK | constants.X_OK
+    accessSync(filePath, mode)
+    return { success: true, executablePath: filePath }
+  } catch {
+    return { success: false, error: `File not found or not executable: ${filePath}` }
+  }
+}
+
+// Resolve an agent command via `which` (unix) / `where` (win)
 // using a normalized PATH that covers Homebrew, npm global, ~/.local/bin, etc.
-export async function getCodingAgentRuntimeInfo(agentType: CodingAgentType): Promise<CodingAgentRuntimeInfo> {
-  const cmd = AGENT_EXECUTABLE[agentType]
-  if (!cmd) {
-    return { success: false, error: `Unknown agent type: ${agentType}` }
+// If executablePath is provided, validate that file directly instead of PATH lookup.
+export async function getCodingAgentRuntimeInfo(command: string, executablePath?: string): Promise<CodingAgentRuntimeInfo> {
+  if (!command && !executablePath) {
+    return { success: false, error: 'No command specified' }
+  }
+
+  // User-provided executable path: validate directly without PATH resolution
+  if (executablePath) {
+    return validateAbsolutePath(executablePath)
   }
 
   const whichCmd = platform() === 'win32' ? 'where' : 'which'
   try {
-    const { stdout } = await execFileAsync(whichCmd, [cmd], {
+    const { stdout } = await execFileAsync(whichCmd, [command], {
       timeout: 5000,
       env: getNormalizedEnv()
     })
     const resolved = (stdout || '').split(/\r?\n/)[0].trim()
     if (!resolved) {
+      const hint = KNOWN_INSTALL_HINTS[command]
       return {
         success: false,
-        error: `${cmd} not found in PATH. Please install: ${AGENT_INSTALL_HINT[agentType]}`
+        error: hint
+          ? `${command} not found in PATH. Please install: ${hint}`
+          : `${command} not found in PATH.`
       }
     }
     return { success: true, executablePath: resolved }
   } catch {
+    const hint = KNOWN_INSTALL_HINTS[command]
     return {
       success: false,
-      error: `${cmd} not found in PATH. Please install: ${AGENT_INSTALL_HINT[agentType]}`
+      error: hint
+        ? `${command} not found in PATH. Please install: ${hint}`
+        : `${command} not found in PATH.`
     }
   }
 }

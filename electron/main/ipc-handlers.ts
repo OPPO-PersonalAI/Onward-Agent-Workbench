@@ -11,7 +11,7 @@ import { GitWatchManager } from './git-watch-manager'
 import { getPromptStorage, Prompt } from './prompt-storage'
 import { getTerminalConfigStorage, TerminalWindowConfig } from './terminal-config-storage'
 import { getCommandPresetStorage, CommandPreset } from './command-preset-storage'
-import { getCodingAgentConfigStorage, CodingAgentConfigInput, CodingAgentType } from './coding-agent-config-storage'
+import { getCodingAgentConfigStorage, CodingAgentConfigInput } from './coding-agent-config-storage'
 import { getCodingAgentRuntimeInfo } from './coding-agent-runtime'
 import { getAppStateStorage, AppState } from './app-state-storage'
 import { readCurrentChangelog } from './changelog'
@@ -1003,41 +1003,44 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   // Coding Agent configuration storage
   const codingAgentConfigStorage = getCodingAgentConfigStorage()
 
-  ipcMain.handle('coding-agent-config:load', (_, agentType?: CodingAgentType) => {
-    return codingAgentConfigStorage.get(agentType)
+  ipcMain.handle('coding-agent-config:load', (_, command?: string) => {
+    return codingAgentConfigStorage.get(command)
   })
 
   ipcMain.handle('coding-agent-config:save', (_, config: CodingAgentConfigInput) => {
     return codingAgentConfigStorage.save(config)
   })
 
+  ipcMain.handle('coding-agent-config:update', (_, id: string, config: CodingAgentConfigInput) => {
+    return codingAgentConfigStorage.update(id, config)
+  })
+
   ipcMain.handle('coding-agent-config:delete', (_, id: string) => {
     return codingAgentConfigStorage.delete(id)
   })
 
-  ipcMain.handle('coding-agent:prepare', async (_, agentType: CodingAgentType) => {
-    const info = await getCodingAgentRuntimeInfo(agentType || 'claude-code')
+  ipcMain.handle('coding-agent:prepare', async (_, command: string, executablePath?: string) => {
+    const info = await getCodingAgentRuntimeInfo(command || '', executablePath || undefined)
     if (!info.success) {
       return { success: false, error: info.error }
     }
     return { success: true }
   })
 
-  ipcMain.handle('coding-agent:launch', async (_, payload: { terminalId: string; agentType: CodingAgentType; config: CodingAgentConfigInput; cols?: number; rows?: number }) => {
+  ipcMain.handle('coding-agent:launch', async (_, payload: { terminalId: string; config: CodingAgentConfigInput; cols?: number; rows?: number }) => {
     const terminalId = payload?.terminalId
     if (!terminalId) {
       return { success: false, error: 'Terminal ID missing' }
     }
 
-    const agentType: CodingAgentType = payload.agentType || 'claude-code'
-    const runtimeInfo = await getCodingAgentRuntimeInfo(agentType)
-    if (!runtimeInfo.success || !runtimeInfo.executablePath) {
-      return { success: false, error: runtimeInfo.error || 'Agent not ready' }
+    const config = payload.config
+    if (!config || !config.command) {
+      return { success: false, error: 'Agent configuration missing' }
     }
 
-    const config = payload.config
-    if (!config) {
-      return { success: false, error: 'Agent configuration missing' }
+    const runtimeInfo = await getCodingAgentRuntimeInfo(config.command, config.executablePath || undefined)
+    if (!runtimeInfo.success || !runtimeInfo.executablePath) {
+      return { success: false, error: runtimeInfo.error || 'Agent not ready' }
     }
 
     const cwd = await getTerminalCwd(terminalId)
@@ -1045,27 +1048,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     const rows = payload.rows || 24
     const restartCwd = cwd || process.env.HOME || process.cwd()
 
-    // Build environment: only set API env vars for claude-code
+    // Build environment: merge user-specified environment variables
     const env: NodeJS.ProcessEnv = { ...process.env }
-    if (agentType === 'claude-code') {
-      const apiUrl = (config.apiUrl || '').trim()
-      const apiKey = (config.apiKey || '').trim()
-      const model = (config.model || '').trim()
-      if (!apiUrl || !apiKey || !model) {
-        return { success: false, error: 'Claude Code API configuration incomplete' }
+    const userEnvVars = Array.isArray(config.envVars) ? config.envVars : []
+    for (const entry of userEnvVars) {
+      let key = (entry.key || '').trim()
+      let value = entry.value ?? ''
+      // Strip surrounding quotes — users may copy KEY="value" from docs
+      if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+        key = key.slice(1, -1)
       }
-      env.ANTHROPIC_BASE_URL = apiUrl
-      env.ANTHROPIC_AUTH_TOKEN = apiKey
-      env.ANTHROPIC_MODEL = model
-      env.ANTHROPIC_API_KEY = config.provider === 'openrouter' ? '' : apiKey
-      env.ANTHROPIC_DEFAULT_OPUS_MODEL = model
-      env.ANTHROPIC_DEFAULT_SONNET_MODEL = model
-      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model
-      env.CLAUDE_CODE_SUBAGENT_MODEL = model
-      if (config.provider === 'custom') {
-        env.ANTHROPIC_AUTH_TOKEN = apiKey
-        env.ANTHROPIC_API_KEY = apiKey
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
       }
+      if (key) env[key] = value
     }
 
     // Parse user-provided extra arguments with shell-aware quoting
@@ -1586,6 +1582,7 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('command-preset:delete')
   ipcMain.removeHandler('coding-agent-config:load')
   ipcMain.removeHandler('coding-agent-config:save')
+  ipcMain.removeHandler('coding-agent-config:update')
   ipcMain.removeHandler('coding-agent-config:delete')
   ipcMain.removeHandler('coding-agent:prepare')
   ipcMain.removeHandler('coding-agent:launch')

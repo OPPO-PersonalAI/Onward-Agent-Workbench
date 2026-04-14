@@ -17,6 +17,7 @@ For platform-related commands, always consider these three platforms:
     # Clean and package (production build)
     rm -rf out release && pnpm dist
 - After every code change, you must perform a startup test and confirm at minimum that the application can launch normally and enter the main UI.
+- Hard rule — Launching the app for testing: before opening the built `.app`, you must first kill any existing instance of the same application using **exact name matching** (`pkill -x "<exact-process-name>"`). Never use wildcards or partial matches. Chain the kill and open in one command: `pkill -x "Onward 2-<branch>" 2>/dev/null; sleep 0.5; open "<path-to-.app>"`.
 - Multilingual / UI Copy Development Rules:
     - The application currently supports `en` and `zh-CN`, with English as the default language. Whenever user-visible copy is added or modified, all supported languages must be designed and implemented together. Updating only one language is not allowed.
     - User-visible copy includes, but is not limited to, page titles, buttons, settings items, menus, tray menus, dialogs, toasts, tooltips, placeholders, empty states, error messages, context menus, and status text.

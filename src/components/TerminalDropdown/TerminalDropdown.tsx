@@ -5,7 +5,6 @@
 
 import { createPortal } from 'react-dom'
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react'
-import type { CodingAgentType } from '../../types/electron'
 import { useI18n } from '../../i18n/useI18n'
 import './TerminalDropdown.css'
 
@@ -21,7 +20,7 @@ interface TerminalDropdownProps {
   onOpenProjectEditor: () => void
   onToggleBrowser: () => void
   isBrowserOpen: boolean
-  onOpenCodingAgent: (agentType: CodingAgentType) => void
+  onOpenCodingAgent: () => void
   forceClose?: boolean
 }
 
@@ -266,26 +265,14 @@ export function TerminalDropdown({
           <button
             type="button"
             className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent('claude-code'), 'dropdown/tools', 'claudeCode') }}
+            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent(), 'dropdown/tools', 'codeAgent') }}
             role="menuitem"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 1a.5.5 0 0 1 .5.5V3h2A2.5 2.5 0 0 1 13 5.5v5A2.5 2.5 0 0 1 10.5 13h-5A2.5 2.5 0 0 1 3 10.5v-5A2.5 2.5 0 0 1 5.5 3h2V1.5A.5.5 0 0 1 8 1zM5.5 4A1.5 1.5 0 0 0 4 5.5v5A1.5 1.5 0 0 0 5.5 12h5a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 10.5 4h-5zM6 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm4 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2zM5.5 10h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1z"/>
               <path d="M2.5 6a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 1 0v-2a.5.5 0 0 0-.5-.5zm11 0a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 1 0v-2a.5.5 0 0 0-.5-.5z"/>
             </svg>
-            <span>{t('terminalDropdown.claudeCodeCustomApi')}</span>
-          </button>
-          <button
-            type="button"
-            className="terminal-dropdown-item"
-            onClick={() => { handleMenuItemClick(() => onOpenCodingAgent('codex'), 'dropdown/tools', 'codex') }}
-            role="menuitem"
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 1a.5.5 0 0 1 .5.5V3h2A2.5 2.5 0 0 1 13 5.5v5A2.5 2.5 0 0 1 10.5 13h-5A2.5 2.5 0 0 1 3 10.5v-5A2.5 2.5 0 0 1 5.5 3h2V1.5A.5.5 0 0 1 8 1zM5.5 4A1.5 1.5 0 0 0 4 5.5v5A1.5 1.5 0 0 0 5.5 12h5a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 10.5 4h-5zM6 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm4 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2zM5.5 10h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1z"/>
-              <path d="M2.5 6a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 1 0v-2a.5.5 0 0 0-.5-.5zm11 0a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 1 0v-2a.5.5 0 0 0-.5-.5z"/>
-            </svg>
-            <span>{t('terminalDropdown.codex')}</span>
+            <span>{t('terminalDropdown.codeAgent')}</span>
           </button>
           <button
             type="button"
