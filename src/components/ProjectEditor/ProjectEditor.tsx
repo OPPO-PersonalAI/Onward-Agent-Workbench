@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Editor } from '@monaco-editor/react'
 import DOMPurify from 'dompurify'
 import type { ProjectEntry } from '../../types/electron'
@@ -35,6 +36,18 @@ import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } 
 import { usePathCopy } from '../../hooks/usePathCopy'
 import '../../hooks/usePathCopy.css'
 import { renderMermaidDiagrams } from '../../utils/mermaidRenderer'
+import {
+  normalizeQuickFilePaths,
+  prependRecentFile,
+  replaceQuickFilePath,
+  areQuickFileListsEqual,
+  removeQuickFilePath,
+  moveQuickFile,
+  buildQuickFileLabels,
+  decodeQuickFileDragPayload,
+  getBaseName,
+  getParentPath
+} from './quickFileUtils'
 import './ProjectEditor.css'
 
 interface ProjectEditorProps {
@@ -146,8 +159,8 @@ const MAX_OUTLINE_WIDTH = 400
 const MARKDOWN_RENDER_DEBOUNCE_MS = 300
 const MARKDOWN_RENDER_MAX_DEBOUNCE_MS = 1200
 const PROJECT_STATE_SAVE_DEBOUNCE_MS = 1200
-const MAX_PINNED_FILES = 5
-const MAX_RECENT_FILES = 5
+const MAX_PINNED_FILES = Infinity
+const MAX_RECENT_FILES = 10
 const MAX_PERSISTED_FILE_STATES = 20
 const QUICK_FILE_DRAG_MIME = 'application/x-onward-quick-file'
 
@@ -195,92 +208,7 @@ function resolveNavigationFilePath(params: {
   return relativePath || null
 }
 
-function normalizeQuickFilePaths(paths: readonly string[] | null | undefined, maxCount: number): string[] {
-  if (!Array.isArray(paths) || maxCount <= 0) return []
-  const results: string[] = []
-  const dedupe = new Set<string>()
-  for (const item of paths) {
-    const normalized = normalizePath(String(item || '').trim())
-    if (!normalized || dedupe.has(normalized)) continue
-    dedupe.add(normalized)
-    results.push(normalized)
-    if (results.length >= maxCount) break
-  }
-  return results
-}
-
-function prependRecentFile(paths: readonly string[], path: string, maxCount: number): string[] {
-  const normalizedPath = normalizePath(path.trim())
-  if (!normalizedPath) return normalizeQuickFilePaths(paths, maxCount)
-  const normalized = normalizeQuickFilePaths(paths, maxCount)
-  return [normalizedPath, ...normalized.filter(item => item !== normalizedPath)].slice(0, maxCount)
-}
-
-function replaceQuickFilePath(paths: readonly string[], sourcePath: string, nextPath: string, maxCount: number): string[] {
-  const normalizedSource = normalizePath(sourcePath.trim())
-  const normalizedNext = normalizePath(nextPath.trim())
-  if (!normalizedSource || !normalizedNext) return normalizeQuickFilePaths(paths, maxCount)
-  const mapped = paths.map((item) => {
-    if (item === normalizedSource) return normalizedNext
-    if (item.startsWith(`${normalizedSource}/`)) {
-      return `${normalizedNext}${item.slice(normalizedSource.length)}`
-    }
-    return item
-  })
-  return normalizeQuickFilePaths(mapped, maxCount)
-}
-
-function areQuickFileListsEqual(a: readonly string[], b: readonly string[]): boolean {
-  if (a.length !== b.length) return false
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] !== b[index]) return false
-  }
-  return true
-}
-
-function removeQuickFilePath(paths: readonly string[], targetPath: string, maxCount: number): string[] {
-  const normalizedTarget = normalizePath(targetPath.trim())
-  if (!normalizedTarget) return normalizeQuickFilePaths(paths, maxCount)
-  return normalizeQuickFilePaths(
-    paths.filter(item => item !== normalizedTarget && !item.startsWith(`${normalizedTarget}/`)),
-    maxCount
-  )
-}
-
-function moveQuickFile(paths: readonly string[], dragPath: string, targetPath: string, maxCount: number): string[] {
-  const normalized = normalizeQuickFilePaths(paths, maxCount)
-  const fromIndex = normalized.indexOf(dragPath)
-  const toIndex = normalized.indexOf(targetPath)
-  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return normalized
-  const next = [...normalized]
-  const [moved] = next.splice(fromIndex, 1)
-  const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
-  next.splice(insertIndex, 0, moved)
-  return next
-}
-
-function buildQuickFileLabels(paths: readonly string[], rootLabel: string): Record<string, string> {
-  const labels: Record<string, string> = {}
-  paths.forEach((path) => {
-    const base = getBaseName(path)
-    const parent = getParentPath(path)
-    labels[path] = `${base} · ${parent || rootLabel}`
-  })
-  return labels
-}
-
-function decodeQuickFileDragPayload(raw: string): { path: string; source: 'pinned' | 'recent' } | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as { path?: unknown; source?: unknown }
-    const path = typeof parsed.path === 'string' ? normalizePath(parsed.path.trim()) : ''
-    const source = parsed.source === 'pinned' || parsed.source === 'recent' ? parsed.source : null
-    if (!path || !source) return null
-    return { path, source }
-  } catch {
-    return null
-  }
-}
+// Quick-file pure functions imported from ./quickFileUtils
 
 type ProjectEditorScope = {
   terminalId: string
@@ -491,17 +419,6 @@ function joinPath(parent: string, name: string): string {
   return `${parent}/${name}`
 }
 
-function getParentPath(path: string): string {
-  const parts = path.split('/')
-  parts.pop()
-  return parts.join('/')
-}
-
-function getBaseName(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || ''
-}
-
 function fuzzyScore(query: string, target: string): number | null {
   if (!query) return 0
   let score = 0
@@ -656,8 +573,17 @@ export function ProjectEditor({
   const [draggingQuickPath, setDraggingQuickPath] = useState<string | null>(null)
   const [draggingQuickSource, setDraggingQuickSource] = useState<'pinned' | 'recent' | null>(null)
   const [dragOverPinnedPath, setDragOverPinnedPath] = useState<string | null>(null)
-  const [dragOverRecentPath, setDragOverRecentPath] = useState<string | null>(null)
-  const [quickTooltip, setQuickTooltip] = useState<{ text: string; x: number; y: number } | null>(null)
+  const [quickTooltip, setQuickTooltip] = useState<{ text: string; fullPath: string; x: number; y: number } | null>(null)
+  const [visiblePinCount, setVisiblePinCount] = useState<number>(Infinity)
+  const [visibleRecentCount, setVisibleRecentCount] = useState<number>(Infinity)
+  const [pinOverflowOpen, setPinOverflowOpen] = useState(false)
+  const [recentOverflowOpen, setRecentOverflowOpen] = useState(false)
+  const pinnedMeasureRef = useRef<HTMLDivElement>(null)
+  const recentMeasureRef = useRef<HTMLDivElement>(null)
+  const pinOverflowBtnRef = useRef<HTMLButtonElement>(null)
+  const recentOverflowBtnRef = useRef<HTMLButtonElement>(null)
+  const pinDropdownRef = useRef<HTMLDivElement>(null)
+  const recentDropdownRef = useRef<HTMLDivElement>(null)
   const [fileContent, setFileContent] = useState('')
   const fileContentRef = useRef('')
   const [isBinary, setIsBinary] = useState(false)
@@ -1206,8 +1132,25 @@ export function ProjectEditor({
 
   const expandedDirs = useMemo(() => collectExpandedPaths(tree), [tree])
   const quickFileLabels = useMemo(() => {
-    return buildQuickFileLabels([...pinnedFiles, ...recentFiles], t('projectEditor.rootDirectory'))
-  }, [pinnedFiles, recentFiles, t])
+    return buildQuickFileLabels([...pinnedFiles, ...recentFiles])
+  }, [pinnedFiles, recentFiles])
+
+  const visiblePinnedFiles = useMemo(
+    () => pinnedFiles.slice(0, visiblePinCount),
+    [pinnedFiles, visiblePinCount]
+  )
+  const overflowPinnedFiles = useMemo(
+    () => visiblePinCount < pinnedFiles.length ? pinnedFiles.slice(visiblePinCount) : [],
+    [pinnedFiles, visiblePinCount]
+  )
+  const visibleRecentFiles = useMemo(
+    () => recentFiles.slice(0, visibleRecentCount),
+    [recentFiles, visibleRecentCount]
+  )
+  const overflowRecentFiles = useMemo(
+    () => visibleRecentCount < recentFiles.length ? recentFiles.slice(visibleRecentCount) : [],
+    [recentFiles, visibleRecentCount]
+  )
 
   const isMissingFileError = useCallback((error?: string) => {
     if (!error) return false
@@ -1703,7 +1646,6 @@ export function ProjectEditor({
     setDraggingQuickPath(null)
     setDraggingQuickSource(null)
     setDragOverPinnedPath(null)
-    setDragOverRecentPath(null)
     setFileContent('')
     setIsBinary(false)
     setIsImage(false)
@@ -2262,6 +2204,12 @@ export function ProjectEditor({
     if (ok) flashCopyFeedback(e)
   }, [activeFilePath, copyToClipboard, flashCopyFeedback, rootPath, t])
 
+  const handleCwdDblClick = useCallback(async (e: React.MouseEvent) => {
+    if (!rootPath) return
+    const ok = await copyToClipboard(rootPath, t('projectEditor.workingDirectory'))
+    if (ok) flashCopyFeedback(e)
+  }, [copyToClipboard, flashCopyFeedback, rootPath, t])
+
   const resolveAbsolutePath = useCallback((relativePath: string): string | null => {
     const root = rootRef.current ?? rootPath
     if (!root) return null
@@ -2377,12 +2325,8 @@ export function ProjectEditor({
       setPinnedFiles((prev) => prev.filter(item => item !== normalizedPath))
       return
     }
-    if (pinnedFiles.length >= MAX_PINNED_FILES) {
-      showStatus('error', t('projectEditor.maxPinnedFiles', { count: MAX_PINNED_FILES }))
-      return
-    }
     setPinnedFiles((prev) => [normalizedPath, ...prev])
-  }, [pinnedFiles, showStatus, t])
+  }, [pinnedFiles])
 
   const clearRecentFiles = useCallback(() => {
     setRecentFiles([])
@@ -2390,9 +2334,102 @@ export function ProjectEditor({
     setDraggingQuickPath(null)
     setDraggingQuickSource(null)
     setDragOverPinnedPath(null)
-    setDragOverRecentPath(null)
     showStatus('success', t('projectEditor.recentCleared'))
   }, [showStatus, t])
+
+  // Width-responsive overflow measurement
+  const measureOverflow = useCallback((
+    measureContainer: HTMLDivElement | null,
+    itemCount: number,
+    setCount: (n: number) => void
+  ) => {
+    if (!measureContainer || itemCount === 0) {
+      setCount(Infinity)
+      return
+    }
+    const containerWidth = measureContainer.clientWidth
+    if (containerWidth <= 0) {
+      setCount(Infinity)
+      return
+    }
+    const OVERFLOW_BTN_RESERVED = 48
+    const children = measureContainer.children
+    let fitCount = 0
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i] as HTMLElement
+      if (!child.dataset.idx) continue
+      const rightEdge = child.offsetLeft + child.offsetWidth
+      const needsBtn = Number(child.dataset.idx) < itemCount - 1
+      if (rightEdge > containerWidth - (needsBtn ? OVERFLOW_BTN_RESERVED : 0)) {
+        break
+      }
+      fitCount++
+    }
+    // When nothing fits but items exist, show 0 visible items so the +N button
+    // covers all of them — avoids the first item clipping the overflow button (P2-2).
+    setCount(fitCount > 0 && fitCount < itemCount ? fitCount : (fitCount === 0 && itemCount > 0 ? 0 : Infinity))
+  }, [])
+
+  useLayoutEffect(() => {
+    measureOverflow(pinnedMeasureRef.current, pinnedFiles.length, setVisiblePinCount)
+    measureOverflow(recentMeasureRef.current, recentFiles.length, setVisibleRecentCount)
+
+    const observer = new ResizeObserver(() => {
+      measureOverflow(pinnedMeasureRef.current, pinnedFiles.length, setVisiblePinCount)
+      measureOverflow(recentMeasureRef.current, recentFiles.length, setVisibleRecentCount)
+    })
+    if (pinnedMeasureRef.current) observer.observe(pinnedMeasureRef.current)
+    if (recentMeasureRef.current) observer.observe(recentMeasureRef.current)
+    return () => observer.disconnect()
+  }, [pinnedFiles, recentFiles, quickFileLabels, measureOverflow])
+
+  // Overflow dropdown positioning
+  const computeDropdownPos = useCallback((btnRef: React.RefObject<HTMLButtonElement | null>) => {
+    if (!btnRef.current) return { left: 0, top: 0 }
+    const rect = btnRef.current.getBoundingClientRect()
+    const left = Math.min(rect.left, window.innerWidth - 320)
+    const top = rect.bottom + 4
+    return { left: Math.max(0, left), top: Math.min(top, window.innerHeight - 300) }
+  }, [])
+
+  // Close overflow dropdown on click outside (Escape is handled by handleEscape → useSubpageEscape)
+  useEffect(() => {
+    if (!pinOverflowOpen && !recentOverflowOpen) return
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (pinOverflowOpen) {
+        if (!pinDropdownRef.current?.contains(target) && !pinOverflowBtnRef.current?.contains(target)) {
+          setPinOverflowOpen(false)
+          setQuickTooltip(null)
+        }
+      }
+      if (recentOverflowOpen) {
+        if (!recentDropdownRef.current?.contains(target) && !recentOverflowBtnRef.current?.contains(target)) {
+          setRecentOverflowOpen(false)
+          setQuickTooltip(null)
+        }
+      }
+    }
+    window.addEventListener('mousedown', handleMouseDown)
+    return () => {
+      window.removeEventListener('mousedown', handleMouseDown)
+    }
+  }, [pinOverflowOpen, recentOverflowOpen])
+
+  // Drag start from overflow dropdown (pin only)
+  // Defer dropdown close so the browser captures the drag image before the portal unmounts.
+  const handleOverflowPinDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>, path: string) => {
+    setDraggingPinnedPath(path)
+    setDraggingQuickPath(path)
+    setDraggingQuickSource('pinned')
+    setDragOverPinnedPath(null)
+    setQuickTooltip(null)
+    requestAnimationFrame(() => setPinOverflowOpen(false))
+    const payload = JSON.stringify({ path, source: 'pinned' })
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData(QUICK_FILE_DRAG_MIME, payload)
+    event.dataTransfer.setData('text/plain', path)
+  }, [])
 
   const setQuickDragPayload = useCallback((
     event: React.DragEvent<HTMLElement>,
@@ -2425,8 +2462,9 @@ export function ProjectEditor({
 
   const handleQuickTooltipEnter = useCallback((e: React.MouseEvent, path: string) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setQuickTooltip({ text: path, x: rect.left, y: rect.bottom + 4 })
-  }, [])
+    const relativePath = rootPath && path.startsWith(rootPath + '/') ? path.slice(rootPath.length + 1) : path
+    setQuickTooltip({ text: relativePath, fullPath: path, x: rect.left, y: rect.bottom + 4 })
+  }, [rootPath])
 
   const handleQuickTooltipLeave = useCallback(() => {
     setQuickTooltip(null)
@@ -2437,7 +2475,6 @@ export function ProjectEditor({
     setDraggingQuickPath(path)
     setDraggingQuickSource('pinned')
     setDragOverPinnedPath(null)
-    setDragOverRecentPath(null)
     setQuickTooltip(null)
     setQuickDragPayload(event, path, 'pinned')
   }, [setQuickDragPayload])
@@ -2447,7 +2484,6 @@ export function ProjectEditor({
     setDraggingQuickPath(path)
     setDraggingQuickSource('recent')
     setDragOverPinnedPath(null)
-    setDragOverRecentPath(null)
     setQuickTooltip(null)
     setQuickDragPayload(event, path, 'recent')
   }, [setQuickDragPayload])
@@ -2457,14 +2493,12 @@ export function ProjectEditor({
     setDraggingQuickPath(null)
     setDraggingQuickSource(null)
     setDragOverPinnedPath(null)
-    setDragOverRecentPath(null)
   }, [])
 
   const handlePinnedDragOver = useCallback((event: React.DragEvent<HTMLButtonElement>, path: string) => {
     event.preventDefault()
     if (!draggingQuickPath || draggingQuickPath === path) return
     setDragOverPinnedPath(path)
-    setDragOverRecentPath(null)
     event.dataTransfer.dropEffect = 'move'
   }, [draggingQuickPath])
 
@@ -2486,28 +2520,19 @@ export function ProjectEditor({
       return
     }
 
-    if (!pinnedFiles.includes(dragData.path) && pinnedFiles.length >= MAX_PINNED_FILES) {
-      showStatus('error', t('projectEditor.maxPinnedFiles', { count: MAX_PINNED_FILES }))
-      resetQuickDragState()
-      return
-    }
-
+    // recent → pinned: insert at target position
     setPinnedFiles((prev) => {
-      const normalized = normalizeQuickFilePaths(prev, MAX_PINNED_FILES)
-      if (normalized.includes(dragData.path)) {
-        return moveQuickFile(normalized, dragData.path, targetPath, MAX_PINNED_FILES)
+      if (prev.includes(dragData.path)) {
+        return moveQuickFile(prev, dragData.path, targetPath, MAX_PINNED_FILES)
       }
-      const targetIndex = normalized.indexOf(targetPath)
-      if (targetIndex < 0) {
-        return normalizeQuickFilePaths([dragData.path, ...normalized], MAX_PINNED_FILES)
-      }
-      const next = [...normalized]
+      const targetIndex = prev.indexOf(targetPath)
+      if (targetIndex < 0) return [dragData.path, ...prev]
+      const next = [...prev]
       next.splice(targetIndex, 0, dragData.path)
-      return normalizeQuickFilePaths(next, MAX_PINNED_FILES)
+      return next
     })
-
     resetQuickDragState()
-  }, [pinnedFiles, resolveQuickDragPayload, resetQuickDragState, showStatus, t])
+  }, [resolveQuickDragPayload, resetQuickDragState])
 
   const handlePinnedDragEnd = useCallback(() => {
     resetQuickDragState()
@@ -2526,73 +2551,15 @@ export function ProjectEditor({
       return
     }
 
-    if (dragData.source === 'recent' && !pinnedFiles.includes(dragData.path) && pinnedFiles.length >= MAX_PINNED_FILES) {
-      showStatus('error', t('projectEditor.maxPinnedFiles', { count: MAX_PINNED_FILES }))
-      resetQuickDragState()
-      return
-    }
-
     setPinnedFiles((prev) => {
-      const normalized = normalizeQuickFilePaths(prev, MAX_PINNED_FILES)
-      const currentIndex = normalized.indexOf(dragData.path)
+      const currentIndex = prev.indexOf(dragData.path)
       if (currentIndex >= 0) {
-        const next = [...normalized]
+        const next = [...prev]
         const [moved] = next.splice(currentIndex, 1)
         next.push(moved)
         return next
       }
-      return normalizeQuickFilePaths([...normalized, dragData.path], MAX_PINNED_FILES)
-    })
-    resetQuickDragState()
-  }, [pinnedFiles, resolveQuickDragPayload, resetQuickDragState, showStatus, t])
-
-  const handleRecentDragOver = useCallback((event: React.DragEvent<HTMLButtonElement>, path: string) => {
-    if (draggingQuickSource !== 'recent') return
-    event.preventDefault()
-    if (!draggingQuickPath || draggingQuickPath === path) return
-    setDragOverPinnedPath(null)
-    setDragOverRecentPath(path)
-    event.dataTransfer.dropEffect = 'move'
-  }, [draggingQuickPath, draggingQuickSource])
-
-  const handleRecentDrop = useCallback((event: React.DragEvent<HTMLButtonElement>, targetPath: string) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const dragData = resolveQuickDragPayload(event)
-    if (!dragData || dragData.source !== 'recent' || !targetPath) {
-      resetQuickDragState()
-      return
-    }
-
-    if (dragData.path !== targetPath) {
-      setRecentFiles((prev) => moveQuickFile(prev, dragData.path, targetPath, MAX_RECENT_FILES))
-    }
-    resetQuickDragState()
-  }, [resolveQuickDragPayload, resetQuickDragState])
-
-  const handleRecentListDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (draggingQuickSource !== 'recent') return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-  }, [draggingQuickSource])
-
-  const handleRecentListDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    const dragData = resolveQuickDragPayload(event)
-    if (!dragData || dragData.source !== 'recent') {
-      resetQuickDragState()
-      return
-    }
-    setRecentFiles((prev) => {
-      const normalized = normalizeQuickFilePaths(prev, MAX_RECENT_FILES)
-      const currentIndex = normalized.indexOf(dragData.path)
-      if (currentIndex < 0 || currentIndex === normalized.length - 1) {
-        return normalized
-      }
-      const next = [...normalized]
-      const [moved] = next.splice(currentIndex, 1)
-      next.push(moved)
-      return next
+      return [...prev, dragData.path]
     })
     resetQuickDragState()
   }, [resolveQuickDragPayload, resetQuickDragState])
@@ -3110,7 +3077,6 @@ export function ProjectEditor({
       setDraggingQuickPath(null)
       setDraggingQuickSource(null)
       setDragOverPinnedPath(null)
-      setDragOverRecentPath(null)
       activeFilePathRef.current = null
       setFileContent('')
       fileContentRef.current = ''
@@ -4160,6 +4126,13 @@ export function ProjectEditor({
   }, [capturePreviewScrollMemory, confirmDiscardChanges, onClose, persistProjectEditorState, resetActiveFileState])
 
   const handleEscape = useCallback(() => {
+    // Close overflow dropdown before anything else (P2-1: must beat useSubpageEscape)
+    if (pinOverflowOpen || recentOverflowOpen) {
+      setPinOverflowOpen(false)
+      setRecentOverflowOpen(false)
+      setQuickTooltip(null)
+      return
+    }
     if (dialog) {
       handleDialogCancel()
       return
@@ -4177,7 +4150,7 @@ export function ProjectEditor({
       return
     }
     void handleRequestClose()
-  }, [dialog, handleDialogCancel, searchOpen, handleCloseSearch, previewSearchOpen, handleRequestClose, sidebarMode])
+  }, [dialog, handleDialogCancel, searchOpen, handleCloseSearch, previewSearchOpen, handleRequestClose, sidebarMode, pinOverflowOpen, recentOverflowOpen])
 
   const handleOpenGitDiff = useCallback(async (source: 'user' | 'debug' = 'user') => {
     if (!_terminalId) return
@@ -5698,8 +5671,25 @@ export function ProjectEditor({
             </div>
 
             <div className="project-editor-root">
-              <span className="project-editor-root-label">{t('projectEditor.workingDirectory')}</span>
-              <span className="project-editor-root-path" title={rootPath || ''}>{rootPath || '-'}</span>
+              <span
+                className="project-editor-root-label"
+                onDoubleClick={handleCwdDblClick}
+                title={t('projectEditor.cwdCopyHint')}
+              >
+                {t('projectEditor.workingDirectory')}
+              </span>
+              <span
+                className="project-editor-root-path"
+                onDoubleClick={handleCwdDblClick}
+                title={rootPath ? `${rootPath}\n${t('projectEditor.cwdCopyHint')}` : ''}
+              >
+                {rootPath || '-'}
+              </span>
+              {pathCopyMessage && (
+                <span className={`path-copy-toast ${pathCopyMessage.type}`}>
+                  {pathCopyMessage.text}
+                </span>
+              )}
               {editorStatusMeta}
             </div>
           </>
@@ -5786,13 +5776,13 @@ export function ProjectEditor({
               <div className="project-editor-quick-row pin">
                 <div className="project-editor-quick-row-header">
                   <div className="project-editor-quick-row-title">
-                    <span className="project-editor-quick-row-icon" aria-hidden="true">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                        <path d="M5.8 1.75h4.4l-.45 3.2 2.6 2.5v1h-3.1l-1.15 5.8-.95.2-.95-6H2.9v-1l2.6-2.5-.45-3.2Z" fill="currentColor" />
+                    <span className="project-editor-quick-row-icon pin-icon" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M9.828 1.282a1 1 0 0 1 1.415 0l3.475 3.475a1 1 0 0 1 0 1.414l-3.18 3.18a.5.5 0 0 1-.353.147H8.83L6.354 11.97a.5.5 0 0 1-.708 0L4.03 10.354a.5.5 0 0 1 0-.708L6.5 7.17V4.815a.5.5 0 0 1 .146-.353l3.182-3.18ZM7.5 5v2.5a.5.5 0 0 1-.146.354L5.09 10.118l.793.793 2.263-2.264A.5.5 0 0 1 8.5 8.5H11l2.768-2.768L10.293 2.26 7.5 5Z" />
+                        <path d="M1.5 14.5a.5.5 0 0 1 0-.707l3-3a.5.5 0 0 1 .707.707l-3 3a.5.5 0 0 1-.707 0Z" />
                       </svg>
                     </span>
                     <span>{t('projectEditor.pinnedFiles')}</span>
-                    <span className="project-editor-quick-count">{pinnedFiles.length}/{MAX_PINNED_FILES}</span>
                   </div>
                 </div>
                 <div
@@ -5800,54 +5790,109 @@ export function ProjectEditor({
                   onDragOver={handlePinnedListDragOver}
                   onDrop={handlePinnedListDrop}
                 >
+                  <div ref={pinnedMeasureRef} className="quick-file-measure" aria-hidden="true">
+                    {pinnedFiles.map((path, index) => (
+                      <Fragment key={path}>
+                        {index > 0 && <span className="quick-file-measure-sep">·</span>}
+                        <span className="quick-file-measure-item" data-idx={index}>
+                          {quickFileLabels[path] ?? getBaseName(path)}
+                        </span>
+                      </Fragment>
+                    ))}
+                  </div>
                   {pinnedFiles.length === 0 ? (
                     <span className="project-editor-quick-empty">{t('projectEditor.empty.noPinnedFiles')}</span>
                   ) : (
-                    pinnedFiles.map((path) => {
+                    <>
+                      {visiblePinnedFiles.map((path, index) => {
+                        const label = quickFileLabels[path] ?? getBaseName(path)
+                        const cls = [
+                          'project-editor-quick-item',
+                          activeFilePath === path ? 'active' : '',
+                          draggingPinnedPath === path ? 'dragging' : '',
+                          dragOverPinnedPath === path ? 'drag-over' : ''
+                        ].filter(Boolean).join(' ')
+                        return (
+                          <Fragment key={`pin:${path}`}>
+                            {index > 0 && <span className="quick-file-separator" aria-hidden="true">·</span>}
+                            <button
+                              className={cls}
+                              draggable
+                              onClick={() => void openFile(path, 'user', { trackRecent: true })}
+                              onContextMenu={(event) => openContextMenu(event, {
+                                path,
+                                type: 'file',
+                                source: 'quick-pin'
+                              })}
+                              onMouseEnter={(e) => handleQuickTooltipEnter(e, path)}
+                              onMouseLeave={handleQuickTooltipLeave}
+                              onDragStart={(event) => handlePinnedDragStart(event, path)}
+                              onDragOver={(event) => handlePinnedDragOver(event, path)}
+                              onDrop={(event) => handlePinnedDrop(event, path)}
+                              onDragEnd={handlePinnedDragEnd}
+                            >
+                              {label}
+                            </button>
+                          </Fragment>
+                        )
+                      })}
+                      {overflowPinnedFiles.length > 0 && (
+                        <>
+                          {visiblePinnedFiles.length > 0 && <span className="quick-file-separator" aria-hidden="true">·</span>}
+                          <button
+                            ref={pinOverflowBtnRef}
+                            className={`quick-file-overflow-btn${overflowPinnedFiles.some(p => p === activeFilePath) ? ' has-active' : ''}`}
+                            onClick={() => setPinOverflowOpen(prev => !prev)}
+                            title={t('projectEditor.moreFiles', { count: overflowPinnedFiles.length })}
+                            aria-expanded={pinOverflowOpen}
+                            aria-haspopup="true"
+                          >
+                            +{overflowPinnedFiles.length}
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                {pinOverflowOpen && createPortal(
+                  <div
+                    ref={pinDropdownRef}
+                    className="quick-file-overflow-dropdown"
+                    style={computeDropdownPos(pinOverflowBtnRef)}
+                  >
+                    {overflowPinnedFiles.map((path) => {
                       const label = quickFileLabels[path] ?? getBaseName(path)
-                      const className = [
-                        'project-editor-quick-item',
-                        activeFilePath === path ? 'active' : '',
-                        draggingPinnedPath === path ? 'dragging' : '',
-                        dragOverPinnedPath === path ? 'drag-over' : ''
-                      ].filter(Boolean).join(' ')
                       return (
                         <button
-                          key={`pin:${path}`}
-                          className={className}
+                          key={path}
+                          className={`quick-file-overflow-item${activeFilePath === path ? ' active' : ''}`}
                           draggable
-                          onClick={() => void openFile(path, 'user', { trackRecent: true })}
-                          onContextMenu={(event) => openContextMenu(event, {
-                            path,
-                            type: 'file',
-                            source: 'quick-pin'
-                          })}
+                          onClick={() => { setPinOverflowOpen(false); void openFile(path, 'user', { trackRecent: true }) }}
+                          onContextMenu={(event) => { setPinOverflowOpen(false); openContextMenu(event, { path, type: 'file', source: 'quick-pin' }) }}
+                          onDragStart={(event) => handleOverflowPinDragStart(event, path)}
                           onMouseEnter={(e) => handleQuickTooltipEnter(e, path)}
                           onMouseLeave={handleQuickTooltipLeave}
-                          onDragStart={(event) => handlePinnedDragStart(event, path)}
-                          onDragOver={(event) => handlePinnedDragOver(event, path)}
-                          onDrop={(event) => handlePinnedDrop(event, path)}
-                          onDragEnd={handlePinnedDragEnd}
                         >
                           {label}
                         </button>
                       )
-                    })
-                  )}
-                </div>
+                    })}
+                  </div>,
+                  document.body
+                )}
               </div>
 
               <div className="project-editor-quick-row recent">
                 <div className="project-editor-quick-row-header">
                   <div className="project-editor-quick-row-title">
-                    <span className="project-editor-quick-row-icon" aria-hidden="true">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                        <path d="M8 2.25a5.75 5.75 0 1 1-4.53 2.21H1.75v-1h3.5v3h-1V5.39A4.75 4.75 0 1 0 8 3.25Z" fill="currentColor" />
-                        <path d="M8 4.5h1v3.1l2.1 1.05-.45.9L7.5 7.95V4.5Z" fill="currentColor" />
+                    <span className="project-editor-quick-row-icon recent-icon" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 3.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9ZM2.5 8a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" />
+                        <path d="M8 5a.5.5 0 0 1 .5.5V8l2.15 1.07a.5.5 0 0 1-.45.9l-2.4-1.2A.5.5 0 0 1 7.5 8.3V5.5A.5.5 0 0 1 8 5Z" />
+                        <path d="M2.854 3.646a.5.5 0 0 1 0 .708L1.707 5.5H3.5a.5.5 0 0 1 0 1H.5a.5.5 0 0 1-.5-.5v-3a.5.5 0 0 1 1 0v1.793l1.146-1.147a.5.5 0 0 1 .708 0Z" />
                       </svg>
                     </span>
                     <span>{t('projectEditor.recentFiles')}</span>
-                    <span className="project-editor-quick-count">{recentFiles.length}/{MAX_RECENT_FILES}</span>
                   </div>
                   <button
                     className="project-editor-quick-row-action"
@@ -5857,46 +5902,93 @@ export function ProjectEditor({
                     {t('projectEditor.clearAll')}
                   </button>
                 </div>
-                <div
-                  className="project-editor-quick-list"
-                  onDragOver={handleRecentListDragOver}
-                  onDrop={handleRecentListDrop}
-                >
+                <div className="project-editor-quick-list">
+                  <div ref={recentMeasureRef} className="quick-file-measure" aria-hidden="true">
+                    {recentFiles.map((path, index) => (
+                      <Fragment key={path}>
+                        {index > 0 && <span className="quick-file-measure-sep">·</span>}
+                        <span className="quick-file-measure-item" data-idx={index}>
+                          {quickFileLabels[path] ?? getBaseName(path)}
+                        </span>
+                      </Fragment>
+                    ))}
+                  </div>
                   {recentFiles.length === 0 ? (
                     <span className="project-editor-quick-empty">{t('projectEditor.empty.noRecentFiles')}</span>
                   ) : (
-                    recentFiles.map((path) => {
+                    <>
+                      {visibleRecentFiles.map((path, index) => {
+                        const label = quickFileLabels[path] ?? getBaseName(path)
+                        const cls = [
+                          'project-editor-quick-item',
+                          activeFilePath === path ? 'active' : ''
+                        ].filter(Boolean).join(' ')
+                        return (
+                          <Fragment key={`recent:${path}`}>
+                            {index > 0 && <span className="quick-file-separator" aria-hidden="true">·</span>}
+                            <button
+                              className={cls}
+                              draggable
+                              onClick={() => void openFile(path, 'user', { trackRecent: true })}
+                              onContextMenu={(event) => openContextMenu(event, {
+                                path,
+                                type: 'file',
+                                source: 'quick-recent'
+                              })}
+                              onMouseEnter={(e) => handleQuickTooltipEnter(e, path)}
+                              onMouseLeave={handleQuickTooltipLeave}
+                              onDragStart={(event) => handleRecentDragStart(event, path)}
+                              onDragEnd={handlePinnedDragEnd}
+                            >
+                              {label}
+                            </button>
+                          </Fragment>
+                        )
+                      })}
+                      {overflowRecentFiles.length > 0 && (
+                        <>
+                          {visibleRecentFiles.length > 0 && <span className="quick-file-separator" aria-hidden="true">·</span>}
+                          <button
+                            ref={recentOverflowBtnRef}
+                            className={`quick-file-overflow-btn${overflowRecentFiles.some(p => p === activeFilePath) ? ' has-active' : ''}`}
+                            onClick={() => setRecentOverflowOpen(prev => !prev)}
+                            title={t('projectEditor.moreFiles', { count: overflowRecentFiles.length })}
+                            aria-expanded={recentOverflowOpen}
+                            aria-haspopup="true"
+                          >
+                            +{overflowRecentFiles.length}
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                {recentOverflowOpen && createPortal(
+                  <div
+                    ref={recentDropdownRef}
+                    className="quick-file-overflow-dropdown"
+                    style={computeDropdownPos(recentOverflowBtnRef)}
+                  >
+                    {overflowRecentFiles.map((path) => {
                       const label = quickFileLabels[path] ?? getBaseName(path)
-                      const className = [
-                        'project-editor-quick-item',
-                        activeFilePath === path ? 'active' : '',
-                        draggingQuickSource === 'recent' && draggingQuickPath === path ? 'dragging' : '',
-                        dragOverRecentPath === path ? 'drag-over' : ''
-                      ].filter(Boolean).join(' ')
                       return (
                         <button
-                          key={`recent:${path}`}
-                          className={className}
+                          key={path}
+                          className={`quick-file-overflow-item${activeFilePath === path ? ' active' : ''}`}
                           draggable
-                          onClick={() => void openFile(path, 'user', { trackRecent: true })}
-                          onContextMenu={(event) => openContextMenu(event, {
-                            path,
-                            type: 'file',
-                            source: 'quick-recent'
-                          })}
+                          onClick={() => { setRecentOverflowOpen(false); void openFile(path, 'user', { trackRecent: true }) }}
+                          onContextMenu={(event) => { setRecentOverflowOpen(false); openContextMenu(event, { path, type: 'file', source: 'quick-recent' }) }}
+                          onDragStart={(event) => { handleRecentDragStart(event, path); requestAnimationFrame(() => setRecentOverflowOpen(false)) }}
                           onMouseEnter={(e) => handleQuickTooltipEnter(e, path)}
                           onMouseLeave={handleQuickTooltipLeave}
-                          onDragStart={(event) => handleRecentDragStart(event, path)}
-                          onDragOver={(event) => handleRecentDragOver(event, path)}
-                          onDrop={(event) => handleRecentDrop(event, path)}
-                          onDragEnd={handlePinnedDragEnd}
                         >
                           {label}
                         </button>
                       )
-                    })
-                  )}
-                </div>
+                    })}
+                  </div>,
+                  document.body
+                )}
               </div>
             </div>
 
@@ -6430,7 +6522,10 @@ export function ProjectEditor({
             className="project-editor-quick-tooltip"
             style={{ position: 'fixed', left: quickTooltip.x, top: quickTooltip.y }}
           >
-            {quickTooltip.text}
+            <div className="project-editor-quick-tooltip-relative">{quickTooltip.text}</div>
+            {quickTooltip.fullPath !== quickTooltip.text && (
+              <div className="project-editor-quick-tooltip-full">{quickTooltip.fullPath}</div>
+            )}
           </div>
         )}
       </div>
