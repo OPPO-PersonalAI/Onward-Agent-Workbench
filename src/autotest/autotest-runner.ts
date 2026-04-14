@@ -49,6 +49,7 @@ import { testFeedbackUi } from './test-feedback-ui'
 import { testFeedbackPersistenceSeed, testFeedbackPersistenceVerify } from './test-feedback-persistence'
 import { testTelemetry } from './test-telemetry'
 import { testSubpageViewstateRestore } from './test-subpage-viewstate-restore'
+import { testQuickFileUnit } from './test-quick-file-unit'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -175,6 +176,14 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.4:begin')
       const results = await testProjectEditorRestoreUnit(ctx)
       collectSuiteResults('ProjectEditorRestoreUnit', results)
+      await sleep(300)
+    }
+
+    // Phase 0.4b: Quick-file (Pin/Recent) unit tests
+    if (!ctx.cancelled() && shouldRun('quick-file-unit')) {
+      log('phase0.4b:begin')
+      const results = await testQuickFileUnit(ctx)
+      collectSuiteResults('QuickFileUnit', results)
       await sleep(300)
     }
 
