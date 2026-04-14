@@ -10,6 +10,9 @@ const DEBOUNCE_MS = 150
 const HIGHLIGHT_CLASS = 'preview-search-highlight'
 const ACTIVE_CLASS = 'preview-search-highlight-active'
 
+/** Pixel tolerance when comparing vertical positions of highlights on the same visual line */
+export const SORT_LINE_EPSILON_PX = 2
+
 interface UsePreviewSearchOptions {
   previewRef: React.RefObject<HTMLDivElement | null>
   isOpen: boolean
@@ -72,9 +75,19 @@ function applyHighlights(container: HTMLElement, query: string): HTMLElement[] {
       const mark = document.createElement('mark')
       mark.className = HIGHLIGHT_CLASS
       range.surroundContents(mark)
-      marks.unshift(mark)
+      marks.push(mark)
     }
   }
+
+  // Sort by visual position to guarantee top-to-bottom, left-to-right navigation order
+  // regardless of DOM order or layout shifts caused by surroundContents
+  marks.sort((a, b) => {
+    const rectA = a.getBoundingClientRect()
+    const rectB = b.getBoundingClientRect()
+    const topDiff = rectA.top - rectB.top
+    if (Math.abs(topDiff) > SORT_LINE_EPSILON_PX) return topDiff
+    return rectA.left - rectB.left
+  })
 
   return marks
 }
@@ -87,10 +100,16 @@ function setActiveHighlight(marks: HTMLElement[], index: number, scrollContainer
   if (!scrollContainer) return
   const containerRect = scrollContainer.getBoundingClientRect()
   const markRect = activeMark.getBoundingClientRect()
-  const isVisible = markRect.top >= containerRect.top && markRect.bottom <= containerRect.bottom
-  if (!isVisible) {
-    activeMark.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }
+  const markMiddle = markRect.top + markRect.height / 2
+  const containerMiddle = containerRect.top + containerRect.height / 2
+  const offset = markMiddle - containerMiddle
+  // Skip scroll when the mark is already near the viewport center to avoid jitter
+  if (Math.abs(offset) <= 5) return
+  const maxScroll = scrollContainer.scrollHeight - scrollContainer.clientHeight
+  scrollContainer.scrollTo({
+    top: Math.max(0, Math.min(maxScroll, scrollContainer.scrollTop + offset)),
+    behavior: 'smooth',
+  })
 }
 
 export function usePreviewSearch({

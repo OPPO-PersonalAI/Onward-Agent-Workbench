@@ -3,10 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react'
 import { useI18n } from '../../../i18n/useI18n'
 import { usePreviewSearch } from './usePreviewSearch'
 import './PreviewSearchBar.css'
+
+export interface PreviewSearchHandle {
+  setQuery: (query: string) => void
+  goToNext: () => void
+  goToPrevious: () => void
+  getMatchCount: () => number
+  getCurrentIndex: () => number
+}
 
 interface PreviewSearchBarProps {
   previewRef: React.RefObject<HTMLDivElement | null>
@@ -15,7 +23,7 @@ interface PreviewSearchBarProps {
   renderedHtml: string
 }
 
-export function PreviewSearchBar({ previewRef, isOpen, onClose, renderedHtml }: PreviewSearchBarProps) {
+export const PreviewSearchBar = forwardRef<PreviewSearchHandle, PreviewSearchBarProps>(function PreviewSearchBar({ previewRef, isOpen, onClose, renderedHtml }, ref) {
   const { t } = useI18n()
   const inputRef = useRef<HTMLInputElement>(null)
   const { query, setQuery, matchCount, currentIndex, goToNext, goToPrevious } = usePreviewSearch({
@@ -23,6 +31,14 @@ export function PreviewSearchBar({ previewRef, isOpen, onClose, renderedHtml }: 
     isOpen,
     renderedHtml,
   })
+
+  useImperativeHandle(ref, () => ({
+    setQuery,
+    goToNext,
+    goToPrevious,
+    getMatchCount: () => matchCount,
+    getCurrentIndex: () => currentIndex,
+  }), [setQuery, goToNext, goToPrevious, matchCount, currentIndex])
 
   useEffect(() => {
     if (!isOpen) return
@@ -105,4 +121,4 @@ export function PreviewSearchBar({ previewRef, isOpen, onClose, renderedHtml }: 
       </button>
     </div>
   )
-}
+})

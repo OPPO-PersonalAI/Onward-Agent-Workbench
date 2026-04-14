@@ -229,6 +229,18 @@ export interface ProjectEditorDebugApi {
   }
   setPreviewSearchOpen?: (open: boolean) => void
   isPreviewSearchOpen?: () => boolean
+  previewSearchSetQuery?: (query: string) => void
+  previewSearchGoToNext?: () => void
+  previewSearchGoToPrevious?: () => void
+  getPreviewSearchMatchCount?: () => number
+  getPreviewSearchCurrentIndex?: () => number
+  getPreviewSearchMatchPositions?: () => Array<{ top: number; left: number; isActive: boolean }>
+  getPreviewSearchActiveCenter?: () => {
+    markCenter: number
+    containerCenter: number
+    containerHeight: number
+    offset: number
+  } | null
   isMarkdownRenderPending: () => boolean
   getMarkdownRenderedHtml: () => string
   getMarkdownPreviewImageState?: () => {

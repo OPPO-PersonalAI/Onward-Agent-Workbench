@@ -30,6 +30,8 @@ import { countSymbols } from './Outline/outlineParser'
 import { useOutlineSymbols } from './Outline/useOutlineSymbols'
 import { SearchPanel } from './GlobalSearch/SearchPanel'
 import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
+import type { PreviewSearchHandle } from './PreviewSearch/PreviewSearchBar'
+import { SORT_LINE_EPSILON_PX } from './PreviewSearch/usePreviewSearch'
 import { SqliteViewer } from './SqliteViewer'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import { usePathCopy } from '../../hooks/usePathCopy'
@@ -694,6 +696,7 @@ export function ProjectEditor({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [previewSearchOpen, setPreviewSearchOpen] = useState(false)
   const previewSearchOpenRef = useRef(false)
+  const previewSearchRef = useRef<PreviewSearchHandle>(null)
   const [markdownImageMap, setMarkdownImageMap] = useState<Record<string, string>>({})
   const [markdownRenderSource, setMarkdownRenderSource] = useState('')
   const [markdownRenderPending, setMarkdownRenderPending] = useState(false)
@@ -4277,11 +4280,10 @@ export function ProjectEditor({
     openGitDiffRef.current = handleOpenGitDiff
   }, [handleOpenGitDiff])
 
-  useEffect(() => {
-    if (!window.electronAPI?.debug?.enabled) return
-
-    const debugWindow = window as Window & { __onwardProjectEditorDebug?: ProjectEditorDebugApi }
-    const api: ProjectEditorDebugApi = {
+  // Factory for the full debug API — parameterized only by editSource to avoid
+  // duplicating ~55 identical methods across the debug and autotest useEffect blocks.
+  function createProjectEditorDebugApi(editSource: string): ProjectEditorDebugApi {
+    return {
       isOpen: () => isOpenRef.current,
       getRootPath: () => rootRef.current,
       getActiveFilePath: () => activeFilePathRef.current,
@@ -4295,13 +4297,87 @@ export function ProjectEditor({
         const model = editor?.getModel()
         if (!editor || !model) return false
         editor.pushUndoStop()
-        editor.executeEdits('debug-set-editor-content', [{ range: model.getFullModelRange(), text: content }])
+        editor.executeEdits(`${editSource}-set-editor-content`, [{ range: model.getFullModelRange(), text: content }])
         editor.pushUndoStop()
         return true
       },
       getEditorLineCount: () => {
         const model = editorRef.current?.getModel()
         return model ? model.getLineCount() : 0
+      },
+      getCursorPosition: () => {
+        const position = editorRef.current?.getPosition()
+        if (!position) return null
+        return {
+          lineNumber: position.lineNumber,
+          column: position.column
+        }
+      },
+      setCursorPosition: (lineNumber: number, column = 1) => {
+        const editor = editorRef.current
+        if (!editor) return false
+        const model = editor.getModel()
+        if (!model) return false
+        if (!activeFilePathRef.current) return false
+        const maxLine = model.getLineCount()
+        const safeLine = Math.max(1, Math.min(maxLine, Math.floor(lineNumber)))
+        const maxColumn = model.getLineMaxColumn(safeLine)
+        const safeColumn = Math.max(1, Math.min(maxColumn, Math.floor(column)))
+        editor.setPosition({ lineNumber: safeLine, column: safeColumn })
+        editor.revealLineInCenter(safeLine)
+        scheduleProjectStateSave()
+        return true
+      },
+      getScrollTop: () => {
+        const editor = editorRef.current
+        if (!editor) return 0
+        return editor.getScrollTop()
+      },
+      getFirstVisibleLine: () => {
+        const editor = editorRef.current
+        if (!editor) return 1
+        const ranges = editor.getVisibleRanges()
+        if (!ranges || ranges.length === 0) return 1
+        return ranges[0]?.startLineNumber ?? 1
+      },
+      scrollToLine: (lineNumber: number) => {
+        const editor = editorRef.current
+        if (!editor) return false
+        const model = editor.getModel()
+        if (!model) return false
+        const maxLine = model.getLineCount()
+        const safeLine = Math.max(1, Math.min(maxLine, Math.floor(lineNumber)))
+        editor.revealLineNearTop(safeLine)
+        editor.setScrollTop(editor.getTopForLineNumber(safeLine))
+        scheduleProjectStateSave()
+        return true
+      },
+      getMissingFileNotice: () => {
+        const current = missingFileNoticeRef.current
+        if (!current) return null
+        return {
+          path: current.path,
+          message: current.message
+        }
+      },
+      openFileByPath: async (filePath: string) => {
+        await openFileRef.current(filePath, 'debug')
+      },
+      openFileByPathAsUser: async (filePath: string, options?: { trackRecent?: boolean }) => {
+        await openFileRef.current(filePath, 'user', {
+          trackRecent: options?.trackRecent ?? true
+        })
+      },
+      triggerEditorSaveCommand: () => {
+        const editor = editorRef.current
+        const commandId = editorSaveCommandIdRef.current
+        if (!editor || !commandId) return false
+        editor.trigger('autotest', commandId, undefined)
+        return true
+      },
+      triggerToolbarSave: async () => {
+        const result = await handleSaveRef.current('debug-toolbar')
+        return Boolean(result?.success)
       },
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
@@ -4331,6 +4407,52 @@ export function ProjectEditor({
         previewSearchOpenRef.current = open
       },
       isPreviewSearchOpen: () => previewSearchOpenRef.current,
+      previewSearchSetQuery: (query: string) => {
+        previewSearchRef.current?.setQuery(query)
+      },
+      previewSearchGoToNext: () => {
+        previewSearchRef.current?.goToNext()
+      },
+      previewSearchGoToPrevious: () => {
+        previewSearchRef.current?.goToPrevious()
+      },
+      getPreviewSearchMatchCount: () => {
+        return previewSearchRef.current?.getMatchCount() ?? 0
+      },
+      getPreviewSearchCurrentIndex: () => {
+        return previewSearchRef.current?.getCurrentIndex() ?? -1
+      },
+      getPreviewSearchMatchPositions: () => {
+        const preview = previewRef.current
+        if (!preview) return []
+        const marks = Array.from(preview.querySelectorAll('mark.preview-search-highlight'))
+        const containerRect = preview.getBoundingClientRect()
+        return marks.map(mark => {
+          const rect = mark.getBoundingClientRect()
+          return {
+            top: rect.top - containerRect.top + preview.scrollTop,
+            left: rect.left - containerRect.left + preview.scrollLeft,
+            isActive: mark.classList.contains('preview-search-highlight-active'),
+          }
+        }).sort((a, b) => {
+          const topDiff = a.top - b.top
+          if (Math.abs(topDiff) > SORT_LINE_EPSILON_PX) return topDiff
+          return a.left - b.left
+        })
+      },
+      getPreviewSearchActiveCenter: () => {
+        const preview = previewRef.current
+        if (!preview) return null
+        const activeMark = preview.querySelector('mark.preview-search-highlight-active')
+        if (!activeMark) return null
+        const containerRect = preview.getBoundingClientRect()
+        const markRect = activeMark.getBoundingClientRect()
+        const markCenter = markRect.top + markRect.height / 2 - containerRect.top
+        const containerCenter = containerRect.height / 2
+        const containerHeight = containerRect.height
+        const offset = markCenter - containerCenter
+        return { markCenter, containerCenter, containerHeight, offset }
+      },
       isMarkdownRenderPending: () => markdownRenderPendingRef.current,
       getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
       getMarkdownPreviewImageState: () => {
@@ -4430,82 +4552,13 @@ export function ProjectEditor({
         const restoredPosition = preview.scrollTop
         return Math.abs(restoredPosition - savedPosition) <= 30
       },
-      openFileByPath: async (filePath: string) => {
-        await openFileRef.current(filePath, 'debug')
-      },
-      openFileByPathAsUser: async (filePath: string, options?: { trackRecent?: boolean }) => {
-        await openFileRef.current(filePath, 'user', {
-          trackRecent: options?.trackRecent ?? true
-        })
-      },
-      triggerEditorSaveCommand: () => {
-        const editor = editorRef.current
-        const commandId = editorSaveCommandIdRef.current
-        if (!editor || !commandId) return false
-        editor.trigger('autotest', commandId, undefined)
-        return true
-      },
-      triggerToolbarSave: async () => {
-        const result = await handleSaveRef.current('debug-toolbar')
-        return Boolean(result?.success)
-      },
-      getCursorPosition: () => {
-        const position = editorRef.current?.getPosition()
-        if (!position) return null
-        return {
-          lineNumber: position.lineNumber,
-          column: position.column
-        }
-      },
-      setCursorPosition: (lineNumber: number, column = 1) => {
-        const editor = editorRef.current
-        if (!editor) return false
-        const model = editor.getModel()
-        if (!model) return false
-        if (!activeFilePathRef.current) return false
-        const maxLine = model.getLineCount()
-        const safeLine = Math.max(1, Math.min(maxLine, Math.floor(lineNumber)))
-        const maxColumn = model.getLineMaxColumn(safeLine)
-        const safeColumn = Math.max(1, Math.min(maxColumn, Math.floor(column)))
-        editor.setPosition({ lineNumber: safeLine, column: safeColumn })
-        editor.revealLineInCenter(safeLine)
-        scheduleProjectStateSave()
-        return true
-      },
-      getScrollTop: () => {
-        const editor = editorRef.current
-        if (!editor) return 0
-        return editor.getScrollTop()
-      },
-      getFirstVisibleLine: () => {
-        const editor = editorRef.current
-        if (!editor) return 1
-        const ranges = editor.getVisibleRanges()
-        if (!ranges || ranges.length === 0) return 1
-        return ranges[0]?.startLineNumber ?? 1
-      },
-      scrollToLine: (lineNumber: number) => {
-        const editor = editorRef.current
-        if (!editor) return false
-        const model = editor.getModel()
-        if (!model) return false
-        const maxLine = model.getLineCount()
-        const safeLine = Math.max(1, Math.min(maxLine, Math.floor(lineNumber)))
-        editor.revealLineNearTop(safeLine)
-        editor.setScrollTop(editor.getTopForLineNumber(safeLine))
-        scheduleProjectStateSave()
-        return true
-      },
-      getMissingFileNotice: () => {
-        const current = missingFileNoticeRef.current
-        if (!current) return null
-        return {
-          path: current.path,
-          message: current.message
-        }
-      }
     }
+  }
 
+  useEffect(() => {
+    if (!window.electronAPI?.debug?.enabled) return
+    const debugWindow = window as Window & { __onwardProjectEditorDebug?: ProjectEditorDebugApi }
+    const api = createProjectEditorDebugApi('debug')
     debugWindow.__onwardProjectEditorDebug = api
     return () => {
       if (debugWindow.__onwardProjectEditorDebug === api) {
@@ -4535,230 +4588,7 @@ export function ProjectEditor({
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
     const debugWindow = window as Window & { __onwardProjectEditorDebug?: ProjectEditorDebugApi }
-    const api: ProjectEditorDebugApi = {
-      isOpen: () => isOpenRef.current,
-      getRootPath: () => rootRef.current,
-      getActiveFilePath: () => activeFilePathRef.current,
-      getSidebarMode: () => sidebarModeRef.current,
-      setSidebarMode: (mode: 'files' | 'search') => {
-        setSidebarMode(mode)
-      },
-      getEditorContent: () => fileContentRef.current,
-      setEditorContent: (content: string) => {
-        const editor = editorRef.current
-        const model = editor?.getModel()
-        if (!editor || !model) return false
-        editor.pushUndoStop()
-        editor.executeEdits('autotest-set-editor-content', [{ range: model.getFullModelRange(), text: content }])
-        editor.pushUndoStop()
-        return true
-      },
-      getEditorLineCount: () => {
-        const model = editorRef.current?.getModel()
-        return model ? model.getLineCount() : 0
-      },
-      getCursorPosition: () => {
-        const position = editorRef.current?.getPosition()
-        if (!position) return null
-        return {
-          lineNumber: position.lineNumber,
-          column: position.column
-        }
-      },
-      setCursorPosition: (lineNumber: number, column = 1) => {
-        const editor = editorRef.current
-        if (!editor) return false
-        const model = editor.getModel()
-        if (!model) return false
-        if (!activeFilePathRef.current) return false
-        const maxLine = model.getLineCount()
-        const safeLine = Math.max(1, Math.min(maxLine, Math.floor(lineNumber)))
-        const maxColumn = model.getLineMaxColumn(safeLine)
-        const safeColumn = Math.max(1, Math.min(maxColumn, Math.floor(column)))
-        editor.setPosition({ lineNumber: safeLine, column: safeColumn })
-        editor.revealLineInCenter(safeLine)
-        scheduleProjectStateSave()
-        return true
-      },
-      getScrollTop: () => {
-        const editor = editorRef.current
-        if (!editor) return 0
-        return editor.getScrollTop()
-      },
-      getFirstVisibleLine: () => {
-        const editor = editorRef.current
-        if (!editor) return 1
-        const ranges = editor.getVisibleRanges()
-        if (!ranges || ranges.length === 0) return 1
-        return ranges[0]?.startLineNumber ?? 1
-      },
-      scrollToLine: (lineNumber: number) => {
-        const editor = editorRef.current
-        if (!editor) return false
-        const model = editor.getModel()
-        if (!model) return false
-        const maxLine = model.getLineCount()
-        const safeLine = Math.max(1, Math.min(maxLine, Math.floor(lineNumber)))
-        editor.revealLineNearTop(safeLine)
-        editor.setScrollTop(editor.getTopForLineNumber(safeLine))
-        scheduleProjectStateSave()
-        return true
-      },
-      getMissingFileNotice: () => {
-        const current = missingFileNoticeRef.current
-        if (!current) return null
-        return {
-          path: current.path,
-          message: current.message
-        }
-      },
-      openFileByPath: async (filePath: string) => {
-        await openFileRef.current(filePath, 'debug')
-      },
-      openFileByPathAsUser: async (filePath: string, options?: { trackRecent?: boolean }) => {
-        await openFileRef.current(filePath, 'user', {
-          trackRecent: options?.trackRecent ?? true
-        })
-      },
-      triggerEditorSaveCommand: () => {
-        const editor = editorRef.current
-        const commandId = editorSaveCommandIdRef.current
-        if (!editor || !commandId) return false
-        editor.trigger('autotest', commandId, undefined)
-        return true
-      },
-      triggerToolbarSave: async () => {
-        const result = await handleSaveRef.current('debug-toolbar')
-        return Boolean(result?.success)
-      },
-      isSqliteViewerVisible: () => {
-        return Boolean(activeFilePathRef.current && isSqliteRef.current)
-      },
-      getImageFilePreviewState,
-      getFileBrowserScrollTop: () => fileTreeContainerRef.current?.scrollTop ?? 0,
-      getFileBrowserScrollHeight: () => fileTreeContainerRef.current?.scrollHeight ?? 0,
-      scrollFileBrowserToFraction,
-      isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
-      setMarkdownEditorVisible: (visible: boolean) => {
-        setMarkdownEditorVisibleState(visible)
-      },
-      setMarkdownPreviewVisible: (visible: boolean) => {
-        setMarkdownPreviewOpenState(visible)
-      },
-      isMarkdownPreviewVisible: () => previewVisibleRef.current,
-      setMarkdownPreviewOpen: (open: boolean) => {
-        setMarkdownPreviewOpenState(open)
-      },
-      isMarkdownCodeWrapEnabled: () => isMarkdownCodeWrapEnabledRef.current,
-      setMarkdownCodeWrapEnabled: (enabled: boolean) => {
-        setMarkdownCodeWrapEnabledState(enabled)
-      },
-      getMarkdownCodeWrapState: () => getMarkdownCodeWrapDebugState(),
-      setPreviewSearchOpen: (open: boolean) => {
-        setPreviewSearchOpen(open)
-        previewSearchOpenRef.current = open
-      },
-      isPreviewSearchOpen: () => previewSearchOpenRef.current,
-      isMarkdownRenderPending: () => markdownRenderPendingRef.current,
-      getMarkdownRenderedHtml: () => markdownRenderedHtmlRef.current,
-      getMarkdownPreviewImageState: () => {
-        const preview = previewRef.current
-        if (!preview) {
-          return {
-            count: 0,
-            loadedCount: 0,
-            brokenCount: 0,
-            sources: []
-          }
-        }
-        const images = Array.from(preview.querySelectorAll('img')) as HTMLImageElement[]
-        return {
-          count: images.length,
-          loadedCount: images.filter((image) => image.complete && image.naturalWidth > 0).length,
-          brokenCount: images.filter((image) => image.complete && image.naturalWidth === 0).length,
-          sources: images.map((image) => image.currentSrc || image.src || '')
-        }
-      },
-      isPreviewTransitioning: () => previewRestorePhaseRef.current !== 'idle',
-      isPreviewContentVisible: () => isPreviewContentVisibleNow(),
-      getPreviewRestorePhase: () => previewRestorePhaseRef.current,
-      getOutlineTarget: () => outlineTargetRef.current,
-      setOutlineTarget: (target: 'editor' | 'preview') => {
-        setOutlineTargetPreference(target)
-      },
-      getOutlineEffectiveTarget: () => {
-        if (previewVisibleRef.current && !isMarkdownEditorVisibleRef.current) return 'preview'
-        if (isMarkdownEditorVisibleRef.current && !previewVisibleRef.current) return 'editor'
-        return outlineTargetRef.current
-      },
-      isOutlineVisible: () => outlineShowInSplitRef.current,
-      setOutlineVisible: (visible: boolean) => {
-        setOutlineVisibleState(visible)
-      },
-      getOutlineSymbolCount: () => countSymbols(outlineSymbolsRef.current),
-      getOutlineActiveItemName: () => outlineActiveItemRef.current?.name ?? null,
-      getOutlineScrollTop: () => getOutlineScrollContainer()?.scrollTop ?? 0,
-      getOutlineScrollHeight: () => getOutlineScrollContainer()?.scrollHeight ?? 0,
-      scrollOutlineToFraction,
-      clickOutlineItemByName: (name: string) => {
-        const labels = modalRef.current?.querySelectorAll('.outline-panel-item-name') ?? []
-        for (const label of labels) {
-          if (label.textContent?.trim() !== name.trim()) continue
-          const item = label.closest('.outline-panel-item') as HTMLElement | null
-          item?.click()
-          return Boolean(item)
-        }
-        return false
-      },
-      getPreviewActiveSlug: () => previewActiveSlugRef.current,
-      scrollPreviewToFraction: (fraction: number) => {
-        const preview = previewRef.current
-        if (!preview) return false
-        const maxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
-        preview.scrollTop = fraction * maxScroll
-        preview.dispatchEvent(new Event('scroll'))
-        capturePreviewScrollMemory()
-        updatePreviewActiveSlug(scanPreviewNearestSlug())
-        return true
-      },
-      getPreviewScrollTop: () => previewRef.current?.scrollTop ?? 0,
-      getPreviewScrollHeight: () => previewRef.current?.scrollHeight ?? 0,
-      debugScanPreviewHeadings: () => ({ nearest: scanPreviewNearestSlug() }),
-      runPreviewPositionTest: async (mdFilePath: string, otherFilePath: string) => {
-        const sleep = (ms: number) => new Promise<void>((resolve) => {
-          window.setTimeout(resolve, ms)
-        })
-        const waitRender = async (timeoutMs = 8000) => {
-          const startedAt = Date.now()
-          while (Date.now() - startedAt < timeoutMs) {
-            if (!markdownRenderPendingRef.current && markdownRenderedHtmlRef.current) {
-              break
-            }
-            await sleep(100)
-          }
-          await sleep(500)
-        }
-
-        await openFileRef.current(mdFilePath, 'debug')
-        await waitRender()
-
-        const preview = previewRef.current
-        if (!preview) return false
-
-        const maxScroll = Math.max(1, preview.scrollHeight - preview.clientHeight)
-        preview.scrollTop = Math.round(maxScroll * 0.5)
-        await sleep(300)
-        const savedPosition = preview.scrollTop
-
-        await openFileRef.current(otherFilePath, 'debug')
-        await sleep(1500)
-        await openFileRef.current(mdFilePath, 'debug')
-        await waitRender()
-
-        const restoredPosition = preview.scrollTop
-        return Math.abs(restoredPosition - savedPosition) <= 30
-      }
-    }
+    const api = createProjectEditorDebugApi('autotest')
     debugWindow.__onwardProjectEditorDebug = api
     return () => {
       if (debugWindow.__onwardProjectEditorDebug === api) {
@@ -6151,6 +5981,7 @@ export function ProjectEditor({
                           )}
                         </div>
                         <PreviewSearchBar
+                          ref={previewSearchRef}
                           previewRef={previewRef}
                           isOpen={previewSearchOpen}
                           onClose={() => setPreviewSearchOpen(false)}

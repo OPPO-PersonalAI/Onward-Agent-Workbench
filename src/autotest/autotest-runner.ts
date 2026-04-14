@@ -40,6 +40,7 @@ import { testSettingsUpdate } from './test-settings-update'
 import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
 import { testFileWatch } from './test-file-watch'
 import { testPreviewPositionRestore } from './test-preview-position-restore'
+import { testPreviewSearch } from './test-preview-search'
 import { testTerminalStatePersistence } from './test-terminal-state-persistence'
 import { testProjectEditorFileMemory } from './test-project-editor-file-memory'
 import { testChangeLog } from './test-change-log'
@@ -279,6 +280,16 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testPreviewPositionRestore(ctx)
       collectSuiteResults('PreviewPositionRestore', results)
       await ctx.reopenProjectEditor('phase0.89-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('preview-search')) {
+      log('phase0.895:begin')
+      await ctx.reopenProjectEditor('phase0.895-setup')
+      await sleep(300)
+      const results = await testPreviewSearch(ctx)
+      collectSuiteResults('PreviewSearch', results)
+      await ctx.reopenProjectEditor('phase0.895-cleanup')
       await sleep(500)
     }
 
