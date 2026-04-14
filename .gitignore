@@ -3,3 +3,4 @@ out/
 release/
 dist/
 *.log
+test/e2e-update-test/

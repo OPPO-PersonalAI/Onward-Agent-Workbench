@@ -161,6 +161,12 @@ $env:ONWARD_DEBUG="1"
   - Verifies exact-PID process termination does not install a downloaded update
   - Verifies only explicit restart triggers helper installation and relaunch
   - Verifies stale downloaded archives are cleaned up
+- `test/test-auto-update-windows-e2e.mjs`
+  - Builds three Windows production fixtures
+  - Verifies malformed `pending-update.json` markers are removed without blocking startup
+  - Verifies manifest superseding, SHA-256 validation, and cross-session download recovery
+  - Verifies exact-PID process termination does not install a downloaded update
+  - Verifies explicit restart triggers the Windows helper, relaunches the updated app, and clears pending archives
 - `test/test-auto-update-github-e2e.mjs`
   - Pushes a temporary tag to GitHub
   - Waits for the `Daily Build` workflow to finish
@@ -177,6 +183,16 @@ Run the local auto-update suite:
 
 ```bash
 node test/test-auto-update-local-e2e.mjs
+```
+
+Run the Windows local auto-update suite on Windows:
+
+```bash
+bash test/run-auto-update-windows-e2e.sh
+```
+
+```powershell
+node test/test-auto-update-windows-e2e.mjs
 ```
 
 Run the GitHub release + manifest validation suite:

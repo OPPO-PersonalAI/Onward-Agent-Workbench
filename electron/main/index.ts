@@ -21,7 +21,7 @@ import { ptyManager } from './pty-manager'
 import { isSameAppNavigation, openExternalUrlWithConfirm } from './external-link-guard'
 import { startApiServer, stopApiServer } from './api-server'
 import { tMain } from './localization'
-import { getUpdateService } from './update-service'
+import { getUpdateService, applyPendingUpdateOnStartup } from './update-service'
 import { getAppStateStorage } from './app-state-storage'
 import { getSettingsStorage } from './settings-storage'
 import { getTerminalCwd } from './git-utils'
@@ -432,6 +432,16 @@ function createWindow(displayName: string): void {
 
 app.whenReady().then(() => {
   const appInfo = initializeAppIdentity()
+
+  // Windows: check for a pending update that wasn't applied during the
+  // previous quit (e.g. the helper script was killed by Job Object cleanup).
+  // If found, launch the update script and exit immediately so the script
+  // can replace the app files and relaunch.
+  if (applyPendingUpdateOnStartup()) {
+    console.log('[UpdateService] Startup recovery: update script launched, exiting.')
+    app.exit(0)
+    return
+  }
 
   // Debug: reset telemetry consent
   if (TELEMETRY_RESET_CONSENT) {

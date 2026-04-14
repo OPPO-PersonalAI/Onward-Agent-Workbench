@@ -5,12 +5,13 @@
 
 import { app, BrowserWindow, net } from 'electron'
 import { createHash } from 'crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { basename, dirname, isAbsolute, join } from 'path'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { spawn, execSync } from 'child_process'
+import type { ReadableStream as NodeReadableStream } from 'stream/web'
+import { spawn, execFileSync } from 'child_process'
 import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
 import { compareVersions, parseVersion } from './update-version'
 import { getTelemetryService } from './telemetry/telemetry-service'
@@ -65,6 +66,418 @@ const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
 const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000
 const LOG_PREFIX = '[UpdateService]'
+const PENDING_UPDATE_MARKER_SCHEMA_VERSION = 1
+const MAX_PENDING_UPDATE_MARKER_AGE_MS = 60 * 60 * 1000
+const MAX_PENDING_UPDATE_STARTUP_ATTEMPTS = 1
+
+/** Pending update marker written before launching the installer script. */
+interface PendingUpdateInfo {
+  schemaVersion: 1
+  archivePath: string
+  archiveSha256: string
+  artifactName: string
+  installDir: string
+  execPath: string
+  logPath: string
+  timestamp: number
+  targetVersion: string
+  attempts: number
+}
+
+/** Append a timestamped line to the install log (non-blocking, never throws). */
+function appendToInstallLog(logPath: string, message: string): void {
+  try {
+    const dir = dirname(logPath)
+    mkdirSync(dir, { recursive: true })
+    const ts = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+    appendFileSync(logPath, `${ts} ${message}\n`, 'utf-8')
+  } catch { /* non-critical */ }
+}
+
+function safeRemoveFile(filePath: string): void {
+  try { rmSync(filePath, { force: true }) } catch {}
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isSafeArtifactName(value: string): boolean {
+  return value === basename(value) &&
+    !value.includes('/') &&
+    !value.includes('\\') &&
+    value.toLowerCase().endsWith('.zip')
+}
+
+function normalizeWindowsPathForCompare(value: string): string {
+  return value.replace(/[\\/]+$/, '').toLowerCase()
+}
+
+function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | null; error: string | null } {
+  if (!raw || typeof raw !== 'object') {
+    return { info: null, error: 'marker is not an object' }
+  }
+
+  const value = raw as Partial<PendingUpdateInfo>
+  const requiredStrings: Array<keyof Pick<PendingUpdateInfo, 'archivePath' | 'archiveSha256' | 'artifactName' | 'installDir' | 'execPath' | 'logPath' | 'targetVersion'>> = [
+    'archivePath',
+    'archiveSha256',
+    'artifactName',
+    'installDir',
+    'execPath',
+    'logPath',
+    'targetVersion'
+  ]
+
+  if (value.schemaVersion !== PENDING_UPDATE_MARKER_SCHEMA_VERSION) {
+    return { info: null, error: `unsupported marker schema version: ${String(value.schemaVersion)}` }
+  }
+  for (const key of requiredStrings) {
+    if (!isNonEmptyString(value[key])) {
+      return { info: null, error: `missing or invalid marker field: ${key}` }
+    }
+  }
+  if (!Number.isFinite(value.timestamp) || typeof value.timestamp !== 'number') {
+    return { info: null, error: 'missing or invalid marker timestamp' }
+  }
+  if (!Number.isInteger(value.attempts) || typeof value.attempts !== 'number' || value.attempts < 0) {
+    return { info: null, error: 'missing or invalid marker attempts' }
+  }
+  if (!/^[a-f0-9]{64}$/i.test(value.archiveSha256!)) {
+    return { info: null, error: 'invalid archive checksum in marker' }
+  }
+  if (!isSafeArtifactName(value.artifactName!)) {
+    return { info: null, error: 'invalid artifact name in marker' }
+  }
+  for (const key of ['archivePath', 'installDir', 'execPath', 'logPath'] as const) {
+    if (!isAbsolute(value[key]!)) {
+      return { info: null, error: `marker path must be absolute: ${key}` }
+    }
+  }
+
+  return { info: value as PendingUpdateInfo, error: null }
+}
+
+function writePendingUpdateInfo(markerPath: string, info: PendingUpdateInfo): void {
+  mkdirSync(dirname(markerPath), { recursive: true })
+  writeFileSync(markerPath, `${JSON.stringify(info, null, 2)}\n`, 'utf-8')
+}
+
+/** Build PowerShell $env:KEY = 'VALUE' statements for preserved env vars. */
+function buildEnvSetStatements(): string {
+  return RELAUNCH_ENV_KEYS
+    .map((key) => {
+      const value = process.env[key]
+      if (!value) return null
+      return `$env:${key} = ${powershellEscape(value)}`
+    })
+    .filter((value): value is string => Boolean(value))
+    .join('\n')
+}
+
+/**
+ * Generate the PowerShell script that waits for the parent process to exit,
+ * replaces the installation directory with the new archive, and relaunches.
+ */
+function buildWindowsUpdateScript(params: {
+  installDir: string
+  execPath: string
+  archivePath: string
+  archiveSha256: string
+  parentPid: number
+  stagingRoot: string
+  logPath: string
+  markerPath: string
+  lockPath: string
+  envSetStatements: string
+}): string {
+  return [
+    '$ErrorActionPreference = "Stop"',
+    `$installDir = ${powershellEscape(params.installDir)}`,
+    `$execPath = ${powershellEscape(params.execPath)}`,
+    `$archivePath = ${powershellEscape(params.archivePath)}`,
+    `$archiveSha256 = ${powershellEscape(params.archiveSha256)}`,
+    `$parentPid = ${params.parentPid}`,
+    `$stagingRoot = ${powershellEscape(params.stagingRoot)}`,
+    `$logPath = ${powershellEscape(params.logPath)}`,
+    `$markerPath = ${powershellEscape(params.markerPath)}`,
+    `$lockPath = ${powershellEscape(params.lockPath)}`,
+    '$extractRoot = Join-Path $stagingRoot "e"',
+    '$installParent = Split-Path $installDir -Parent',
+    '$installLeaf = Split-Path $installDir -Leaf',
+    '$backupPath = Join-Path $installParent "${installLeaf}.bak"',
+    '$lockCreated = $false',
+    '$parentExited = $false',
+    '',
+    'function Write-Log($msg) {',
+    '    $dir = Split-Path $logPath -Parent',
+    '    if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }',
+    '    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"',
+    '    Add-Content -LiteralPath $logPath -Value "$ts $msg" -ErrorAction SilentlyContinue',
+    '}',
+    '',
+    'function Clear-Marker {',
+    '    Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue',
+    '}',
+    '',
+    'function Relaunch-CurrentApp($reason) {',
+    '    if (-not (Test-Path -LiteralPath $execPath)) {',
+    '        Write-Log "Cannot relaunch ${reason}: executable not found at $execPath"',
+    '        return',
+    '    }',
+    '    try {',
+    params.envSetStatements,
+    '        Write-Log "Relaunching ${reason}."',
+    '        Start-Process -FilePath $execPath',
+    '    } catch {',
+    '        Write-Log "Failed to relaunch ${reason}: $_"',
+    '    }',
+    '}',
+    '',
+    'function Restore-Backup {',
+    '    if (-not (Test-Path -LiteralPath $backupPath)) { return }',
+    '    try {',
+    '        if (Test-Path -LiteralPath $installDir) {',
+    '            $failedPath = Join-Path $installParent "${installLeaf}.failed-$PID"',
+    '            try {',
+    '                Rename-Item -LiteralPath $installDir -NewName (Split-Path $failedPath -Leaf) -Force',
+    '                Remove-Item -LiteralPath $failedPath -Recurse -Force -ErrorAction SilentlyContinue',
+    '            } catch {',
+    '                Write-Log "Could not move failed install directory aside: $_"',
+    '                try {',
+    '                    Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction Stop',
+    '                } catch {',
+    '                    Write-Log "Could not remove failed install directory: $_"',
+    '                }',
+    '            }',
+    '        }',
+    '        if (-not (Test-Path -LiteralPath $installDir)) {',
+    '            Rename-Item -LiteralPath $backupPath -NewName $installLeaf -Force',
+    '            Write-Log "Restored backup after failure."',
+    '        }',
+    '    } catch {',
+    '        Write-Log "Backup restore failed: $_"',
+    '    }',
+    '}',
+    '',
+    'try {',
+    '    Write-Log "Starting Windows update install helper. PID=$PID"',
+    '',
+    '    $lockDir = Split-Path $lockPath -Parent',
+    '    if (-not (Test-Path -LiteralPath $lockDir)) { New-Item -Path $lockDir -ItemType Directory -Force | Out-Null }',
+    '    if (Test-Path -LiteralPath $lockPath) {',
+    '        try {',
+    '            $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction Stop',
+    '            if (((Get-Date) - $lockItem.LastWriteTime).TotalMinutes -gt 30) {',
+    '                Write-Log "Removing stale install lock: $lockPath"',
+    '                Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop',
+    '            }',
+    '        } catch {',
+    '            Write-Log "Failed to inspect stale install lock: $_"',
+    '        }',
+    '    }',
+    '    try {',
+    '        New-Item -Path $lockPath -ItemType File -Value "$PID" -ErrorAction Stop | Out-Null',
+    '        $lockCreated = $true',
+    '    } catch {',
+    '        Write-Log "Another update install helper is already active: $_"',
+    '        exit 0',
+    '    }',
+    '',
+    '    # Wait for parent process to exit',
+    '    try {',
+    '        $proc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue',
+    '        if ($proc) {',
+    '            Write-Log "Waiting for parent process ($parentPid) to exit."',
+    '            $parentExited = $proc.WaitForExit(120000)',
+    '            if (-not $parentExited) { throw "Parent process $parentPid did not exit within 120s." }',
+    '        } else {',
+    '            $parentExited = $true',
+    '        }',
+    '    } catch { throw }',
+    '    Write-Log "Parent process exited."',
+    '',
+    '    # Wait briefly for OS to release file handles',
+    '    Start-Sleep -Seconds 2',
+    '',
+    '    # Clean previous staging and backup',
+    '    if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }',
+    '    if (Test-Path -LiteralPath $backupPath) {',
+    '        if (-not (Test-Path -LiteralPath $installDir)) {',
+    '            Rename-Item -LiteralPath $backupPath -NewName $installLeaf -Force',
+    '            Write-Log "Restored leftover backup before retry."',
+    '            Clear-Marker',
+    '            Relaunch-CurrentApp "existing app after backup restore"',
+    '            exit 0',
+    '        }',
+    '        Remove-Item -LiteralPath $backupPath -Recurse -Force',
+    '    }',
+    '',
+    '    # Verify archive before touching the installed app',
+    '    Write-Log "Verifying update archive checksum."',
+    '    $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()',
+    '    if ($actualSha256 -ne $archiveSha256.ToLowerInvariant()) {',
+    '        throw "Archive checksum mismatch: expected=$archiveSha256 actual=$actualSha256"',
+    '    }',
+    '',
+    '    # Extract archive',
+    '    Write-Log "Extracting update archive: $archivePath"',
+    '    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force',
+    '    Write-Log "Extraction complete."',
+    '',
+    '    # Detect extracted content: single subdirectory or flat contents',
+    '    $extractedItems = @(Get-ChildItem -LiteralPath $extractRoot -Force)',
+    '    if ($extractedItems.Count -eq 0) { throw "Extracted update archive is empty." }',
+    '    if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {',
+    '        $sourceDir = $extractedItems[0].FullName',
+    '    } else {',
+    '        $sourceDir = $extractRoot',
+    '    }',
+    '    $sourceExe = Join-Path $sourceDir (Split-Path $execPath -Leaf)',
+    '    if (-not (Test-Path -LiteralPath $sourceExe)) {',
+    '        throw "Extracted update does not contain expected executable: $sourceExe"',
+    '    }',
+    '',
+    '    # Backup current installation (with retries for locked files)',
+    '    Write-Log "Backing up current installation."',
+    '    $retryCount = 0',
+    '    $maxRetries = 5',
+    '    while ($true) {',
+    '        try {',
+    '            Rename-Item -LiteralPath $installDir -NewName (Split-Path $backupPath -Leaf) -Force',
+    '            break',
+    '        } catch {',
+    '            $retryCount++',
+    '            if ($retryCount -ge $maxRetries) {',
+    '                Write-Log "Backup failed after $maxRetries attempts: $_"',
+    '                throw',
+    '            }',
+    '            Write-Log "Backup attempt $retryCount failed, retrying in 3s: $_"',
+    '            Start-Sleep -Seconds 3',
+    '        }',
+    '    }',
+    '',
+    '    # Install update',
+    '    Write-Log "Installing update."',
+    '    if ($sourceDir -ne $extractRoot) {',
+    '        Move-Item -LiteralPath $sourceDir -Destination $installDir -Force',
+    '    } else {',
+    '        New-Item -Path $installDir -ItemType Directory -Force | Out-Null',
+    '        Get-ChildItem -LiteralPath $extractRoot -Force | Move-Item -Destination $installDir -Force',
+    '    }',
+    '    if (-not (Test-Path -LiteralPath $execPath)) {',
+    '        throw "Installed update is missing expected executable: $execPath"',
+    '    }',
+    '',
+    '    # Mark success BEFORE relaunching, because the new app reads and',
+    '    # clears install.log on startup (reportPreviousInstallResult).',
+    '    Write-Log "Update installed successfully."',
+    '    Clear-Marker',
+    '',
+    '    # Relaunch the updated app.',
+    '    Relaunch-CurrentApp "updated app"',
+    '',
+    '    # Cleanup (non-critical, runs after relaunch)',
+    '    Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue',
+    '    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue',
+    '    Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue',
+    '} catch {',
+    '    Write-Log "Update install failed: $_"',
+    '    Restore-Backup',
+    '    Clear-Marker',
+    '    if ($parentExited) {',
+    '        Relaunch-CurrentApp "existing app after update failure"',
+    '    } else {',
+    '        Write-Log "Skipping relaunch because parent process may still be running."',
+    '    }',
+    '} finally {',
+    '    if ($lockCreated) {',
+    '        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue',
+    '    }',
+    '}'
+  ].join('\n')
+}
+
+function windowsCommandQuote(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`
+}
+
+function launchWindowsUpdateScript(params: {
+  stagingRoot: string
+  scriptPath: string
+  logPath: string
+}): boolean {
+  const psPath = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+  // Strategy 1: WMI process creation.
+  // Win32_Process.Create() spawns the process through the WMI service, outside
+  // the caller's Job Object. This helps the helper survive Electron shutdown.
+  const workerCmd = [
+    windowsCommandQuote(psPath),
+    '-ExecutionPolicy Bypass',
+    '-NoProfile',
+    '-WindowStyle Hidden',
+    '-File',
+    windowsCommandQuote(params.scriptPath)
+  ].join(' ')
+  const launcherPath = join(params.stagingRoot, 'launch.ps1')
+  const launcherContent = [
+    '$ErrorActionPreference = "Stop"',
+    `$result = ([wmiclass]'Win32_Process').Create(${powershellEscape(workerCmd)})`,
+    'if ($result.ReturnValue -ne 0) {',
+    `    Add-Content -LiteralPath ${powershellEscape(params.logPath)} -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') WMI Create failed: ReturnValue=$($result.ReturnValue)" -ErrorAction SilentlyContinue`,
+    '    exit 1',
+    '}'
+  ].join('\n')
+  writeFileSync(launcherPath, launcherContent, { encoding: 'utf-8' })
+
+  try {
+    execFileSync(psPath, ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', launcherPath], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: 15000
+    })
+    appendToInstallLog(params.logPath, 'Node.js: WMI launch succeeded.')
+    return true
+  } catch (err) {
+    appendToInstallLog(params.logPath, `Node.js: WMI launch failed: ${err}. Trying batch launcher.`)
+  }
+
+  // Strategy 2: Batch file with cmd.exe /c start (legacy fallback).
+  const batPath = join(params.stagingRoot, 'up.bat')
+  const batContent = `@echo off\r\nstart "" /min "${psPath}" -ExecutionPolicy Bypass -NoProfile -File "${params.scriptPath}"\r\n`
+  writeFileSync(batPath, batContent, { encoding: 'utf-8' })
+
+  try {
+    execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', batPath], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: 5000
+    })
+    appendToInstallLog(params.logPath, 'Node.js: Batch launcher succeeded.')
+    return true
+  } catch (err) {
+    appendToInstallLog(params.logPath, `Node.js: Batch launcher failed: ${err}. Trying detached spawn.`)
+  }
+
+  // Strategy 3: Direct detached spawn (least reliable during will-quit).
+  try {
+    const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-WindowStyle', 'Hidden', '-File', params.scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    child.on('error', (err) => {
+      appendToInstallLog(params.logPath, `Node.js: Detached spawn emitted error: ${err}`)
+    })
+    child.unref()
+    appendToInstallLog(params.logPath, 'Node.js: Detached spawn succeeded (fire-and-forget).')
+    return true
+  } catch (err) {
+    appendToInstallLog(params.logPath, `Node.js: All launch strategies failed: ${err}`)
+    return false
+  }
+}
 
 /** Track when update failure telemetry was last sent (keyed by date string). */
 let lastFailureTelemetryDate = ''
@@ -122,11 +535,14 @@ function normalizeArch(value: string): 'arm64' | 'x64' | null {
 
 function parseRepositoryOwnerAndName(pkg: Record<string, unknown> | null): { owner: string; name: string } | null {
   const repositoryValue = pkg?.repository
+  const repositoryObject = typeof repositoryValue === 'object' && repositoryValue !== null
+    ? repositoryValue as { url?: unknown }
+    : null
   const url =
     typeof repositoryValue === 'string'
       ? repositoryValue
-      : typeof repositoryValue === 'object' && repositoryValue && typeof repositoryValue.url === 'string'
-        ? repositoryValue.url
+      : repositoryObject && typeof repositoryObject.url === 'string'
+        ? repositoryObject.url
         : ''
 
   const match = /github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/.exec(url)
@@ -139,8 +555,11 @@ function resolveUpdateBaseUrl(pkg: Record<string, unknown> | null, repository: {
   if (envBaseUrl) return envBaseUrl.replace(/\/+$/, '')
 
   const onwardValue = pkg?.onward
-  if (typeof onwardValue === 'object' && onwardValue && typeof onwardValue.updateManifestBaseUrl === 'string') {
-    return onwardValue.updateManifestBaseUrl.replace(/\/+$/, '')
+  const onwardObject = typeof onwardValue === 'object' && onwardValue !== null
+    ? onwardValue as { updateManifestBaseUrl?: unknown }
+    : null
+  if (onwardObject && typeof onwardObject.updateManifestBaseUrl === 'string') {
+    return onwardObject.updateManifestBaseUrl.replace(/\/+$/, '')
   }
 
   if (!repository) return null
@@ -205,7 +624,7 @@ async function downloadFile(url: string, destinationPath: string): Promise<void>
 
   mkdirSync(dirname(destinationPath), { recursive: true })
   const fileStream = createWriteStream(destinationPath)
-  await pipeline(Readable.fromWeb(response.body as globalThis.ReadableStream), fileStream)
+  await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), fileStream)
 }
 
 async function fetchUpdateResource(
@@ -321,6 +740,12 @@ export class UpdateService {
     const arch = normalizeArch(process.arch)
     if (!manifest.version || !manifest.tag || !manifest.artifactUrl || !manifest.sha256 || !manifest.artifactName) {
       throw new Error('Manifest is missing required fields.')
+    }
+    if (!isSafeArtifactName(manifest.artifactName)) {
+      throw new Error(`Manifest artifact name is invalid: ${manifest.artifactName}`)
+    }
+    if (!/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
+      throw new Error('Manifest SHA-256 is invalid.')
     }
     if (manifest.channel !== this.status.currentChannel) {
       throw new Error(`Manifest channel mismatch: expected ${this.status.currentChannel}, got ${String(manifest.channel)}`)
@@ -475,6 +900,11 @@ export class UpdateService {
         ` (channel=${String(manifest.channel)}, platform=${String(manifest.platform)}, arch=${String(manifest.arch)})`)
       return false
     }
+    if (!isSafeArtifactName(manifest.artifactName) || !/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
+      rmSync(versionDir, { recursive: true, force: true })
+      console.log(`${LOG_PREFIX} Removed invalid download manifest: ${version}`)
+      return false
+    }
 
     const archivePath = join(versionDir, manifest.artifactName)
     if (!existsSync(archivePath)) {
@@ -572,16 +1002,23 @@ export class UpdateService {
       if (!content) return
 
       const lines = content.split('\n').filter(Boolean)
-      const lastLine = lines[lines.length - 1] || ''
-      const success = lastLine.includes('installed successfully')
-      const failed = lastLine.includes('install failed')
+      let lastSuccessIndex = -1
+      let lastFailureIndex = -1
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        if (line.includes('installed successfully')) lastSuccessIndex = i
+        if (line.includes('install failed')) lastFailureIndex = i
+      }
+      const success = lastSuccessIndex >= 0 && lastSuccessIndex > lastFailureIndex
+      const failed = lastFailureIndex >= 0 && lastFailureIndex > lastSuccessIndex
 
       if (success) {
         console.log(`${LOG_PREFIX} Previous update installed successfully`)
         trackUpdateEvent('update/installComplete', { result: 'success' })
       } else if (failed) {
+        const failedLine = lines[lastFailureIndex] || ''
         // Extract error from the log line: "YYYY-MM-DD HH:MM:SS Update install failed: <error>"
-        const errorMatch = /install failed:\s*(.+)$/i.exec(lastLine)
+        const errorMatch = /install failed:\s*(.+)$/i.exec(failedLine)
         const errorDetail = errorMatch ? errorMatch[1] : 'unknown'
         console.error(`${LOG_PREFIX} Previous update install failed: ${errorDetail}`)
         trackUpdateFailure('install', errorDetail, {
@@ -929,118 +1366,54 @@ export class UpdateService {
     const scriptPath = join(stagingRoot, 'up.ps1')
     const logPath = resolveUpdateLogPath()
     const execPath = app.getPath('exe')
+    const markerPath = join(resolveUpdatesRootPath(), 'pending-update.json')
+    const lockPath = join(resolveUpdatesRootPath(), 'install.lock')
 
-    const envSetStatements = RELAUNCH_ENV_KEYS
-      .map((key) => {
-        const value = process.env[key]
-        if (!value) return null
-        return `$env:${key} = ${powershellEscape(value)}`
-      })
-      .filter((value): value is string => Boolean(value))
-      .join('\n')
+    // Pre-flight logging from Node.js side (appears in install.log)
+    appendToInstallLog(logPath, `Node.js: Preparing update install helper. PID=${process.pid}`)
+    appendToInstallLog(logPath, `Node.js: installDir=${installDir}`)
+    appendToInstallLog(logPath, `Node.js: archivePath=${this.downloadedUpdate!.archivePath}`)
+    appendToInstallLog(logPath, `Node.js: stagingRoot=${stagingRoot}`)
 
-    const scriptContent = [
-      '$ErrorActionPreference = "Stop"',
-      `$installDir = ${powershellEscape(installDir)}`,
-      `$execPath = ${powershellEscape(execPath)}`,
-      `$archivePath = ${powershellEscape(this.downloadedUpdate!.archivePath)}`,
-      `$parentPid = ${process.pid}`,
-      `$stagingRoot = ${powershellEscape(stagingRoot)}`,
-      `$logPath = ${powershellEscape(logPath)}`,
-      '$extractRoot = Join-Path $stagingRoot "e"',
-      '$backupPath = "${installDir}.bak"',
-      '',
-      'function Write-Log($msg) {',
-      '    $dir = Split-Path $logPath -Parent',
-      '    if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }',
-      '    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"',
-      '    Add-Content -Path $logPath -Value "$ts $msg" -ErrorAction SilentlyContinue',
-      '}',
-      '',
-      'try {',
-      '    Write-Log "Starting Windows update install helper."',
-      '',
-      '    # Wait for parent process to exit',
-      '    try {',
-      '        $proc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue',
-      '        if ($proc) {',
-      '            Write-Log "Waiting for parent process ($parentPid) to exit."',
-      '            $proc.WaitForExit(120000) | Out-Null',
-      '        }',
-      '    } catch { }',
-      '    Write-Log "Parent process exited."',
-      '',
-      '    # Clean previous staging and backup',
-      '    if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }',
-      '    if (Test-Path $backupPath) { Remove-Item $backupPath -Recurse -Force }',
-      '',
-      '    # Extract archive',
-      '    Write-Log "Extracting update archive."',
-      '    Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force',
-      '',
-      '    # Detect extracted content: single subdirectory or flat contents',
-      '    $extractedItems = Get-ChildItem $extractRoot',
-      '    if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {',
-      '        $sourceDir = $extractedItems[0].FullName',
-      '    } else {',
-      '        $sourceDir = $extractRoot',
-      '    }',
-      '',
-      '    # Backup current installation',
-      '    Write-Log "Backing up current installation."',
-      '    Rename-Item -Path $installDir -NewName (Split-Path $backupPath -Leaf) -Force',
-      '',
-      '    # Install update',
-      '    Write-Log "Installing update."',
-      '    if ($sourceDir -ne $extractRoot) {',
-      '        Move-Item -Path $sourceDir -Destination $installDir -Force',
-      '    } else {',
-      '        New-Item -Path $installDir -ItemType Directory -Force | Out-Null',
-      '        Get-ChildItem $extractRoot | Move-Item -Destination $installDir -Force',
-      '    }',
-      '',
-      '    # Set environment variables and relaunch',
-      '    Write-Log "Relaunching updated app."',
-      envSetStatements,
-      '    Start-Process -FilePath $execPath',
-      '',
-      '    # Cleanup',
-      '    Remove-Item $backupPath -Recurse -Force -ErrorAction SilentlyContinue',
-      '    Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue',
-      '    Remove-Item $archivePath -Force -ErrorAction SilentlyContinue',
-      '',
-      '    Write-Log "Update installed successfully."',
-      '} catch {',
-      '    Write-Log "Update install failed: $_"',
-      '    # Restore backup if installation dir is gone',
-      '    if (-not (Test-Path $installDir) -and (Test-Path $backupPath)) {',
-      '        Rename-Item -Path $backupPath -NewName (Split-Path $installDir -Leaf) -Force',
-      '        Write-Log "Restored backup after failure."',
-      '    }',
-      '}'
-    ].join('\n')
+    // Write pending-update marker for startup recovery fallback.
+    // If the helper script fails to launch or is killed during Electron's
+    // shutdown, the next app startup will detect this marker and retry.
+    try {
+      const marker: PendingUpdateInfo = {
+        schemaVersion: PENDING_UPDATE_MARKER_SCHEMA_VERSION,
+        archivePath: this.downloadedUpdate!.archivePath,
+        archiveSha256: this.downloadedUpdate!.manifest.sha256,
+        artifactName: this.downloadedUpdate!.manifest.artifactName,
+        installDir,
+        execPath,
+        logPath,
+        timestamp: Date.now(),
+        targetVersion: this.downloadedUpdate!.manifest.version,
+        attempts: 0
+      }
+      writePendingUpdateInfo(markerPath, marker)
+      appendToInstallLog(logPath, 'Node.js: Wrote pending-update marker.')
+    } catch (err) {
+      appendToInstallLog(logPath, `Node.js: Failed to write pending-update marker: ${err}`)
+    }
+
+    const envSetStatements = buildEnvSetStatements()
+    const scriptContent = buildWindowsUpdateScript({
+      installDir,
+      execPath,
+      archivePath: this.downloadedUpdate!.archivePath,
+      archiveSha256: this.downloadedUpdate!.manifest.sha256,
+      parentPid: process.pid,
+      stagingRoot,
+      logPath,
+      markerPath,
+      lockPath,
+      envSetStatements
+    })
 
     writeFileSync(scriptPath, scriptContent, { encoding: 'utf-8' })
-
-    // Write a batch launcher that starts PowerShell in a fully independent process.
-    // Using cmd.exe /c start ensures the PowerShell process survives Electron's
-    // will-quit teardown, which can silently kill detached child processes.
-    const psPath = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    const batPath = join(stagingRoot, 'up.bat')
-    const batContent = `@echo off\r\nstart "" /min "${psPath}" -ExecutionPolicy Bypass -File "${scriptPath}"\r\n`
-    writeFileSync(batPath, batContent, { encoding: 'utf-8' })
-
-    try {
-      execSync(`"${batPath}"`, { windowsHide: true, stdio: 'ignore', timeout: 5000 })
-    } catch {
-      // Fallback: try direct spawn
-      const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true
-      })
-      child.on('error', () => {})
-      child.unref()
+    if (!launchWindowsUpdateScript({ stagingRoot, scriptPath, logPath })) {
+      safeRemoveFile(markerPath)
     }
   }
 }
@@ -1052,4 +1425,156 @@ export function getUpdateService(): UpdateService {
     updateService = new UpdateService()
   }
   return updateService
+}
+
+/**
+ * Called early during app startup (after initializeAppIdentity but before
+ * createWindow). If the previous quit-time update script failed to run,
+ * this detects the pending-update marker and retries the update.
+ *
+ * Returns true if a recovery update was launched and the caller should
+ * exit immediately (the helper script will relaunch the app).
+ */
+export function applyPendingUpdateOnStartup(): boolean {
+  if (process.platform !== 'win32') return false
+
+  const markerPath = join(resolveUpdatesRootPath(), 'pending-update.json')
+  if (!existsSync(markerPath)) return false
+
+  let info: PendingUpdateInfo
+  let rawMarker: unknown
+  try {
+    rawMarker = JSON.parse(readFileSync(markerPath, 'utf-8')) as unknown
+  } catch {
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  const validation = validatePendingUpdateInfo(rawMarker)
+  if (!validation.info) {
+    const rawLogPath = rawMarker && typeof rawMarker === 'object'
+      ? (rawMarker as { logPath?: unknown }).logPath
+      : null
+    const fallbackLogPath = isNonEmptyString(rawLogPath) && isAbsolute(rawLogPath)
+      ? rawLogPath
+      : resolveUpdateLogPath()
+    appendToInstallLog(fallbackLogPath, `Node.js: Removing invalid pending-update marker: ${validation.error}`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+  info = validation.info
+
+  const currentInstallDir = resolveCurrentInstallPath()
+  const currentExecPath = app.getPath('exe')
+  if (!currentInstallDir ||
+      normalizeWindowsPathForCompare(currentInstallDir) !== normalizeWindowsPathForCompare(info.installDir) ||
+      normalizeWindowsPathForCompare(currentExecPath) !== normalizeWindowsPathForCompare(info.execPath)) {
+    appendToInstallLog(info.logPath, 'Node.js: Pending update marker install path no longer matches current app, removing marker.')
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  if (basename(info.archivePath) !== info.artifactName) {
+    appendToInstallLog(info.logPath, 'Node.js: Pending update marker archive path does not match artifact name, removing marker.')
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  let isTargetNewer = false
+  const { version: currentVersion } = getAppInfo()
+  try {
+    isTargetNewer = compareVersions(info.targetVersion, currentVersion) > 0
+  } catch {
+    appendToInstallLog(info.logPath, `Node.js: Pending update marker target version is invalid: ${info.targetVersion}`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  // If current version already matches or exceeds the target, the update was applied.
+  if (!isTargetNewer) {
+    console.log(`${LOG_PREFIX} Pending update target (${info.targetVersion}) is not newer than current (${currentVersion}), clearing marker.`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  // Skip if marker is too old (> 1 hour)
+  if (Date.now() - info.timestamp > MAX_PENDING_UPDATE_MARKER_AGE_MS) {
+    console.log(`${LOG_PREFIX} Pending update marker is stale (${new Date(info.timestamp).toISOString()}), removing.`)
+    appendToInstallLog(info.logPath, 'Node.js: Pending update marker is stale, removing marker.')
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  if (info.attempts >= MAX_PENDING_UPDATE_STARTUP_ATTEMPTS) {
+    console.log(`${LOG_PREFIX} Pending update startup recovery already attempted, removing marker.`)
+    appendToInstallLog(info.logPath, 'Node.js: Startup recovery attempt limit reached, removing marker.')
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  // Skip if archive is gone (already cleaned up or never downloaded)
+  if (!existsSync(info.archivePath)) {
+    console.log(`${LOG_PREFIX} Pending update archive not found: ${info.archivePath}, removing marker.`)
+    appendToInstallLog(info.logPath, `Node.js: Pending update archive not found: ${info.archivePath}`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  try {
+    const checksum = hashFileSha256(info.archivePath)
+    if (checksum.toLowerCase() !== info.archiveSha256.toLowerCase()) {
+      console.log(`${LOG_PREFIX} Pending update archive checksum mismatch, removing marker and archive.`)
+      appendToInstallLog(info.logPath, `Node.js: Pending update archive checksum mismatch: expected=${info.archiveSha256} actual=${checksum}`)
+      safeRemoveFile(info.archivePath)
+      safeRemoveFile(markerPath)
+      return false
+    }
+  } catch (err) {
+    appendToInstallLog(info.logPath, `Node.js: Pending update archive could not be verified: ${err}`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  console.log(`${LOG_PREFIX} Found pending update ${info.targetVersion}. Launching recovery update script.`)
+  appendToInstallLog(info.logPath, `Node.js: Startup recovery: launching update script for ${info.targetVersion}. PID=${process.pid}`)
+
+  try {
+    writePendingUpdateInfo(markerPath, {
+      ...info,
+      attempts: info.attempts + 1
+    })
+  } catch (err) {
+    appendToInstallLog(info.logPath, `Node.js: Startup recovery: failed to update marker attempt count: ${err}`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+
+  // Create a new staging directory and PowerShell script with the CURRENT PID
+  const stagingRoot = join(process.env.TEMP || tmpdir(), `ou-${Date.now().toString(36)}`)
+  mkdirSync(stagingRoot, { recursive: true })
+  const scriptPath = join(stagingRoot, 'up.ps1')
+  const lockPath = join(resolveUpdatesRootPath(), 'install.lock')
+
+  const scriptContent = buildWindowsUpdateScript({
+    installDir: info.installDir,
+    execPath: info.execPath,
+    archivePath: info.archivePath,
+    archiveSha256: info.archiveSha256,
+    parentPid: process.pid,
+    stagingRoot,
+    logPath: info.logPath,
+    markerPath,
+    lockPath,
+    envSetStatements: buildEnvSetStatements()
+  })
+  writeFileSync(scriptPath, scriptContent, 'utf-8')
+
+  if (!launchWindowsUpdateScript({ stagingRoot, scriptPath, logPath: info.logPath })) {
+    appendToInstallLog(info.logPath, 'Node.js: Startup recovery: failed to launch script.')
+    console.error(`${LOG_PREFIX} Startup recovery failed to launch.`)
+    safeRemoveFile(markerPath)
+    return false
+  }
+  appendToInstallLog(info.logPath, 'Node.js: Startup recovery: script launched successfully.')
+  return true
 }
