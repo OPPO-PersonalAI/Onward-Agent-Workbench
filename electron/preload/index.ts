@@ -819,39 +819,41 @@ export interface BrowserNavState {
 }
 
 // Coding Agent integration types
-export type CodingAgentType = 'claude-code' | 'codex'
-export type CodingAgentProvider = 'openrouter' | 'custom'
+export interface EnvVarEntry {
+  key: string
+  value: string
+  masked?: boolean
+}
 
 export interface CodingAgentConfigInput {
-  agentType: CodingAgentType
-  provider?: CodingAgentProvider
-  apiUrl?: string
-  apiKey?: string
-  model?: string
+  command: string
+  executablePath?: string
   extraArgs?: string
+  envVars?: EnvVarEntry[]
+  alias?: string
 }
 
 export interface CodingAgentHistoryEntry {
   id: string
-  agentType: CodingAgentType
-  provider?: CodingAgentProvider
-  apiUrl?: string
-  apiKey?: string
-  model?: string
+  command: string
+  executablePath: string
   extraArgs: string
+  envVars: EnvVarEntry[]
+  alias: string
   createdAt: number
   lastUsedAt: number
 }
 
 export interface CodingAgentConfigState {
   version: number
-  lastUsedId: Record<CodingAgentType, string | null>
+  lastUsedId: string | null
   history: CodingAgentHistoryEntry[]
 }
 
 export interface CodingAgentConfigAPI {
-  load: (agentType?: CodingAgentType) => Promise<CodingAgentConfigState>
+  load: (command?: string) => Promise<CodingAgentConfigState>
   save: (config: CodingAgentConfigInput) => Promise<CodingAgentConfigState>
+  update: (id: string, config: CodingAgentConfigInput) => Promise<CodingAgentConfigState>
   delete: (id: string) => Promise<CodingAgentConfigState>
 }
 
@@ -862,7 +864,6 @@ export interface CodingAgentPrepareResult {
 
 export interface CodingAgentLaunchInput {
   terminalId: string
-  agentType: CodingAgentType
   config: CodingAgentConfigInput
   cols?: number
   rows?: number
@@ -874,7 +875,7 @@ export interface CodingAgentLaunchResult {
 }
 
 export interface CodingAgentAPI {
-  prepare: (agentType: CodingAgentType) => Promise<CodingAgentPrepareResult>
+  prepare: (command: string, executablePath?: string) => Promise<CodingAgentPrepareResult>
   launch: (payload: CodingAgentLaunchInput) => Promise<CodingAgentLaunchResult>
 }
 
@@ -1593,13 +1594,14 @@ const feedbackAPI: FeedbackAPI = {
 }
 
 const codingAgentConfigAPI: CodingAgentConfigAPI = {
-  load: (agentType?: CodingAgentType) => ipcRenderer.invoke('coding-agent-config:load', agentType),
+  load: (command?: string) => ipcRenderer.invoke('coding-agent-config:load', command),
   save: (config: CodingAgentConfigInput) => ipcRenderer.invoke('coding-agent-config:save', config),
+  update: (id: string, config: CodingAgentConfigInput) => ipcRenderer.invoke('coding-agent-config:update', id, config),
   delete: (id: string) => ipcRenderer.invoke('coding-agent-config:delete', id)
 }
 
 const codingAgentAPI: CodingAgentAPI = {
-  prepare: (agentType: CodingAgentType) => ipcRenderer.invoke('coding-agent:prepare', agentType),
+  prepare: (command: string, executablePath?: string) => ipcRenderer.invoke('coding-agent:prepare', command, executablePath),
   launch: (payload: CodingAgentLaunchInput) => ipcRenderer.invoke('coding-agent:launch', payload)
 }
 

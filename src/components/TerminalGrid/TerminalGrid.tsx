@@ -12,7 +12,7 @@ import { GitHistoryViewer } from '../GitHistoryViewer'
 import { ProjectEditor } from '../ProjectEditor'
 import { SubpagePanelShell, type SubpagePanelShellState } from '../SubpageSwitcher'
 import { CodingAgentModal } from '../CodingAgentModal'
-import type { CodingAgentType } from '../../types/electron'
+import type { CodingAgentConfigInput } from '../../types/electron'
 import { BrowserPanel } from '../BrowserPanel/BrowserPanel'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_FAMILY } from '../../constants/terminal'
@@ -154,7 +154,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   // Coding Agent launch modal state
   const [codingAgentModalOpen, setCodingAgentModalOpen] = useState(false)
   const [codingAgentTerminalId, setCodingAgentTerminalId] = useState<string | null>(null)
-  const [codingAgentType, setCodingAgentType] = useState<CodingAgentType>('claude-code')
+  // codingAgentType state removed — modal handles command selection internally
   const [terminalInfos, setTerminalInfos] = useState<Record<string, TerminalGitInfo>>({})
   const [copyNotice, setCopyNotice] = useState<{ terminalId: string; message: string } | null>(null)
   const copyNoticeTimerRef = useRef<number | null>(null)
@@ -1278,9 +1278,8 @@ export const TerminalGrid = memo(function TerminalGrid({
   }, [closeGitHistoryPanel])
 
   // Coding Agent handlers
-  const handleOpenCodingAgent = useCallback((terminalId: string, agentType: CodingAgentType) => {
+  const handleOpenCodingAgent = useCallback((terminalId: string) => {
     setCodingAgentTerminalId(terminalId)
-    setCodingAgentType(agentType)
     setCodingAgentModalOpen(true)
   }, [])
 
@@ -1289,14 +1288,13 @@ export const TerminalGrid = memo(function TerminalGrid({
     setCodingAgentTerminalId(null)
   }, [])
 
-  const handleLaunchCodingAgent = useCallback(async (config: import('../../types/electron').CodingAgentConfigInput) => {
+  const handleLaunchCodingAgent = useCallback(async (config: CodingAgentConfigInput) => {
     if (!codingAgentTerminalId) return
     const session = terminalSessionManager.getSession(codingAgentTerminalId)
     const cols = session?.terminal.cols || 80
     const rows = session?.terminal.rows || 24
     const result = await window.electronAPI.codingAgent.launch({
       terminalId: codingAgentTerminalId,
-      agentType: codingAgentType,
       config,
       cols,
       rows
@@ -1308,7 +1306,7 @@ export const TerminalGrid = memo(function TerminalGrid({
     terminalSessionManager.focus(codingAgentTerminalId)
     setCodingAgentModalOpen(false)
     setCodingAgentTerminalId(null)
-  }, [codingAgentTerminalId, codingAgentType])
+  }, [codingAgentTerminalId])
 
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalId: string) => {
@@ -1416,7 +1414,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                     onOpenProjectEditor={() => onOpenProjectEditor(termInfo.id)}
                     onToggleBrowser={() => handleToggleBrowser(termInfo.id)}
                     isBrowserOpen={browserOpenTerminals.has(termInfo.id)}
-                    onOpenCodingAgent={(agentType) => handleOpenCodingAgent(termInfo.id, agentType)}
+                    onOpenCodingAgent={() => handleOpenCodingAgent(termInfo.id)}
                     forceClose={hidden || globalOverlayActive}
                   />
                   <div className="terminal-grid-header-left">
@@ -1612,7 +1610,6 @@ export const TerminalGrid = memo(function TerminalGrid({
       )}
       {codingAgentModalOpen && (
         <CodingAgentModal
-          agentType={codingAgentType}
           onCancel={handleCloseCodingAgent}
           onLaunch={handleLaunchCodingAgent}
         />
