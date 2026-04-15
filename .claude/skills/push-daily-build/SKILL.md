@@ -86,6 +86,7 @@ This script writes the draft files:
 
 The draft is always written in English, based on the current `HEAD` diff against the previous Daily tag. It is only a starting point.
 The HTML assets are generated automatically from the Markdown and should not be edited by hand.
+Before showing the draft to the user, inspect the generated English Markdown and ensure every user-facing Change Log title, heading, bullet item, and sentence starts with an uppercase letter. Fix lowercase initial letters in the Markdown draft, then regenerate derived HTML assets if any Markdown content changed.
 
 After generation, **stop and ask the user to review the draft**. Do not continue automatically.
 

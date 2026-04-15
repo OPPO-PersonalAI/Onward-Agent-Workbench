@@ -9,6 +9,12 @@
 import type { AutotestContext, TestResult } from './types'
 
 const SAMPLE_MARKDOWN_PATH = 'test/dl_math_foundations.md'
+const CJK_STRONG_SOURCE = '\u7528**\u5FAE\u89C2\u8FC7\u6EE4\u673A\u5236\uFF08Micro-Level Filtering\uFF09**\u6765'
+const CJK_STRONG_HTML = '\u7528<strong>\u5FAE\u89C2\u8FC7\u6EE4\u673A\u5236\uFF08Micro-Level Filtering\uFF09</strong>\u6765'
+const CJK_CODE_SPAN_SOURCE = '`\u7528**\u4EE3\u7801\uFF09**\u6765`'
+const CJK_CODE_SPAN_HTML = '<code>\u7528**\u4EE3\u7801\uFF09**\u6765</code>'
+const CJK_LINK_SOURCE = '[\u7528**\u94FE\u63A5\uFF09**\u6765](docs/test\uFF09**path)'
+const CJK_LINK_TEXT_HTML = '\u7528<strong>\u94FE\u63A5\uFF09</strong>\u6765</a>'
 
 function countClassName(html: string, className: string): number {
   const regex = new RegExp(`class="[^"]*\\b${className}\\b[^"]*"`, 'g')
@@ -113,6 +119,11 @@ export async function testMarkdownLatexPreview(ctx: AutotestContext): Promise<Te
     'f(x) &= x^2 + 1 \\\\',
     'g(x) &= \\frac{1}{1 + e^{-x}}',
     '\\end{aligned}',
+    '',
+    'AUTOTEST_CJK_STRONG_MARKER',
+    CJK_STRONG_SOURCE,
+    `Inline code should stay literal: ${CJK_CODE_SPAN_SOURCE}`,
+    `Link target should stay literal: ${CJK_LINK_SOURCE}`,
     ''
   ].join('\n')
 
@@ -160,15 +171,32 @@ export async function testMarkdownLatexPreview(ctx: AutotestContext): Promise<Te
       !tempHtml.includes('\\(') &&
       !tempHtml.includes('\\['),
       {
-      hasInlineParenthesesDelimiter: tempHtml.includes('\\('),
-      hasBlockBracketDelimiter: tempHtml.includes('\\[')
-    }
+        hasInlineParenthesesDelimiter: tempHtml.includes('\\('),
+        hasBlockBracketDelimiter: tempHtml.includes('\\[')
+      }
     )
+    const hasCjkStrong = tempHtml.includes(CJK_STRONG_HTML)
+    const hasRawCjkStrong = tempHtml.includes(CJK_STRONG_SOURCE.slice(0, 12))
+    _assert('MLP-12-cjk-strong-after-fullwidth-punctuation', hasCjkStrong && !hasRawCjkStrong, {
+      hasCjkStrong,
+      hasRawCjkStrong
+    })
+    const hasLiteralCjkCodeSpan = tempHtml.includes(CJK_CODE_SPAN_HTML)
+    _assert('MLP-13-cjk-inline-code-keeps-literal-stars', hasLiteralCjkCodeSpan, {
+      hasLiteralCjkCodeSpan
+    })
+    const hasCjkStrongLinkText = tempHtml.includes(CJK_LINK_TEXT_HTML)
+    const hasUnchangedCjkLinkTarget = tempHtml.includes('%EF%BC%89**path')
+      && !tempHtml.includes('%EF%BC%89%E2%80%8B**path')
+    _assert('MLP-14-cjk-link-text-and-target-rendering', hasCjkStrongLinkText && hasUnchangedCjkLinkTarget, {
+      hasCjkStrongLinkText,
+      hasUnchangedCjkLinkTarget
+    })
     if (cancelled()) return results
 
     const updatedContent = `${tempContent}\nAUTOTEST_LATEX_UPDATED_MARKER\nUpdated formula check: $\\alpha + \\beta$`
     const saveResult = await window.electronAPI.project.saveFile(rootPath, tempPath, updatedContent)
-    _assert('MLP-12-update-temp-file', saveResult.success, {
+    _assert('MLP-15-update-temp-file', saveResult.success, {
       error: saveResult.success ? null : saveResult.error
     })
     if (!saveResult.success || cancelled()) return results
@@ -187,14 +215,14 @@ export async function testMarkdownLatexPreview(ctx: AutotestContext): Promise<Te
       () => getApi()?.getActiveFilePath?.() === tempPath,
       10000
     )
-    _assert('MLP-13-reopen-temp-file-after-save', tempReopened, {
+    _assert('MLP-16-reopen-temp-file-after-save', tempReopened, {
       expected: tempPath,
       actual: getApi()?.getActiveFilePath?.() ?? null
     })
     if (!tempReopened || cancelled()) return results
 
     const updatedRendered = await waitForMarkdownRendered('temp-updated', 360, 'AUTOTEST_LATEX_UPDATED_MARKER')
-    _assert('MLP-14-rerender-after-file-update', updatedRendered, {
+    _assert('MLP-17-rerender-after-file-update', updatedRendered, {
       renderPending: getApi()?.isMarkdownRenderPending?.(),
       htmlLength: getApi()?.getMarkdownRenderedHtml?.().length ?? 0
     })
@@ -203,7 +231,7 @@ export async function testMarkdownLatexPreview(ctx: AutotestContext): Promise<Te
     const updatedHtml = getApi()?.getMarkdownRenderedHtml?.() ?? ''
     const hasUpdatedMarker = updatedHtml.includes('AUTOTEST_LATEX_UPDATED_MARKER')
     const hasRawUpdatedFormula = updatedHtml.includes('$\\alpha + \\beta$')
-    _assert('MLP-15-updated-formula-visible', hasUpdatedMarker && !hasRawUpdatedFormula, {
+    _assert('MLP-18-updated-formula-visible', hasUpdatedMarker && !hasRawUpdatedFormula, {
       hasUpdatedMarker,
       hasRawUpdatedFormula
     })

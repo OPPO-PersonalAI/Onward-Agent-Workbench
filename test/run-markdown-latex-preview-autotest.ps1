@@ -68,9 +68,9 @@ if ($content -match "\[AutoTest\] FAIL") {
   Write-Error "Markdown LaTeX preview autotest failed. Log: $LogFile"
 }
 
-if ($content -notmatch "MLP-15-updated-formula-visible") {
+if ($content -notmatch "MLP-18-updated-formula-visible") {
   Get-Content $LogFile -Tail 160 | Write-Host
-  Write-Error "Missing MLP-15-updated-formula-visible result. Log: $LogFile"
+  Write-Error "Missing MLP-18-updated-formula-visible result. Log: $LogFile"
 }
 
 Write-Host "Markdown LaTeX preview autotest passed. Log: $LogFile"

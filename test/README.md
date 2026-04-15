@@ -493,7 +493,7 @@ Source set: ProjectEditor multi-terminal isolation validation suite
 
 Source set: Markdown LaTeX preview validation suite
 
-- `MLP-00` to `MLP-15`: fixture existence, preview rendering, KaTeX output, and temporary file preview behavior
+- `MLP-00` to `MLP-18`: fixture existence, preview rendering, KaTeX output, CJK strong delimiter handling, and temporary file preview behavior
 
 ### Phase 0.81: Image Diff
 

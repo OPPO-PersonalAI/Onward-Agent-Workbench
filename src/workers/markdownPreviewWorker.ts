@@ -114,6 +114,12 @@ function renderKatex(token: KatexToken, newlineAfter = false): string {
 const inlineParenRule = /^\\\(((?:\\.|[^\\\n])+?)\\\)/
 const blockBracketRule = /^\\\[\n((?:\\[^]|[^\\])+?)\n\\\](?:\n|$)/
 const blockEnvironmentRule = /^\\begin\{([a-zA-Z*]+)\}\n((?:\\[^]|[^\\])+?)\n\\end\{\1\}(?:\n|$)/
+const cjkStrongDelimiterMaskRule = /([\u3001-\u303F\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65])(\*\*)(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])/gu
+
+// marked uses this same-length mask only for delimiter classification.
+function maskCjkStrongDelimiterPunctuation(src: string): string {
+  return src.replace(cjkStrongDelimiterMaskRule, 'A$2')
+}
 
 marked.use(markedKatex({
   ...KATEX_OPTIONS,
@@ -121,6 +127,11 @@ marked.use(markedKatex({
 }))
 
 marked.use({
+  hooks: {
+    emStrongMask(src: string): string {
+      return maskCjkStrongDelimiterPunctuation(src)
+    }
+  },
   extensions: [
     {
       name: 'inlineKatexParentheses',

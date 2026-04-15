@@ -61,8 +61,8 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   exit 1
 fi
 
-if ! grep -q "MLP-15-updated-formula-visible" "$LOG_FILE"; then
-  echo "Missing MLP-15-updated-formula-visible result. Log: $LOG_FILE" >&2
+if ! grep -q "MLP-18-updated-formula-visible" "$LOG_FILE"; then
+  echo "Missing MLP-18-updated-formula-visible result. Log: $LOG_FILE" >&2
   tail -n 160 "$LOG_FILE" >&2
   exit 1
 fi

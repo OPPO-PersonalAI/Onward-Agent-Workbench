@@ -40,6 +40,7 @@ For platform-related commands, always consider these three platforms:
 - Whenever `CLAUDE.md` is modified, automatically run `./claude-sync-to-agents.sh`.
 - Git commit messages must be written in English.
 - Hard rule: all code comments must use English. Do not use any Simplified Chinese in code comments.
+- Do not manually edit generated Change Log HTML files under `resources/changelog/**` (including `resources/changelog/html/**`) when modifying code or fixing bugs. These HTML files are compiled artifacts; update the source Markdown / JSON and regenerate derived assets through the changelog scripts only when release or Change Log work explicitly requires it.
 - Copyright and license compliance:
     - Never copy or adapt code from third-party projects, Stack Overflow, blog posts, or any other external source without verifying its license compatibility with Apache-2.0. Do not reproduce substantial code blocks whose origin is unclear. When in doubt, write an original implementation instead of reusing external snippets.
     - Generated code must not introduce any dependency or code snippet licensed under GPL, LGPL, AGPL, SSPL, or any other copyleft license incompatible with Apache-2.0.
