@@ -3470,7 +3470,14 @@ export function GitDiffViewer({
             {/* Header */}
             <div className="git-diff-header">
               <div className="git-diff-header-main">
-                <h2 className="git-diff-title">{t('gitDiff.title')}{taskTitle && <span className="git-diff-task-label"> &middot; {taskTitle}</span>}</h2>
+                <h2 className="git-diff-title">
+                  <span className="git-diff-title-main">{t('gitDiff.title')}</span>
+                  {taskTitle ? (
+                    <span className="git-diff-task-label subpage-task-source" title={taskTitle}>
+                      <span className="subpage-task-source-name">{taskTitle}</span>
+                    </span>
+                  ) : null}
+                </h2>
                 <SubpageSwitcher current="diff" onSelect={handleSelectSubpage} />
               </div>
               <div className="git-diff-header-actions">

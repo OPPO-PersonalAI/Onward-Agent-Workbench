@@ -1860,7 +1860,14 @@ export function GitHistoryViewer({
           <>
             <div className="git-history-header">
               <div className="git-history-header-main">
-                <h2 className="git-history-title">{t('gitHistory.title')}{taskTitle && <span className="git-history-task-label"> &middot; {taskTitle}</span>}</h2>
+                <h2 className="git-history-title">
+                  <span className="git-history-title-main">{t('gitHistory.title')}</span>
+                  {taskTitle ? (
+                    <span className="git-history-task-label subpage-task-source" title={taskTitle}>
+                      <span className="subpage-task-source-name">{taskTitle}</span>
+                    </span>
+                  ) : null}
+                </h2>
                 <SubpageSwitcher current="history" onSelect={handleSelectSubpage} />
               </div>
               <div className="git-history-header-actions">

@@ -23,13 +23,10 @@
 .subpage-panel-shell-task-title {
   flex: 1;
   min-width: 0;
-  text-align: center;
-  font-size: var(--font-sm);
-  font-weight: 500;
-  color: var(--text-2);
+  display: flex;
+  justify-content: center;
+  align-items: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .subpage-panel-shell-actions {
