@@ -553,6 +553,7 @@ import type { SettingsState, ShortcutAction, SettingsAPI } from './settings.d.ts
 export type { SettingsState, ShortcutAction }
 export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
+export type RuntimePlatform = 'darwin' | 'win32' | 'linux' | 'unknown'
 export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
 export interface AppInfo {
@@ -561,6 +562,8 @@ export interface AppInfo {
   tag: string | null
   releaseChannel: ReleaseChannel
   releaseOs: ReleaseOs
+  platform: RuntimePlatform
+  platformVersion: string
   version: string
   productName: string
   displayName: string

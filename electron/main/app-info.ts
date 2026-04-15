@@ -5,11 +5,13 @@
 
 import { app } from 'electron'
 import { readFileSync, readdirSync, existsSync, copyFileSync, mkdirSync } from 'fs'
+import { release as osRelease } from 'os'
 import { join } from 'path'
 
 export type BuildChannel = 'dev' | 'prod'
 export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
+export type RuntimePlatform = 'darwin' | 'win32' | 'linux' | 'unknown'
 
 export interface AppInfo {
   buildChannel: BuildChannel
@@ -17,6 +19,8 @@ export interface AppInfo {
   tag: string | null
   releaseChannel: ReleaseChannel
   releaseOs: ReleaseOs
+  platform: RuntimePlatform
+  platformVersion: string
   version: string
   productName: string
   displayName: string
@@ -67,6 +71,19 @@ function normalizeReleaseChannel(value: unknown): ReleaseChannel {
   return 'unknown'
 }
 
+function normalizeRuntimePlatform(value: NodeJS.Platform): RuntimePlatform {
+  if (value === 'darwin' || value === 'win32' || value === 'linux') {
+    return value
+  }
+  return 'unknown'
+}
+
+function normalizePlatformVersion(value: unknown): string {
+  if (typeof value !== 'string') return 'unknown'
+  const trimmed = value.trim()
+  return trimmed || 'unknown'
+}
+
 function normalizeVersion(value: unknown): string {
   if (typeof value !== 'string') return '0.0.0'
   const trimmed = value.trim()
@@ -108,6 +125,8 @@ export function getAppInfo(): AppInfo {
   const tag = normalizeTag(pkg?.tag ?? process.env.ONWARD_TAG)
   const releaseChannel = normalizeReleaseChannel(pkg?.releaseChannel)
   const releaseOs = normalizeReleaseOs(pkg?.releaseOs)
+  const platform = normalizeRuntimePlatform(process.platform)
+  const platformVersion = normalizePlatformVersion(osRelease())
   const version = normalizeVersion(pkg?.version ?? app.getVersion())
 
   let displayName = productName
@@ -124,6 +143,8 @@ export function getAppInfo(): AppInfo {
     tag,
     releaseChannel,
     releaseOs,
+    platform,
+    platformVersion,
     version,
     productName,
     displayName,
