@@ -92,6 +92,7 @@ interface TerminalSession {
   lastOptions: TerminalSessionOptions | null
   pendingViewportRestore: TerminalViewportRestoreState | null
   pendingRestoreAnimationFrame: number | null
+  pendingGeometryRefreshAnimationFrame: number | null
   userWantsBottom: boolean
   lastProgrammaticScrollAt: number
   scrollTrackingDisposable: IDisposable | null
@@ -122,6 +123,18 @@ const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 const AUTOFOLLOW_THRESHOLD_LINES = 2
 const PROGRAMMATIC_SCROLL_GUARD_MS = 50
+
+function resolveTerminalFontFamily(options: TerminalSessionOptions): string {
+  const styleFontFamily = options.terminalStyle?.fontFamily
+  return styleFontFamily && styleFontFamily.trim() ? styleFontFamily : options.fontFamily
+}
+
+function resolveTerminalFontSize(options: TerminalSessionOptions): number {
+  const styleFontSize = options.terminalStyle?.fontSize
+  return typeof styleFontSize === 'number' && Number.isFinite(styleFontSize) && styleFontSize > 0
+    ? styleFontSize
+    : options.fontSize
+}
 
 function handleTerminalLinkClick(_event: MouseEvent, uri: string) {
   void requestOpenExternalHttpLink(uri).then((result) => {
@@ -386,6 +399,28 @@ export class TerminalSessionManager {
     }
   }
 
+  private clearPendingGeometryRefreshAnimationFrame(session: TerminalSession): void {
+    if (session.pendingGeometryRefreshAnimationFrame !== null) {
+      cancelAnimationFrame(session.pendingGeometryRefreshAnimationFrame)
+      session.pendingGeometryRefreshAnimationFrame = null
+    }
+  }
+
+  private scheduleGeometryRefresh(session: TerminalSession): void {
+    if (!session.open || !session.container || session.status === 'disposed') return
+
+    this.clearPendingGeometryRefreshAnimationFrame(session)
+    const sessionId = session.id
+
+    session.pendingGeometryRefreshAnimationFrame = requestAnimationFrame(() => {
+      const currentSession = this.sessions.get(sessionId)
+      if (!currentSession || currentSession.status === 'disposed') return
+
+      currentSession.pendingGeometryRefreshAnimationFrame = null
+      this.forceFit(sessionId)
+    })
+  }
+
   private scrollTerminalToBottom(session: TerminalSession): void {
     session.lastProgrammaticScrollAt = Date.now()
     session.terminal.scrollToBottom()
@@ -576,12 +611,25 @@ export class TerminalSessionManager {
   }
 
   private applyOptions(session: TerminalSession, options: TerminalSessionOptions) {
-    const terminalStyle = options.terminalStyle
+    const previousOptions = session.lastOptions
+    const previousFontFamily = previousOptions
+      ? resolveTerminalFontFamily(previousOptions)
+      : String(session.terminal.options.fontFamily ?? '')
+    const previousFontSize = previousOptions
+      ? resolveTerminalFontSize(previousOptions)
+      : Number(session.terminal.options.fontSize ?? options.fontSize)
+    const nextFontFamily = resolveTerminalFontFamily(options)
+    const nextFontSize = resolveTerminalFontSize(options)
+    const fontMetricsChanged = previousFontFamily !== nextFontFamily || previousFontSize !== nextFontSize
 
     session.terminal.options.theme = buildTheme(options)
-    session.terminal.options.fontFamily = terminalStyle?.fontFamily || options.fontFamily
-    session.terminal.options.fontSize = terminalStyle?.fontSize || options.fontSize
+    session.terminal.options.fontFamily = nextFontFamily
+    session.terminal.options.fontSize = nextFontSize
     session.lastOptions = options
+
+    if (fontMetricsChanged) {
+      this.scheduleGeometryRefresh(session)
+    }
   }
 
   getViewportDebugState(id: string): TerminalViewportDebugState | null {
@@ -629,6 +677,7 @@ export class TerminalSessionManager {
     const session = this.sessions.get(id)
     if (!session?.open) return false
     this.clearPendingRestoreAnimationFrame(session)
+    this.clearPendingGeometryRefreshAnimationFrame(session)
     session.pendingViewportRestore = null
     session.userWantsBottom = true
     this.scrollTerminalToBottom(session)
@@ -639,8 +688,8 @@ export class TerminalSessionManager {
     const noopDisposable: IDisposable = { dispose() {} }
     const terminal = new XTerm({
       theme: buildTheme(options),
-      fontSize: options.terminalStyle?.fontSize || options.fontSize,
-      fontFamily: options.terminalStyle?.fontFamily || options.fontFamily,
+      fontSize: resolveTerminalFontSize(options),
+      fontFamily: resolveTerminalFontFamily(options),
       cursorBlink: true,
       cursorStyle: 'block',
       allowProposedApi: true,
@@ -719,9 +768,10 @@ export class TerminalSessionManager {
       lastRows: DEFAULT_ROWS,
       lastFitWidth: 0,
       lastFitHeight: 0,
-      lastOptions: null,
+      lastOptions: options,
       pendingViewportRestore: null,
       pendingRestoreAnimationFrame: null,
+      pendingGeometryRefreshAnimationFrame: null,
       userWantsBottom: true,
       lastProgrammaticScrollAt: 0,
       scrollTrackingDisposable: null,
@@ -979,6 +1029,20 @@ export class TerminalSessionManager {
     session.container = null
   }
 
+  private syncPtySize(session: TerminalSession, force = false): void {
+    const { cols, rows } = session.terminal
+    if (cols <= 0 || rows <= 0) return
+
+    const prevCols = session.lastCols
+    const prevRows = session.lastRows
+    session.lastCols = cols
+    session.lastRows = rows
+
+    if (session.status === 'ready' && (force || cols !== prevCols || rows !== prevRows)) {
+      window.electronAPI.terminal.resize(session.id, cols, rows)
+    }
+  }
+
   fit(id: string): void {
     const session = this.sessions.get(id)
     if (!session || !session.open) return
@@ -998,16 +1062,7 @@ export class TerminalSessionManager {
 
     try {
       session.fitAddon.fit()
-      const { cols, rows } = session.terminal
-      if (cols > 0 && rows > 0) {
-        const prevCols = session.lastCols
-        const prevRows = session.lastRows
-        session.lastCols = cols
-        session.lastRows = rows
-        if (session.status === 'ready' && (cols !== prevCols || rows !== prevRows)) {
-          window.electronAPI.terminal.resize(id, cols, rows)
-        }
-      }
+      this.syncPtySize(session)
     } catch (e) {
       // Ignore fit errors during transitions
     }
@@ -1157,6 +1212,7 @@ export class TerminalSessionManager {
       }
 
       session.status = 'ready'
+      this.syncPtySize(session, true)
     })()
 
     session.readyPromise.catch(() => {
@@ -1191,6 +1247,7 @@ export class TerminalSessionManager {
     session.pendingDataBytes = 0
     this.dirtyVisibleSessions.delete(id)
     this.clearPendingRestoreAnimationFrame(session)
+    this.clearPendingGeometryRefreshAnimationFrame(session)
 
     // Data/exit IPC listeners are global; no per-session cleanup needed
     window.electronAPI.terminal.dispose(id)
