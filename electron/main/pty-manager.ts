@@ -5,7 +5,7 @@
 
 import * as pty from 'node-pty'
 import { platform, homedir } from 'os'
-import { join, delimiter } from 'path'
+import { join, delimiter, basename } from 'path'
 import { execFileSync } from 'child_process'
 import { app } from 'electron'
 import { getApiPort } from './api-server'
@@ -21,9 +21,11 @@ export interface PtyOptions {
 
 type PtyExitEvent = { exitCode: number; signal?: number }
 type PtySequencePhase = 'content' | 'enter'
+export type PtyShellKind = 'posix' | 'powershell' | 'cmd' | 'unknown'
 
 interface PtyRecord {
   pty: pty.IPty
+  shellKind: PtyShellKind
   externalDisposables: pty.IDisposable[]
   exitDisposable: pty.IDisposable
   exitPromise: Promise<PtyExitEvent>
@@ -81,6 +83,7 @@ export class PtyManager {
     const { cols = 80, rows = 24, cwd, env, command, args } = options
     const execCommand = command || shell
     let execArgs = command ? (args || []) : []
+    const shellKind = this.detectShellKind(execCommand)
 
     // On macOS/Linux, launch the default shell as a login shell so that
     // profile files (.zprofile, .bash_profile, .profile) are sourced.
@@ -150,6 +153,7 @@ export class PtyManager {
 
     const record: PtyRecord = {
       pty: ptyProcess,
+      shellKind,
       externalDisposables: [],
       exitDisposable: { dispose: () => {} },
       exitPromise,
@@ -291,6 +295,12 @@ export class PtyManager {
     return this.cwdMap.get(id) ?? null
   }
 
+  getShellKind(id: string): PtyShellKind {
+    const record = this.instances.get(id)
+    if (record) return record.shellKind
+    return platform() === 'win32' ? 'unknown' : 'posix'
+  }
+
   dispose(id: string): boolean {
     const record = this.instances.get(id)
     if (record) {
@@ -376,6 +386,18 @@ export class PtyManager {
   private isCmdShell(shell: string): boolean {
     const lower = shell.toLowerCase()
     return lower.includes('cmd') && !lower.includes('powershell') && !lower.includes('pwsh')
+  }
+
+  private detectShellKind(command: string): PtyShellKind {
+    if (platform() !== 'win32') return 'posix'
+    const name = basename(command).toLowerCase()
+    if (name === 'pwsh' || name === 'pwsh.exe' || name === 'powershell' || name === 'powershell.exe') {
+      return 'powershell'
+    }
+    if (name === 'cmd' || name === 'cmd.exe') {
+      return 'cmd'
+    }
+    return 'unknown'
   }
 
   disposeAll(): void {

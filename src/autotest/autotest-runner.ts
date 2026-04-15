@@ -48,6 +48,7 @@ import { testFeedbackUi } from './test-feedback-ui'
 import { testFeedbackPersistenceSeed, testFeedbackPersistenceVerify } from './test-feedback-persistence'
 import { testTelemetry } from './test-telemetry'
 import { testSubpageViewstateRestore } from './test-subpage-viewstate-restore'
+import { buildChangeDirectoryCommand, type TerminalShellKind } from '../utils/terminal-command'
 
 function normalizeRuntimeMessage(value: unknown): string {
   if (value instanceof Error) {
@@ -77,6 +78,14 @@ function isIgnorableRuntimeIssue(type: 'error' | 'unhandledrejection', message: 
     if (normalized === 'error: canceled') return true
   }
   return false
+}
+
+async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShellKind | undefined> {
+  try {
+    return (await window.electronAPI.terminal.getInputCapabilities(terminalId)).shellKind
+  } catch {
+    return undefined
+  }
 }
 
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
@@ -127,9 +136,8 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
     log('phase0:init', { rootPath: ctx.rootPath, terminalId: ctx.terminalId })
     if (ctx.terminalId) {
       const platform = window.electronAPI.platform
-      const cdCommand = platform === 'win32'
-        ? `cd /d "${ctx.rootPath}"\r`
-        : `cd "${ctx.rootPath}"\r`
+      const shellKind = await resolveTerminalShellKind(ctx.terminalId)
+      const cdCommand = buildChangeDirectoryCommand(platform, ctx.rootPath, shellKind)
       await window.electronAPI.terminal.write(ctx.terminalId, cdCommand)
       await sleep(600)
       await window.electronAPI.git.notifyTerminalActivity(ctx.terminalId)
