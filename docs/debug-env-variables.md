@@ -66,6 +66,7 @@ set ONWARD_TELEMETRY_RESET_CONSENT=1
 | `ONWARD_TELEMETRY_RESET_CONSENT` | `1` | Reset telemetry consent on launch (autotest: set to true; manual: set to null for consent dialog) |
 | `ONWARD_TELEMETRY_FAST_HEARTBEAT` | `1` | Reduce heartbeat interval from 5 minutes to 5 seconds for telemetry testing |
 | `ONWARD_TELEMETRY_FORCE_UPLOAD` | `1` | Force daily summary upload on the next heartbeat cycle (skip 24h wait) |
+| `ONWARD_DIST_DEV_OPEN` | `0` / `1` / unset | Controls whether `pnpm dist:dev` opens the packaged app after a successful build: **unset** = open on local machines (skipped when `CI` is truthy); **`1`** = always open (including in CI); **`0`** = never open. |
 
 ## Adding a New Debug Variable
 
