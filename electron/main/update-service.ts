@@ -48,7 +48,7 @@ interface UpdateManifest {
 
 interface DownloadedUpdate {
   manifest: UpdateManifest
-  archivePath: string
+  artifactPath: string
 }
 
 const RELAUNCH_ENV_KEYS = [
@@ -66,15 +66,15 @@ const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
 const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000
 const LOG_PREFIX = '[UpdateService]'
-const PENDING_UPDATE_MARKER_SCHEMA_VERSION = 1
+const PENDING_UPDATE_MARKER_SCHEMA_VERSION = 2
 const MAX_PENDING_UPDATE_MARKER_AGE_MS = 60 * 60 * 1000
 const MAX_PENDING_UPDATE_STARTUP_ATTEMPTS = 1
 
 /** Pending update marker written before launching the installer script. */
 interface PendingUpdateInfo {
-  schemaVersion: 1
-  archivePath: string
-  archiveSha256: string
+  schemaVersion: 2
+  artifactPath: string
+  artifactSha256: string
   artifactName: string
   installDir: string
   execPath: string
@@ -102,11 +102,117 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
 
-function isSafeArtifactName(value: string): boolean {
+function getExpectedArtifactExtension(platform: ReleaseOs): '.zip' | '.exe' | null {
+  if (platform === 'windows') return '.exe'
+  if (platform === 'macos' || platform === 'linux') return '.zip'
+  return null
+}
+
+function isSafeArtifactFileName(value: string): boolean {
   return value === basename(value) &&
     !value.includes('/') &&
-    !value.includes('\\') &&
-    value.toLowerCase().endsWith('.zip')
+    !value.includes('\\')
+}
+
+function isSafeArtifactName(value: string, platform: ReleaseOs): boolean {
+  const expectedExtension = getExpectedArtifactExtension(platform)
+  return isSafeArtifactFileName(value) &&
+    expectedExtension !== null &&
+    value.toLowerCase().endsWith(expectedExtension)
+}
+
+function isSafeLegacyWindowsZipArtifactName(value: string): boolean {
+  return isSafeArtifactFileName(value) && value.toLowerCase().endsWith('.zip')
+}
+
+function parseGitHubReleaseDownloadUrl(rawUrl: string): {
+  owner: string
+  repo: string
+  tag: string
+  assetName: string
+} | null {
+  try {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com') {
+      return null
+    }
+
+    const parts = url.pathname.split('/').filter(Boolean).map((part) => decodeURIComponent(part))
+    if (parts.length < 6 || parts[2] !== 'releases' || parts[3] !== 'download') {
+      return null
+    }
+
+    return {
+      owner: parts[0],
+      repo: parts[1],
+      tag: parts[4],
+      assetName: parts.slice(5).join('/')
+    }
+  } catch {
+    return null
+  }
+}
+
+function buildGitHubReleaseDownloadUrl(
+  release: {
+    owner: string
+    repo: string
+    tag: string
+  },
+  assetName: string
+): string {
+  const parts = [
+    release.owner,
+    release.repo,
+    'releases',
+    'download',
+    release.tag,
+    assetName
+  ].map((part) => encodeURIComponent(part))
+  return `https://github.com/${parts.join('/')}`
+}
+
+function buildGitHubExpandedAssetsUrl(release: {
+  owner: string
+  repo: string
+  tag: string
+}): string {
+  const parts = [
+    release.owner,
+    release.repo,
+    'releases',
+    'expanded_assets',
+    release.tag
+  ].map((part) => encodeURIComponent(part))
+  return `https://github.com/${parts.join('/')}`
+}
+
+function findGitHubExpandedAssetSha256(html: string, assetName: string): string | null {
+  let searchFrom = 0
+  while (searchFrom < html.length) {
+    const assetIndex = html.indexOf(assetName, searchFrom)
+    if (assetIndex === -1) return null
+
+    const rowStart = html.lastIndexOf('<li', assetIndex)
+    const rowEnd = html.indexOf('</li>', assetIndex)
+    searchFrom = assetIndex + assetName.length
+
+    if (rowStart === -1 || rowEnd === -1 || rowEnd <= rowStart) {
+      continue
+    }
+
+    const row = html.slice(rowStart, rowEnd)
+    if (!row.includes('/releases/download/') || !row.includes(assetName)) {
+      continue
+    }
+
+    const match = /sha256:([a-f0-9]{64})/i.exec(row)
+    if (match) {
+      return match[1].toLowerCase()
+    }
+  }
+
+  return null
 }
 
 function normalizeWindowsPathForCompare(value: string): string {
@@ -119,9 +225,9 @@ function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | nu
   }
 
   const value = raw as Partial<PendingUpdateInfo>
-  const requiredStrings: Array<keyof Pick<PendingUpdateInfo, 'archivePath' | 'archiveSha256' | 'artifactName' | 'installDir' | 'execPath' | 'logPath' | 'targetVersion'>> = [
-    'archivePath',
-    'archiveSha256',
+  const requiredStrings: Array<keyof Pick<PendingUpdateInfo, 'artifactPath' | 'artifactSha256' | 'artifactName' | 'installDir' | 'execPath' | 'logPath' | 'targetVersion'>> = [
+    'artifactPath',
+    'artifactSha256',
     'artifactName',
     'installDir',
     'execPath',
@@ -143,13 +249,13 @@ function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | nu
   if (!Number.isInteger(value.attempts) || typeof value.attempts !== 'number' || value.attempts < 0) {
     return { info: null, error: 'missing or invalid marker attempts' }
   }
-  if (!/^[a-f0-9]{64}$/i.test(value.archiveSha256!)) {
-    return { info: null, error: 'invalid archive checksum in marker' }
+  if (!/^[a-f0-9]{64}$/i.test(value.artifactSha256!)) {
+    return { info: null, error: 'invalid artifact checksum in marker' }
   }
-  if (!isSafeArtifactName(value.artifactName!)) {
+  if (!isSafeArtifactName(value.artifactName!, 'windows')) {
     return { info: null, error: 'invalid artifact name in marker' }
   }
-  for (const key of ['archivePath', 'installDir', 'execPath', 'logPath'] as const) {
+  for (const key of ['artifactPath', 'installDir', 'execPath', 'logPath'] as const) {
     if (!isAbsolute(value[key]!)) {
       return { info: null, error: `marker path must be absolute: ${key}` }
     }
@@ -176,36 +282,37 @@ function buildEnvSetStatements(): string {
 }
 
 /**
- * Generate the PowerShell script that waits for the parent process to exit,
- * replaces the installation directory with the new archive, and relaunches.
+ * Generate the Windows installer runner. Windows updates are applied by the
+ * NSIS installer instead of renaming the live installation directory, because
+ * Electron child processes and security tools can keep files locked after quit.
  */
 function buildWindowsUpdateScript(params: {
   installDir: string
   execPath: string
-  archivePath: string
-  archiveSha256: string
+  installerPath: string
+  installerSha256: string
   parentPid: number
   stagingRoot: string
   logPath: string
   markerPath: string
   lockPath: string
+  targetVersion: string
   envSetStatements: string
 }): string {
   return [
     '$ErrorActionPreference = "Stop"',
     `$installDir = ${powershellEscape(params.installDir)}`,
     `$execPath = ${powershellEscape(params.execPath)}`,
-    `$archivePath = ${powershellEscape(params.archivePath)}`,
-    `$archiveSha256 = ${powershellEscape(params.archiveSha256)}`,
+    `$installerPath = ${powershellEscape(params.installerPath)}`,
+    `$installerSha256 = ${powershellEscape(params.installerSha256)}`,
     `$parentPid = ${params.parentPid}`,
     `$stagingRoot = ${powershellEscape(params.stagingRoot)}`,
     `$logPath = ${powershellEscape(params.logPath)}`,
     `$markerPath = ${powershellEscape(params.markerPath)}`,
     `$lockPath = ${powershellEscape(params.lockPath)}`,
-    '$extractRoot = Join-Path $stagingRoot "e"',
-    '$installParent = Split-Path $installDir -Parent',
-    '$installLeaf = Split-Path $installDir -Leaf',
-    '$backupPath = Join-Path $installParent "${installLeaf}.bak"',
+    `$targetVersion = ${powershellEscape(params.targetVersion)}`,
+    '$exeName = Split-Path $execPath -Leaf',
+    '$appProcessNameForQuery = $exeName.Replace("\'", "\'\'")',
     '$lockCreated = $false',
     '$parentExited = $false',
     '',
@@ -218,6 +325,36 @@ function buildWindowsUpdateScript(params: {
     '',
     'function Clear-Marker {',
     '    Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue',
+    '}',
+    '',
+    'function Normalize-PathForCompare($value) {',
+    '    try {',
+    '        return [System.IO.Path]::GetFullPath([string]$value).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()',
+    '    } catch {',
+    '        return ([string]$value).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()',
+    '    }',
+    '}',
+    '',
+    'function Get-AppProcesses {',
+    '    $targetPath = Normalize-PathForCompare -value $execPath',
+    '    $items = @(Get-CimInstance -ClassName Win32_Process -Filter ("Name = \'{0}\'" -f $appProcessNameForQuery) -ErrorAction SilentlyContinue)',
+    '    return @($items | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and (Normalize-PathForCompare -value $_.ExecutablePath) -eq $targetPath })',
+    '}',
+    '',
+    'function Wait-ForAppProcessesToExit($timeoutSeconds) {',
+    '    $deadline = (Get-Date).AddSeconds($timeoutSeconds)',
+    '    $lastLogAt = [datetime]::MinValue',
+    '    while ((Get-Date) -lt $deadline) {',
+    '        $processes = @(Get-AppProcesses)',
+    '        if ($processes.Count -eq 0) { return $true }',
+    '        if (((Get-Date) - $lastLogAt).TotalSeconds -ge 5) {',
+    '            $ids = (($processes | ForEach-Object { $_.ProcessId }) -join ",")',
+    '            Write-Log "Waiting for app process(es) to exit: $ids"',
+    '            $lastLogAt = Get-Date',
+    '        }',
+    '        Start-Sleep -Seconds 1',
+    '    }',
+    '    return $false',
     '}',
     '',
     'function Relaunch-CurrentApp($reason) {',
@@ -234,34 +371,8 @@ function buildWindowsUpdateScript(params: {
     '    }',
     '}',
     '',
-    'function Restore-Backup {',
-    '    if (-not (Test-Path -LiteralPath $backupPath)) { return }',
-    '    try {',
-    '        if (Test-Path -LiteralPath $installDir) {',
-    '            $failedPath = Join-Path $installParent "${installLeaf}.failed-$PID"',
-    '            try {',
-    '                Rename-Item -LiteralPath $installDir -NewName (Split-Path $failedPath -Leaf) -Force',
-    '                Remove-Item -LiteralPath $failedPath -Recurse -Force -ErrorAction SilentlyContinue',
-    '            } catch {',
-    '                Write-Log "Could not move failed install directory aside: $_"',
-    '                try {',
-    '                    Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction Stop',
-    '                } catch {',
-    '                    Write-Log "Could not remove failed install directory: $_"',
-    '                }',
-    '            }',
-    '        }',
-    '        if (-not (Test-Path -LiteralPath $installDir)) {',
-    '            Rename-Item -LiteralPath $backupPath -NewName $installLeaf -Force',
-    '            Write-Log "Restored backup after failure."',
-    '        }',
-    '    } catch {',
-    '        Write-Log "Backup restore failed: $_"',
-    '    }',
-    '}',
-    '',
     'try {',
-    '    Write-Log "Starting Windows update install helper. PID=$PID"',
+    '    Write-Log "Starting Windows installer helper. PID=$PID Target=$targetVersion"',
     '',
     '    $lockDir = Split-Path $lockPath -Parent',
     '    if (-not (Test-Path -LiteralPath $lockDir)) { New-Item -Path $lockDir -ItemType Directory -Force | Out-Null }',
@@ -297,76 +408,32 @@ function buildWindowsUpdateScript(params: {
     '    } catch { throw }',
     '    Write-Log "Parent process exited."',
     '',
-    '    # Wait briefly for OS to release file handles',
+    '    if (-not (Wait-ForAppProcessesToExit 120)) {',
+    '        $remaining = ((@(Get-AppProcesses) | ForEach-Object { $_.ProcessId }) -join ",")',
+    '        throw "Timed out waiting for app processes to exit. Remaining PIDs: $remaining"',
+    '    }',
+    '    Write-Log "No matching app processes remain."',
+    '',
+    '    # Wait briefly for Windows to release file handles held by exited processes.',
     '    Start-Sleep -Seconds 2',
     '',
-    '    # Clean previous staging and backup',
-    '    if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }',
-    '    if (Test-Path -LiteralPath $backupPath) {',
-    '        if (-not (Test-Path -LiteralPath $installDir)) {',
-    '            Rename-Item -LiteralPath $backupPath -NewName $installLeaf -Force',
-    '            Write-Log "Restored leftover backup before retry."',
-    '            Clear-Marker',
-    '            Relaunch-CurrentApp "existing app after backup restore"',
-    '            exit 0',
-    '        }',
-    '        Remove-Item -LiteralPath $backupPath -Recurse -Force',
+    '    # Verify installer before running code downloaded from the network.',
+    '    Write-Log "Verifying Windows installer checksum."',
+    '    $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()',
+    '    if ($actualSha256 -ne $installerSha256.ToLowerInvariant()) {',
+    '        throw "Installer checksum mismatch: expected=$installerSha256 actual=$actualSha256"',
     '    }',
     '',
-    '    # Verify archive before touching the installed app',
-    '    Write-Log "Verifying update archive checksum."',
-    '    $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()',
-    '    if ($actualSha256 -ne $archiveSha256.ToLowerInvariant()) {',
-    '        throw "Archive checksum mismatch: expected=$archiveSha256 actual=$actualSha256"',
-    '    }',
-    '',
-    '    # Extract archive',
-    '    Write-Log "Extracting update archive: $archivePath"',
-    '    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force',
-    '    Write-Log "Extraction complete."',
-    '',
-    '    # Detect extracted content: single subdirectory or flat contents',
-    '    $extractedItems = @(Get-ChildItem -LiteralPath $extractRoot -Force)',
-    '    if ($extractedItems.Count -eq 0) { throw "Extracted update archive is empty." }',
-    '    if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {',
-    '        $sourceDir = $extractedItems[0].FullName',
-    '    } else {',
-    '        $sourceDir = $extractRoot',
-    '    }',
-    '    $sourceExe = Join-Path $sourceDir (Split-Path $execPath -Leaf)',
-    '    if (-not (Test-Path -LiteralPath $sourceExe)) {',
-    '        throw "Extracted update does not contain expected executable: $sourceExe"',
-    '    }',
-    '',
-    '    # Backup current installation (with retries for locked files)',
-    '    Write-Log "Backing up current installation."',
-    '    $retryCount = 0',
-    '    $maxRetries = 5',
-    '    while ($true) {',
-    '        try {',
-    '            Rename-Item -LiteralPath $installDir -NewName (Split-Path $backupPath -Leaf) -Force',
-    '            break',
-    '        } catch {',
-    '            $retryCount++',
-    '            if ($retryCount -ge $maxRetries) {',
-    '                Write-Log "Backup failed after $maxRetries attempts: $_"',
-    '                throw',
-    '            }',
-    '            Write-Log "Backup attempt $retryCount failed, retrying in 3s: $_"',
-    '            Start-Sleep -Seconds 3',
-    '        }',
-    '    }',
-    '',
-    '    # Install update',
-    '    Write-Log "Installing update."',
-    '    if ($sourceDir -ne $extractRoot) {',
-    '        Move-Item -LiteralPath $sourceDir -Destination $installDir -Force',
-    '    } else {',
-    '        New-Item -Path $installDir -ItemType Directory -Force | Out-Null',
-    '        Get-ChildItem -LiteralPath $extractRoot -Force | Move-Item -Destination $installDir -Force',
+    '    Write-Log "Running Windows installer silently: $installerPath"',
+    '    $installerArguments = @("/S", "/D=$installDir")',
+    '    $installerProcess = Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait -PassThru',
+    '    $exitCode = $installerProcess.ExitCode',
+    '    Write-Log "Windows installer exited with code $exitCode."',
+    '    if ($null -ne $exitCode -and $exitCode -ne 0) {',
+    '        throw "Windows installer exited with code $exitCode."',
     '    }',
     '    if (-not (Test-Path -LiteralPath $execPath)) {',
-    '        throw "Installed update is missing expected executable: $execPath"',
+    '        throw "Installed app is missing expected executable: $execPath"',
     '    }',
     '',
     '    # Mark success BEFORE relaunching, because the new app reads and',
@@ -377,18 +444,16 @@ function buildWindowsUpdateScript(params: {
     '    # Relaunch the updated app.',
     '    Relaunch-CurrentApp "updated app"',
     '',
-    '    # Cleanup (non-critical, runs after relaunch)',
-    '    Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue',
-    '    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue',
-    '    Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue',
+    '    # Cleanup (non-critical, runs after relaunch).',
+    '    Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue',
     '} catch {',
     '    Write-Log "Update install failed: $_"',
-    '    Restore-Backup',
     '    Clear-Marker',
-    '    if ($parentExited) {',
+    '    $remainingProcesses = @(Get-AppProcesses)',
+    '    if ($parentExited -and $remainingProcesses.Count -eq 0) {',
     '        Relaunch-CurrentApp "existing app after update failure"',
     '    } else {',
-    '        Write-Log "Skipping relaunch because parent process may still be running."',
+    '        Write-Log "Skipping relaunch because an app process may still be running."',
     '    }',
     '} finally {',
     '    if ($lockCreated) {',
@@ -654,6 +719,54 @@ async function fetchUpdateResource(
   }
 }
 
+async function resolveWindowsInstallerManifestFromLegacyZip(manifest: UpdateManifest): Promise<UpdateManifest> {
+  const parsedZipUrl = parseGitHubReleaseDownloadUrl(manifest.artifactUrl)
+  if (!parsedZipUrl || parsedZipUrl.assetName !== manifest.artifactName || parsedZipUrl.tag !== manifest.tag) {
+    throw new Error('Windows legacy ZIP manifest cannot be resolved to an installer artifact.')
+  }
+
+  const installerName = manifest.artifactName.replace(/\.zip$/i, '.exe')
+  if (!isSafeArtifactName(installerName, 'windows')) {
+    throw new Error(`Resolved Windows installer artifact name is invalid: ${installerName}`)
+  }
+
+  const expandedAssetsUrl = buildGitHubExpandedAssetsUrl(parsedZipUrl)
+  const response = await fetchUpdateResource(expandedAssetsUrl, {
+    headers: {
+      Accept: 'text/html',
+      'User-Agent': 'Onward-UpdateService'
+    },
+    timeoutMs: DEFAULT_UPDATE_REQUEST_TIMEOUT_MS
+  })
+  if (!response.ok) {
+    throw new Error(`GitHub release asset digest request failed: ${response.status} ${response.statusText}`)
+  }
+
+  const html = await response.text()
+  const installerSha256 = findGitHubExpandedAssetSha256(html, installerName)
+  if (!installerSha256) {
+    throw new Error(`GitHub release installer artifact is missing a SHA-256 digest: ${installerName}`)
+  }
+
+  const installerUrl = buildGitHubReleaseDownloadUrl(parsedZipUrl, installerName)
+  const parsedInstallerUrl = parseGitHubReleaseDownloadUrl(installerUrl)
+  if (!parsedInstallerUrl ||
+      parsedInstallerUrl.owner !== parsedZipUrl.owner ||
+      parsedInstallerUrl.repo !== parsedZipUrl.repo ||
+      parsedInstallerUrl.tag !== parsedZipUrl.tag ||
+      parsedInstallerUrl.assetName !== installerName) {
+    throw new Error(`GitHub release installer download URL is not consistent with the manifest tag: ${installerName}`)
+  }
+
+  console.log(`${LOG_PREFIX} Resolved legacy Windows ZIP manifest to installer artifact: ${installerName}`)
+  return {
+    ...manifest,
+    artifactName: installerName,
+    artifactUrl: installerUrl,
+    sha256: installerSha256
+  }
+}
+
 export class UpdateService {
   private status: UpdateStatus = this.createInitialStatus()
   private mainWindow: BrowserWindow | null = null
@@ -741,9 +854,6 @@ export class UpdateService {
     if (!manifest.version || !manifest.tag || !manifest.artifactUrl || !manifest.sha256 || !manifest.artifactName) {
       throw new Error('Manifest is missing required fields.')
     }
-    if (!isSafeArtifactName(manifest.artifactName)) {
-      throw new Error(`Manifest artifact name is invalid: ${manifest.artifactName}`)
-    }
     if (!/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
       throw new Error('Manifest SHA-256 is invalid.')
     }
@@ -757,7 +867,7 @@ export class UpdateService {
       throw new Error(`Manifest architecture mismatch: expected ${arch || 'unknown'}, got ${String(manifest.arch)}`)
     }
 
-    return {
+    const normalizedManifest: UpdateManifest = {
       channel: manifest.channel,
       version: manifest.version,
       tag: manifest.tag,
@@ -769,6 +879,15 @@ export class UpdateService {
       releaseNotes: manifest.releaseNotes ?? null,
       publishedAt: manifest.publishedAt ?? new Date().toISOString()
     }
+
+    if (isSafeArtifactName(normalizedManifest.artifactName, normalizedManifest.platform)) {
+      return normalizedManifest
+    }
+    if (normalizedManifest.platform === 'windows' && isSafeLegacyWindowsZipArtifactName(normalizedManifest.artifactName)) {
+      return resolveWindowsInstallerManifestFromLegacyZip(normalizedManifest)
+    }
+
+    throw new Error(`Manifest artifact name is invalid for ${normalizedManifest.platform}: ${normalizedManifest.artifactName}`)
   }
 
   private getDownloadPath(manifest: UpdateManifest): string {
@@ -874,7 +993,7 @@ export class UpdateService {
   /**
    * Attempt to recover a previously downloaded update from disk.
    * Validates channel/platform/arch compatibility, manifest integrity, and
-   * archive checksum. Removes the version directory on any failure.
+   * artifact checksum. Removes the version directory on any failure.
    * @returns true if recovery succeeded, false if the candidate was invalid.
    */
   private recoverPendingUpdate(version: string): boolean {
@@ -887,9 +1006,9 @@ export class UpdateService {
       return false
     }
 
-    // Reject archives from a different channel, platform, or architecture.
+    // Reject artifacts from a different channel, platform, or architecture.
     // Prod builds across release channels (daily/dev/stable) share the same
-    // userData directory, so a channel switch can leave foreign archives behind.
+    // userData directory, so a channel switch can leave foreign artifacts behind.
     const arch = normalizeArch(process.arch)
     if (manifest.channel !== this.status.currentChannel ||
         manifest.platform !== this.status.currentReleaseOs ||
@@ -900,21 +1019,21 @@ export class UpdateService {
         ` (channel=${String(manifest.channel)}, platform=${String(manifest.platform)}, arch=${String(manifest.arch)})`)
       return false
     }
-    if (!isSafeArtifactName(manifest.artifactName) || !/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
+    if (!isSafeArtifactName(manifest.artifactName, manifest.platform) || !/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
       rmSync(versionDir, { recursive: true, force: true })
       console.log(`${LOG_PREFIX} Removed invalid download manifest: ${version}`)
       return false
     }
 
-    const archivePath = join(versionDir, manifest.artifactName)
-    if (!existsSync(archivePath)) {
+    const artifactPath = join(versionDir, manifest.artifactName)
+    if (!existsSync(artifactPath)) {
       rmSync(versionDir, { recursive: true, force: true })
-      console.log(`${LOG_PREFIX} Removed incomplete download (archive missing): ${version}`)
+      console.log(`${LOG_PREFIX} Removed incomplete download (artifact missing): ${version}`)
       return false
     }
 
     try {
-      const checksum = hashFileSha256(archivePath)
+      const checksum = hashFileSha256(artifactPath)
       if (checksum.toLowerCase() !== manifest.sha256.toLowerCase()) {
         rmSync(versionDir, { recursive: true, force: true })
         console.log(`${LOG_PREFIX} Removed corrupted download (checksum mismatch): ${version}`)
@@ -926,7 +1045,7 @@ export class UpdateService {
       return false
     }
 
-    this.downloadedUpdate = { manifest, archivePath }
+    this.downloadedUpdate = { manifest, artifactPath }
     this.setStatus({
       phase: 'downloaded',
       targetVersion: manifest.version,
@@ -939,29 +1058,29 @@ export class UpdateService {
   }
 
   private async ensureDownloaded(manifest: UpdateManifest): Promise<DownloadedUpdate> {
-    const archivePath = this.getDownloadPath(manifest)
-    if (!existsSync(archivePath)) {
+    const artifactPath = this.getDownloadPath(manifest)
+    if (!existsSync(artifactPath)) {
       console.log(`${LOG_PREFIX} Downloading: ${manifest.artifactUrl}`)
-      await downloadFile(manifest.artifactUrl, archivePath)
-      console.log(`${LOG_PREFIX} Download saved to: ${archivePath}`)
+      await downloadFile(manifest.artifactUrl, artifactPath)
+      console.log(`${LOG_PREFIX} Download saved to: ${artifactPath}`)
     } else {
-      console.log(`${LOG_PREFIX} Archive already exists, verifying checksum: ${archivePath}`)
+      console.log(`${LOG_PREFIX} Artifact already exists, verifying checksum: ${artifactPath}`)
     }
 
-    const checksum = hashFileSha256(archivePath)
+    const checksum = hashFileSha256(artifactPath)
     if (checksum.toLowerCase() !== manifest.sha256.toLowerCase()) {
       console.error(`${LOG_PREFIX} Checksum mismatch: expected=${manifest.sha256}, got=${checksum}`)
-      rmSync(archivePath, { force: true })
+      rmSync(artifactPath, { force: true })
       throw new Error('Downloaded update failed checksum verification.')
     }
     console.log(`${LOG_PREFIX} Checksum verified: ${checksum}`)
 
-    // Persist manifest alongside the archive for cross-session recovery
+    // Persist manifest alongside the artifact for cross-session recovery.
     this.saveManifestFile(manifest)
 
     return {
       manifest,
-      archivePath
+      artifactPath
     }
   }
 
@@ -1292,7 +1411,7 @@ export class UpdateService {
       'set -eu',
       `APP_PATH=${shellEscape(bundlePath)}`,
       `EXEC_PATH=${shellEscape(app.getPath('exe'))}`,
-      `ARCHIVE_PATH=${shellEscape(this.downloadedUpdate!.archivePath)}`,
+      `ARCHIVE_PATH=${shellEscape(this.downloadedUpdate!.artifactPath)}`,
       `PARENT_PID=${process.pid}`,
       `STAGING_ROOT=${shellEscape(stagingRoot)}`,
       `LOG_PATH=${shellEscape(logPath)}`,
@@ -1358,8 +1477,7 @@ export class UpdateService {
     const installDir = resolveCurrentInstallPath()
     if (!installDir) return
 
-    // Use a short staging path to avoid Windows 260-char path length limit
-    // during zip extraction (deep node_modules paths inside the archive).
+    // Use a short staging path for the detached runner script.
     const stagingId = Date.now().toString(36)
     const stagingRoot = join(process.env.TEMP || tmpdir(), `ou-${stagingId}`)
     mkdirSync(stagingRoot, { recursive: true })
@@ -1372,7 +1490,7 @@ export class UpdateService {
     // Pre-flight logging from Node.js side (appears in install.log)
     appendToInstallLog(logPath, `Node.js: Preparing update install helper. PID=${process.pid}`)
     appendToInstallLog(logPath, `Node.js: installDir=${installDir}`)
-    appendToInstallLog(logPath, `Node.js: archivePath=${this.downloadedUpdate!.archivePath}`)
+    appendToInstallLog(logPath, `Node.js: installerPath=${this.downloadedUpdate!.artifactPath}`)
     appendToInstallLog(logPath, `Node.js: stagingRoot=${stagingRoot}`)
 
     // Write pending-update marker for startup recovery fallback.
@@ -1381,8 +1499,8 @@ export class UpdateService {
     try {
       const marker: PendingUpdateInfo = {
         schemaVersion: PENDING_UPDATE_MARKER_SCHEMA_VERSION,
-        archivePath: this.downloadedUpdate!.archivePath,
-        archiveSha256: this.downloadedUpdate!.manifest.sha256,
+        artifactPath: this.downloadedUpdate!.artifactPath,
+        artifactSha256: this.downloadedUpdate!.manifest.sha256,
         artifactName: this.downloadedUpdate!.manifest.artifactName,
         installDir,
         execPath,
@@ -1401,13 +1519,14 @@ export class UpdateService {
     const scriptContent = buildWindowsUpdateScript({
       installDir,
       execPath,
-      archivePath: this.downloadedUpdate!.archivePath,
-      archiveSha256: this.downloadedUpdate!.manifest.sha256,
+      installerPath: this.downloadedUpdate!.artifactPath,
+      installerSha256: this.downloadedUpdate!.manifest.sha256,
       parentPid: process.pid,
       stagingRoot,
       logPath,
       markerPath,
       lockPath,
+      targetVersion: this.downloadedUpdate!.manifest.version,
       envSetStatements
     })
 
@@ -1474,8 +1593,8 @@ export function applyPendingUpdateOnStartup(): boolean {
     return false
   }
 
-  if (basename(info.archivePath) !== info.artifactName) {
-    appendToInstallLog(info.logPath, 'Node.js: Pending update marker archive path does not match artifact name, removing marker.')
+  if (basename(info.artifactPath) !== info.artifactName) {
+    appendToInstallLog(info.logPath, 'Node.js: Pending update marker artifact path does not match artifact name, removing marker.')
     safeRemoveFile(markerPath)
     return false
   }
@@ -1512,25 +1631,25 @@ export function applyPendingUpdateOnStartup(): boolean {
     return false
   }
 
-  // Skip if archive is gone (already cleaned up or never downloaded)
-  if (!existsSync(info.archivePath)) {
-    console.log(`${LOG_PREFIX} Pending update archive not found: ${info.archivePath}, removing marker.`)
-    appendToInstallLog(info.logPath, `Node.js: Pending update archive not found: ${info.archivePath}`)
+  // Skip if the installer is gone (already cleaned up or never downloaded).
+  if (!existsSync(info.artifactPath)) {
+    console.log(`${LOG_PREFIX} Pending update artifact not found: ${info.artifactPath}, removing marker.`)
+    appendToInstallLog(info.logPath, `Node.js: Pending update artifact not found: ${info.artifactPath}`)
     safeRemoveFile(markerPath)
     return false
   }
 
   try {
-    const checksum = hashFileSha256(info.archivePath)
-    if (checksum.toLowerCase() !== info.archiveSha256.toLowerCase()) {
-      console.log(`${LOG_PREFIX} Pending update archive checksum mismatch, removing marker and archive.`)
-      appendToInstallLog(info.logPath, `Node.js: Pending update archive checksum mismatch: expected=${info.archiveSha256} actual=${checksum}`)
-      safeRemoveFile(info.archivePath)
+    const checksum = hashFileSha256(info.artifactPath)
+    if (checksum.toLowerCase() !== info.artifactSha256.toLowerCase()) {
+      console.log(`${LOG_PREFIX} Pending update artifact checksum mismatch, removing marker and artifact.`)
+      appendToInstallLog(info.logPath, `Node.js: Pending update artifact checksum mismatch: expected=${info.artifactSha256} actual=${checksum}`)
+      safeRemoveFile(info.artifactPath)
       safeRemoveFile(markerPath)
       return false
     }
   } catch (err) {
-    appendToInstallLog(info.logPath, `Node.js: Pending update archive could not be verified: ${err}`)
+    appendToInstallLog(info.logPath, `Node.js: Pending update artifact could not be verified: ${err}`)
     safeRemoveFile(markerPath)
     return false
   }
@@ -1558,13 +1677,14 @@ export function applyPendingUpdateOnStartup(): boolean {
   const scriptContent = buildWindowsUpdateScript({
     installDir: info.installDir,
     execPath: info.execPath,
-    archivePath: info.archivePath,
-    archiveSha256: info.archiveSha256,
+    installerPath: info.artifactPath,
+    installerSha256: info.artifactSha256,
     parentPid: process.pid,
     stagingRoot,
     logPath: info.logPath,
     markerPath,
     lockPath,
+    targetVersion: info.targetVersion,
     envSetStatements: buildEnvSetStatements()
   })
   writeFileSync(scriptPath, scriptContent, 'utf-8')

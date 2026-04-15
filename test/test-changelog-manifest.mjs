@@ -50,6 +50,8 @@ test('generate-update-manifest embeds English changelog notes into every platfor
     mkdirSync(artifactDir, { recursive: true })
     writeFile(join(artifactDir, 'Onward 2-macos-arm64.zip'), 'arm64-artifact')
     writeFile(join(artifactDir, 'Onward 2-macos-x64.zip'), 'x64-artifact')
+    writeFile(join(artifactDir, 'Onward 2-windows-x64.exe'), 'windows-installer')
+    writeFile(join(artifactDir, 'Onward 2-windows-x64.zip'), 'windows-zip-not-used')
     writeFile(join(changelogRoot, 'en', 'daily', `${tag}.md`), changelog)
 
     const result = runNode([SCRIPT_PATH], {
@@ -64,11 +66,14 @@ test('generate-update-manifest embeds English changelog notes into every platfor
 
     const arm64ManifestPath = join(manifestDir, 'daily', 'macos', 'arm64', 'latest.json')
     const x64ManifestPath = join(manifestDir, 'daily', 'macos', 'x64', 'latest.json')
+    const windowsManifestPath = join(manifestDir, 'daily', 'windows', 'x64', 'latest.json')
     assert.equal(existsSync(arm64ManifestPath), true)
     assert.equal(existsSync(x64ManifestPath), true)
+    assert.equal(existsSync(windowsManifestPath), true)
 
     const arm64Manifest = JSON.parse(readFileSync(arm64ManifestPath, 'utf-8'))
     const x64Manifest = JSON.parse(readFileSync(x64ManifestPath, 'utf-8'))
+    const windowsManifest = JSON.parse(readFileSync(windowsManifestPath, 'utf-8'))
 
     assert.equal(arm64Manifest.version, '2.0.1-daily.20260406.1')
     assert.equal(arm64Manifest.releaseNotes, changelog)
@@ -77,6 +82,11 @@ test('generate-update-manifest embeds English changelog notes into every platfor
 
     assert.equal(x64Manifest.releaseNotes, changelog)
     assert.equal(x64Manifest.artifactName, 'Onward.2-macos-x64.zip')
+
+    assert.equal(windowsManifest.platform, 'windows')
+    assert.equal(windowsManifest.releaseNotes, changelog)
+    assert.equal(windowsManifest.artifactName, 'Onward.2-windows-x64.exe')
+    assert.match(windowsManifest.artifactUrl, /releases\/download\/v2\.0\.1-daily\.20260406\.1\/Onward\.2-windows-x64\.exe/)
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
   }

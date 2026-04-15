@@ -33,6 +33,7 @@
     "appId": "com.onward2.app",
     "productName": "Onward 2",
     "copyright": "Copyright © 2026 OPPO",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },

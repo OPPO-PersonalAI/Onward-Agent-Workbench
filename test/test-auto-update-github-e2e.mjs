@@ -101,6 +101,27 @@ async function headJson(url) {
   })
 }
 
+async function readGhPagesManifest(repository, manifestPath) {
+  const manifestOutput = await captureCommand(
+    `gh api ${shellEscape(`repos/${repository}/contents/${manifestPath}?ref=gh-pages`)} --jq .content`
+  )
+  return JSON.parse(Buffer.from(manifestOutput.trim(), 'base64').toString('utf-8'))
+}
+
+async function assertManifestArtifact(repository, manifestPath, expected) {
+  const manifest = await readGhPagesManifest(repository, manifestPath)
+  assert(manifest.tag === expected.tag, `Expected ${manifestPath} tag ${expected.tag}, got ${manifest.tag}`)
+  assert(manifest.platform === expected.platform, `Expected ${manifestPath} platform=${expected.platform}, got ${manifest.platform}`)
+  assert(manifest.arch === expected.arch, `Expected ${manifestPath} arch=${expected.arch}, got ${manifest.arch}`)
+  assert(String(manifest.artifactName).endsWith(expected.extension),
+    `Expected ${manifestPath} artifact to end with ${expected.extension}, got ${manifest.artifactName}`)
+  assert(String(manifest.artifactUrl).includes(`/releases/download/${expected.tag}/`),
+    `Expected ${manifestPath} artifact URL to point at the pushed tag release.`)
+  const headResponse = await headJson(manifest.artifactUrl)
+  assert(/HTTP\/2 200|HTTP\/1\.1 200/.test(headResponse), `Expected ${manifestPath} artifact URL to resolve successfully.`)
+  return manifest
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
 
@@ -160,20 +181,22 @@ async function main() {
   assert(assetNames.some((name) => name.endsWith('-macos-arm64.zip')), 'Expected macOS arm64 ZIP asset.')
   assert(assetNames.some((name) => name.endsWith('-macos-x64.dmg')), 'Expected macOS x64 DMG asset.')
   assert(assetNames.some((name) => name.endsWith('-macos-x64.zip')), 'Expected macOS x64 ZIP asset.')
+  assert(assetNames.some((name) => name.endsWith('-windows-x64.exe')), 'Expected Windows x64 NSIS installer asset.')
+  assert(assetNames.some((name) => name.endsWith('-windows-x64.zip')), 'Expected Windows x64 ZIP inspection asset.')
 
   console.log('[github-e2e] Verifying gh-pages update manifests through GitHub API')
-  const manifestPath = `updates/daily/macos/arm64/latest.json`
-  const manifestOutput = await captureCommand(
-    `gh api ${shellEscape(`repos/${repository}/contents/${manifestPath}?ref=gh-pages`)} --jq .content`
-  )
-  const decodedManifest = Buffer.from(manifestOutput.trim(), 'base64').toString('utf-8')
-  const manifest = JSON.parse(decodedManifest)
-  assert(manifest.tag === args.tag, `Expected gh-pages manifest tag ${args.tag}, got ${manifest.tag}`)
-  assert(manifest.platform === 'macos', 'Expected gh-pages manifest platform=macos.')
-  assert(manifest.arch === 'arm64', 'Expected gh-pages manifest arch=arm64.')
-  assert(String(manifest.artifactUrl).includes(`/releases/download/${args.tag}/`), 'Expected manifest artifact URL to point at the pushed tag release.')
-  const headResponse = await headJson(manifest.artifactUrl)
-  assert(/HTTP\/2 200|HTTP\/1\.1 200/.test(headResponse), 'Expected manifest artifact URL to resolve successfully.')
+  await assertManifestArtifact(repository, 'updates/daily/macos/arm64/latest.json', {
+    tag: args.tag,
+    platform: 'macos',
+    arch: 'arm64',
+    extension: '.zip'
+  })
+  await assertManifestArtifact(repository, 'updates/daily/windows/x64/latest.json', {
+    tag: args.tag,
+    platform: 'windows',
+    arch: 'x64',
+    extension: '.exe'
+  })
 
   console.log('[github-e2e] Passed')
 }

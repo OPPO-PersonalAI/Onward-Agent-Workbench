@@ -166,18 +166,24 @@ $env:ONWARD_DEBUG="1"
   - Verifies malformed `pending-update.json` markers are removed without blocking startup
   - Verifies manifest superseding, SHA-256 validation, and cross-session download recovery
   - Verifies exact-PID process termination does not install a downloaded update
-  - Verifies explicit restart triggers the Windows helper, relaunches the updated app, and clears pending archives
+  - Verifies explicit restart triggers the Windows installer helper, relaunches the updated app, and clears pending installers
 - `test/test-auto-update-github-e2e.mjs`
   - Pushes a temporary tag to GitHub
   - Waits for the `Daily Build` workflow to finish
   - Verifies the GitHub Release assets
-  - Verifies the `gh-pages` updater manifest matches the pushed tag
+  - Verifies the `gh-pages` updater manifests match the pushed tag
+  - Verifies Windows `gh-pages` manifests point to the NSIS `.exe` installer, not the `.zip` inspection artifact
 - `test/test-auto-update-public-github-e2e.mjs`
   - Builds a local old production fixture
   - Uses the default public GitHub updater source without any local manifest override
   - Verifies anonymous client download from public `gh-pages` + GitHub Release assets
   - Verifies exact-PID process termination still does not install
   - Verifies explicit restart installs the public GitHub update
+- `test/test-auto-update-public-github-windows-installer.mjs`
+  - Installs a local Windows production installer into the real NSIS install directory
+  - Uses the default public GitHub updater source without a local manifest override
+  - Verifies the Windows updater downloads a GitHub Release `.exe` installer
+  - Verifies explicit restart runs the installer helper and relaunches the updated app
 
 Run the local auto-update suite:
 
@@ -216,6 +222,14 @@ Run the public GitHub client E2E suite after the repository is public and a newe
 node test/test-auto-update-public-github-e2e.mjs \
   --old-tag v2.1.0-daily.20260402.1602 \
   --target-version 2.1.0-daily.20260402.1701
+```
+
+Run the public GitHub Windows installer E2E suite after building the local old production installer:
+
+```powershell
+node test/test-auto-update-public-github-windows-installer.mjs `
+  --local-tag v2.1.0-daily.20260414.1 `
+  --target-version 2.1.0-daily.20260415.1
 ```
 
 ### Settings Update Suite

@@ -15,7 +15,7 @@ When a tag matching the release convention is pushed, GitHub Actions will:
 2. Inject the pushed tag into `scripts/dist-release.js` through `ONWARD_TAG`
 3. Inject the operating system label through `ONWARD_RELEASE_OS`
 4. Build a production package
-5. Upload the packaged `.dmg` and `.zip` files as workflow artifacts
+5. Upload the packaged `.dmg`, `.zip`, and Windows installer `.exe` files as workflow artifacts
 6. Collect those artifacts in a publish job
 7. Create or update a prerelease GitHub Release for the same tag
 8. Generate update manifests and publish them to the `gh-pages` branch under `updates/`
@@ -97,12 +97,18 @@ Current layout:
 
 - `updates/daily/macos/arm64/latest.json`
 - `updates/daily/macos/x64/latest.json`
+- `updates/daily/windows/x64/latest.json`
 
 Reserved layouts for future expansion:
 
-- `updates/daily/windows/x64/latest.json`
 - `updates/daily/linux/x64/latest.json`
 - `updates/stable/<os>/<arch>/latest.json`
+
+Artifact selection:
+
+- macOS manifests point to `.zip` artifacts.
+- Windows manifests point to the NSIS `.exe` installer artifact.
+- Windows `.zip` artifacts are not selected for update manifests.
 
 ## What Is Not Configured Yet
 

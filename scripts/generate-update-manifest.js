@@ -89,21 +89,42 @@ const manifestDir = getRequiredEnv('ONWARD_MANIFEST_DIR')
 const changelogRoot = String(process.env.ONWARD_CHANGELOG_ROOT || join(process.cwd(), 'resources', 'changelog')).trim()
 const release = parseReleaseTag(releaseTag)
 const releaseNotes = readReleaseNotes(changelogRoot, release)
-const artifactFiles = readdirSync(artifactDir).filter(fileName => fileName.endsWith('.zip'))
+const artifactFiles = readdirSync(artifactDir).filter(fileName => /\.(zip|exe)$/i.test(fileName))
 
 if (artifactFiles.length === 0) {
-  fail(`No zip artifacts found in "${artifactDir}".`)
+  fail(`No update artifacts found in "${artifactDir}".`)
 }
 
+function parseUpdateArtifact(fileName) {
+  const windowsInstallerMatch = /-(windows)-(arm64|x64)\.exe$/i.exec(fileName)
+  if (windowsInstallerMatch) {
+    return {
+      releaseOs: windowsInstallerMatch[1],
+      arch: windowsInstallerMatch[2]
+    }
+  }
+
+  const zipMatch = /-(macos|linux)-(arm64|x64)\.zip$/i.exec(fileName)
+  if (zipMatch) {
+    return {
+      releaseOs: zipMatch[1],
+      arch: zipMatch[2]
+    }
+  }
+
+  return null
+}
+
+let generatedCount = 0
 for (const fileName of artifactFiles) {
-  const match = /-(macos|windows|linux)-(arm64|x64)\.zip$/.exec(fileName)
-  if (!match) {
+  const artifact = parseUpdateArtifact(fileName)
+  if (!artifact) {
     console.warn(`Skipping unsupported artifact name "${fileName}".`)
     continue
   }
 
-  const releaseOs = match[1]
-  const arch = match[2]
+  const releaseOs = artifact.releaseOs
+  const arch = artifact.arch
   const artifactPath = join(artifactDir, fileName)
   const outputDir = join(manifestDir, release.releaseChannel, releaseOs, arch)
   const outputPath = join(outputDir, 'latest.json')
@@ -126,4 +147,9 @@ for (const fileName of artifactFiles) {
 
   writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8')
   console.log(`Generated update manifest: ${outputPath}`)
+  generatedCount++
+}
+
+if (generatedCount === 0) {
+  fail(`No supported update artifacts found in "${artifactDir}".`)
 }

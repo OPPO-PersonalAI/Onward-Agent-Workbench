@@ -49,6 +49,7 @@ Behavior:
 - Reads the release operating system from `ONWARD_RELEASE_OS` when provided
 - Displays the raw tag in the app title
 - Converts the tag date into an Electron-compatible version number
+- Uses the shared electron-builder `npmRebuild=false` setting; native modules are prepared during dependency installation instead of being rebuilt during packaging
 
 Examples:
 
@@ -114,6 +115,13 @@ Examples:
 
 - `Onward 2-v2.1.0-daily.20260402.1-macos-arm64.dmg`
 - `Onward 2-v2.1.0-daily.20260402.1-macos-x64.zip`
+- `Onward 2-v2.1.0-daily.20260402.1-windows-x64.exe`
+
+Updater manifest rules:
+
+- macOS manifests point to the `.zip` artifact.
+- Windows manifests point to the NSIS `.exe` installer artifact.
+- Windows `.zip` artifacts may still be uploaded for manual inspection, but they are not used by the in-app updater.
 
 Reserved operating system labels for future expansion:
 

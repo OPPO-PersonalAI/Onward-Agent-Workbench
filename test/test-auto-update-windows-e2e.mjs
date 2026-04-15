@@ -17,7 +17,7 @@
  *  S6. Restart-to-update → new version launches, version confirmed
  *  S7. install.log written before relaunch, contains "installed successfully"
  *  S8. pending-update.json cleaned up after successful update
- *  S9. Downloaded archive cleaned up after installation
+ *  S9. Downloaded installer cleaned up after installation
  *
  * Usage: node test/test-auto-update-windows-e2e.mjs
  */
@@ -25,9 +25,9 @@
 import * as http from 'http'
 import { createHash } from 'crypto'
 import {
-  cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync
+  cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync
 } from 'fs'
-import { dirname, join, basename, resolve, sep } from 'path'
+import { dirname, join, resolve, sep } from 'path'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import {
@@ -67,10 +67,6 @@ function sha256File(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex')
 }
 
-function powershellQuote(value) {
-  return `'${String(value).replace(/'/g, "''")}'`
-}
-
 function isPathInside(rootDir, filePath) {
   const normalizedRoot = resolve(rootDir)
   const normalizedFilePath = resolve(filePath)
@@ -86,12 +82,16 @@ function isPathInside(rootDir, filePath) {
  * Uses electron-vite + electron-builder directly (skips changelog/notices for speed).
  * Caches the output — if the directory already exists, the build is skipped.
  */
-function buildVersion(tag, fixturesRoot) {
+function buildVersion(tag, fixturesRoot, options = {}) {
   const version = tag.slice(1)
   const outputDir = join(fixturesRoot, tag)
-  if (existsSync(join(outputDir, `${PRODUCT_NAME}.exe`))) {
+  const installerArtifactName = `${PRODUCT_NAME}-${tag}-${PLATFORM}-${ARCH}.exe`
+  const installerFileName = installerArtifactName.replace(/ /g, '.')
+  const installerPath = join(fixturesRoot, installerFileName)
+  const needsInstaller = options.installer === true
+  if (existsSync(join(outputDir, `${PRODUCT_NAME}.exe`)) && (!needsInstaller || existsSync(installerPath))) {
     console.log(`  [build] Reusing cached build: ${outputDir}`)
-    return outputDir
+    return { dir: outputDir, installerPath, installerFileName }
   }
 
   console.log(`  [build] Building ${tag} (this may take several minutes) ...`)
@@ -111,6 +111,7 @@ function buildVersion(tag, fixturesRoot) {
   const q = '"'
   const artifactName = `${PRODUCT_NAME}-${tag}-${PLATFORM}-\${arch}.\${ext}`
   const builderArgs = [
+    '-c.appId=com.onward2.autoupdate.e2e',
     `${q}-c.artifactName=${artifactName}${q}`,
     `${q}-c.extraMetadata.version=${version}${q}`,
     '-c.extraMetadata.buildChannel=prod',
@@ -118,7 +119,7 @@ function buildVersion(tag, fixturesRoot) {
     `-c.extraMetadata.releaseChannel=${RELEASE_CHANNEL}`,
     `-c.extraMetadata.releaseOs=${PLATFORM}`,
     '-c.npmRebuild=false',
-    '--dir'
+    ...(needsInstaller ? [] : ['--dir'])
   ].join(' ')
 
   execSync(`pnpm exec electron-builder ${builderArgs}`, {
@@ -130,28 +131,22 @@ function buildVersion(tag, fixturesRoot) {
   mkdirSync(outputDir, { recursive: true })
   cpSync(join(PROJECT_ROOT, 'release', 'win-unpacked'), outputDir, { recursive: true })
   console.log(`  [build] Built ${tag} → ${outputDir}`)
-  return outputDir
-}
-
-function createZip(sourceDir, zipPath) {
-  if (existsSync(zipPath)) {
-    console.log(`  [zip] Reusing cached: ${basename(zipPath)}`)
-    return
+  if (needsInstaller) {
+    const builtInstallerPath = join(PROJECT_ROOT, 'release', installerArtifactName)
+    assert(existsSync(builtInstallerPath), `Installer not found: ${builtInstallerPath}`)
+    cpSync(builtInstallerPath, installerPath)
   }
-  console.log(`  [zip] Creating ${basename(zipPath)} ...`)
-  execSync(
-    `powershell.exe -NoProfile -Command "Compress-Archive -Path ${powershellQuote(`${sourceDir}\\*`)} -DestinationPath ${powershellQuote(zipPath)} -Force"`,
-    { stdio: 'pipe' }
-  )
-  const sizeMB = (statSync(zipPath).size / 1024 / 1024).toFixed(1)
-  console.log(`  [zip] Created: ${basename(zipPath)} (${sizeMB} MB)`)
+  return { dir: outputDir, installerPath, installerFileName }
 }
 
-function makeRelease(tag, dir, fixturesRoot) {
-  const zipFileName = `${PRODUCT_NAME}-${tag}-${PLATFORM}-${ARCH}.zip`.replace(/ /g, '.')
-  const zipPath = join(fixturesRoot, zipFileName)
-  createZip(dir, zipPath)
-  return { tag, version: tag.slice(1), dir, zipPath, zipFileName }
+function makeRelease(tag, build) {
+  return {
+    tag,
+    version: tag.slice(1),
+    dir: build.dir,
+    installerPath: build.installerPath,
+    installerFileName: build.installerFileName
+  }
 }
 
 function createManifest(release, port) {
@@ -161,9 +156,9 @@ function createManifest(release, port) {
     tag: release.tag,
     platform: PLATFORM,
     arch: ARCH,
-    artifactName: release.zipFileName,
-    artifactUrl: `http://127.0.0.1:${port}/downloads/${encodeURIComponent(release.zipFileName)}`,
-    sha256: sha256File(release.zipPath),
+    artifactName: release.installerFileName,
+    artifactUrl: `http://127.0.0.1:${port}/downloads/${encodeURIComponent(release.installerFileName)}`,
+    sha256: sha256File(release.installerPath),
     releaseNotes: `Test update to ${release.version}`,
     publishedAt: new Date().toISOString()
   }
@@ -250,22 +245,22 @@ async function main() {
   // ── Step 1: Build three versions ───────────────────────────────────────
 
   console.log('[Step 1] Building three app versions...')
-  const dirB = buildVersion(TAG_B, fixturesRoot)
+  const buildB = buildVersion(TAG_B, fixturesRoot, { installer: true })
   rmSync(join(PROJECT_ROOT, 'out'), { recursive: true, force: true })
   rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
-  const dirA = buildVersion(TAG_A, fixturesRoot)
+  const buildA = buildVersion(TAG_A, fixturesRoot, { installer: true })
   rmSync(join(PROJECT_ROOT, 'out'), { recursive: true, force: true })
   rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
-  const dirOld = buildVersion(OLD_TAG, fixturesRoot)
+  const buildOld = buildVersion(OLD_TAG, fixturesRoot)
 
-  // ── Step 2: Create zip archives ────────────────────────────────────────
+  // Step 2: Prepare Windows installer artifacts.
 
-  console.log('\n[Step 2] Creating zip archives...')
-  const releaseA = makeRelease(TAG_A, dirA, fixturesRoot)
-  const releaseB = makeRelease(TAG_B, dirB, fixturesRoot)
+  console.log('\n[Step 2] Preparing Windows installer artifacts...')
+  const releaseA = makeRelease(TAG_A, buildA)
+  const releaseB = makeRelease(TAG_B, buildB)
 
-  cpSync(releaseA.zipPath, join(downloadsRoot, releaseA.zipFileName))
-  cpSync(releaseB.zipPath, join(downloadsRoot, releaseB.zipFileName))
+  cpSync(releaseA.installerPath, join(downloadsRoot, releaseA.installerFileName))
+  cpSync(releaseB.installerPath, join(downloadsRoot, releaseB.installerFileName))
 
   // ── Step 3: Start HTTP server with manifest → A ────────────────────────
 
@@ -294,7 +289,7 @@ async function main() {
 
     console.log('\n[Step 4] Launching old version...')
     const installDir = join(runRoot, 'app')
-    cpSync(dirOld, installDir, { recursive: true })
+    cpSync(buildOld.dir, installDir, { recursive: true })
     const execPath = join(installDir, `${PRODUCT_NAME}.exe`)
     assert(existsSync(execPath), `Executable not found: ${execPath}`)
 
@@ -305,8 +300,8 @@ async function main() {
     const invalidMarkerPath = join(invalidMarkerUserDataDir, 'updates', 'pending-update.json')
     mkdirSync(dirname(invalidMarkerPath), { recursive: true })
     writeFileSync(invalidMarkerPath, JSON.stringify({
-      schemaVersion: 1,
-      archivePath: 'missing.zip'
+      schemaVersion: 2,
+      artifactPath: 'missing.exe'
     }), 'utf-8')
 
     markerProcess = spawnApp(execPath, {
@@ -349,7 +344,7 @@ async function main() {
     console.log(`  Downloaded A: ${downloadedA.downloadedFileName} ✓`)
 
     const filesAfterA = listUpdateFiles(userDataDir)
-    assert(filesAfterA.some((f) => f.endsWith('.zip')), 'Expected A archive on disk')
+    assert(filesAfterA.some((f) => f.endsWith('.exe')), 'Expected A installer on disk')
     assert(!filesAfterA.some((f) => f.includes(VERSION_B)), 'B must not be present before manifest switch')
     console.log(`  Only A on disk ✓`)
 
@@ -367,16 +362,16 @@ async function main() {
     assert(downloadedB.targetTag === TAG_B, 'Expected downloaded tag to match B')
     console.log(`  Downloaded B: ${downloadedB.downloadedFileName} ✓`)
 
-    // B archive must be on disk
+    // B installer must be on disk
     const filesAfterB = listUpdateFiles(userDataDir)
-    assert(filesAfterB.some((f) => f.includes(VERSION_B) && f.endsWith('.zip')), 'Expected B archive on disk')
-    // Note: A archive stays on disk until next startup cleanup (no runtime purge)
-    console.log(`  B archive on disk ✓`)
+    assert(filesAfterB.some((f) => f.includes(VERSION_B) && f.endsWith('.exe')), 'Expected B installer on disk')
+    // Note: A installer stays on disk until next startup cleanup (no runtime purge)
+    console.log(`  B installer on disk ✓`)
 
     // Verify SHA-256 of B
-    const bZip = filesAfterB.find((f) => f.includes(VERSION_B) && f.endsWith('.zip'))
-    assert(bZip, 'B zip not found')
-    assert(sha256File(bZip) === manifestB.sha256, 'SHA-256 mismatch for B')
+    const bInstaller = filesAfterB.find((f) => f.includes(VERSION_B) && f.endsWith('.exe'))
+    assert(bInstaller, 'B installer not found')
+    assert(sha256File(bInstaller) === manifestB.sha256, 'SHA-256 mismatch for B')
     console.log(`  SHA-256 verified ✓`)
 
     // ── Step 8: Safety check — kill without restart ──────────────────────
@@ -412,11 +407,11 @@ async function main() {
     assert(recovered.targetVersion === VERSION_B, 'Expected B recovered')
     console.log(`  B recovered from disk ✓`)
 
-    // Startup cleanup should have removed the stale A archive
+    // Startup cleanup should have removed the stale A installer
     const filesAfterRelaunch = listUpdateFiles(userDataDir)
-    assert(!filesAfterRelaunch.some((f) => f.includes(VERSION_A) && f.endsWith('.zip')),
-      'Expected stale A archive to be cleaned up by startup recovery')
-    console.log(`  Stale A archive cleaned up ✓`)
+    assert(!filesAfterRelaunch.some((f) => f.includes(VERSION_A) && f.endsWith('.exe')),
+      'Expected stale A installer to be cleaned up by startup recovery')
+    console.log(`  Stale A installer cleaned up ✓`)
 
     // ── Step 10: Restart-to-update ──────────────────────────────────────
 
@@ -471,11 +466,11 @@ async function main() {
     assert(!existsSync(pendingMarkerPath), 'pending-update.json must be removed after successful update')
     console.log(`  pending-update.json cleaned up ✓`)
 
-    // Downloaded archives must be cleaned up
+    // Downloaded installers must be cleaned up
     const finalFiles = listUpdateFiles(userDataDir)
-    assert(!finalFiles.some((f) => f.endsWith('.zip')),
-      `Expected all archives cleaned up, found: ${finalFiles.filter(f => f.endsWith('.zip')).join(', ')}`)
-    console.log(`  Downloaded archives cleaned up ✓`)
+    assert(!finalFiles.some((f) => f.endsWith('.exe')),
+      `Expected all installers cleaned up, found: ${finalFiles.filter(f => f.endsWith('.exe')).join(', ')}`)
+    console.log(`  Downloaded installers cleaned up ✓`)
 
     // ── Cleanup ─────────────────────────────────────────────────────────
 
@@ -500,7 +495,7 @@ async function main() {
     console.log(`  ✓ S9: New version (${VERSION_B}) launched and confirmed`)
     console.log(`  ✓ S10: install.log indicates success`)
     console.log(`  ✓ S11: pending-update.json cleaned up`)
-    console.log(`  ✓ S12: All downloaded archives cleaned up`)
+    console.log(`  ✓ S12: All downloaded installers cleaned up`)
     console.log('\n=== PASS ===')
 
   } catch (error) {
