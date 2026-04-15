@@ -24,7 +24,7 @@ import {
   TerminalFocusRequest
 } from './types/prompt'
 import type { TerminalBatchIssue, TerminalBatchIssueReason } from './types/prompt'
-import type { CurrentChangelogResult, Prompt } from './types/electron.d.ts'
+import type { AppInfo, CurrentChangelogResult, Prompt } from './types/electron.d.ts'
 import type { TabState, EditorDraft, PromptCleanupConfig, PromptSchedule, ExecutionLogEntry } from './types/tab.d.ts'
 import type { ShortcutAction } from './types/settings.d.ts'
 import type { ProjectEditorOpenEventDetail, ProjectEditorOpenRequest, SubpageId } from './types/subpage'
@@ -51,8 +51,45 @@ import './App.css'
 import './styles/form-controls.css'
 
 const MAX_SCHEDULE_LOG_ENTRIES = 50
-const SEND_AND_EXECUTE_SETTLE_DELAY_MS = 150
+const DEFAULT_SEND_AND_EXECUTE_SETTLE_DELAY_MS = 150
+const WINDOWS_SEND_AND_EXECUTE_SETTLE_DELAY_MS = 500
 const DEBUG_TERMINAL_FOCUS = Boolean(window.electronAPI?.debug?.enabled)
+
+type SendAndExecuteDelayPlatform = AppInfo['platform']
+
+interface SendAndExecuteDelayContext {
+  platform: SendAndExecuteDelayPlatform
+  platformVersion: string
+}
+
+interface SendAndExecuteDelayConfig {
+  defaultDelayMs: number
+  versionRules: Array<{
+    platformVersionPrefix: string
+    delayMs: number
+  }>
+}
+
+const SEND_AND_EXECUTE_SETTLE_DELAY_CONFIG: Record<SendAndExecuteDelayPlatform, SendAndExecuteDelayConfig> = {
+  darwin: {
+    defaultDelayMs: DEFAULT_SEND_AND_EXECUTE_SETTLE_DELAY_MS,
+    versionRules: []
+  },
+  win32: {
+    defaultDelayMs: WINDOWS_SEND_AND_EXECUTE_SETTLE_DELAY_MS,
+    versionRules: []
+  },
+  linux: {
+    defaultDelayMs: DEFAULT_SEND_AND_EXECUTE_SETTLE_DELAY_MS,
+    versionRules: []
+  },
+  unknown: {
+    defaultDelayMs: DEFAULT_SEND_AND_EXECUTE_SETTLE_DELAY_MS,
+    versionRules: []
+  }
+}
+
+let sendAndExecuteDelayContextPromise: Promise<SendAndExecuteDelayContext> | null = null
 
 function debugTerminalFocus(message: string, data?: unknown) {
   if (!DEBUG_TERMINAL_FOCUS) return
@@ -70,9 +107,40 @@ function appendScheduleLogEntry(schedule: PromptSchedule, entry: ExecutionLogEnt
 }
 
 async function waitForSendAndExecuteSettle(): Promise<void> {
+  const delayMs = resolveSendAndExecuteSettleDelayMs(await getSendAndExecuteDelayContext())
   await new Promise<void>((resolve) => {
-    window.setTimeout(resolve, SEND_AND_EXECUTE_SETTLE_DELAY_MS)
+    window.setTimeout(resolve, delayMs)
   })
+}
+
+function normalizeSendAndExecuteDelayPlatform(platform: string): SendAndExecuteDelayPlatform {
+  if (platform === 'darwin' || platform === 'win32' || platform === 'linux') {
+    return platform
+  }
+  return 'unknown'
+}
+
+function resolveSendAndExecuteSettleDelayMs(context: SendAndExecuteDelayContext): number {
+  const config = SEND_AND_EXECUTE_SETTLE_DELAY_CONFIG[context.platform] ?? SEND_AND_EXECUTE_SETTLE_DELAY_CONFIG.unknown
+  const versionRule = config.versionRules.find((rule) => {
+    return context.platformVersion.startsWith(rule.platformVersionPrefix)
+  })
+  return versionRule?.delayMs ?? config.defaultDelayMs
+}
+
+function getSendAndExecuteDelayContext(): Promise<SendAndExecuteDelayContext> {
+  if (!sendAndExecuteDelayContextPromise) {
+    sendAndExecuteDelayContextPromise = window.electronAPI.appInfo.get()
+      .then((info) => ({
+        platform: normalizeSendAndExecuteDelayPlatform(info.platform || window.electronAPI.platform),
+        platformVersion: info.platformVersion || 'unknown'
+      }))
+      .catch(() => ({
+        platform: normalizeSendAndExecuteDelayPlatform(window.electronAPI.platform),
+        platformVersion: 'unknown'
+      }))
+  }
+  return sendAndExecuteDelayContextPromise
 }
 
 async function resolveProjectEditorDebugCwd(

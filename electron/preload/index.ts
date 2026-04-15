@@ -39,8 +39,9 @@ export interface TerminalBufferResult {
   error?: string
 }
 
-export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
+export type RuntimePlatform = 'darwin' | 'win32' | 'linux' | 'unknown'
 export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
 export type PromptBridgeAction = 'send' | 'execute' | 'send-and-execute'
@@ -689,6 +690,8 @@ export interface AppInfo {
   tag: string | null
   releaseChannel: ReleaseChannel
   releaseOs: ReleaseOs
+  platform: RuntimePlatform
+  platformVersion: string
   version: string
   productName: string
   displayName: string
