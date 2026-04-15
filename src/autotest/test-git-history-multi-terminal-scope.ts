@@ -7,6 +7,7 @@
  * Git History multi-terminal scope regression test
  */
 import type { AutotestContext, TestResult } from './types'
+import { buildChangeDirectoryCommand, type TerminalShellKind } from '../utils/terminal-command'
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -38,6 +39,14 @@ function dispatchEscape(): void {
     bubbles: true,
     cancelable: true
   }))
+}
+
+async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShellKind | undefined> {
+  try {
+    return (await window.electronAPI.terminal.getInputCapabilities(terminalId)).shellKind
+  } catch {
+    return undefined
+  }
 }
 
 async function waitForTerminalCwd(
@@ -130,9 +139,8 @@ export async function testGitHistoryMultiTerminalScope(ctx: AutotestContext): Pr
       'git add README.md',
       'git -c user.name="Onward AutoTest" -c user.email="autotest@example.com" commit -m "fixture" >/dev/null 2>&1'
     ].join(' && ') + "\r"
-  const rootCommand = platform === 'win32'
-    ? `cd /d "${rootShellPath}"\r`
-    : `cd "${rootShellPath}"\r`
+  const shellKindA = await resolveTerminalShellKind(terminalA)
+  const rootCommand = buildChangeDirectoryCommand(platform, rootShellPath, shellKindA)
 
   await writeAndSyncTerminal(terminalA, rootCommand, sleep)
   await writeAndSyncTerminal(terminalB, fixtureCommand, sleep)

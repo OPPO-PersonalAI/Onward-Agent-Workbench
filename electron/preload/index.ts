@@ -73,8 +73,11 @@ export interface TerminalInputSequencePayload {
   content: string
 }
 
+export type TerminalShellKind = 'posix' | 'powershell' | 'cmd' | 'unknown'
+
 export interface TerminalInputCapabilities {
   bracketedPasteEnabled: boolean
+  shellKind: TerminalShellKind
 }
 
 export interface TerminalAPI {

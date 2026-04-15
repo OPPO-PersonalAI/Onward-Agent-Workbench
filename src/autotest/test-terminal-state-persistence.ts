@@ -4,7 +4,7 @@
  */
 
 import type { AutotestContext, TestResult } from './types'
-import { buildChangeDirectoryCommand } from '../utils/terminal-command'
+import { buildChangeDirectoryCommand, type TerminalShellKind } from '../utils/terminal-command'
 
 function joinPath(base: string, name: string): string {
   const separator = base.includes('\\') ? '\\' : '/'
@@ -26,6 +26,14 @@ function openPromptPanel(): void {
 function switchToDoubleLayout(): void {
   const buttons = Array.from(document.querySelectorAll('.sidebar .sidebar-btn')) as HTMLButtonElement[]
   buttons[2]?.click()
+}
+
+async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShellKind | undefined> {
+  try {
+    return (await window.electronAPI.terminal.getInputCapabilities(terminalId)).shellKind
+  } catch {
+    return undefined
+  }
 }
 
 function dragPromptEditorHeight(deltaY: number): boolean {
@@ -137,9 +145,11 @@ export async function testTerminalStatePersistence(ctx: AutotestContext): Promis
   const cwdA = rootPath
   const cwdB = joinPath(rootPath, 'src')
   const platform = window.electronAPI.platform
+  const shellKindA = await resolveTerminalShellKind(terminalA)
+  const shellKindB = await resolveTerminalShellKind(terminalB)
 
-  await window.electronAPI.terminal.write(terminalA, buildChangeDirectoryCommand(platform, cwdA))
-  await window.electronAPI.terminal.write(terminalB, buildChangeDirectoryCommand(platform, cwdB))
+  await window.electronAPI.terminal.write(terminalA, buildChangeDirectoryCommand(platform, cwdA, shellKindA))
+  await window.electronAPI.terminal.write(terminalB, buildChangeDirectoryCommand(platform, cwdB, shellKindB))
   await sleep(700)
   await window.electronAPI.git.notifyTerminalActivity(terminalA)
   await window.electronAPI.git.notifyTerminalActivity(terminalB)

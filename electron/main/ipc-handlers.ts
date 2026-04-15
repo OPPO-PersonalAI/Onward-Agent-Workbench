@@ -724,7 +724,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   ipcMain.handle('terminal:get-input-capabilities', (_, id: string) => {
     return {
-      bracketedPasteEnabled: terminalBracketedPasteState.get(id) ?? false
+      bracketedPasteEnabled: terminalBracketedPasteState.get(id) ?? false,
+      shellKind: ptyManager.getShellKind(id)
     }
   })
 

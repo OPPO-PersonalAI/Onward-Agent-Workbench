@@ -7,6 +7,7 @@
  * Phase 0.7: ProjectEditor multi-terminal isolation recovery test in the same directory
  */
 import type { AutotestContext, TestResult } from './types'
+import { buildChangeDirectoryCommand, type TerminalShellKind } from '../utils/terminal-command'
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/')
@@ -27,6 +28,14 @@ function dispatchEscape(): void {
     bubbles: true,
     cancelable: true
   }))
+}
+
+async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShellKind | undefined> {
+  try {
+    return (await window.electronAPI.terminal.getInputCapabilities(terminalId)).shellKind
+  } catch {
+    return undefined
+  }
 }
 
 async function waitForTerminalCwd(
@@ -120,12 +129,13 @@ export async function testProjectEditorMultiTerminalScope(ctx: AutotestContext):
   if (!createB.success || cancelled()) return results
 
   const platform = window.electronAPI.platform
-  const cdCommand = platform === 'win32'
-    ? `cd /d "${rootPath}"\r`
-    : `cd "${rootPath}"\r`
+  const shellKindA = await resolveTerminalShellKind(terminalA)
+  const shellKindB = await resolveTerminalShellKind(terminalB)
+  const cdCommandA = buildChangeDirectoryCommand(platform, rootPath, shellKindA)
+  const cdCommandB = buildChangeDirectoryCommand(platform, rootPath, shellKindB)
 
-  await window.electronAPI.terminal.write(terminalA, cdCommand)
-  await window.electronAPI.terminal.write(terminalB, cdCommand)
+  await window.electronAPI.terminal.write(terminalA, cdCommandA)
+  await window.electronAPI.terminal.write(terminalB, cdCommandB)
   await window.electronAPI.git.notifyTerminalActivity(terminalA)
   await window.electronAPI.git.notifyTerminalActivity(terminalB)
 

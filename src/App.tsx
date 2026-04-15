@@ -46,7 +46,7 @@ import { ConsentDialog } from './components/ConsentDialog/ConsentDialog'
 import { terminalSessionManager } from './terminal/terminal-session-manager'
 import { focusCoordinator, type TerminalFocusRestoreReason } from './terminal/focus-coordinator'
 import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
-import { buildChangeDirectoryCommand } from './utils/terminal-command'
+import { buildChangeDirectoryCommand, type TerminalShellKind } from './utils/terminal-command'
 import './App.css'
 import './styles/form-controls.css'
 
@@ -154,6 +154,14 @@ async function resolveProjectEditorDebugCwd(
     return await window.electronAPI.git.getTerminalCwd(terminalId)
   } catch {
     return null
+  }
+}
+
+async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShellKind | undefined> {
+  try {
+    return (await window.electronAPI.terminal.getInputCapabilities(terminalId)).shellKind
+  } catch {
+    return undefined
   }
 }
 
@@ -1091,7 +1099,8 @@ function AppContent({
         }
         projectEditorProfileScenarioRef.current = true
         const platform = window.electronAPI.platform
-        const cdCommand = buildChangeDirectoryCommand(platform, debugCwd)
+        const shellKind = await resolveTerminalShellKind(terminalId)
+        const cdCommand = buildChangeDirectoryCommand(platform, debugCwd, shellKind)
         await window.electronAPI.terminal.write(terminalId, cdCommand)
         await sleep(400)
         openProjectEditorDebug(debugCwd)
@@ -1241,9 +1250,10 @@ function AppContent({
   // Change working directory
   const handleChangeWorkDir = useCallback(async (terminalIds: string[], directory: string) => {
     const platform = window.electronAPI.platform
-    const fullCommand = buildChangeDirectoryCommand(platform, directory)
 
     for (const id of terminalIds) {
+      const shellKind = await resolveTerminalShellKind(id)
+      const fullCommand = buildChangeDirectoryCommand(platform, directory, shellKind)
       await window.electronAPI.terminal.write(id, fullCommand)
       setTerminalLastCwd(id, directory)
     }

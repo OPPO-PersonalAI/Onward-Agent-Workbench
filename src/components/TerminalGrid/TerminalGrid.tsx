@@ -21,7 +21,7 @@ import { focusCoordinator } from '../../terminal/focus-coordinator'
 import type { TerminalDebugApi } from '../../autotest/types'
 import { perfMonitor } from '../../utils/perf-monitor'
 import { useI18n } from '../../i18n/useI18n'
-import { buildChangeDirectoryCommand } from '../../utils/terminal-command'
+import { buildChangeDirectoryCommand, type TerminalShellKind } from '../../utils/terminal-command'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
@@ -76,6 +76,14 @@ interface TerminalGitInfo {
 const TERMINAL_PATH_SEGMENTS = 3
 const FOCUS_REQUEST_MAX_ATTEMPTS = 12
 const FOCUS_REQUEST_RETRY_MS = 50
+
+async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShellKind | undefined> {
+  try {
+    return (await window.electronAPI.terminal.getInputCapabilities(terminalId)).shellKind
+  } catch {
+    return undefined
+  }
+}
 
 export const TerminalGrid = memo(function TerminalGrid({
   layoutMode,
@@ -1312,7 +1320,8 @@ export const TerminalGrid = memo(function TerminalGrid({
   const handleChangeWorkDir = useCallback(async (terminalId: string) => {
     const result = await window.electronAPI.dialog.openDirectory()
     if (result.success && result.path) {
-      const cdCommand = buildChangeDirectoryCommand(window.electronAPI.platform, result.path)
+      const shellKind = await resolveTerminalShellKind(terminalId)
+      const cdCommand = buildChangeDirectoryCommand(window.electronAPI.platform, result.path, shellKind)
       await window.electronAPI.terminal.write(terminalId, cdCommand)
       onPersistTerminalCwd(terminalId, result.path)
       onTerminalFocus(terminalId)
