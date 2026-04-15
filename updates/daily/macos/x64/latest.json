@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260410.2",
-  "tag": "v2.1.0-daily.20260410.2",
+  "version": "2.1.0-daily.20260415.1",
+  "tag": "v2.1.0-daily.20260415.1",
   "platform": "macos",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260410.2-macos-x64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward/releases/download/v2.1.0-daily.20260410.2/Onward.2-v2.1.0-daily.20260410.2-macos-x64.zip",
-  "sha256": "735fdf253fad78b97a53061b587f353b8a8aad4b7d79e60cee8d11d21929c4c4",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260410.2\n\nChanges since `v2.1.0-daily.20260410.1`.\n\n## New Features\n- Add Mermaid diagram rendering to Markdown preview\n- Add auto-refresh for Git Diff viewer when files change externally\n- Display git submodule changes in diff viewer\n- Add expand/collapse for unchanged regions in Git History diff view\n- Enable text word-wrap for file list in GitDiff and GitHistory panels\n- Enable text word-wrap for file tree and outline panel in Editor\n- Unify file path copy UX with shared usePathCopy hook\n- Add row labels to Prompt History filter panel and rename Targets to Task\n- Add download expiration cleanup and cross-session recovery for auto-update\n\n## Bug Fixes\n- Resolve infinite refresh loop in Feedback History view\n- Prevent telemetry consent from being overwritten by stale renderer saves\n- Restore task title display in SubpagePanelShell header\n- Recover terminal rendering after WebGL context loss\n- Improve UI state persistence across restarts and upgrades\n- Preserve Pin/Recent and cursor position across Editor↔Diff↔History subpage switches\n- Align task labels to the left in Prompt History list\n",
-  "publishedAt": "2026-04-10T13:27:45.029Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260415.1-macos-x64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-daily.20260415.1/Onward.2-v2.1.0-daily.20260415.1-macos-x64.zip",
+  "sha256": "957c77f257d2fda4639019f7ddb6c1dcf7d53d4a2186f2a39b0cb8266e8c687f",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260415.1\n\nChanges since `v2.1.0-daily.20260410.2`.\n\n## New Features\n- Redesign Pin/Recent quick-file display with text style and overflow dropdown\n- Refactor Coding Agent into generic agent launcher with environment variables, history management, alias, and absolute path support\n\n## Bug Fixes\n- Fix preview search highlight ordering, centering, and scroll clamping\n",
+  "publishedAt": "2026-04-15T03:00:00.111Z"
 }
