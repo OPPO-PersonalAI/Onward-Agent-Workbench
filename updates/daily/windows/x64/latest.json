@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260415.1",
-  "tag": "v2.1.0-daily.20260415.1",
+  "version": "2.1.0-daily.20260416.1",
+  "tag": "v2.1.0-daily.20260416.1",
   "platform": "windows",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260415.1-windows-x64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-daily.20260415.1/Onward.2-v2.1.0-daily.20260415.1-windows-x64.zip",
-  "sha256": "cdc8b7e445c621da7f7cbd3786dbf7c465049f4e9480a853d37ca55e10c2b298",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260415.1\n\nChanges since `v2.1.0-daily.20260410.2`.\n\n## New Features\n- Redesign Pin/Recent quick-file display with text style and overflow dropdown\n- Refactor Coding Agent into generic agent launcher with environment variables, history management, alias, and absolute path support\n\n## Bug Fixes\n- Fix preview search highlight ordering, centering, and scroll clamping\n",
-  "publishedAt": "2026-04-15T03:00:00.347Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260416.1-windows-x64.exe",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-daily.20260416.1/Onward.2-v2.1.0-daily.20260416.1-windows-x64.exe",
+  "sha256": "be67c33a0de58c9405c0f87f01134a6a326c0cb2dbe7a01ce87d6c39950bf1f8",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260416.1\n\nChanges since `v2.1.0-daily.20260415.1`.\n\n## New Features\n- Harden Windows auto-update recovery\n\n## Bug Fixes\n- Fix Windows auto-update installer flow\n- Fix Windows send-and-execute prompt delay\n- Fix terminal layout refresh after font size changes\n- Fix shell-specific directory changes\n",
+  "publishedAt": "2026-04-16T07:13:50.205Z"
 }
