@@ -169,6 +169,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const lastShortcutTokenRef = useRef<number | null>(null)
   const gitDiffOpenTokenRef = useRef(0)
   const gitHistoryOpenTokenRef = useRef(0)
+  const subpageNavigateTokenRef = useRef(0)
   const [terminalStatuses, setTerminalStatuses] = useState<Record<string, TerminalSessionStatus>>({})
   const projectEditorOpenInGrid = projectEditorOpen
     && Boolean(projectEditorTerminalId && terminals.some(term => term.id === projectEditorTerminalId))
@@ -234,6 +235,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   }, [gitDiffOpen, gitHistoryOpen, projectEditorOpenInGrid])
 
   const activePanelShellState = activeSubpage ? panelShellStates[activeSubpage] ?? null : null
+  const activeSubpageSelect = activePanelShellState?.onSelect
 
   useEffect(() => {
     const previous = previousActiveSubpageRef.current
@@ -1221,8 +1223,11 @@ export const TerminalGrid = memo(function TerminalGrid({
       const target = customEvent.detail?.target
       if (!terminalId || !target) return
       if (!terminals.some(term => term.id === terminalId)) return
+      const navigateToken = ++subpageNavigateTokenRef.current
+      setActiveSubpage(target)
 
       const closeNonTargetSubpages = () => {
+        if (subpageNavigateTokenRef.current !== navigateToken) return
         if (target !== 'diff') {
           closeGitDiffPanel(false)
         }
@@ -1355,12 +1360,39 @@ export const TerminalGrid = memo(function TerminalGrid({
     if (!isTargetVisible) return
 
     lastShortcutTokenRef.current = shortcutAction.token
+    const isSubpageOpen = (target: SubpageId) => {
+      if (target === 'diff') return gitDiffOpen
+      if (target === 'history') return gitHistoryOpen
+      return projectEditorOpenInGrid
+    }
+
+    const selectOpenSubpage = (target: SubpageId) => {
+      if (!anySubpageOpen) return false
+      if (isSubpageOpen(target)) return true
+      if (!activeSubpageSelect) {
+        debugLog('subpage:shortcut:missing-selector', { target, activeSubpage })
+        return true
+      }
+      activeSubpageSelect(target)
+      return true
+    }
+
     switch (shortcutAction.action) {
       case 'gitDiff':
-        void handleViewGitDiff(shortcutAction.terminalId)
+        if (selectOpenSubpage('diff')) {
+          return
+        }
+        if (!gitDiffOpen) {
+          void handleViewGitDiff(shortcutAction.terminalId)
+        }
         break
       case 'gitHistory':
-        void handleViewGitHistory(shortcutAction.terminalId)
+        if (selectOpenSubpage('history')) {
+          return
+        }
+        if (!gitHistoryOpen) {
+          void handleViewGitHistory(shortcutAction.terminalId)
+        }
         break
       case 'changeWorkDir':
         void handleChangeWorkDir(shortcutAction.terminalId)
@@ -1369,10 +1401,15 @@ export const TerminalGrid = memo(function TerminalGrid({
         void handleOpenWorkDir(shortcutAction.terminalId)
         break
       case 'projectEditor':
-        onOpenProjectEditor(shortcutAction.terminalId)
+        if (selectOpenSubpage('editor')) {
+          return
+        }
+        if (!projectEditorOpenInGrid) {
+          onOpenProjectEditor(shortcutAction.terminalId)
+        }
         break
     }
-  }, [shortcutAction, hidden, visibleTerminals, handleViewGitDiff, handleViewGitHistory, handleChangeWorkDir, handleOpenWorkDir, onOpenProjectEditor])
+  }, [shortcutAction, hidden, visibleTerminals, handleViewGitDiff, handleViewGitHistory, handleChangeWorkDir, handleOpenWorkDir, onOpenProjectEditor, anySubpageOpen, activeSubpage, activeSubpageSelect, gitDiffOpen, gitHistoryOpen, projectEditorOpenInGrid])
 
   const handleTerminalFocus = useCallback((terminalId: string, event?: React.MouseEvent) => {
     // Skip focus steal when click originates inside a browser panel

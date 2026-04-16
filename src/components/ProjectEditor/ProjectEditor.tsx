@@ -1435,7 +1435,10 @@ export function ProjectEditor({
     }
   }, [expandedDirs, pinnedFiles, recentFiles, rootPath, saveCurrentFileMemory])
 
-  const persistProjectEditorState = useCallback((scopeOverride?: ProjectEditorScope | null) => {
+  const persistProjectEditorState = useCallback((
+    scopeOverride?: ProjectEditorScope | null,
+    options?: { flush?: boolean }
+  ) => {
     const scope = resolveEditorScope(scopeOverride)
     if (!scope) return
     const snapshot = buildProjectEditorStateSnapshot(scope)
@@ -1456,8 +1459,12 @@ export function ProjectEditor({
       })
     }
 
+    if (options?.flush) {
+      flushProjectEditorState(scope, snapshot)
+      return
+    }
     setProjectEditorState(scope, snapshot)
-  }, [buildProjectEditorStateSnapshot, expandedDirs, pinnedFiles, recentFiles, resolveEditorScope, setProjectEditorState])
+  }, [buildProjectEditorStateSnapshot, expandedDirs, flushProjectEditorState, pinnedFiles, recentFiles, resolveEditorScope, setProjectEditorState])
 
   const scheduleProjectStateSave = useCallback((scopeOverride?: ProjectEditorScope | null) => {
     const scope = resolveEditorScope(scopeOverride)
@@ -4121,7 +4128,7 @@ export function ProjectEditor({
         fileTreeScrollTopRef.current.set(treeKey, treeEl.scrollTop)
       }
       capturePreviewScrollMemory()
-      persistProjectEditorState(scope)
+      persistProjectEditorState(scope, { flush: true })
     }
     skipClosePersistRef.current = true
     resetActiveFileState()
@@ -4177,7 +4184,7 @@ export function ProjectEditor({
     const canClose = source === 'debug' || window.electronAPI.debug.profile ? true : await confirmDiscardChanges()
     if (!canClose) return
     if (lastEditorScopeRef.current) {
-      persistProjectEditorState(lastEditorScopeRef.current)
+      persistProjectEditorState(lastEditorScopeRef.current, { flush: true })
     }
     skipClosePersistRef.current = true
     gitDiffOpenRef.current = true
@@ -4223,7 +4230,7 @@ export function ProjectEditor({
     const canClose = source === 'debug' || window.electronAPI.debug.profile ? true : await confirmDiscardChanges()
     if (!canClose) return
     if (lastEditorScopeRef.current) {
-      persistProjectEditorState(lastEditorScopeRef.current)
+      persistProjectEditorState(lastEditorScopeRef.current, { flush: true })
     }
     skipClosePersistRef.current = true
     resetActiveFileState()

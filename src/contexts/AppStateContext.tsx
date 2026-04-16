@@ -1152,8 +1152,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const getProjectEditorState = useCallback((scope: ProjectEditorScope): ProjectEditorState | null => {
     const stateKey = buildProjectEditorStateKey(scope)
     if (!stateKey) return null
-    return state.projectEditorStates?.[stateKey] ?? null
-  }, [state.projectEditorStates])
+    return stateRef.current.projectEditorStates?.[stateKey] ?? null
+  }, [])
 
   const setProjectEditorState = useCallback((scope: ProjectEditorScope, projectState: ProjectEditorState | null) => {
     const stateKey = buildProjectEditorStateKey(scope)
