@@ -5,7 +5,7 @@
  */
 
 const { execSync, spawnSync } = require('child_process')
-const { readFileSync } = require('fs')
+const { existsSync, readFileSync, readdirSync } = require('fs')
 const { join } = require('path')
 
 function run(command, args) {
@@ -53,6 +53,76 @@ function getBaseProductName() {
   }
 }
 
+function isTruthyCi() {
+  const ci = process.env.CI
+  return ci === 'true' || ci === '1' || Boolean(process.env.GITHUB_ACTIONS)
+}
+
+/** Whether to open the packaged app after a successful dev build. */
+function shouldOpenPackagedApp() {
+  if (process.env.ONWARD_DIST_DEV_OPEN === '0') return false
+  if (process.env.ONWARD_DIST_DEV_OPEN === '1') return true
+  return !isTruthyCi()
+}
+
+/**
+ * Resolve path to the unpacked packaged app (electron-builder --dir).
+ * @param {string} productName
+ * @returns {string | null}
+ */
+function getPackagedAppPath(productName) {
+  const releaseRoot = join(__dirname, '..', 'release')
+  if (!existsSync(releaseRoot)) return null
+
+  if (process.platform === 'darwin') {
+    let dirNames = []
+    try {
+      dirNames = readdirSync(releaseRoot).filter((n) => n.startsWith('mac-'))
+    } catch {
+      return null
+    }
+    for (const dirName of dirNames) {
+      const dir = join(releaseRoot, dirName)
+      const direct = join(dir, `${productName}.app`)
+      if (existsSync(direct)) return direct
+      try {
+        for (const ent of readdirSync(dir)) {
+          if (ent.endsWith('.app')) return join(dir, ent)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return null
+  }
+
+  if (process.platform === 'win32') {
+    const dir = join(releaseRoot, 'win-unpacked')
+    const exePath = join(dir, `${productName}.exe`)
+    return existsSync(exePath) ? exePath : null
+  }
+
+  const dir = join(releaseRoot, 'linux-unpacked')
+  const binPath = join(dir, productName)
+  return existsSync(binPath) ? binPath : null
+}
+
+/**
+ * Open the packaged app in a GUI session (non-blocking where supported).
+ * @param {string} appPath
+ */
+function openPackagedApp(appPath) {
+  if (process.platform === 'darwin') {
+    spawnSync('open', [appPath], { stdio: 'inherit' })
+    return
+  }
+  if (process.platform === 'win32') {
+    spawnSync('cmd', ['/c', 'start', '', appPath], { stdio: 'inherit', shell: true })
+    return
+  }
+  spawnSync('xdg-open', [appPath], { stdio: 'inherit' })
+}
+
 const branchRaw = getBranchName()
 const branch = sanitizeBranchName(branchRaw)
 const baseName = getBaseProductName()
@@ -73,3 +143,19 @@ run('electron-builder', [
   '-c.npmRebuild=false',
   '--dir'
 ])
+
+if (!shouldOpenPackagedApp()) {
+  if (process.env.ONWARD_DIST_DEV_OPEN === '0') {
+    console.log('[dist:dev] Skipping packaged app launch (ONWARD_DIST_DEV_OPEN=0)')
+  } else {
+    console.log('[dist:dev] Skipping packaged app launch (CI); set ONWARD_DIST_DEV_OPEN=1 to force')
+  }
+} else {
+  const appPath = getPackagedAppPath(productName)
+  if (appPath) {
+    console.log(`[dist:dev] Opening packaged app: ${appPath}`)
+    openPackagedApp(appPath)
+  } else {
+    console.warn('[dist:dev] Packaged app not found under release/; skip auto-launch')
+  }
+}

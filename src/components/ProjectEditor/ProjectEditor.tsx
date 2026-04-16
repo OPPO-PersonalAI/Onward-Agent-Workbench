@@ -51,6 +51,7 @@ import {
   getBaseName,
   getParentPath
 } from './quickFileUtils'
+import { createThemedSetiFileIconResolver, sanitizeSetiSvgOnce } from './setiFileIconTheme'
 import './ProjectEditor.css'
 
 interface ProjectEditorProps {
@@ -798,7 +799,7 @@ export function ProjectEditor({
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
   const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
-  const { getTerminalStyle } = useSettings()
+  const { getTerminalStyle, settings } = useSettings()
   const { locale, t } = useI18n()
   const {
     getProjectEditorState,
@@ -6137,10 +6138,16 @@ export function ProjectEditor({
     ['--project-editor-font-size' as string]: `${editorFontSize}px`
   }), [editorFontSize, isPanel, modalSize.height, modalSize.width])
 
+  const resolveSetiFileIcon = useMemo(
+    () => createThemedSetiFileIconResolver(settings?.theme),
+    [settings?.theme]
+  )
+
   const renderTree = useCallback((nodes: TreeNode[], depth = 0) => {
     return nodes.map((node) => {
       const isSelected = selectedPath === node.path
       const itemClass = `project-editor-tree-item ${isSelected ? 'selected' : ''}`
+      const setiFile = node.type === 'file' ? resolveSetiFileIcon(node.name) : null
 
       return (
         <div key={node.path}>
@@ -6164,24 +6171,27 @@ export function ProjectEditor({
             <div className="project-editor-tree-main">
               {node.type === 'dir' ? (
                 <span className={`project-editor-tree-toggle ${node.isExpanded ? 'open' : ''}`}>
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                  <svg viewBox="0 0 10 10" fill="currentColor" aria-hidden={true}>
                     <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </span>
               ) : (
                 <span className="project-editor-tree-spacer" />
               )}
-              <span className={`project-editor-tree-icon ${node.type}`}>
-                {node.type === 'dir' ? (
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              {node.type === 'dir' ? (
+                <span className="project-editor-tree-icon dir">
+                  <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden={true}>
                     <path d="M1.75 3a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h12.5a.75.75 0 0 0 .75-.75V5.5a.75.75 0 0 0-.75-.75H7.5a.75.75 0 0 1-.53-.22l-.97-.97A.75.75 0 0 0 5.47 3H1.75Z" />
                   </svg>
-                ) : (
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M4.75 1.5a.75.75 0 0 0-.75.75v11.5c0 .414.336.75.75.75h6.5a.75.75 0 0 0 .75-.75V5.5a.75.75 0 0 0-.22-.53l-2.75-2.75A.75.75 0 0 0 8.5 2h-3.75Z" />
-                  </svg>
-                )}
-              </span>
+                </span>
+              ) : (
+                <span
+                  className="project-editor-tree-icon file project-editor-tree-seti-icon"
+                  style={{ color: setiFile!.color }}
+                  // eslint-disable-next-line react/no-danger -- SVG from MIT seti-icons (VS Code Seti family); sanitized with DOMPurify
+                  dangerouslySetInnerHTML={{ __html: sanitizeSetiSvgOnce(setiFile!.svg) }}
+                />
+              )}
               <span className="project-editor-tree-name" title={node.name}>{node.name}</span>
               {node.isLoading && <span className="project-editor-tree-loading">{t('projectEditor.loading')}</span>}
             </div>
@@ -6190,7 +6200,7 @@ export function ProjectEditor({
         </div>
       )
     })
-  }, [openContextMenu, openFile, selectedPath, setSelectedPath, t, toggleDirectory])
+  }, [openContextMenu, openFile, resolveSetiFileIcon, selectedPath, setSelectedPath, t, toggleDirectory])
 
   const treeNodes = useMemo(() => {
     if (tree.length === 0) {

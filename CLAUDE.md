@@ -12,11 +12,11 @@ For platform-related commands, always consider these three platforms:
     # Clean and package (development build)
     rm -rf out release && pnpm dist:dev
 
-
+- After a successful `pnpm dist:dev`, the build script automatically opens the packaged app (macOS `open`, Windows `start`, Linux `xdg-open`) for a smoke test. Auto-launch is skipped when `CI` is truthy (set `ONWARD_DIST_DEV_OPEN=1` to force) or when `ONWARD_DIST_DEV_OPEN=0` is set. See `docs/debug-env-variables.md`.
     If the user explicitly asks for a production build:
     # Clean and package (production build)
     rm -rf out release && pnpm dist
-- After every code change, you must perform a startup test and confirm at minimum that the application can launch normally and enter the main UI.
+- After every code change, you must perform a startup test and confirm at minimum that the application can launch normally and enter the main UI. When `pnpm dist:dev` auto-opens the packaged app, a clean launch counts as the startup test; if exact launch control is required, set `ONWARD_DIST_DEV_OPEN=0` and launch manually once.
 - Hard rule — Launching the app for testing: before opening the built `.app`, you must first kill any existing instance of the same application using **exact name matching** (`pkill -x "<exact-process-name>"`). Never use wildcards or partial matches. Chain the kill and open in one command: `pkill -x "Onward 2-<branch>" 2>/dev/null; sleep 0.5; open "<path-to-.app>"`.
 - Multilingual / UI Copy Development Rules:
     - The application currently supports `en` and `zh-CN`, with English as the default language. Whenever user-visible copy is added or modified, all supported languages must be designed and implemented together. Updating only one language is not allowed.
@@ -36,7 +36,7 @@ For platform-related commands, always consider these three platforms:
     - When the app icon display size looks wrong, first check the content-to-canvas ratio rather than the resolution; add more padding by scaling down the content.
     - macOS status bar icons must follow the Template convention: the filename must contain `Template`, and the code must explicitly call `setTemplateImage(true)`; avoid incorrect colors in light/dark mode.
     - After generating tray icons, update all referenced paths so the resource filenames and code stay consistent.
-- After the build completes, show the current status and provide the command to run the program. Example: `open "project-dir/release/mac-arm64/Onward 2-branch-name.app"` to launch the app.
+- After the build completes, show the current status. For `pnpm dist:dev`, the script usually launches the packaged app automatically; if not (e.g. `ONWARD_DIST_DEV_OPEN=0`), provide the manual command, for example: `open "project-dir/release/mac-arm64/Onward 2-branch-name.app"` (macOS).
 - Whenever `CLAUDE.md` is modified, automatically run `./claude-sync-to-agents.sh`.
 - Git commit messages must be written in English.
 - Hard rule: all code comments must use English. Do not use any Simplified Chinese in code comments.
