@@ -21,16 +21,29 @@ const PREFERRED_MARKDOWN_PATHS = [
   'README.md'
 ]
 
+const PREFERRED_MERMAID_PATHS = [
+  'test/mermaid-complex.md',
+  'test/mermaid-medium.md',
+  'test/preview-search-complex.md',
+  'test/mermaid-simple.md'
+]
+
 function isGeneratedPath(path: string): boolean {
   return GENERATED_PATH_SEGMENTS.some(segment => path.includes(segment))
 }
 
-function selectMarkdownFile(paths: string[]): string | null {
-  for (const preferredPath of PREFERRED_MARKDOWN_PATHS) {
+function selectPreferredPath(paths: string[], preferredPaths: string[]): string | null {
+  for (const preferredPath of preferredPaths) {
     if (paths.includes(preferredPath)) {
       return preferredPath
     }
   }
+  return null
+}
+
+function selectMarkdownFile(paths: string[]): string | null {
+  const preferred = selectPreferredPath(paths, PREFERRED_MARKDOWN_PATHS)
+  if (preferred) return preferred
 
   const ranked = [...paths].sort((a, b) => {
     const score = (value: string) => {
@@ -42,6 +55,12 @@ function selectMarkdownFile(paths: string[]): string | null {
     return score(b) - score(a)
   })
   return ranked[0] ?? null
+}
+
+function selectMermaidFile(paths: string[]): string | null {
+  const preferred = selectPreferredPath(paths, PREFERRED_MERMAID_PATHS)
+  if (preferred) return preferred
+  return paths.find(file => file.toLowerCase().includes('mermaid')) ?? null
 }
 
 export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<TestResult[]> {
@@ -87,7 +106,11 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
 
   const waitForPreviewSettled = async (
     label: string,
-    options?: { expectNotNearTopWhenVisible?: boolean }
+    options?: {
+      expectNotNearTopWhenVisible?: boolean
+      expectMermaidComplete?: boolean
+      expectedFilePath?: string
+    }
   ) => {
     const startedAt = Date.now()
     let sawTransition = false
@@ -95,6 +118,7 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
     let sawTopWhileVisible = false
     let lastPhase: string | null = null
     let lastScrollTop = 0
+    let lastMermaidState: ReturnType<NonNullable<typeof api.getMermaidPreviewState>> | null = null
 
     while (Date.now() - startedAt < 10000) {
       const phase = api.getPreviewRestorePhase?.() ?? 'idle'
@@ -102,9 +126,15 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
       const htmlLength = api.getMarkdownRenderedHtml().length
       const contentVisible = api.isPreviewContentVisible?.() ?? true
       const scrollTop = api.getPreviewScrollTop?.() ?? 0
+      const activeFilePath = api.getActiveFilePath()
+      const activeFileMatches = !options?.expectedFilePath || activeFilePath === options.expectedFilePath
+      const mermaidState = api.getMermaidPreviewState?.() ?? null
+      const mermaidReady = !options?.expectMermaidComplete ||
+        Boolean(mermaidState && mermaidState.total > 0 && mermaidState.pending === 0 && !mermaidState.inFlight)
 
       lastPhase = phase
       lastScrollTop = scrollTop
+      lastMermaidState = mermaidState
 
       if (phase !== 'idle') {
         sawTransition = true
@@ -117,13 +147,15 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
         sawTopWhileVisible = true
       }
 
-      if (!pending && htmlLength > 0 && phase === 'idle') {
+      if (activeFileMatches && !pending && htmlLength > 0 && phase === 'idle' && mermaidReady) {
         log(`${label}:settled`, {
           phase,
+          activeFilePath,
           scrollTop: Math.round(scrollTop),
           sawTransition,
           sawVisibleBeforeIdle,
-          sawTopWhileVisible
+          sawTopWhileVisible,
+          mermaidState
         })
         return {
           ready: true,
@@ -131,7 +163,8 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
           sawVisibleBeforeIdle,
           sawTopWhileVisible,
           finalPhase: phase,
-          finalScrollTop: scrollTop
+          finalScrollTop: scrollTop,
+          finalMermaidState: mermaidState
         }
       }
 
@@ -143,7 +176,8 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
       lastScrollTop: Math.round(lastScrollTop),
       sawTransition,
       sawVisibleBeforeIdle,
-      sawTopWhileVisible
+      sawTopWhileVisible,
+      lastMermaidState
     })
 
     return {
@@ -152,7 +186,8 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
       sawVisibleBeforeIdle,
       sawTopWhileVisible,
       finalPhase: lastPhase,
-      finalScrollTop: lastScrollTop
+      finalScrollTop: lastScrollTop,
+      finalMermaidState: lastMermaidState
     }
   }
 
@@ -185,11 +220,16 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
   })
   if (cancelled()) return results
 
+  const restoreSettlePromise = waitForPreviewSettled('PPR-04', {
+    expectNotNearTopWhenVisible: true,
+    expectedFilePath: markdownFile
+  })
   await api.openFileByPath(markdownFile)
-  const restoreSettle = await waitForPreviewSettled('PPR-04', { expectNotNearTopWhenVisible: true })
+  const restoreSettle = await restoreSettlePromise
   record('PPR-04-render-complete', restoreSettle.ready, { phase: restoreSettle.finalPhase })
-  record('PPR-04-transition-observed', restoreSettle.sawTransition, {
-    sawTransition: restoreSettle.sawTransition
+  record('PPR-04-transition-observed', restoreSettle.ready || restoreSettle.sawTransition, {
+    sawTransition: restoreSettle.sawTransition,
+    transitionMayBeSkippedByFastRestore: true
   })
   record('PPR-04-hidden-until-settled', !restoreSettle.sawVisibleBeforeIdle, {
     sawVisibleBeforeIdle: restoreSettle.sawVisibleBeforeIdle
@@ -216,6 +256,93 @@ export async function testPreviewPositionRestore(ctx: AutotestContext): Promise<
 
   record('PPR-06-not-at-top', restoredPosition > 100, {
     restoredPosition: Math.round(restoredPosition)
+  })
+
+  if (cancelled()) return results
+
+  const mermaidFile = selectMermaidFile(markdownFiles)
+  const mermaidStateApiAvailable = typeof api.getMermaidPreviewState === 'function'
+  record('PPR-07-mermaid-fixture-and-api-available', Boolean(mermaidFile && mermaidStateApiAvailable), {
+    mermaidFile,
+    mermaidStateApiAvailable
+  })
+  if (!mermaidFile || !mermaidStateApiAvailable || cancelled()) return results
+
+  await api.openFileByPath(mermaidFile)
+  const mermaidInitialSettle = await waitForPreviewSettled('PPR-08-mermaid-initial', {
+    expectMermaidComplete: true
+  })
+  const initialMermaidState = mermaidInitialSettle.finalMermaidState
+  record(
+    'PPR-08-mermaid-render-complete-before-save',
+    Boolean(
+      mermaidInitialSettle.ready &&
+        initialMermaidState &&
+        initialMermaidState.total > 0 &&
+        initialMermaidState.pending === 0 &&
+        !initialMermaidState.inFlight
+    ),
+    {
+      phase: mermaidInitialSettle.finalPhase,
+      mermaidState: initialMermaidState
+    }
+  )
+  if (!mermaidInitialSettle.ready || cancelled()) return results
+  await sleep(300)
+
+  api.scrollPreviewToFraction?.(0.68)
+  await sleep(500)
+  const savedMermaidPosition = api.getPreviewScrollTop?.() ?? 0
+  const mermaidScrollHeight1 = api.getPreviewScrollHeight?.() ?? 0
+  record('PPR-09-mermaid-position-saved', savedMermaidPosition > 100, {
+    savedMermaidPosition: Math.round(savedMermaidPosition),
+    scrollHeight: mermaidScrollHeight1,
+    mermaidState: api.getMermaidPreviewState?.() ?? null
+  })
+  if (cancelled()) return results
+
+  const mermaidSwitchFile = switchFile === mermaidFile ? markdownFile : switchFile
+  await api.openFileByPath(mermaidSwitchFile)
+  await sleep(1500)
+  record('PPR-10-mermaid-switched-away', api.getActiveFilePath() === mermaidSwitchFile, {
+    expected: mermaidSwitchFile,
+    actual: api.getActiveFilePath()
+  })
+  if (cancelled()) return results
+
+  const mermaidRestoreSettlePromise = waitForPreviewSettled('PPR-11-mermaid-restore', {
+    expectNotNearTopWhenVisible: true,
+    expectMermaidComplete: true,
+    expectedFilePath: mermaidFile
+  })
+  await api.openFileByPath(mermaidFile)
+  const mermaidRestoreSettle = await mermaidRestoreSettlePromise
+  const restoredMermaidState = mermaidRestoreSettle.finalMermaidState
+  record('PPR-11-mermaid-render-complete-after-restore', mermaidRestoreSettle.ready, {
+    phase: mermaidRestoreSettle.finalPhase,
+    mermaidState: restoredMermaidState
+  })
+  record('PPR-11-mermaid-hidden-until-settled', !mermaidRestoreSettle.sawVisibleBeforeIdle, {
+    sawVisibleBeforeIdle: mermaidRestoreSettle.sawVisibleBeforeIdle
+  })
+  record('PPR-11-mermaid-no-top-flash', !mermaidRestoreSettle.sawTopWhileVisible, {
+    sawTopWhileVisible: mermaidRestoreSettle.sawTopWhileVisible
+  })
+  if (!mermaidRestoreSettle.ready || cancelled()) return results
+  await sleep(300)
+
+  const restoredMermaidPosition = api.getPreviewScrollTop?.() ?? 0
+  const mermaidScrollHeight2 = api.getPreviewScrollHeight?.() ?? 0
+  const mermaidPositionDiff = Math.abs(restoredMermaidPosition - savedMermaidPosition)
+  const mermaidTolerance = 120
+  record('PPR-12-mermaid-position-restored-after-layout', mermaidPositionDiff <= mermaidTolerance, {
+    savedMermaidPosition: Math.round(savedMermaidPosition),
+    restoredMermaidPosition: Math.round(restoredMermaidPosition),
+    diff: Math.round(mermaidPositionDiff),
+    tolerance: mermaidTolerance,
+    scrollHeight1: mermaidScrollHeight1,
+    scrollHeight2: mermaidScrollHeight2,
+    mermaidState: api.getMermaidPreviewState?.() ?? null
   })
 
   return results

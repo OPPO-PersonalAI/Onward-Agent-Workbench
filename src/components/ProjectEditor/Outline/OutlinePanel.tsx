@@ -30,6 +30,7 @@ interface OutlinePanelProps {
 }
 
 const FILTER_THRESHOLD = 8
+const INITIAL_SCROLL_ACTIVE_REVEAL_SUPPRESS_MS = 8000
 
 function headingSlug(text: string): string {
   return text
@@ -253,20 +254,29 @@ export function OutlinePanel({
     let frameId = 0
     let attempts = 0
     const targetScrollTop = Math.max(0, initialScrollTop)
+    const maxAttempts = 60
 
     const applyInitialScroll = () => {
       const tree = treeRef.current
       if (!tree) return
 
-      tree.scrollTop = targetScrollTop
       const maxScrollTop = Math.max(0, tree.scrollHeight - tree.clientHeight)
+      if (targetScrollTop > 0 && maxScrollTop <= 0) {
+        attempts += 1
+        if (attempts < maxAttempts) {
+          frameId = requestAnimationFrame(applyInitialScroll)
+        }
+        return
+      }
+
       const clampedTarget = Math.min(targetScrollTop, maxScrollTop)
+      tree.scrollTop = clampedTarget
       const isApplied = Math.abs(tree.scrollTop - clampedTarget) <= 2
 
-      if (isApplied || attempts >= 4) {
+      if (isApplied || attempts >= maxAttempts) {
         initialScrollAppliedRef.current = true
         onScrollCapture?.(tree.scrollTop)
-        suppressActiveRevealUntilRef.current = performance.now() + 320
+        suppressActiveRevealUntilRef.current = performance.now() + INITIAL_SCROLL_ACTIVE_REVEAL_SUPPRESS_MS
         return
       }
 

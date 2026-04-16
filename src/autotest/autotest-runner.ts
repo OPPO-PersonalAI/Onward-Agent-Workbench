@@ -43,6 +43,7 @@ import { testPreviewPositionRestore } from './test-preview-position-restore'
 import { testPreviewSearch } from './test-preview-search'
 import { testTerminalStatePersistence } from './test-terminal-state-persistence'
 import { testProjectEditorFileMemory } from './test-project-editor-file-memory'
+import { testProjectEditorMarkdownSessionRestore } from './test-project-editor-markdown-session-restore'
 import { testChangeLog } from './test-change-log'
 import { testFeedback } from './test-feedback'
 import { testFeedbackUi } from './test-feedback-ui'
@@ -252,6 +253,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.85:begin')
       const results = await testProjectEditorMarkdownNavigation(ctx)
       collectSuiteResults('ProjectEditorMarkdownNavigation', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('project-editor-markdown-session-restore')) {
+      log('phase0.855:begin')
+      const results = await testProjectEditorMarkdownSessionRestore(ctx)
+      collectSuiteResults('ProjectEditorMarkdownSessionRestore', results)
       await sleep(500)
     }
 
