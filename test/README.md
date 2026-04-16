@@ -239,7 +239,7 @@ node test/test-auto-update-public-github-windows-installer.mjs `
 - `src/autotest/test-settings-update.ts`
   - Verifies unsupported environments keep the action disabled
   - Verifies the smart action enters `checking` and blocks repeated clicks
-  - Verifies `up-to-date`, `error`, `downloading`, and `downloaded` detail rendering
+  - Verifies `up-to-date`, localized error-code detail, download progress, and `downloaded` detail rendering
   - Verifies the restart action locks while pending and surfaces restart errors
   - Verifies the language, font, and task selectors use the shared dropdown shell and inset arrow spacing
 

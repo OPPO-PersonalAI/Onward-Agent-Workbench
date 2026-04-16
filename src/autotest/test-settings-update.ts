@@ -13,6 +13,10 @@ function querySettingsSelect(testId: string): HTMLSelectElement | null {
   return document.querySelector(`[data-testid="${testId}"]`) as HTMLSelectElement | null
 }
 
+function querySettingsUpdateProgress(): HTMLElement | null {
+  return document.querySelector('[data-testid="settings-update-progress"]') as HTMLElement | null
+}
+
 export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResult[]> {
   const { assert, cancelled, log, sleep, waitFor } = ctx
   const results: TestResult[] = []
@@ -216,6 +220,36 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
     record('SU-06-error-shows-detail', errorReady && !errorState?.actionDisabled && Boolean(errorState?.detailText?.includes('503')), errorState ?? undefined)
     if (cancelled()) return results
 
+    const zhOfflineSnippet = String.fromCharCode(26080, 32593, 32476, 36830, 25509)
+    const localizedErrorReady = await applyMockStatus({
+      phase: 'error',
+      supported: true,
+      targetVersion: null,
+      targetTag: null,
+      downloadedFileName: null,
+      lastCheckedAt: Date.now(),
+      error: 'raw-offline-sentinel',
+      errorCode: 'offline',
+      bannerDismissed: false
+    }, 'settings-update-localized-error')
+    const localizedErrorDetailReady = await waitFor(
+      'settings-update-localized-error-detail',
+      () => {
+        const detail = getState()?.detailText ?? ''
+        return (detail.includes('No network connection') || detail.includes(zhOfflineSnippet)) &&
+          !detail.includes('raw-offline-sentinel')
+      },
+      1200,
+      40
+    )
+    const localizedErrorState = getState()
+    const localizedErrorDetail = localizedErrorState?.detailText ?? ''
+    record('SU-06b-error-code-uses-localized-detail', localizedErrorReady &&
+      localizedErrorDetailReady &&
+      (localizedErrorDetail.includes('No network connection') || localizedErrorDetail.includes(zhOfflineSnippet)) &&
+      !localizedErrorDetail.includes('raw-offline-sentinel'), localizedErrorState ?? undefined)
+    if (cancelled()) return results
+
     const targetVersion = `2.0.2-daily.${Date.now()}`
     const targetTag = `v${targetVersion}`
 
@@ -234,6 +268,43 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
       downloadingState?.actionDisabled === true &&
       downloadingState.detailText?.includes(targetVersion) === true &&
       downloadingState.actionLabel !== idleActionLabel, downloadingState ?? undefined)
+
+    const downloadingProgressReady = await applyMockStatus({
+      phase: 'downloading',
+      supported: true,
+      targetVersion,
+      targetTag,
+      downloadedFileName: 'Onward 2.zip',
+      lastCheckedAt: Date.now(),
+      error: null,
+      downloadProgress: {
+        downloadedBytes: 512 * 1024,
+        totalBytes: 1024 * 1024,
+        percent: 50,
+        bytesPerSecond: 128 * 1024
+      },
+      bannerDismissed: false
+    }, 'settings-update-downloading-progress')
+    const progressDetailReady = await waitFor(
+      'settings-update-downloading-progress-detail',
+      () => {
+        const detail = getState()?.detailText ?? ''
+        return Boolean(querySettingsUpdateProgress()) && detail.includes('512.0 KB')
+      },
+      1200,
+      40
+    )
+    const downloadingProgressState = getState()
+    const progressEl = querySettingsUpdateProgress()
+    const downloadingProgressDetail = downloadingProgressState?.detailText ?? ''
+    record('SU-07c-downloading-shows-progress-detail', downloadingProgressReady &&
+      progressDetailReady &&
+      Boolean(progressEl) &&
+      downloadingProgressDetail.includes('512.0 KB') &&
+      progressEl?.textContent?.includes('50%') === true, {
+        ...(downloadingProgressState ?? {}),
+        progressText: progressEl?.textContent ?? null
+      })
 
     const repeatWhileDownloading = await api.clickUpdateAction()
     record('SU-07b-downloading-blocks-repeat-clicks', repeatWhileDownloading === false && getState()?.actionCounts.checkNow === 1, {
