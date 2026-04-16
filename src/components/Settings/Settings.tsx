@@ -14,7 +14,7 @@ import { DEFAULT_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_S
 import { DEFAULT_GIT_DIFF_FONT_SIZE, MIN_GIT_DIFF_FONT_SIZE, MAX_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import type { SettingsDebugApi } from '../../autotest/types'
 import type { ShortcutConfig, TerminalStyleConfig, GlobalTerminalStyle } from '../../types/settings'
-import type { AppInfo, UpdatePhase, UpdaterStatus } from '../../types/electron.d.ts'
+import type { AppInfo, DownloadErrorCode, UpdatePhase, UpdaterStatus } from '../../types/electron.d.ts'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
 import './Settings.css'
@@ -128,8 +128,28 @@ function createFallbackUpdaterStatus(appInfo: AppInfo | null, platform: string):
     downloadedFileName: null,
     lastCheckedAt: null,
     error: null,
-    bannerDismissed: false
+    errorCode: null,
+    bannerDismissed: false,
+    downloadProgress: null
   }
+}
+
+const ERROR_CODE_I18N_MAP: Record<DownloadErrorCode, TranslationKey> = {
+  'offline': 'settings.update.error.offline',
+  'connection-failed': 'settings.update.error.connectionFailed',
+  'timeout': 'settings.update.error.timeout',
+  'stalled': 'settings.update.error.stalled',
+  'http-error': 'settings.update.error.httpError',
+  'checksum-mismatch': 'settings.update.error.checksumMismatch',
+  'disk-error': 'settings.update.error.diskError',
+  'aborted': 'settings.update.error.aborted'
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
 function summarizeUpdateError(error: string | null | undefined): string | null {
@@ -271,14 +291,42 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     }
     if (!effectiveUpdaterStatus) return null
 
-    const summarizedStatusError = summarizeUpdateError(effectiveUpdaterStatus.error)
-    if (effectiveUpdaterStatus.phase === 'error' && summarizedStatusError) {
-      return t('settings.update.detail.error', { error: summarizedStatusError })
+    if (effectiveUpdaterStatus.phase === 'error' && effectiveUpdaterStatus.error) {
+      // Use localized error message when a known error code is available;
+      // fall back to the raw error string for unclassified errors.
+      const i18nKey = effectiveUpdaterStatus.errorCode
+        ? ERROR_CODE_I18N_MAP[effectiveUpdaterStatus.errorCode]
+        : null
+      if (i18nKey) {
+        return t(i18nKey)
+      }
+      const summarizedStatusError = summarizeUpdateError(effectiveUpdaterStatus.error)
+      if (summarizedStatusError) {
+        return t('settings.update.detail.error', { error: summarizedStatusError })
+      }
     }
-    if (
-      (effectiveUpdaterStatus.phase === 'downloading' || effectiveUpdaterStatus.phase === 'downloaded') &&
-      effectiveUpdaterStatus.targetVersion
-    ) {
+    if (effectiveUpdaterStatus.phase === 'downloading') {
+      const progress = effectiveUpdaterStatus.downloadProgress
+      if (progress && progress.downloadedBytes > 0) {
+        const speed = formatBytes(progress.bytesPerSecond)
+        if (progress.totalBytes > 0) {
+          return t('settings.update.detail.downloadProgress', {
+            downloaded: formatBytes(progress.downloadedBytes),
+            total: formatBytes(progress.totalBytes),
+            speed
+          })
+        }
+        return t('settings.update.detail.downloadProgressUnknown', {
+          downloaded: formatBytes(progress.downloadedBytes),
+          speed
+        })
+      }
+      if (effectiveUpdaterStatus.targetVersion) {
+        return t('settings.update.detail.targetVersion', { version: effectiveUpdaterStatus.targetVersion })
+      }
+      return null
+    }
+    if (effectiveUpdaterStatus.phase === 'downloaded' && effectiveUpdaterStatus.targetVersion) {
       return t('settings.update.detail.targetVersion', { version: effectiveUpdaterStatus.targetVersion })
     }
     if (effectiveUpdaterStatus.phase === 'unsupported') {
@@ -309,10 +357,17 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       debugUpdaterStatus ??
       updaterStatus ??
       createFallbackUpdaterStatus(appInfo, window.electronAPI.platform)
-    return {
+    const nextStatus = {
       ...base,
       ...patch
     }
+    if (patch.error === null && patch.errorCode === undefined) {
+      nextStatus.errorCode = null
+    }
+    if (patch.phase !== 'downloading' && patch.downloadProgress === undefined) {
+      nextStatus.downloadProgress = null
+    }
+    return nextStatus
   }, [appInfo, debugUpdaterStatus, updaterStatus])
 
   const resetMockUpdater = useCallback(() => {
@@ -646,6 +701,28 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                     >
                       {isUpdateDetailSuccess && <div>{t('settings.update.detail.upToDate')}</div>}
                       {updateDetailText && <div>{updateDetailText}</div>}
+                    </div>
+                  )}
+                  {effectiveUpdaterStatus?.phase === 'downloading' && effectiveUpdaterStatus.downloadProgress && (
+                    <div className="settings-update-progress" data-testid="settings-update-progress">
+                      <div className="settings-update-progress-track">
+                        <div
+                          className="settings-update-progress-fill"
+                          style={{
+                            width: effectiveUpdaterStatus.downloadProgress.percent >= 0
+                              ? `${effectiveUpdaterStatus.downloadProgress.percent}%`
+                              : '100%',
+                            ...(effectiveUpdaterStatus.downloadProgress.percent < 0
+                              ? { animation: 'settings-progress-indeterminate 1.5s ease-in-out infinite' }
+                              : {})
+                          }}
+                        />
+                      </div>
+                      {effectiveUpdaterStatus.downloadProgress.percent >= 0 && (
+                        <span className="settings-update-progress-pct">
+                          {effectiveUpdaterStatus.downloadProgress.percent}%
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

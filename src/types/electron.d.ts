@@ -607,6 +607,23 @@ export interface ChangelogAPI {
   getCurrent: (locale?: string) => Promise<CurrentChangelogResult>
 }
 
+export interface DownloadProgress {
+  downloadedBytes: number
+  totalBytes: number
+  percent: number
+  bytesPerSecond: number
+}
+
+export type DownloadErrorCode =
+  | 'offline'
+  | 'connection-failed'
+  | 'timeout'
+  | 'stalled'
+  | 'http-error'
+  | 'checksum-mismatch'
+  | 'disk-error'
+  | 'aborted'
+
 export interface UpdaterStatus {
   phase: UpdatePhase
   supported: boolean
@@ -619,12 +636,15 @@ export interface UpdaterStatus {
   downloadedFileName: string | null
   lastCheckedAt: number | null
   error: string | null
+  errorCode: DownloadErrorCode | null
   bannerDismissed: boolean
+  downloadProgress: DownloadProgress | null
 }
 
 export interface UpdaterAPI {
   getStatus: () => Promise<UpdaterStatus>
   checkNow: () => Promise<UpdaterStatus>
+  downloadNow: () => Promise<UpdaterStatus>
   restartToUpdate: () => Promise<{ success: boolean; error?: string }>
   dismissBanner: () => Promise<UpdaterStatus>
   onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void

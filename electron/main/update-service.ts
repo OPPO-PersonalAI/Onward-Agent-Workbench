@@ -3,17 +3,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { app, BrowserWindow, net } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { createHash } from 'crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { dirname, join } from 'path'
-import { pipeline } from 'stream/promises'
-import { Readable } from 'stream'
-import { spawn, execSync } from 'child_process'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
 import { compareVersions, parseVersion } from './update-version'
 import { getTelemetryService } from './telemetry/telemetry-service'
+import {
+  DownloadError,
+  type DownloadErrorCode,
+  type DownloadProgress,
+  downloadFileWithRetry,
+  fetchUpdateResource,
+  formatDownloadBytes,
+  getPartialDownloadPath
+} from './update-download'
+import {
+  canInstallUpdatesOnCurrentPlatform,
+  installDownloadedUpdateOnQuit as launchUpdateInstaller,
+  resolveUpdateLogPath
+} from './update-installer'
 
 export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
@@ -29,7 +39,9 @@ export interface UpdateStatus {
   downloadedFileName: string | null
   lastCheckedAt: number | null
   error: string | null
+  errorCode: DownloadErrorCode | null
   bannerDismissed: boolean
+  downloadProgress: DownloadProgress | null
 }
 
 interface UpdateManifest {
@@ -50,20 +62,8 @@ interface DownloadedUpdate {
   archivePath: string
 }
 
-const RELAUNCH_ENV_KEYS = [
-  'ONWARD_USER_DATA_DIR',
-  'ONWARD_DEBUG',
-  'ONWARD_UPDATE_CHECK_INTERVAL_MS',
-  'ONWARD_UPDATE_BASE_URL',
-  'ONWARD_AUTOTEST',
-  'ONWARD_AUTOTEST_CWD',
-  'ONWARD_AUTOTEST_EXIT',
-  'ONWARD_DEBUG_CAPTURE'
-] as const
-
 const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
-const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000
 const LOG_PREFIX = '[UpdateService]'
 
 /** Track when update failure telemetry was last sent (keyed by date string). */
@@ -122,11 +122,14 @@ function normalizeArch(value: string): 'arm64' | 'x64' | null {
 
 function parseRepositoryOwnerAndName(pkg: Record<string, unknown> | null): { owner: string; name: string } | null {
   const repositoryValue = pkg?.repository
+  const repositoryObject = typeof repositoryValue === 'object' && repositoryValue
+    ? repositoryValue as Record<string, unknown>
+    : null
   const url =
     typeof repositoryValue === 'string'
       ? repositoryValue
-      : typeof repositoryValue === 'object' && repositoryValue && typeof repositoryValue.url === 'string'
-        ? repositoryValue.url
+      : repositoryObject && typeof repositoryObject.url === 'string'
+        ? repositoryObject.url
         : ''
 
   const match = /github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/.exec(url)
@@ -139,25 +142,15 @@ function resolveUpdateBaseUrl(pkg: Record<string, unknown> | null, repository: {
   if (envBaseUrl) return envBaseUrl.replace(/\/+$/, '')
 
   const onwardValue = pkg?.onward
-  if (typeof onwardValue === 'object' && onwardValue && typeof onwardValue.updateManifestBaseUrl === 'string') {
-    return onwardValue.updateManifestBaseUrl.replace(/\/+$/, '')
+  const onwardObject = typeof onwardValue === 'object' && onwardValue
+    ? onwardValue as Record<string, unknown>
+    : null
+  if (onwardObject && typeof onwardObject.updateManifestBaseUrl === 'string') {
+    return onwardObject.updateManifestBaseUrl.replace(/\/+$/, '')
   }
 
   if (!repository) return null
   return `https://raw.githubusercontent.com/${repository.owner}/${repository.name}/gh-pages/updates`
-}
-
-function resolveCurrentInstallPath(): string | null {
-  const exePath = app.getPath('exe')
-  if (process.platform === 'darwin') {
-    // macOS: exe is at Foo.app/Contents/MacOS/Foo, install path is Foo.app
-    return dirname(dirname(dirname(exePath)))
-  }
-  if (process.platform === 'win32') {
-    // Windows NSIS per-user: exe is at %LOCALAPPDATA%\Programs\Onward 2\Onward 2.exe
-    return dirname(exePath)
-  }
-  return null
 }
 
 function hashFileSha256(filePath: string): string {
@@ -165,18 +158,6 @@ function hashFileSha256(filePath: string): string {
   const buffer = readFileSync(filePath)
   hash.update(buffer)
   return hash.digest('hex')
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, `'\"'\"'`)}'`
-}
-
-function powershellEscape(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
-}
-
-function resolveUpdateLogPath(): string {
-  return join(app.getPath('userData'), 'updates', 'install.log')
 }
 
 function resolveUpdatesRootPath(): string {
@@ -195,46 +176,6 @@ function resolveUpdateCheckIntervalMs(): number {
   return parsedValue
 }
 
-async function downloadFile(url: string, destinationPath: string): Promise<void> {
-  const response = await fetchUpdateResource(url, {
-    timeoutMs: DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_MS
-  })
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`)
-  }
-
-  mkdirSync(dirname(destinationPath), { recursive: true })
-  const fileStream = createWriteStream(destinationPath)
-  await pipeline(Readable.fromWeb(response.body as globalThis.ReadableStream), fileStream)
-}
-
-async function fetchUpdateResource(
-  url: string,
-  options: {
-    headers?: Record<string, string>
-    timeoutMs?: number
-  } = {}
-): Promise<Response> {
-  const controller = new AbortController()
-  const timeoutHandle = setTimeout(() => {
-    controller.abort()
-  }, options.timeoutMs ?? DEFAULT_UPDATE_REQUEST_TIMEOUT_MS)
-
-  try {
-    return await net.fetch(url, {
-      headers: options.headers,
-      signal: controller.signal
-    })
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(`Update request timed out: ${url}`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timeoutHandle)
-  }
-}
-
 export class UpdateService {
   private status: UpdateStatus = this.createInitialStatus()
   private mainWindow: BrowserWindow | null = null
@@ -251,13 +192,16 @@ export class UpdateService {
     const repository = parseRepositoryOwnerAndName(pkg)
     const baseUrl = resolveUpdateBaseUrl(pkg, repository)
     const arch = normalizeArch(process.arch)
-    const isSupportedPlatform =
+    const releaseOsMatchesPlatform =
       (process.platform === 'darwin' && appInfo.releaseOs === 'macos') ||
-      (process.platform === 'win32' && appInfo.releaseOs === 'windows')
+      (process.platform === 'win32' && appInfo.releaseOs === 'windows') ||
+      (process.platform === 'linux' && appInfo.releaseOs === 'linux')
+    const installSupported = canInstallUpdatesOnCurrentPlatform()
     const supported =
       appInfo.isPackaged &&
       appInfo.buildChannel === 'prod' &&
-      isSupportedPlatform &&
+      releaseOsMatchesPlatform &&
+      installSupported &&
       (appInfo.releaseChannel === 'daily' || appInfo.releaseChannel === 'dev' || appInfo.releaseChannel === 'stable') &&
       arch !== null &&
       Boolean(baseUrl)
@@ -274,7 +218,9 @@ export class UpdateService {
       downloadedFileName: null,
       lastCheckedAt: null,
       error: null,
-      bannerDismissed: false
+      errorCode: null,
+      bannerDismissed: false,
+      downloadProgress: null
     }
   }
 
@@ -370,7 +316,7 @@ export class UpdateService {
    * Clean up stale downloads and recover the latest pending update on startup.
    *
    * Expiration rules:
-   * 1. Versions ≤ currentVersion are expired (already installed or older) → delete
+   * 1. Versions <= currentVersion are expired (already installed or older), then deleted
    * 2. Among versions > currentVersion, try to recover from newest to oldest
    * 3. On first successful recovery, delete all remaining older candidates
    * 4. Each candidate is verified (channel/platform/arch + manifest + checksum);
@@ -416,7 +362,7 @@ export class UpdateService {
       return
     }
 
-    // Sort descending — try newest first, fall back to older candidates
+    // Sort descending: try newest first, fall back to older candidates.
     pendingVersions.sort((a, b) => compareVersions(b, a))
 
     // Try candidates in descending order. Only delete superseded versions
@@ -427,8 +373,11 @@ export class UpdateService {
         recoveredIndex = i
         break
       }
-      // recoverPendingUpdate already cleaned up the failed candidate
-      cleanedCount++
+      // Count as cleaned only if the directory was actually removed
+      // (partial downloads are preserved for cross-session resume)
+      if (!existsSync(join(updatesRoot, pendingVersions[i]))) {
+        cleanedCount++
+      }
     }
 
     // Delete remaining untried candidates that are older than the recovered one
@@ -478,6 +427,13 @@ export class UpdateService {
 
     const archivePath = join(versionDir, manifest.artifactName)
     if (!existsSync(archivePath)) {
+      // Preserve directories with a .partial file so they can be resumed.
+      const partialPath = getPartialDownloadPath(archivePath)
+      if (existsSync(partialPath)) {
+        const partialSize = statSync(partialPath).size
+        console.log(`${LOG_PREFIX} Found resumable partial download: ${version} (${formatDownloadBytes(partialSize)})`)
+        return false
+      }
       rmSync(versionDir, { recursive: true, force: true })
       console.log(`${LOG_PREFIX} Removed incomplete download (archive missing): ${version}`)
       return false
@@ -502,17 +458,32 @@ export class UpdateService {
       targetVersion: manifest.version,
       targetTag: manifest.tag,
       downloadedFileName: manifest.artifactName,
-      error: null
+      error: null,
+      errorCode: null,
+      downloadProgress: null
     })
     console.log(`${LOG_PREFIX} Recovered pending update: ${version} (${manifest.artifactName})`)
     return true
   }
 
-  private async ensureDownloaded(manifest: UpdateManifest): Promise<DownloadedUpdate> {
+  private async ensureDownloaded(
+    manifest: UpdateManifest,
+    onProgress?: (progress: DownloadProgress) => void
+  ): Promise<DownloadedUpdate> {
     const archivePath = this.getDownloadPath(manifest)
+
+    // Persist manifest before download so partial files can be resumed across sessions
+    this.saveManifestFile(manifest)
+
     if (!existsSync(archivePath)) {
       console.log(`${LOG_PREFIX} Downloading: ${manifest.artifactUrl}`)
-      await downloadFile(manifest.artifactUrl, archivePath)
+      await downloadFileWithRetry(manifest.artifactUrl, archivePath, {
+        onProgress,
+        onRetry: ({ attempt, maxAttempts, delayMs, error }) => {
+          console.log(`${LOG_PREFIX} Retry ${attempt}/${maxAttempts} in ${delayMs}ms: ${error.message}`)
+        },
+        log: (message) => console.log(`${LOG_PREFIX} ${message}`)
+      })
       console.log(`${LOG_PREFIX} Download saved to: ${archivePath}`)
     } else {
       console.log(`${LOG_PREFIX} Archive already exists, verifying checksum: ${archivePath}`)
@@ -522,12 +493,13 @@ export class UpdateService {
     if (checksum.toLowerCase() !== manifest.sha256.toLowerCase()) {
       console.error(`${LOG_PREFIX} Checksum mismatch: expected=${manifest.sha256}, got=${checksum}`)
       rmSync(archivePath, { force: true })
-      throw new Error('Downloaded update failed checksum verification.')
+      rmSync(getPartialDownloadPath(archivePath), { force: true })
+      throw new DownloadError('checksum-mismatch', 'Downloaded update failed checksum verification.')
     }
     console.log(`${LOG_PREFIX} Checksum verified: ${checksum}`)
 
-    // Persist manifest alongside the archive for cross-session recovery
-    this.saveManifestFile(manifest)
+    // Clean up partial file after successful verification
+    rmSync(getPartialDownloadPath(archivePath), { force: true })
 
     return {
       manifest,
@@ -548,8 +520,7 @@ export class UpdateService {
 
     if (!this.status.supported) return
 
-    // DEV channel: updates are manual only — no auto-check, no auto-download.
-    // User must click Check Now → Download → Restart in the Settings UI.
+    // DEV channel updates are manual only: Check Now, then Download, then Restart.
     if (this.status.currentChannel === 'dev') return
 
     void this.checkNow()
@@ -627,7 +598,9 @@ export class UpdateService {
     console.log(`${LOG_PREFIX} Starting update check (current: ${this.status.currentVersion})`)
     this.setStatus({
       phase: 'checking',
-      error: null
+      error: null,
+      errorCode: null,
+      downloadProgress: null
     })
 
     try {
@@ -644,7 +617,9 @@ export class UpdateService {
             targetTag: manifest.tag,
             downloadedFileName: this.downloadedUpdate.manifest.artifactName,
             lastCheckedAt,
-            error: null
+            error: null,
+            errorCode: null,
+            downloadProgress: null
           })
         }
 
@@ -658,7 +633,9 @@ export class UpdateService {
           downloadedFileName: null,
           bannerDismissed: false,
           lastCheckedAt,
-          error: null
+          error: null,
+          errorCode: null,
+          downloadProgress: null
         })
       }
 
@@ -680,7 +657,9 @@ export class UpdateService {
           downloadedFileName: this.downloadedUpdate.manifest.artifactName,
           bannerDismissed: false,
           lastCheckedAt,
-          error: null
+          error: null,
+          errorCode: null,
+          downloadProgress: null
         })
       }
 
@@ -702,14 +681,17 @@ export class UpdateService {
           downloadedFileName: null,
           bannerDismissed: false,
           lastCheckedAt,
-          error: null
+          error: null,
+          errorCode: null,
+          downloadProgress: null
         })
       }
 
       // Daily/Stable channel: auto-download immediately.
-      return this.downloadAndApply(manifest, lastCheckedAt)
+      return this.downloadUpdate(manifest, lastCheckedAt)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorCode = error instanceof DownloadError ? error.code : null
       const failedPhase = this.status.phase === 'downloading' ? 'download' : 'check'
       console.error(`${LOG_PREFIX} Update ${failedPhase} failed: ${errorMessage}`)
       trackUpdateFailure(failedPhase, errorMessage, {
@@ -726,18 +708,22 @@ export class UpdateService {
           targetTag: this.downloadedUpdate.manifest.tag,
           downloadedFileName: this.downloadedUpdate.manifest.artifactName,
           lastCheckedAt: Date.now(),
-          error: errorMessage
+          error: errorMessage,
+          errorCode,
+          downloadProgress: null
         })
       }
       return this.setStatus({
         phase: 'error',
         lastCheckedAt: Date.now(),
-        error: errorMessage
+        error: errorMessage,
+        errorCode,
+        downloadProgress: null
       })
     }
   }
 
-  private async downloadAndApply(manifest: UpdateManifest, lastCheckedAt: number): Promise<UpdateStatus> {
+  private async downloadUpdate(manifest: UpdateManifest, lastCheckedAt: number): Promise<UpdateStatus> {
     this.setStatus({
       phase: 'downloading',
       targetVersion: manifest.version,
@@ -745,10 +731,16 @@ export class UpdateService {
       downloadedFileName: manifest.artifactName,
       bannerDismissed: false,
       lastCheckedAt,
-      error: null
+      error: null,
+      errorCode: null,
+      downloadProgress: null
     })
 
-    this.downloadedUpdate = await this.ensureDownloaded(manifest)
+    const onProgress = (progress: DownloadProgress): void => {
+      this.setStatus({ downloadProgress: progress })
+    }
+
+    this.downloadedUpdate = await this.ensureDownloaded(manifest, onProgress)
     console.log(`${LOG_PREFIX} Download complete: ${manifest.artifactName}`)
     trackUpdateEvent('update/downloaded', {
       targetVersion: manifest.version,
@@ -762,7 +754,9 @@ export class UpdateService {
       downloadedFileName: manifest.artifactName,
       bannerDismissed: false,
       lastCheckedAt,
-      error: null
+      error: null,
+      errorCode: null,
+      downloadProgress: null
     })
   }
 
@@ -779,9 +773,10 @@ export class UpdateService {
     this.pendingManifest = null
 
     try {
-      return await this.downloadAndApply(manifest, this.status.lastCheckedAt ?? Date.now())
+      return await this.downloadUpdate(manifest, this.status.lastCheckedAt ?? Date.now())
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorCode = error instanceof DownloadError ? error.code : null
       console.error(`${LOG_PREFIX} Download failed: ${errorMessage}`)
       trackUpdateFailure('download', errorMessage, {
         currentVersion: this.status.currentVersion,
@@ -789,7 +784,9 @@ export class UpdateService {
       })
       return this.setStatus({
         phase: 'error',
-        error: errorMessage
+        error: errorMessage,
+        errorCode,
+        downloadProgress: null
       })
     }
   }
@@ -802,7 +799,7 @@ export class UpdateService {
   }
 
   canInstallDownloadedUpdate(): boolean {
-    return (process.platform === 'darwin' || process.platform === 'win32') && Boolean(this.downloadedUpdate)
+    return canInstallUpdatesOnCurrentPlatform() && Boolean(this.downloadedUpdate)
   }
 
   requestRestartToUpdate(): { success: boolean; error?: string } {
@@ -821,226 +818,20 @@ export class UpdateService {
     if (!this.downloadedUpdate) return
 
     const targetVersion = this.downloadedUpdate.manifest.version
-    console.log(`${LOG_PREFIX} Installing update on quit: ${this.status.currentVersion} → ${targetVersion}`)
+    console.log(`${LOG_PREFIX} Installing update on quit: ${this.status.currentVersion} -> ${targetVersion}`)
     trackUpdateEvent('update/installStart', {
       currentVersion: this.status.currentVersion,
       targetVersion
     })
 
-    if (process.platform === 'darwin') {
-      this.installDownloadedUpdateOnQuitMacOS()
-    } else if (process.platform === 'win32') {
-      this.installDownloadedUpdateOnQuitWindows()
-    }
-  }
-
-  private installDownloadedUpdateOnQuitMacOS(): void {
-    const bundlePath = resolveCurrentInstallPath()
-    if (!bundlePath) return
-
-    const stagingRoot = join(tmpdir(), `onward-update-${Date.now()}`)
-    mkdirSync(stagingRoot, { recursive: true })
-    const scriptPath = join(stagingRoot, 'install-update.sh')
-    const logPath = resolveUpdateLogPath()
-    const relaunchEnvAssignments = RELAUNCH_ENV_KEYS
-      .map((key) => {
-        const value = process.env[key]
-        if (!value) return null
-        return `${key}=${shellEscape(value)}`
+    const started = launchUpdateInstaller({
+      archivePath: this.downloadedUpdate.archivePath
+    })
+    if (!started) {
+      trackUpdateFailure('install', 'Current platform does not have an update installer.', {
+        currentVersion: this.status.currentVersion,
+        targetVersion
       })
-      .filter((value): value is string => Boolean(value))
-      .join(' ')
-    const scriptContent = [
-      '#!/bin/sh',
-      'set -eu',
-      `APP_PATH=${shellEscape(bundlePath)}`,
-      `EXEC_PATH=${shellEscape(app.getPath('exe'))}`,
-      `ARCHIVE_PATH=${shellEscape(this.downloadedUpdate!.archivePath)}`,
-      `PARENT_PID=${process.pid}`,
-      `STAGING_ROOT=${shellEscape(stagingRoot)}`,
-      `LOG_PATH=${shellEscape(logPath)}`,
-      `RELAUNCH_ENV_ASSIGNMENTS=${shellEscape(relaunchEnvAssignments)}`,
-      'EXTRACT_ROOT="$STAGING_ROOT/extracted"',
-      'BACKUP_PATH="$APP_PATH.onward-backup"',
-      'mkdir -p "$(dirname "$LOG_PATH")"',
-      'log() {',
-      '  printf "%s %s\\n" "$(date \'+%Y-%m-%d %H:%M:%S\')" "$1" >> "$LOG_PATH"',
-      '}',
-      'restore_backup() {',
-      '  if [ ! -d "$APP_PATH" ] && [ -d "$BACKUP_PATH" ]; then',
-      '    mv "$BACKUP_PATH" "$APP_PATH"',
-      '  fi',
-      '}',
-      'handle_error() {',
-      '  local exit_code=$?',
-      '  log "Update install failed: exit code $exit_code (last command at line $1)"',
-      '  restore_backup',
-      '}',
-      'trap \'handle_error $LINENO\' EXIT',
-      'log "Starting update install helper."',
-      'for _ in $(seq 1 120); do',
-      '  if ! kill -0 "$PARENT_PID" 2>/dev/null; then',
-      '    log "Detected parent process exit."',
-      '    break',
-      '  fi',
-      '  sleep 1',
-      'done',
-      'rm -rf "$EXTRACT_ROOT" "$BACKUP_PATH"',
-      'mkdir -p "$EXTRACT_ROOT"',
-      'log "Extracting update archive."',
-      'ditto -x -k "$ARCHIVE_PATH" "$EXTRACT_ROOT"',
-      'NEW_APP_PATH="$(find "$EXTRACT_ROOT" -maxdepth 1 -name \'*.app\' -print -quit)"',
-      'if [ -z "$NEW_APP_PATH" ]; then',
-      '  log "No .app bundle found in extracted archive."',
-      '  exit 1',
-      'fi',
-      'log "Replacing app bundle with downloaded update."',
-      'mv "$APP_PATH" "$BACKUP_PATH"',
-      'mv "$NEW_APP_PATH" "$APP_PATH"',
-      'trap - EXIT',
-      'rm -rf "$BACKUP_PATH" "$EXTRACT_ROOT"',
-      'log "Update installed successfully."',
-      'log "Relaunching updated app."',
-      'if [ -n "$RELAUNCH_ENV_ASSIGNMENTS" ]; then',
-      '  eval "/usr/bin/env $RELAUNCH_ENV_ASSIGNMENTS \\"$EXEC_PATH\\"" >/dev/null 2>&1 &',
-      'else',
-      '  open -n "$APP_PATH"',
-      'fi',
-      'rm -f "$ARCHIVE_PATH" "$0"',
-      'rmdir "$STAGING_ROOT" 2>/dev/null || true'
-    ].join('\n')
-
-    writeFileSync(scriptPath, `${scriptContent}\n`, { encoding: 'utf-8', mode: 0o755 })
-    spawn('/bin/sh', [scriptPath], {
-      detached: true,
-      stdio: 'ignore'
-    }).unref()
-  }
-
-  private installDownloadedUpdateOnQuitWindows(): void {
-    const installDir = resolveCurrentInstallPath()
-    if (!installDir) return
-
-    // Use a short staging path to avoid Windows 260-char path length limit
-    // during zip extraction (deep node_modules paths inside the archive).
-    const stagingId = Date.now().toString(36)
-    const stagingRoot = join(process.env.TEMP || tmpdir(), `ou-${stagingId}`)
-    mkdirSync(stagingRoot, { recursive: true })
-    const scriptPath = join(stagingRoot, 'up.ps1')
-    const logPath = resolveUpdateLogPath()
-    const execPath = app.getPath('exe')
-
-    const envSetStatements = RELAUNCH_ENV_KEYS
-      .map((key) => {
-        const value = process.env[key]
-        if (!value) return null
-        return `$env:${key} = ${powershellEscape(value)}`
-      })
-      .filter((value): value is string => Boolean(value))
-      .join('\n')
-
-    const scriptContent = [
-      '$ErrorActionPreference = "Stop"',
-      `$installDir = ${powershellEscape(installDir)}`,
-      `$execPath = ${powershellEscape(execPath)}`,
-      `$archivePath = ${powershellEscape(this.downloadedUpdate!.archivePath)}`,
-      `$parentPid = ${process.pid}`,
-      `$stagingRoot = ${powershellEscape(stagingRoot)}`,
-      `$logPath = ${powershellEscape(logPath)}`,
-      '$extractRoot = Join-Path $stagingRoot "e"',
-      '$backupPath = "${installDir}.bak"',
-      '',
-      'function Write-Log($msg) {',
-      '    $dir = Split-Path $logPath -Parent',
-      '    if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }',
-      '    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"',
-      '    Add-Content -Path $logPath -Value "$ts $msg" -ErrorAction SilentlyContinue',
-      '}',
-      '',
-      'try {',
-      '    Write-Log "Starting Windows update install helper."',
-      '',
-      '    # Wait for parent process to exit',
-      '    try {',
-      '        $proc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue',
-      '        if ($proc) {',
-      '            Write-Log "Waiting for parent process ($parentPid) to exit."',
-      '            $proc.WaitForExit(120000) | Out-Null',
-      '        }',
-      '    } catch { }',
-      '    Write-Log "Parent process exited."',
-      '',
-      '    # Clean previous staging and backup',
-      '    if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }',
-      '    if (Test-Path $backupPath) { Remove-Item $backupPath -Recurse -Force }',
-      '',
-      '    # Extract archive',
-      '    Write-Log "Extracting update archive."',
-      '    Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force',
-      '',
-      '    # Detect extracted content: single subdirectory or flat contents',
-      '    $extractedItems = Get-ChildItem $extractRoot',
-      '    if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {',
-      '        $sourceDir = $extractedItems[0].FullName',
-      '    } else {',
-      '        $sourceDir = $extractRoot',
-      '    }',
-      '',
-      '    # Backup current installation',
-      '    Write-Log "Backing up current installation."',
-      '    Rename-Item -Path $installDir -NewName (Split-Path $backupPath -Leaf) -Force',
-      '',
-      '    # Install update',
-      '    Write-Log "Installing update."',
-      '    if ($sourceDir -ne $extractRoot) {',
-      '        Move-Item -Path $sourceDir -Destination $installDir -Force',
-      '    } else {',
-      '        New-Item -Path $installDir -ItemType Directory -Force | Out-Null',
-      '        Get-ChildItem $extractRoot | Move-Item -Destination $installDir -Force',
-      '    }',
-      '',
-      '    # Set environment variables and relaunch',
-      '    Write-Log "Relaunching updated app."',
-      envSetStatements,
-      '    Start-Process -FilePath $execPath',
-      '',
-      '    # Cleanup',
-      '    Remove-Item $backupPath -Recurse -Force -ErrorAction SilentlyContinue',
-      '    Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue',
-      '    Remove-Item $archivePath -Force -ErrorAction SilentlyContinue',
-      '',
-      '    Write-Log "Update installed successfully."',
-      '} catch {',
-      '    Write-Log "Update install failed: $_"',
-      '    # Restore backup if installation dir is gone',
-      '    if (-not (Test-Path $installDir) -and (Test-Path $backupPath)) {',
-      '        Rename-Item -Path $backupPath -NewName (Split-Path $installDir -Leaf) -Force',
-      '        Write-Log "Restored backup after failure."',
-      '    }',
-      '}'
-    ].join('\n')
-
-    writeFileSync(scriptPath, scriptContent, { encoding: 'utf-8' })
-
-    // Write a batch launcher that starts PowerShell in a fully independent process.
-    // Using cmd.exe /c start ensures the PowerShell process survives Electron's
-    // will-quit teardown, which can silently kill detached child processes.
-    const psPath = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    const batPath = join(stagingRoot, 'up.bat')
-    const batContent = `@echo off\r\nstart "" /min "${psPath}" -ExecutionPolicy Bypass -File "${scriptPath}"\r\n`
-    writeFileSync(batPath, batContent, { encoding: 'utf-8' })
-
-    try {
-      execSync(`"${batPath}"`, { windowsHide: true, stdio: 'ignore', timeout: 5000 })
-    } catch {
-      // Fallback: try direct spawn
-      const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true
-      })
-      child.on('error', () => {})
-      child.unref()
     }
   }
 }

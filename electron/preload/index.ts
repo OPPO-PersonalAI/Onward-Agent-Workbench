@@ -39,9 +39,18 @@ export interface TerminalBufferResult {
   error?: string
 }
 
-export type ReleaseChannel = 'daily' | 'stable' | 'unknown'
+export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
-export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+export type DownloadErrorCode =
+  | 'offline'
+  | 'connection-failed'
+  | 'timeout'
+  | 'stalled'
+  | 'http-error'
+  | 'checksum-mismatch'
+  | 'disk-error'
+  | 'aborted'
 
 export type PromptBridgeAction = 'send' | 'execute' | 'send-and-execute'
 
@@ -747,7 +756,16 @@ export interface UpdaterStatus {
   downloadedFileName: string | null
   lastCheckedAt: number | null
   error: string | null
+  errorCode: DownloadErrorCode | null
   bannerDismissed: boolean
+  downloadProgress: DownloadProgress | null
+}
+
+export interface DownloadProgress {
+  downloadedBytes: number
+  totalBytes: number
+  percent: number
+  bytesPerSecond: number
 }
 
 export interface UpdaterAPI {
