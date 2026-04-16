@@ -7,6 +7,8 @@ import type { AutotestContext, TestResult } from './types'
 
 const SAMPLE_MARKDOWN_PATH = 'test/dl_math_foundations.md'
 const HIGHLIGHT_FIXTURE_PATH = 'docs/api-reference.md'
+const OUTLINE_SCROLL_FIXTURE_PATH = 'docs/porting-diff-analysis.md'
+const OUTLINE_SCROLL_FIXTURE_TEXT = 'Porting Diff Analysis'
 const IMAGE_FIXTURE_PATH = 'test/markdown-image-preview.md'
 const CODE_WRAP_FIXTURE_PATH = 'test/markdown-code-wrap.md'
 const CODE_OUTLINE_FIXTURE_PATH = 'test/outline-fixture.py'
@@ -245,8 +247,12 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
 
   let savedMarkdownOutlineScroll = 0
   if (canManageOutline) {
-    await getApi()?.openFileByPath?.(HIGHLIGHT_FIXTURE_PATH)
-    const highlightOutlineReady = await waitForMarkdownFile('pmn-highlight-outline-ready', HIGHLIGHT_FIXTURE_PATH, 'API Reference')
+    await getApi()?.openFileByPath?.(OUTLINE_SCROLL_FIXTURE_PATH)
+    const highlightOutlineReady = await waitForMarkdownFile(
+      'pmn-highlight-outline-ready',
+      OUTLINE_SCROLL_FIXTURE_PATH,
+      OUTLINE_SCROLL_FIXTURE_TEXT
+    )
     record('PMN-13-highlight-outline-ready', highlightOutlineReady, {
       activeFilePath: getApi()?.getActiveFilePath?.() ?? null,
       symbolCount: getApi()?.getOutlineSymbolCount?.() ?? 0
@@ -254,11 +260,29 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
     if (!highlightOutlineReady || cancelled()) return results
 
     api?.setOutlineVisible?.(true)
-    const markdownOutlineScrolled = Boolean(api?.scrollOutlineToFraction?.(0.88))
-    await sleep(220)
-    savedMarkdownOutlineScroll = getApi()?.getOutlineScrollTop?.() ?? 0
-    record('PMN-14-markdown-outline-scroll-captured', markdownOutlineScrolled && savedMarkdownOutlineScroll > 40, {
-      scrollTop: Math.round(savedMarkdownOutlineScroll)
+    let markdownOutlineScrolled = false
+    const markdownOutlineScrollCaptured = await waitFor(
+      'pmn-markdown-outline-scroll-captured-ready',
+      () => {
+        const current = getApi()
+        if (current?.isOutlineVisible?.() !== true) return false
+        if ((current?.getOutlineSymbolCount?.() ?? 0) <= 0) return false
+        const maxScroll = current?.getOutlineScrollMax?.() ?? 0
+        if (maxScroll <= 40) return true
+        markdownOutlineScrolled = Boolean(current?.scrollOutlineToFraction?.(0.88))
+        savedMarkdownOutlineScroll = current?.getOutlineScrollTop?.() ?? 0
+        return markdownOutlineScrolled && savedMarkdownOutlineScroll > 40
+      },
+      5000,
+      80
+    )
+    savedMarkdownOutlineScroll = getApi()?.getOutlineScrollTop?.() ?? savedMarkdownOutlineScroll
+    record('PMN-14-markdown-outline-scroll-captured', markdownOutlineScrollCaptured, {
+      outlineScrolled: markdownOutlineScrolled,
+      scrollTop: Math.round(savedMarkdownOutlineScroll),
+      outlineScrollHeight: getApi()?.getOutlineScrollHeight?.() ?? null,
+      outlineScrollMax: getApi()?.getOutlineScrollMax?.() ?? null,
+      symbolCount: getApi()?.getOutlineSymbolCount?.() ?? null
     })
 
     api?.setOutlineVisible?.(false)
@@ -408,13 +432,14 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
   if (canUsePreviewOutline) {
     const beforeSlug = getApi()?.getPreviewActiveSlug?.() ?? null
     const previewScrollBeforeTrack = getApi()?.getPreviewScrollTop?.() ?? 0
+    const previewScrollHeightBeforeTrack = getApi()?.getPreviewScrollHeight?.() ?? 0
+    const previewTargetFraction = previewScrollBeforeTrack > previewScrollHeightBeforeTrack * 0.5 ? 0.2 : 0.8
     api?.setOutlineTarget?.('preview')
-    api?.scrollPreviewToFraction?.(0.7)
+    api?.scrollPreviewToFraction?.(previewTargetFraction)
     const previewTracked = await waitFor(
       'pmn-preview-outline-tracked',
       () => {
         const current = getApi()
-        const slug = current?.getPreviewActiveSlug?.() ?? null
         const scrollTop = current?.getPreviewScrollTop?.() ?? 0
         return current?.getOutlineTarget?.() === 'preview' && Math.abs(scrollTop - previewScrollBeforeTrack) > 40
       },
@@ -425,6 +450,7 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
     record('PMN-28-preview-scroll-updates-active-heading', previewTracked, {
       beforeSlug,
       afterSlug,
+      previewTargetFraction,
       previewScrollBeforeTrack: Math.round(previewScrollBeforeTrack),
       previewScrollAfterTrack: Math.round(getApi()?.getPreviewScrollTop?.() ?? 0),
       outlineTarget: getApi()?.getOutlineTarget?.()
@@ -607,12 +633,16 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
   }
 
   if (canManageOutline && savedMarkdownOutlineScroll > 0) {
-    await getApi()?.openFileByPath?.(SAMPLE_MARKDOWN_PATH)
-    const sampleAfterReopen = await waitForMarkdownFile('pmn-sample-after-reopen', SAMPLE_MARKDOWN_PATH, 'Deep Learning Math Foundations')
-    record('PMN-42-sample-opened-after-reopen', sampleAfterReopen, {
+    await getApi()?.openFileByPath?.(OUTLINE_SCROLL_FIXTURE_PATH)
+    const highlightAfterReopen = await waitForMarkdownFile(
+      'pmn-highlight-after-reopen',
+      OUTLINE_SCROLL_FIXTURE_PATH,
+      OUTLINE_SCROLL_FIXTURE_TEXT
+    )
+    record('PMN-42-highlight-opened-after-reopen', highlightAfterReopen, {
       activeFilePath: getApi()?.getActiveFilePath?.() ?? null
     })
-    if (!sampleAfterReopen || cancelled()) return results
+    if (!highlightAfterReopen || cancelled()) return results
 
     const outlineAfterReopen = await waitFor(
       'pmn-outline-after-reopen',

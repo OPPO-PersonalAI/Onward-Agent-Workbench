@@ -249,6 +249,36 @@ export interface ProjectEditorDebugApi {
     brokenCount: number
     sources: string[]
   }
+  getMermaidPreviewState?: () => {
+    total: number
+    rendered: number
+    error: number
+    pending: number
+    inFlight: boolean
+  }
+  getMarkdownSessionCacheState?: () => {
+    size: number
+    limit: number
+    lastRestore: {
+      mode: 'hit' | 'miss' | 'stale' | 'disabled'
+      key: string | null
+      filePath: string | null
+      size: number
+      limit: number
+      openCount?: number
+      dwellMs?: number
+      renderedHtmlLength?: number
+    }
+    entries: Array<{
+      filePath: string
+      renderedHtmlLength: number
+      openCount: number
+      dwellMs: number
+      lastAccessedAt: number
+      hitCount: number
+      stale: boolean
+    }>
+  }
   getOutlineTarget?: () => 'editor' | 'preview'
   setOutlineTarget?: (target: 'editor' | 'preview') => void
   getOutlineEffectiveTarget?: () => 'editor' | 'preview'
@@ -258,6 +288,7 @@ export interface ProjectEditorDebugApi {
   getOutlineActiveItemName?: () => string | null
   getOutlineScrollTop?: () => number
   getOutlineScrollHeight?: () => number
+  getOutlineScrollMax?: () => number
   scrollOutlineToFraction?: (fraction: number) => boolean
   clickOutlineItemByName?: (name: string) => boolean
   getPreviewActiveSlug?: () => string | null

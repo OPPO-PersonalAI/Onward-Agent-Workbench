@@ -21,6 +21,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Markdown preview rendering
 - External file change watching and automatic refresh
 - Preview position restore without top flash
+- Project Editor Markdown session restore after preview-only section navigation and Edit mode reopen
 - Project Editor per-file memory persistence, including recent tracking and Markdown preview restore
 - Git state inspection and Git Diff behavior
 - Multi-submodule Git Diff staged loading
@@ -73,6 +74,7 @@ src/autotest/
 ├── test-feedback-ui.ts
 ├── test-feedback-persistence.ts
 ├── test-preview-position-restore.ts
+├── test-project-editor-markdown-session-restore.ts
 ├── test-project-editor-sqlite.ts
 ├── test-prompt-sender.ts
 ├── test-terminal-state-persistence.ts
@@ -360,6 +362,24 @@ bash test/run-project-editor-file-memory-autotest.sh
 pwsh test/run-project-editor-file-memory-autotest.ps1
 ```
 
+### Project Editor Markdown Session Restore Suite
+
+- `src/autotest/test-project-editor-markdown-session-restore.ts`
+  - Verifies a preview-only Markdown session can navigate to the target Harness Anthropic section
+  - Verifies entering Edit mode keeps the same section context instead of resetting the editor to the top
+  - Verifies closing Project Editor to Terminal and reopening restores the target file, Markdown view mode, preview scroll, and editor section
+  - Verifies reopening the same Markdown session uses the retained Markdown session cache when it is still valid
+
+Run the Project Editor Markdown session restore suite:
+
+```bash
+bash test/run-project-editor-markdown-session-restore-autotest.sh
+```
+
+```powershell
+pwsh test/run-project-editor-markdown-session-restore-autotest.ps1
+```
+
 ### Phase 2: Per-Agent Font Size
 
 Legacy source branch: `git_diff_ui_miss_match`
@@ -481,7 +501,13 @@ Source set: ProjectEditor external file refresh validation suite
 
 Source set: Markdown preview restore validation suite
 
-- `PPR-00` to `PPR-06`: file discovery, transition visibility, top-flash prevention, and scroll restoration accuracy
+- `PPR-00` to `PPR-12`: file discovery, transition visibility, top-flash prevention, scroll restoration accuracy, and Mermaid layout-stable restore after diagrams finish rendering
+
+### Phase 0.855: Project Editor Markdown Session Restore
+
+Source set: Project Editor Markdown preview-only section restore suite
+
+- `PMSR-00` to `PMSR-12`: Harness Markdown fixture selection, preview-only section navigation, Edit mode section alignment, close-to-Terminal reopen, preview scroll restore, editor section restore, and retained Markdown session cache hit
 
 ### Phase 0.9: ProjectEditor SQLite
 
