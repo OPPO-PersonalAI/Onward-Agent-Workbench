@@ -2,5 +2,6 @@ node_modules/
 out/
 release/
 dist/
+.pnpm-store/
 *.log
 test/e2e-update-test/

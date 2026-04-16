@@ -92,19 +92,29 @@
 }
 
 .git-history-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
   font-size: var(--font-lg);
   font-weight: 600;
   color: var(--text-1);
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-wrap: nowrap;
+}
+
+.git-history-title-main {
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
 .git-history-task-label {
-  font-weight: 400;
-  opacity: 0.6;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .git-history-header-actions {

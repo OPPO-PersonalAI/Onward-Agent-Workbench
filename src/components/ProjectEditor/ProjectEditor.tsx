@@ -6324,7 +6324,14 @@ export function ProjectEditor({
           <>
             <div className="project-editor-header">
               <div className="project-editor-header-main">
-                <div className="project-editor-title">{t('projectEditor.title')}{taskTitle && <span className="project-editor-task-label"> &middot; {taskTitle}</span>}</div>
+                <div className="project-editor-title">
+                  <span className="project-editor-title-main">{t('projectEditor.title')}</span>
+                  {taskTitle ? (
+                    <span className="project-editor-task-label subpage-task-source" title={taskTitle}>
+                      <span className="subpage-task-source-name">{taskTitle}</span>
+                    </span>
+                  ) : null}
+                </div>
                 <SubpageSwitcher current="editor" onSelect={handleSelectSubpage} />
               </div>
               <div className="project-editor-header-actions">

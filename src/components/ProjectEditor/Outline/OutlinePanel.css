@@ -171,7 +171,7 @@
   color: var(--text-2);
   font-size: var(--project-editor-font-size, 14px);
   line-height: 1.4;
-  min-height: 24px;
+  min-height: max(24px, calc(var(--project-editor-font-size, 14px) * 1.65));
 }
 
 .outline-panel-item:hover {
@@ -187,10 +187,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 1em;
+  height: 1em;
   flex-shrink: 0;
-  margin-top: 3px;
+  margin-top: calc(var(--project-editor-font-size, 14px) * 0.21);
   color: var(--text-3);
   transition: transform 0.12s ease;
 }
@@ -200,24 +200,25 @@
 }
 
 .outline-panel-item-spacer {
-  width: 14px;
-  height: 14px;
+  width: 1em;
+  height: 1em;
   flex-shrink: 0;
-  margin-top: 3px;
+  margin-top: calc(var(--project-editor-font-size, 14px) * 0.21);
 }
 
 .outline-panel-item-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  font-size: 10px;
+  /* Match row font scale so heading/symbol badges stay visually aligned with labels */
+  width: max(14px, calc(var(--project-editor-font-size, 14px) * 1.15));
+  height: max(14px, calc(var(--project-editor-font-size, 14px) * 1.15));
+  border-radius: max(2px, calc(var(--project-editor-font-size, 14px) * 0.22));
+  font-size: max(9px, calc(var(--project-editor-font-size, 14px) * 0.72));
   font-weight: 700;
   flex-shrink: 0;
   line-height: 1;
-  margin-top: 2px;
+  margin-top: calc(var(--project-editor-font-size, 14px) * 0.14);
 }
 
 /* Symbol kind colors */

@@ -44,8 +44,10 @@ export function SubpagePanelShell({
       <div className="subpage-panel-shell-header">
         <SubpageSwitcher current={current} onSelect={onSelect} />
         {taskTitle && (
-          <div className="subpage-panel-shell-task-title" title={taskTitle}>
-            {taskTitle}
+          <div className="subpage-panel-shell-task-title">
+            <div className="subpage-task-source" title={taskTitle}>
+              <span className="subpage-task-source-name">{taskTitle}</span>
+            </div>
           </div>
         )}
         {actions && <div className="subpage-panel-shell-actions">{actions}</div>}

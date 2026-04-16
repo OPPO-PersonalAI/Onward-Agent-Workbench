@@ -103,18 +103,28 @@
 }
 
 .project-editor-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   font-size: var(--font-lg);
   color: var(--text-1);
   font-weight: 600;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-wrap: nowrap;
+}
+
+.project-editor-title-main {
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
 .project-editor-task-label {
-  font-weight: 400;
-  opacity: 0.6;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .project-editor-header-actions {
