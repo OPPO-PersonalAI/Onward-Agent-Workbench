@@ -1342,7 +1342,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   const { t } = useI18n()
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
-  const MIN_EDITOR_HEIGHT = 100
+  const MIN_EDITOR_HEIGHT = 180
   const [height, setHeight] = useState(() => Math.max(promptEditorHeight, MIN_EDITOR_HEIGHT))
   const heightRef = useRef(height)
   const isDraggingRef = useRef(false)

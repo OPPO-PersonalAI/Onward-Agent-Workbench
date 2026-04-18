@@ -271,6 +271,78 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     }
   }
 
+  // Scope new layout assertions to the visible notebook so they are not
+  // skewed by hidden tabs that remain mounted in multi-tab scenarios.
+  const visibleNotebookSelector = '.prompt-notebook:not(.prompt-notebook-hidden)'
+
+  // PS-31: Terminals grid no longer has the legacy 140px hard cap
+  if (!cancelled()) {
+    const grid = document.querySelector(`${visibleNotebookSelector} .prompt-sender-terminals`) as HTMLElement | null
+    if (grid) {
+      const style = window.getComputedStyle(grid)
+      const maxHeight = style.maxHeight
+      const overflowY = style.overflowY
+      const isUncapped = maxHeight === 'none' || maxHeight === '' || !maxHeight.endsWith('140px')
+      _assert('PS-31-terminals-no-hard-cap', isUncapped && overflowY === 'auto', {
+        maxHeight,
+        overflowY
+      })
+    } else {
+      results.push({ name: 'PS-31-terminals-no-hard-cap', ok: false, detail: { reason: 'grid element not found' } })
+    }
+  }
+
+  // PS-32: Sender container enforces the 50% ceiling of the notebook
+  if (!cancelled()) {
+    const sender = document.querySelector(`${visibleNotebookSelector} .prompt-sender`) as HTMLElement | null
+    const notebook = document.querySelector(visibleNotebookSelector) as HTMLElement | null
+    if (sender && notebook) {
+      const senderHeight = sender.getBoundingClientRect().height
+      const notebookHeight = notebook.getBoundingClientRect().height
+      const ceiling = notebookHeight * 0.5
+      // 2px tolerance for sub-pixel rounding
+      const withinCeiling = senderHeight <= ceiling + 2
+      const senderMaxHeight = window.getComputedStyle(sender).maxHeight
+      // Electron/Chromium may return the literal '50%' or a resolved px value.
+      // Accept either: string ending with '%' and equals '50%', OR a px value
+      // that is approximately half of the notebook height.
+      const maxHeightRule = senderMaxHeight === '50%'
+      const maxHeightPx = parseFloat(senderMaxHeight)
+      const maxHeightPxHalf = senderMaxHeight.endsWith('px')
+        && Number.isFinite(maxHeightPx)
+        && Math.abs(maxHeightPx - ceiling) <= 2
+      const maxHeightOk = maxHeightRule || maxHeightPxHalf
+      _assert('PS-32-sender-respects-50-percent-cap', withinCeiling && maxHeightOk, {
+        senderHeight,
+        notebookHeight,
+        ceiling,
+        senderMaxHeight,
+        maxHeightPx
+      })
+    } else {
+      results.push({ name: 'PS-32-sender-respects-50-percent-cap', ok: false, detail: { reason: 'sender or notebook not found' } })
+    }
+  }
+
+  // PS-33: Editor is compressible (flex-shrink: 1) with a 180px floor
+  if (!cancelled()) {
+    const editor = document.querySelector(`${visibleNotebookSelector} .prompt-editor`) as HTMLElement | null
+    if (editor) {
+      const style = window.getComputedStyle(editor)
+      const minHeight = style.minHeight
+      const flexShrink = style.flexShrink
+      const minHeightPx = parseFloat(minHeight)
+      const minHeightOk = Number.isFinite(minHeightPx) && Math.abs(minHeightPx - 180) <= 1
+      const shrinkOk = flexShrink === '1'
+      _assert('PS-33-editor-compressible-with-floor', minHeightOk && shrinkOk, {
+        minHeight,
+        flexShrink
+      })
+    } else {
+      results.push({ name: 'PS-33-editor-compressible-with-floor', ok: false, detail: { reason: 'editor element not found' } })
+    }
+  }
+
   log('phase1:done', {
     total: results.length,
     passed: results.filter(r => r.ok).length,
