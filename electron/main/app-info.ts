@@ -154,12 +154,12 @@ export function getAppInfo(): AppInfo {
   return cachedInfo
 }
 
-function getDevUserDataPath(displayName: string): string {
+function getDevUserDataPath(branch: string | null): string {
   // Store dev build data under a stable appData path so that
   // `rm -rf release && pnpm dist:dev` does not destroy user state.
   // Each branch gets its own subdirectory to avoid cross-branch interference.
-  const branch = displayName.replace(/^Onward 2-/, '') || 'default'
-  return join(app.getPath('appData'), 'Onward 2-dev', branch)
+  const branchSegment = (branch && branch.trim()) || 'default'
+  return join(app.getPath('appData'), 'Onward 2-dev', branchSegment)
 }
 
 /**
@@ -264,7 +264,7 @@ export function initializeAppIdentity(): AppInfo {
   }
 
   if (appInfo.buildChannel === 'dev' && appInfo.isPackaged) {
-    const userDataPath = getDevUserDataPath(appInfo.displayName)
+    const userDataPath = getDevUserDataPath(appInfo.branch)
     app.setPath('userData', userDataPath)
     return appInfo
   }

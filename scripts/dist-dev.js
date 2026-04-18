@@ -43,13 +43,13 @@ function sanitizeBranchName(value) {
   return name || 'branch'
 }
 
-function getBaseProductName() {
+function getPackageVersion() {
   try {
     const pkgPath = join(__dirname, '..', 'package.json')
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
-    return pkg.productName || pkg.name || 'Onward 2'
+    return pkg.version || '0.0.0'
   } catch {
-    return 'Onward 2'
+    return '0.0.0'
   }
 }
 
@@ -125,8 +125,8 @@ function openPackagedApp(appPath) {
 
 const branchRaw = getBranchName()
 const branch = sanitizeBranchName(branchRaw)
-const baseName = getBaseProductName()
-const productName = `${baseName}-${branch}`
+const version = getPackageVersion()
+const productName = `Under Development ${version}-${branch}`
 
 run('node', [join(__dirname, 'check-chinese-comments.js')])
 run('node', [join(__dirname, 'compile-changelog.js')])
