@@ -25,12 +25,12 @@ rm -rf out release && pnpm dist:dev
 Behavior:
 
 - Uses the development packaging path
-- Injects the current Git branch into the app display name
+- Injects the current `package.json` version and Git branch into the app display name
 - Keeps development builds clearly separated from release builds
 
 Typical result:
 
-- App title example: `Onward 2-feature-branch`
+- App title example: `Under Development 2.0.1-feature-branch`
 
 ## 2. Release Package Build
 

@@ -14,7 +14,9 @@ detect_app_bin() {
   if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
     branch="detached"
   fi
-  local product_name="Onward 2-$branch"
+  local version
+  version="$(node -p "require('$ROOT_DIR/package.json').version" 2>/dev/null || echo 0.0.0)"
+  local product_name="Under Development $version-$branch"
   local candidates=(
     "$ROOT_DIR/release/mac-arm64/$product_name.app/Contents/MacOS/$product_name"
     "$ROOT_DIR/release/mac/$product_name.app/Contents/MacOS/$product_name"
@@ -29,7 +31,7 @@ detect_app_bin() {
   done
 
   local fallback
-  fallback="$(find "$ROOT_DIR/release" -type f \( -path "*/Contents/MacOS/Onward 2-*" -o -path "*/linux-unpacked/Onward 2-*" \) 2>/dev/null | head -n 1 || true)"
+  fallback="$(find "$ROOT_DIR/release" -type f \( -path "*/Contents/MacOS/Under Development *" -o -path "*/linux-unpacked/Under Development *" \) 2>/dev/null | head -n 1 || true)"
   if [[ -n "$fallback" ]]; then
     echo "$fallback"
     return 0

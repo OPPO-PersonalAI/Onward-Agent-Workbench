@@ -18,7 +18,9 @@ detect_dev_product_name() {
   local branch
   branch="$(git -C "$root_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
   branch="$(sanitize_branch_name "$branch")"
-  printf 'Onward 2-%s\n' "$branch"
+  local version
+  version="$(node -p "require('$root_dir/package.json').version" 2>/dev/null || echo 0.0.0)"
+  printf 'Under Development %s-%s\n' "$version" "$branch"
 }
 
 resolve_dev_app_bin() {
@@ -38,7 +40,7 @@ resolve_dev_app_bin() {
   done
 
   local fallback
-  fallback="$(find "$root_dir/release" -type f \( -path "*/Contents/MacOS/Onward 2-*" -o -path "*/linux-unpacked/Onward 2-*" \) 2>/dev/null | head -n 1 || true)"
+  fallback="$(find "$root_dir/release" -type f \( -path "*/Contents/MacOS/Under Development *" -o -path "*/linux-unpacked/Under Development *" \) 2>/dev/null | head -n 1 || true)"
   if [[ -n "$fallback" ]]; then
     printf '%s\n' "$fallback"
     return 0

@@ -130,7 +130,7 @@ ONWARD_AUTOTEST=1 \
 ONWARD_AUTOTEST_EXIT=1 \
 ONWARD_AUTOTEST_CWD="/path/to/git/repo" \
 ONWARD_DEBUG=1 \
-open "release/mac-arm64/Onward 2-<branch>.app"
+open "release/mac-arm64/Under Development <version>-<branch>.app"
 ```
 
 ### Linux
@@ -140,7 +140,7 @@ ONWARD_AUTOTEST=1 \
 ONWARD_AUTOTEST_EXIT=1 \
 ONWARD_AUTOTEST_CWD="/path/to/git/repo" \
 ONWARD_DEBUG=1 \
-"/path/to/release/linux-unpacked/Onward 2-<branch>"
+"/path/to/release/linux-unpacked/Under Development <version>-<branch>"
 ```
 
 ### Windows (PowerShell)
@@ -150,7 +150,7 @@ $env:ONWARD_AUTOTEST="1"
 $env:ONWARD_AUTOTEST_EXIT="1"
 $env:ONWARD_AUTOTEST_CWD="C:\\path\\to\\git\\repo"
 $env:ONWARD_DEBUG="1"
-& "C:\\path\\to\\release\\win-unpacked\\Onward 2-<branch>.exe"
+& "C:\\path\\to\\release\\win-unpacked\\Under Development <version>-<branch>.exe"
 ```
 
 ## Current Suite Inventory

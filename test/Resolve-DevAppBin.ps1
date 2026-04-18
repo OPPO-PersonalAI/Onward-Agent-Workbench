@@ -34,7 +34,12 @@ function Resolve-DevAppBin {
   )
 
   $branch = Get-SanitizedBranchName -RootDir $RootDir
-  $productName = "Onward 2-$branch"
+  $pkgPath = Join-Path $RootDir "package.json"
+  $version = "0.0.0"
+  try {
+    $version = (Get-Content -Raw $pkgPath | ConvertFrom-Json).version
+  } catch {}
+  $productName = "Under Development $version-$branch"
   $candidates = @(
     (Join-Path $RootDir "release\win-unpacked\$productName.exe"),
     (Join-Path $RootDir "release\win-ia32-unpacked\$productName.exe"),
@@ -47,7 +52,7 @@ function Resolve-DevAppBin {
     }
   }
 
-  $fallback = Get-ChildItem -Path (Join-Path $RootDir "release") -Recurse -Filter "Onward 2-*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  $fallback = Get-ChildItem -Path (Join-Path $RootDir "release") -Recurse -Filter "Under Development *.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($fallback) {
     return $fallback.FullName
   }

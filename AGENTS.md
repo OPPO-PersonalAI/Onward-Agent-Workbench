@@ -17,7 +17,7 @@ For platform-related commands, always consider these three platforms:
     # Clean and package (production build)
     rm -rf out release && pnpm dist
 - After every code change, you must perform a startup test and confirm at minimum that the application can launch normally and enter the main UI. When `pnpm dist:dev` auto-opens the packaged app, a clean launch counts as the startup test; if exact launch control is required, set `ONWARD_DIST_DEV_OPEN=0` and launch manually once.
-- Hard rule — Launching the app for testing: before opening the built `.app`, you must first kill any existing instance of the same application using **exact name matching** (`pkill -x "<exact-process-name>"`). Never use wildcards or partial matches. Chain the kill and open in one command: `pkill -x "Onward 2-<branch>" 2>/dev/null; sleep 0.5; open "<path-to-.app>"`.
+- Hard rule — Launching the app for testing: before opening the built `.app`, you must first kill any existing instance of the same application using **exact name matching** (`pkill -x "<exact-process-name>"`). Never use wildcards or partial matches. Chain the kill and open in one command: `pkill -x "Under Development <version>-<branch>" 2>/dev/null; sleep 0.5; open "<path-to-.app>"`.
 - Multilingual / UI Copy Development Rules:
     - The application currently supports `en` and `zh-CN`, with English as the default language. Whenever user-visible copy is added or modified, all supported languages must be designed and implemented together. Updating only one language is not allowed.
     - User-visible copy includes, but is not limited to, page titles, buttons, settings items, menus, tray menus, dialogs, toasts, tooltips, placeholders, empty states, error messages, context menus, and status text.
@@ -30,13 +30,18 @@ For platform-related commands, always consider these three platforms:
     - Expand test cases from the requirements to cover different operation paths and entry points.
     - Add as complete a set of test cases as possible and run them all; only report completion after all tests pass.
     - Newly created test scripts must be stored under the `test` directory, and the relevant documentation must be updated for reuse.
+- Hard rule — Test fixture isolation: when running tests, construct a self-contained fixture set covering cases that range from simple to complex (including code structure and folder structure), materialize it under a dedicated test working directory, and use that directory as the test's `cwd`. Requirements:
+    1. Never read from or operate against the user's real data. Do not target the user's Home directory, root directory, or any other path outside the project. In particular, do not pass `$HOME`, `~`, `/`, or other system-level paths as the test working directory.
+    2. Tests must operate exclusively inside the dedicated test working directory you created for that suite.
+    3. If the target test working directory does not exist on the user's machine, create it before the test runs.
+    4. The test working directory must be committed as a reusable test asset under the `test/` directory (e.g. `test/fixtures/<suite-name>/`), so it ships with the repository and can be reused by future runs and by CI.
 - Icon sizing guidelines
     - The macOS app icon must follow the safe-area proportions from Apple Design Resources to avoid appearing oversized in the Dock / Mission Control.
     - Use `resources/icon.svg` as the single source of truth. After changes, fully regenerate `resources/icons/**`, `icon.icns`, `icon.ico`, and `icon.png`.
     - When the app icon display size looks wrong, first check the content-to-canvas ratio rather than the resolution; add more padding by scaling down the content.
     - macOS status bar icons must follow the Template convention: the filename must contain `Template`, and the code must explicitly call `setTemplateImage(true)`; avoid incorrect colors in light/dark mode.
     - After generating tray icons, update all referenced paths so the resource filenames and code stay consistent.
-- After the build completes, show the current status. For `pnpm dist:dev`, the script usually launches the packaged app automatically; if not (e.g. `ONWARD_DIST_DEV_OPEN=0`), provide the manual command, for example: `open "project-dir/release/mac-arm64/Onward 2-branch-name.app"` (macOS).
+- After the build completes, show the current status. For `pnpm dist:dev`, the script usually launches the packaged app automatically; if not (e.g. `ONWARD_DIST_DEV_OPEN=0`), provide the manual command, for example: `open "project-dir/release/mac-arm64/Under Development <version>-<branch>.app"` (macOS). The dev-build product name format is `Under Development <package.json version>-<branch>`, e.g. `Under Development 2.0.1-master`.
 - Whenever `CLAUDE.md` is modified, automatically run `./claude-sync-to-agents.sh`.
 - Git commit messages must be written in English.
 - Hard rule: all code comments must use English. Do not use any Simplified Chinese in code comments.

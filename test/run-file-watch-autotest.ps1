@@ -16,7 +16,12 @@ if (-not $TestCwd) {
 $Branch = git -C $ProjectDir rev-parse --abbrev-ref HEAD 2>$null
 if (-not $Branch) { $Branch = "unknown" }
 
-$AppPath = Join-Path $ProjectDir "release\win-unpacked\Onward 2-${Branch}.exe"
+$Version = "0.0.0"
+try {
+    $Version = (Get-Content -Raw (Join-Path $ProjectDir "package.json") | ConvertFrom-Json).version
+} catch {}
+$ProductName = "Under Development $Version-$Branch"
+$AppPath = Join-Path $ProjectDir "release\win-unpacked\${ProductName}.exe"
 if (-not (Test-Path $AppPath)) {
     Write-Host "ERROR: App binary not found: $AppPath"
     Write-Host "Build the development package first with: rm -rf out release && pnpm dist:dev"

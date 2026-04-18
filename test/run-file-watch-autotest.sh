@@ -6,9 +6,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BRANCH=$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+VERSION=$(node -p "require('$ROOT_DIR/package.json').version" 2>/dev/null || echo "0.0.0")
+PRODUCT_NAME="Under Development ${VERSION}-${BRANCH}"
 
 if [[ "$(uname)" == "Darwin" ]]; then
-  APP_BIN_DEFAULT="$ROOT_DIR/release/mac-arm64/Onward 2-${BRANCH}.app/Contents/MacOS/Onward 2-${BRANCH}"
+  APP_BIN_DEFAULT="$ROOT_DIR/release/mac-arm64/${PRODUCT_NAME}.app/Contents/MacOS/${PRODUCT_NAME}"
 else
   APP_BIN_DEFAULT=$(find "$ROOT_DIR/release" -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
 fi

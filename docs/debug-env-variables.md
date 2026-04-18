@@ -21,13 +21,13 @@ Onward uses `ONWARD_*` environment variables as feature-level debug switches. Ea
 Set the variable before the `open` command (packaged build):
 
 ```bash
-ONWARD_TELEMETRY_RESET_CONSENT=1 open "release/mac-arm64/Onward 2-<branch>.app"
+ONWARD_TELEMETRY_RESET_CONSENT=1 open "release/mac-arm64/Under Development <version>-<branch>.app"
 ```
 
 Multiple variables:
 
 ```bash
-ONWARD_DEBUG=1 ONWARD_TELEMETRY_RESET_CONSENT=1 open "release/mac-arm64/Onward 2-<branch>.app"
+ONWARD_DEBUG=1 ONWARD_TELEMETRY_RESET_CONSENT=1 open "release/mac-arm64/Under Development <version>-<branch>.app"
 ```
 
 Development mode (electron-vite):

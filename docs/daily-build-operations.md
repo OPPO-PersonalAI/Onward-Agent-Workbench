@@ -98,7 +98,7 @@ Build and launch the development package:
 
 ```bash
 rm -rf out release && pnpm dist:dev
-open "/Users/yingyun/Projects/Onward-Github/release/mac-arm64/Onward 2-master.app"
+open "/Users/yingyun/Projects/Onward-Github/release/mac-arm64/Under Development 2.0.1-master.app"
 ```
 
 ## Verification Checklist
