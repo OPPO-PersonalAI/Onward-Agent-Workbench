@@ -64,12 +64,14 @@ import { RipgrepSearchManager } from './ripgrep-search'
 import { browserViewManager } from './browser-view-manager'
 import { FileWatchManager } from './file-watch-manager'
 import { ImageWatchManager } from './image-watch-manager'
+import { ProjectTreeWatchManager } from './project-tree-watch-manager'
 import { getUpdateService } from './update-service'
 
 let gitWatchManager: GitWatchManager | null = null
 let ripgrepSearchManager: RipgrepSearchManager | null = null
 let fileWatchManager: FileWatchManager | null = null
 let imageWatchManager: ImageWatchManager | null = null
+let projectTreeWatchManager: ProjectTreeWatchManager | null = null
 let feedbackDebugLastOpenedUrl: string | null = null
 
 type TerminalInputSequencePayload = {
@@ -376,6 +378,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
   fileWatchManager = new FileWatchManager(mainWindow)
   imageWatchManager = new ImageWatchManager(mainWindow)
+  projectTreeWatchManager = new ProjectTreeWatchManager(mainWindow)
 
   ipcMain.on('debug:log', (_event, payload: { message?: string; data?: unknown }) => {
     log('[RendererDebug]', payload?.message ?? '', payload?.data ?? '')
@@ -1354,6 +1357,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     return { success: true }
   })
 
+  ipcMain.handle('project:tree-watch:start', (_event, cwd: string) => {
+    if (typeof cwd !== 'string' || cwd.length === 0) return { success: false }
+    projectTreeWatchManager?.start(cwd)
+    return { success: true }
+  })
+
+  ipcMain.handle('project:tree-watch:stop', (_event, cwd: string) => {
+    if (typeof cwd !== 'string' || cwd.length === 0) return { success: false }
+    projectTreeWatchManager?.stop(cwd)
+    return { success: true }
+  })
+
   // Settings storage handlers
   const settingsStorage = getSettingsStorage()
   const shortcutManager = getShortcutManager()
@@ -1526,6 +1541,8 @@ export function cleanupIpcHandlers(): void {
   fileWatchManager = null
   imageWatchManager?.dispose()
   imageWatchManager = null
+  projectTreeWatchManager?.dispose()
+  projectTreeWatchManager = null
   ipcMain.removeHandler('app:get-info')
   ipcMain.removeHandler('feedback:load')
   ipcMain.removeHandler('feedback:update-preferences')
@@ -1617,6 +1634,8 @@ export function cleanupIpcHandlers(): void {
   ipcMain.removeHandler('project:delete-path')
   ipcMain.removeHandler('project:search-start')
   ipcMain.removeHandler('project:search-cancel')
+  ipcMain.removeHandler('project:tree-watch:start')
+  ipcMain.removeHandler('project:tree-watch:stop')
   ipcMain.removeHandler('project:watch-file')
   ipcMain.removeHandler('project:unwatch-file')
   ipcMain.removeHandler('project:watch-image-files')

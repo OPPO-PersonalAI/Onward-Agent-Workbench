@@ -278,6 +278,49 @@ bash test/run-change-log-autotest.sh
 pwsh test/run-change-log-autotest.ps1
 ```
 
+### Project Editor File Search Cache Suite
+
+- `test/file-index-cache.test.mts`
+  - Verifies the filename-search index builds exactly once per normalized cwd and serves subsequent searches from cache
+  - Verifies multiple concurrent `ensureIndex` calls dedupe to a single walker invocation (multi-Tab open storm)
+  - Verifies distinct cwds keep independent cache entries and that Windows-style backslash paths normalize to the same entry as POSIX-style
+  - Verifies `invalidate` forces a rebuild and does not affect sibling cwds
+  - Verifies `addFile`, `removeFile`, `renameFile`, and `applyFsEvent` apply incremental patches, including directory-prefix cascades
+  - Verifies subscriber notification semantics, LRU eviction (cap 8) with subscriber protection, and watcher-adapter `start` / `stop` lifecycle
+  - Verifies the invalidation-during-in-flight-build race: a stale walker cannot overwrite a newer ready state
+  - Exercises the user-reported scenario end-to-end: two simulated Tabs over the same repo repeatedly open search 20+ times, walker runs exactly once
+- `test/project-tree-watch-manager.test.mts`
+  - Verifies the main-process tree watcher emits `added` / `removed` / nested-path / rename events over a real temp directory
+  - Verifies rapid writes coalesce into a single debounced IPC flush
+  - Verifies `stop()` and `dispose()` silence further events, double `start()` is a no-op, and a missing cwd does not throw
+
+Run the file-search cache logic suite (Node built-in tests, 29 assertions):
+
+```bash
+node --experimental-transform-types --test \
+  test/file-index-cache.test.mts \
+  test/project-tree-watch-manager.test.mts
+```
+
+#### UI-level coverage
+
+- `src/autotest/test-file-index-cache-ui.ts` — drives the real Project
+  Editor UI via the `__onwardProjectEditorDebug` API. Opens Cmd+P, types
+  queries, asserts that repeated opens reuse the cached index
+  (`totalBuilds` counter never advances), and that in-app
+  create/rename/delete incrementally patch the cache rather than
+  triggering a full rebuild. Also exercises a nested-subdirectory create
+  and the manual "Refresh" recovery path.
+- Runs against the committed fixture at
+  `test/fixtures/file-index-cache/` — the autotest never touches the
+  user's home directory, the live repo, or any unrelated workspace.
+
+Run the UI suite (22 assertions, launches the packaged app):
+
+```bash
+bash test/run-file-index-cache-ui-autotest.sh
+```
+
 ### Feedback Suite
 
 - `src/autotest/test-feedback.ts`

@@ -31,6 +31,17 @@ import { countSymbols } from './Outline/outlineParser'
 import { OutlineSymbolKind, type OutlineItem } from './Outline/types'
 import { useOutlineSymbols } from './Outline/useOutlineSymbols'
 import { SearchPanel } from './GlobalSearch/SearchPanel'
+import {
+  addFile as fileIndexAddFile,
+  ensureIndex as fileIndexEnsure,
+  getCacheStats as fileIndexGetCacheStats,
+  getIndexSnapshot as fileIndexSnapshot,
+  invalidate as fileIndexInvalidate,
+  removeFile as fileIndexRemoveFile,
+  renameFile as fileIndexRenameFile,
+  subscribe as fileIndexSubscribe
+} from './GlobalSearch/fileIndexCache'
+import { initializeFileIndexCacheBridge } from './GlobalSearch/fileIndexCacheBootstrap'
 import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import type { PreviewSearchHandle } from './PreviewSearch/PreviewSearchBar'
 import { SORT_LINE_EPSILON_PX } from './PreviewSearch/usePreviewSearch'
@@ -53,6 +64,8 @@ import {
 } from './quickFileUtils'
 import { createThemedSetiFileIconResolver, sanitizeSetiSvgOnce } from './setiFileIconTheme'
 import './ProjectEditor.css'
+
+initializeFileIndexCacheBridge()
 
 interface ProjectEditorProps {
   isOpen: boolean
@@ -879,11 +892,14 @@ export function ProjectEditor({
   const [isLoadingFile, setIsLoadingFile] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  const searchOpenRef = useRef(false)
   const [sidebarMode, setSidebarMode] = useState<'files' | 'search'>('files')
   const sidebarModeRef = useRef(sidebarMode)
   const [initialSearchType, setInitialSearchType] = useState<'content' | 'filename'>('content')
   const [searchQuery, setSearchQuery] = useState('')
+  const searchQueryRef = useRef('')
   const [searchResults, setSearchResults] = useState<string[]>([])
+  const searchResultsRef = useRef<string[]>([])
   const [searchActiveIndex, setSearchActiveIndex] = useState(0)
   const [isIndexing, setIsIndexing] = useState(false)
   const isIndexingRef = useRef(false)
@@ -921,8 +937,7 @@ export function ProjectEditor({
   const originalModelVersionRef = useRef<number | null>(null)
   const dirtyRef = useRef(false)
   const saveTimerRef = useRef<number | null>(null)
-  const fileIndexRef = useRef<string[]>([])
-  const indexTokenRef = useRef(0)
+  const [fileIndexVersion, setFileIndexVersion] = useState(0)
 
   const modalRef = useRef<HTMLDivElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
@@ -1289,6 +1304,18 @@ export function ProjectEditor({
   useEffect(() => {
     sidebarModeRef.current = sidebarMode
   }, [sidebarMode])
+
+  useEffect(() => {
+    searchOpenRef.current = searchOpen
+  }, [searchOpen])
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery
+  }, [searchQuery])
+
+  useEffect(() => {
+    searchResultsRef.current = searchResults
+  }, [searchResults])
 
   useEffect(() => {
     isOutlineVisibleRef.current = isOutlineVisible
@@ -2134,7 +2161,6 @@ export function ProjectEditor({
     updatePreviewActiveSlug(null)
     markdownApplyRequestIdRef.current += 1
     markdownPendingPayloadRef.current = null
-    indexTokenRef.current += 1
     setIsIndexing(false)
     editorScrollDisposableRef.current?.dispose()
     editorScrollDisposableRef.current = null
@@ -3533,76 +3559,71 @@ export function ProjectEditor({
   }, [openFile])
 
   const invalidateFileIndex = useCallback(() => {
-    fileIndexRef.current = []
+    const root = rootRef.current
+    if (!root) return
+    fileIndexInvalidate(root)
   }, [])
 
   const getFileIndex = useCallback(() => {
-    return fileIndexRef.current
+    const root = rootRef.current
+    if (!root) return []
+    return fileIndexSnapshot(root).files
   }, [])
 
   const buildFileIndex = useCallback(async () => {
     const root = rootRef.current
     if (!root) return []
-    const token = ++indexTokenRef.current
+    const snapshot = fileIndexSnapshot(root)
+    if (snapshot.status === 'ready') {
+      return snapshot.files
+    }
     const start = performance.now()
     if (DEBUG_PROJECT_EDITOR) {
-      debugLog('index:build:start', { root, token })
+      debugLog('index:build:start', { root })
     }
     setIsIndexing(true)
-    const results: string[] = []
-    const queue: string[] = ['']
-
-    while (queue.length > 0) {
-      const current = queue.shift() ?? ''
-      const res = await window.electronAPI.project.listDirectory(root, current)
-      if (token !== indexTokenRef.current) {
-        setIsIndexing(false)
-        if (DEBUG_PROJECT_EDITOR) {
-          debugLog('index:build:cancelled', { root, token })
+    try {
+      const result = await fileIndexEnsure(root, async (cwd) => {
+        const collected: string[] = []
+        const queue: string[] = ['']
+        while (queue.length > 0) {
+          const current = queue.shift() ?? ''
+          const res = await window.electronAPI.project.listDirectory(cwd, current)
+          if (!res.success) {
+            if (DEBUG_PROJECT_EDITOR) {
+              debugLog('index:build:entry-error', { root: cwd, path: current, error: res.error })
+            }
+            continue
+          }
+          for (const entry of res.entries) {
+            if (entry.type === 'dir') {
+              queue.push(entry.path)
+            } else {
+              collected.push(entry.path)
+            }
+          }
         }
-        return []
-      }
-      if (!res.success) {
-        if (DEBUG_PROJECT_EDITOR) {
-          debugLog('index:build:entry-error', { root, token, path: current, error: res.error })
-        }
-        continue
-      }
-      for (const entry of res.entries) {
-        if (entry.type === 'dir') {
-          queue.push(entry.path)
-        } else {
-          results.push(entry.path)
-        }
-      }
-    }
-
-    if (token === indexTokenRef.current) {
-      fileIndexRef.current = results
-      setIsIndexing(false)
+        return collected
+      })
       if (DEBUG_PROJECT_EDITOR) {
         debugLog('index:build:done', {
           root,
-          token,
-          total: results.length,
+          total: result.length,
           duration: Math.round(performance.now() - start)
         })
       }
-      return results
+      return result
+    } finally {
+      setIsIndexing(false)
     }
-
-    setIsIndexing(false)
-    if (DEBUG_PROJECT_EDITOR) {
-      debugLog('index:build:stale', { root, token })
-    }
-    return []
   }, [])
 
   const handleOpenSearch = useCallback(async () => {
     setSearchOpen(true)
     setSearchQuery('')
     setSearchActiveIndex(0)
-    let index = fileIndexRef.current
+    const root = rootRef.current
+    let index = root ? fileIndexSnapshot(root).files : []
     if (index.length === 0) {
       index = await buildFileIndex()
     }
@@ -3616,6 +3637,15 @@ export function ProjectEditor({
     setSearchResults([])
     setSearchActiveIndex(0)
   }, [])
+
+  const handleOpenSearchRef = useRef(handleOpenSearch)
+  const handleCloseSearchRef = useRef(handleCloseSearch)
+  useEffect(() => {
+    handleOpenSearchRef.current = handleOpenSearch
+  }, [handleOpenSearch])
+  useEffect(() => {
+    handleCloseSearchRef.current = handleCloseSearch
+  }, [handleCloseSearch])
 
   // (sidebar search is now controlled by sidebarMode state, no overlay needed)
 
@@ -3635,7 +3665,6 @@ export function ProjectEditor({
       return
     }
     setTree(buildNodes(result.entries))
-    invalidateFileIndex()
     if (DEBUG_PROJECT_EDITOR) {
       debugLog('root:load:done', {
         root,
@@ -3695,7 +3724,6 @@ export function ProjectEditor({
       void window.electronAPI.project.unwatchAllImageFiles()
       watchedImagePathsRef.current = new Set()
       rootRef.current = null
-      fileIndexRef.current = []
       editorSaveCommandIdRef.current = null
       return
     }
@@ -3731,17 +3759,25 @@ export function ProjectEditor({
       setSearchQuery('')
       setSearchResults([])
       setSearchActiveIndex(0)
-      fileIndexRef.current = []
     }
 
     setRootError(null)
     gitDiffOpenRef.current = false
     setRootPath(cwd)
     rootRef.current = cwd
-    fileIndexRef.current = []
     setSearchResults([])
     void loadRoot(cwd)
   }, [cwd, isOpen, loadRoot, resetActiveFileState, t])
+
+  useEffect(() => {
+    if (!isOpen || !rootPath) return
+    const unsubscribe = fileIndexSubscribe(rootPath, () => {
+      setFileIndexVersion((version) => version + 1)
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [isOpen, rootPath])
 
   useEffect(() => {
     if (!isOpen || !openRequest) return
@@ -3858,10 +3894,12 @@ export function ProjectEditor({
 
   useEffect(() => {
     if (!searchOpen || isIndexing) return
-    const results = buildFuzzyResults(searchQuery, fileIndexRef.current)
+    const root = rootRef.current
+    const files = root ? fileIndexSnapshot(root).files : []
+    const results = buildFuzzyResults(searchQuery, files)
     setSearchResults(results)
     setSearchActiveIndex(0)
-  }, [searchOpen, searchQuery, isIndexing])
+  }, [searchOpen, searchQuery, isIndexing, fileIndexVersion])
 
   useEffect(() => {
     if (!contextMenu || !contextMenuRef.current || !modalRef.current) return
@@ -5370,6 +5408,26 @@ export function ProjectEditor({
         const restoredPosition = preview.scrollTop
         return Math.abs(restoredPosition - savedPosition) <= 30
       },
+      isGlobalFilenameSearchOpen: () => searchOpenRef.current,
+      openGlobalFilenameSearch: async () => {
+        await handleOpenSearchRef.current()
+      },
+      closeGlobalFilenameSearch: () => {
+        handleCloseSearchRef.current()
+      },
+      setGlobalFilenameSearchQuery: (query: string) => {
+        setSearchQuery(query)
+      },
+      getGlobalFilenameSearchQuery: () => searchQueryRef.current,
+      getGlobalFilenameSearchResults: () => [...searchResultsRef.current],
+      getFileIndexStats: () => fileIndexGetCacheStats(),
+      forceRefreshFileIndex: async () => {
+        const root = rootRef.current
+        if (!root) return false
+        fileIndexInvalidate(root)
+        await buildFileIndex()
+        return true
+      },
     }
   }
 
@@ -5816,10 +5874,10 @@ export function ProjectEditor({
     }
 
     await refreshDirectory(baseDir)
-    invalidateFileIndex()
+    fileIndexAddFile(root, targetPath)
     await openFile(targetPath, 'user', { trackRecent: true })
     showStatus('success', t('projectEditor.fileCreated'))
-  }, [invalidateFileIndex, openFile, refreshDirectory, requestPrompt, selectedPath, showStatus, t, tree])
+  }, [openFile, refreshDirectory, requestPrompt, selectedPath, showStatus, t, tree])
 
   const handleNewFolder = useCallback(async (baseDirOverride?: string) => {
     const root = rootRef.current
@@ -5851,9 +5909,8 @@ export function ProjectEditor({
     }
 
     await refreshDirectory(baseDir)
-    invalidateFileIndex()
     showStatus('success', t('projectEditor.folderCreated'))
-  }, [invalidateFileIndex, refreshDirectory, requestPrompt, selectedPath, showStatus, t, tree])
+  }, [refreshDirectory, requestPrompt, selectedPath, showStatus, t, tree])
 
   const handleRename = useCallback(async (targetPathOverride?: string) => {
     const root = rootRef.current
@@ -5901,9 +5958,9 @@ export function ProjectEditor({
     replaceQuickFileEntries(sourcePath, nextPath)
 
     await refreshDirectory(parentPath)
-    invalidateFileIndex()
+    fileIndexRenameFile(root, sourcePath, nextPath)
     showStatus('success', t('projectEditor.renameSuccess'))
-  }, [activeFilePath, invalidateFileIndex, refreshDirectory, replaceQuickFileEntries, requestPrompt, selectedPath, showStatus, t, tree])
+  }, [activeFilePath, refreshDirectory, replaceQuickFileEntries, requestPrompt, selectedPath, showStatus, t, tree])
 
   const handleDelete = useCallback(async (targetPathOverride?: string) => {
     const root = rootRef.current
@@ -5954,9 +6011,9 @@ export function ProjectEditor({
     const parentPath = getParentPath(targetPath)
     setSelectedPath(null)
     await refreshDirectory(parentPath)
-    invalidateFileIndex()
+    fileIndexRemoveFile(root, targetPath)
     showStatus('success', t('projectEditor.deleteSuccess'))
-  }, [activeFilePath, invalidateFileIndex, refreshDirectory, removeQuickFileEntries, requestConfirm, selectedPath, showStatus, t, tree])
+  }, [activeFilePath, refreshDirectory, removeQuickFileEntries, requestConfirm, selectedPath, showStatus, t, tree])
 
   const handleResizeMouseDown = useCallback((event: React.MouseEvent) => {
     event.preventDefault()

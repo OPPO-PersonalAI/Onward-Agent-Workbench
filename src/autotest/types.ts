@@ -306,6 +306,18 @@ export interface ProjectEditorDebugApi {
   getFirstVisibleLine: () => number
   scrollToLine: (lineNumber: number) => boolean
   getMissingFileNotice: () => { path: string; message: string } | null
+  isGlobalFilenameSearchOpen?: () => boolean
+  openGlobalFilenameSearch?: () => Promise<void>
+  closeGlobalFilenameSearch?: () => void
+  setGlobalFilenameSearchQuery?: (query: string) => void
+  getGlobalFilenameSearchQuery?: () => string
+  getGlobalFilenameSearchResults?: () => string[]
+  getFileIndexStats?: () => {
+    totalBuilds: number
+    entryCount: number
+    entries: Array<{ cwd: string; status: 'idle' | 'building' | 'ready'; fileCount: number }>
+  }
+  forceRefreshFileIndex?: () => Promise<boolean>
 }
 
 export interface TerminalFocusDebugApi {
