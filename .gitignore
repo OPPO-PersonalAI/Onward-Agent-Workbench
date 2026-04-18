@@ -5,3 +5,4 @@ dist/
 .pnpm-store/
 *.log
 test/e2e-update-test/
+.claude/*.lock

@@ -19,6 +19,7 @@ import { useI18n } from '../../i18n/useI18n'
 import type { ImportPrepareResult } from '../../utils/prompt-io'
 import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
 import { buildPromptTaskHistorySummary } from './promptTaskHistory'
+import { PROMPT_COLORS, type PromptColor } from './prompt-colors'
 import './PromptNotebook.css'
 
 type PromptColorFilter = 'red' | 'yellow' | 'green' | null
@@ -1495,16 +1496,35 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     onSaveSuccess?.()
   }, [title, content, editingPrompt, onSubmit, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
-  // Submit processing (add new Prompt)
-  const handleSubmit = useCallback(() => {
+  // Submit processing (add new Prompt, optionally with a color tag)
+  const handleSubmit = useCallback((color?: PromptColor | null) => {
     if (!content.trim()) return
 
-    onSubmit(title.trim(), content.trim())
+    onSubmit(title.trim(), content.trim(), color ?? null)
     setTitle('')
     setContent('')
     // Clear draft after submission
     onEditorDraftChange(null)
   }, [title, content, onSubmit, onEditorDraftChange])
+
+  // Edit mode: apply a color and save the current edit in one action
+  const handleSaveWithColor = useCallback((color: PromptColor) => {
+    if (!content.trim() || !editingPrompt) return
+
+    onUpdatePrompt({
+      ...editingPrompt,
+      title: title.trim(),
+      content: content.trim(),
+      color,
+      lastUsedAt: Date.now()
+    }, true)
+
+    setTitle('')
+    setContent('')
+    onCancelEdit()
+    onEditorDraftChange(null)
+    onSaveSuccess?.()
+  }, [title, content, editingPrompt, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
   // Cancel edit
   const handleCancel = useCallback(() => {
@@ -1610,6 +1630,31 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       </div>
 
       <div className="prompt-editor-actions">
+        <div
+          className="prompt-editor-color-picker"
+          role="group"
+          aria-label={t('promptEditor.colorPickerLabel')}
+        >
+          {PROMPT_COLORS.map(({ key, hex }) => {
+            const label = editingPrompt
+              ? t(`promptEditor.saveWith.${key}`)
+              : t(`promptEditor.addWith.${key}`)
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`prompt-editor-color-btn prompt-editor-color-btn-${key}`}
+                style={{ ['--color' as string]: hex } as React.CSSProperties}
+                disabled={!content.trim()}
+                onClick={() => editingPrompt ? handleSaveWithColor(key) : handleSubmit(key)}
+                title={label}
+                aria-label={label}
+              >
+                <span className="prompt-editor-color-dot" />
+              </button>
+            )
+          })}
+        </div>
         {editingPrompt ? (
           <>
             <button
@@ -1639,7 +1684,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         ) : (
           <button
             className="prompt-editor-btn prompt-editor-btn-submit"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit()}
             disabled={!content.trim()}
           >
             {t('promptEditor.addToHistory')}

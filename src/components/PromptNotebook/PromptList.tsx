@@ -8,6 +8,7 @@ import { Prompt } from '../../types/electron'
 import type { PromptSchedule } from '../../types/tab.d.ts'
 import { formatShortTime } from '../../utils/schedule'
 import { useI18n } from '../../i18n/useI18n'
+import { PROMPT_COLORS } from './prompt-colors'
 
 type PromptColorFilter = 'red' | 'yellow' | 'green' | null
 
@@ -61,13 +62,6 @@ interface PromptListProps {
   onViewSendHistory?: (prompt: Prompt) => void
   onCopyPrompt?: (prompt: Prompt) => void | Promise<void>
 }
-
-// Color configuration
-const COLORS = [
-  { key: 'red', hex: '#e74c3c' },
-  { key: 'yellow', hex: '#f1c40f' },
-  { key: 'green', hex: '#27ae60' }
-] as const
 
 const LONG_PRESS_DELAY = 280
 const DRAG_MOVE_TOLERANCE = 6
@@ -621,7 +615,7 @@ export const PromptList = memo(function PromptList({
           <div className="prompt-list-filters">
           <div className="prompt-list-filter-group">
             <span className="prompt-list-filter-row-label">{t('promptList.filter.markLabel')}</span>
-            {COLORS.map(({ key, hex }) => {
+            {PROMPT_COLORS.map(({ key, hex }) => {
               const count = colorFilterStats[key]
               const isActive = activeColorFilter === key
               return (
@@ -754,7 +748,7 @@ export const PromptList = memo(function PromptList({
           onMouseDown={(event) => event.stopPropagation()}
         >
           <div className="prompt-context-group">
-            {COLORS.map(({ key, hex }) => {
+            {PROMPT_COLORS.map(({ key, hex }) => {
               const isActive = contextPrompt.color === key
               return (
                 <button
