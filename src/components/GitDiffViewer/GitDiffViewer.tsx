@@ -58,6 +58,54 @@ const MIN_DIFF_SPLIT_RATIO = 0.1
 const MAX_DIFF_SPLIT_RATIO = 0.9
 const DIFF_SPLIT_RATIO_EPSILON = 0.002
 
+// Monaco theme aligned with @pierre/diffs' pierre-dark palette so Git Diff
+// reads as the same visual family as the Git History viewer.
+const PIERRE_LIKE_MONACO_THEME = 'onward-pierre-dark'
+const PIERRE_LIKE_MONACO_FONT = "'SF Mono', Monaco, Consolas, 'Ubuntu Mono', 'Liberation Mono', 'Courier New', monospace"
+let pierreLikeMonacoThemeRegistered = false
+
+function ensurePierreLikeMonacoTheme(monaco: typeof monacoTypes) {
+  if (pierreLikeMonacoThemeRegistered) return
+  monaco.editor.defineTheme(PIERRE_LIKE_MONACO_THEME, {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#070707',
+      'editor.foreground': '#fbfbfb',
+      'editorLineNumber.foreground': '#84848a',
+      'editorLineNumber.activeForeground': '#adadb1',
+      'editorGutter.background': '#070707',
+      'editor.lineHighlightBackground': '#101010',
+      'editor.lineHighlightBorder': '#00000000',
+      'editorIndentGuide.background': '#1a1a1a',
+      'editorIndentGuide.activeBackground': '#2a2a2a',
+      'editorIndentGuide.background1': '#1a1a1a',
+      'editorIndentGuide.activeBackground1': '#2a2a2a',
+      'editor.selectionBackground': '#2a2a2a',
+      'editor.inactiveSelectionBackground': '#1a1a1a',
+      'editorWhitespace.foreground': '#2a2a2a',
+      'diffEditor.insertedLineBackground': '#00cab11a',
+      'diffEditor.insertedTextBackground': '#00cab140',
+      'diffEditor.removedLineBackground': '#ff2e3f1a',
+      'diffEditor.removedTextBackground': '#ff2e3f40',
+      'diffEditor.diagonalFill': '#14141400',
+      'diffEditor.border': '#1a1a1a',
+      'diffEditor.unchangedRegionBackground': '#0a0a0a',
+      'diffEditor.unchangedRegionForeground': '#79797f',
+      'diffEditor.unchangedCodeBackground': '#0a0a0a',
+      'diffEditorGutter.insertedLineBackground': '#00cab11a',
+      'diffEditorGutter.removedLineBackground': '#ff2e3f1a',
+      'diffEditorOverview.insertedForeground': '#00cab1',
+      'diffEditorOverview.removedForeground': '#ff2e3f',
+      'scrollbarSlider.background': '#1f1f1f80',
+      'scrollbarSlider.hoverBackground': '#2f2f2fa0',
+      'scrollbarSlider.activeBackground': '#3f3f3fc0'
+    }
+  })
+  pierreLikeMonacoThemeRegistered = true
+}
+
 // Pop-up window size limit
 const DEFAULT_MODAL_WIDTH = 1200
 const DEFAULT_MODAL_HEIGHT = 600
@@ -2468,8 +2516,12 @@ export function GitDiffViewer({
     minimap: { enabled: false },
     wordWrap: 'on' as const,
     diffWordWrap: 'on' as const,
+    fontFamily: PIERRE_LIKE_MONACO_FONT,
     fontSize: diffFontSize,
     lineHeight: Math.round(diffFontSize * 1.5),
+    renderIndicators: true,
+    renderMarginRevertIcon: false,
+    diffAlgorithm: 'advanced' as const,
     automaticLayout: true,
     scrollBeyondLastLine: false,
     hideUnchangedRegions: {
@@ -2738,7 +2790,8 @@ export function GitDiffViewer({
         modifiedModelPath={modifiedModelPath}
         keepCurrentOriginalModel={true}
         keepCurrentModifiedModel={true}
-        theme="vs-dark"
+        theme={PIERRE_LIKE_MONACO_THEME}
+        beforeMount={ensurePierreLikeMonacoTheme}
         options={diffEditorOptions}
         onMount={handleEditorDidMount}
         className="git-diff-monaco"
