@@ -63,7 +63,7 @@ interface PromptListProps {
   onCopyPrompt?: (prompt: Prompt) => void | Promise<void>
 }
 
-const LONG_PRESS_DELAY = 280
+const LONG_PRESS_DELAY = 100
 const DRAG_MOVE_TOLERANCE = 6
 
 interface PromptRetentionDropdownProps {
