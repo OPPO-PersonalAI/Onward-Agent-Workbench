@@ -30,6 +30,7 @@ This directory contains reusable automation notes and validation procedures for 
 - Terminal focus restore and activation behavior
 - Stability when switching between Project Editor, Git Diff, and Git History
 - Change Log draft generation, manifest publishing, and in-app rendering
+- Editor sidebar auto-scroll: Outline panel smooth-centers the active heading / symbol as the user scrolls Markdown preview, moves the Markdown editor cursor, or scrolls a code file; File Browser auto-expands ancestor directories and centers the active file's row when the file changes from a non-tree source; the "Locate current file" header button re-centers the row on demand.
 
 Reference document for Markdown + LaTeX syntax:
 
@@ -87,10 +88,21 @@ src/autotest/
 ├── test-terminal-autofollow.ts
 ├── test-prompt-cleanup.ts
 ├── test-regression.ts
+├── test-sidebar-autoscroll.ts
 └── test-stress.ts
 ```
 
 Additional suite: `src/autotest/test-terminal-focus-activation.ts`
+
+### `test-sidebar-autoscroll.ts` — Sidebar auto-scroll suite
+
+Runs under `ONWARD_AUTOTEST_SUITE=sidebar-autoscroll`. Verifies the Outline + File Browser auto-scroll behavior using three fixtures that live in-tree:
+
+- `test/sidebar-autoscroll-long.md` — 60 H2 headings; drives the Outline-follows-Markdown-preview and Outline-follows-Markdown-editor checks.
+- `test/fixtures/sidebar-autoscroll-code.py` — 50 top-level Python functions; drives the Outline-follows-code-cursor checks. Python was chosen over JS / TS because the outline parser has a synchronous regex strategy for Python, sidestepping Monaco's JS / TS language-service cold-start flakiness inside autotest runs.
+- `test/fixtures/sidebar-deep/alpha/beta/gamma/delta/target-leaf.md` — seven-level-deep path; drives the File Browser ancestor-expansion + row-centering check.
+
+Cases (25 total): SA-01 debug-API availability; SA-02 Outline follows Markdown preview scroll with dead-zone + boundary exemptions; SA-03 manual outline scroll pauses auto-center for 3 s and resumes afterwards; SA-04 Outline follows code cursor; SA-05 Outline follows Markdown editor cursor; SA-06 non-tree file open (Search / Pin / Recent path) auto-expands all ancestor directories and centers the row; SA-07 "Locate current file" header button re-centers after the user has scrolled the tree away; SA-09 Locate still works after the user has collapsed the target's ancestor and expanded an unrelated folder; SA-11 reveal deferred while sidebar is in Search mode replays when the user returns to Files; SA-12 rapid successive file opens do not leave the File Browser highlighted or centered on a stale file.
 
 ## Debug APIs
 

@@ -51,6 +51,7 @@ import { testFeedbackPersistenceSeed, testFeedbackPersistenceVerify } from './te
 import { testTelemetry } from './test-telemetry'
 import { testSubpageViewstateRestore } from './test-subpage-viewstate-restore'
 import { testQuickFileUnit } from './test-quick-file-unit'
+import { testSidebarAutoscroll } from './test-sidebar-autoscroll'
 import { buildChangeDirectoryCommand, type TerminalShellKind } from '../utils/terminal-command'
 
 function normalizeRuntimeMessage(value: unknown): string {
@@ -193,6 +194,14 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.4b:begin')
       const results = await testQuickFileUnit(ctx)
       collectSuiteResults('QuickFileUnit', results)
+      await sleep(300)
+    }
+
+    // Phase 0.4c: Sidebar auto-scroll (Outline + File Browser)
+    if (!ctx.cancelled() && shouldRun('sidebar-autoscroll')) {
+      log('phase0.4c:begin')
+      const results = await testSidebarAutoscroll(ctx)
+      collectSuiteResults('SidebarAutoscroll', results)
       await sleep(300)
     }
 

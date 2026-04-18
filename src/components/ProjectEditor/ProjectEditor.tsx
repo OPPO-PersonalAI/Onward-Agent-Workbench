@@ -133,7 +133,14 @@ type OpenFileOptions = {
   trackRecent?: boolean
   cursorPosition?: { lineNumber: number; column?: number } | null
   missingBehavior?: OpenMissingBehavior
+  // Set by callers that originated inside the File Browser tree itself, to
+  // skip the automatic "expand ancestors + center row" reveal that other
+  // sources (Search, Pin, Recent, ...) trigger.
+  suppressFileBrowserReveal?: boolean
 }
+
+const FILE_BROWSER_USER_SCROLL_PAUSE_MS = 3000
+const FILE_BROWSER_PROGRAMMATIC_SCROLL_SETTLE_MS = 1000
 
 const STORAGE_KEY_FILE_TREE_WIDTH = 'project-editor-file-tree-width'
 const STORAGE_KEY_MODAL_SIZE = 'project-editor-modal-size'
@@ -595,6 +602,17 @@ function getMarkdownRenderDelay(contentLength: number, lastDuration: number): nu
   return delay
 }
 
+function collectAncestorDirPaths(filePath: string): string[] {
+  // node.path is relative to the project root and uses forward slashes (see
+  // buildNodes / listDirectory). Returns ancestors shallowest → deepest.
+  const parts = filePath.split('/').filter(Boolean)
+  const ancestors: string[] = []
+  for (let i = 1; i < parts.length; i++) {
+    ancestors.push(parts.slice(0, i).join('/'))
+  }
+  return ancestors
+}
+
 function collectExpandedPaths(nodes: TreeNode[]): string[] {
   const results: string[] = []
   const walk = (items: TreeNode[]) => {
@@ -1011,6 +1029,17 @@ export function ProjectEditor({
   })
   const fileTreeWidthRef = useRef(fileTreeWidth)
   const fileTreeContainerRef = useRef<HTMLDivElement | null>(null)
+  // Auto-reveal coordination: pause for 3s after the user manually scrolls the
+  // tree, and mask programmatic scrolls so they don't count as "user activity".
+  const fileTreeUserScrollAtRef = useRef<number>(0)
+  const fileTreeProgrammaticScrollUntilRef = useRef<number>(0)
+  // Set by openFile when the call came from inside the tree itself; the
+  // activeFilePath effect consumes and clears it so the reveal only fires for
+  // cross-panel sources (Search / Pin / Recent / Command).
+  const suppressNextRevealRef = useRef<boolean>(false)
+  // When reveal runs while sidebarMode === 'search' (tree is unmounted) we
+  // remember the target here and replay as soon as the tree comes back.
+  const pendingRevealPathRef = useRef<string | null>(null)
   const fileTreeScrollTopRef = useRef<Map<string, number>>(new Map())
   const outlineScrollTopRef = useRef<Map<string, number>>(new Map())
   const outlineScrollByFileRef = useRef<Map<string, number>>(new Map())
@@ -3365,6 +3394,14 @@ export function ProjectEditor({
 
     // Update the active path
     const sqliteFile = Boolean(result.isSqlite)
+    // Suppress auto-reveal for:
+    //   1. explicit tree clicks (options.suppressFileBrowserReveal)
+    //   2. session restore — it queues its own queueFileTreeScrollRestore to
+    //      replay the persisted tree scrollTop; auto-centering on the
+    //      restored file would clobber that saved position.
+    if (options?.suppressFileBrowserReveal || source === 'restore') {
+      suppressNextRevealRef.current = true
+    }
     setActiveFilePath(path)
     activeFilePathRef.current = path
     setSelectedPath(path)
@@ -3918,6 +3955,159 @@ export function ProjectEditor({
       if (token !== restoreTokenRef.current) return
     }
   }, [refreshDirectory])
+
+  // Expand ancestor directories of `filePath` and smooth-center the tree row
+  // inside the File Browser viewport. Used by non-tree open sources (Search,
+  // Pin, Recent, ...) and by the "Locate current file" header button.
+  const revealFileInBrowser = useCallback(
+    async (filePath: string | null, opts: { force?: boolean } = {}) => {
+      const diag = ((window as unknown) as { __onwardFileBrowserRevealDiag?: {
+        calls: number; skippedNoPath: number; skippedPaused: number;
+        skippedNoContainer: number; skippedNoRow: number; scrolled: number;
+        lastPath: string | null; lastReason: string | null;
+        lastForce: boolean; lastAncestorCount: number
+      } }).__onwardFileBrowserRevealDiag ??= {
+        calls: 0, skippedNoPath: 0, skippedPaused: 0,
+        skippedNoContainer: 0, skippedNoRow: 0, scrolled: 0,
+        lastPath: null, lastReason: null,
+        lastForce: false, lastAncestorCount: 0
+      }
+      diag.calls += 1
+      diag.lastPath = filePath
+      diag.lastForce = Boolean(opts.force)
+      if (!filePath) {
+        diag.skippedNoPath += 1
+        diag.lastReason = 'no-path'
+        return
+      }
+      const now = performance.now()
+      if (!opts.force && now - fileTreeUserScrollAtRef.current < FILE_BROWSER_USER_SCROLL_PAUSE_MS) {
+        diag.skippedPaused += 1
+        diag.lastReason = 'user-scroll-pause'
+        return
+      }
+      // If the tree is unmounted (sidebarMode === 'search'), defer the reveal
+      // so we can replay once the user returns to Files mode.
+      if (!fileTreeContainerRef.current) {
+        diag.skippedNoContainer += 1
+        diag.lastReason = 'no-container-deferred'
+        pendingRevealPathRef.current = filePath
+        return
+      }
+      // Open the settle window first so ancestor-expansion setTree events
+      // don't trigger queueFileTreeScrollRestore, which would otherwise fight
+      // our eventual scrollTo and leave the tree at a stale position.
+      fileTreeProgrammaticScrollUntilRef.current = performance.now() + 3000
+      const ancestors = collectAncestorDirPaths(filePath)
+      diag.lastAncestorCount = ancestors.length
+      if (ancestors.length > 0) {
+        await applyExpandedDirectories(ancestors, restoreTokenRef.current)
+      }
+      // Abort if the editor has since moved to a different file. Without
+      // this guard the stale reveal would highlight and scroll to a row the
+      // user has already navigated away from.
+      if (activeFilePathRef.current !== filePath) {
+        diag.lastReason = 'stale-active'
+        return
+      }
+      // Select the file so the revealed row also gets the visual highlight.
+      setSelectedPath(filePath)
+      // Give React enough frames to commit the expanded-tree updates.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      if (activeFilePathRef.current !== filePath) {
+        diag.lastReason = 'stale-active'
+        return
+      }
+      const scopeKey = getScrollScopeKey(lastEditorScopeRef.current)
+      // Compute the centered scroll target ourselves — so we can also update
+      // fileTreeScrollTopRef before any late setTree restore has a chance to
+      // read a stale value.
+      const applyReveal = (label: string): boolean => {
+        // Bail if the active file changed between scheduling and running.
+        if (activeFilePathRef.current !== filePath) return false
+        const liveContainer = fileTreeContainerRef.current
+        if (!liveContainer) return false
+        const liveRow = liveContainer.querySelector<HTMLElement>(
+          `.project-editor-tree-item[data-path="${CSS.escape(filePath)}"]`
+        )
+        if (!liveRow) return false
+        const containerRect = liveContainer.getBoundingClientRect()
+        const rowRect = liveRow.getBoundingClientRect()
+        const targetCenterInContainer = rowRect.top - containerRect.top + rowRect.height / 2
+        const delta = targetCenterInContainer - containerRect.height / 2
+        const maxScroll = Math.max(0, liveContainer.scrollHeight - liveContainer.clientHeight)
+        const targetScrollTop = Math.max(0, Math.min(maxScroll, liveContainer.scrollTop + delta))
+        if (scopeKey) fileTreeScrollTopRef.current.set(scopeKey, targetScrollTop)
+        // Instant scroll — decisive "jump" semantics like VS Code's Reveal
+        // in Explorer. Smooth animation is fragile when setTree shifts the
+        // target mid-flight.
+        liveContainer.scrollTop = targetScrollTop
+        debugLog(`revealFileInBrowser:${label}`, {
+          filePath,
+          targetScrollTop,
+          finalScrollTop: liveContainer.scrollTop,
+          rowTop: rowRect.top,
+          containerTop: containerRect.top,
+          containerHeight: containerRect.height
+        })
+        return true
+      }
+      const firstOk = applyReveal('first')
+      if (!firstOk) {
+        diag.skippedNoRow += 1
+        diag.lastReason = 'no-row'
+        return
+      }
+      diag.scrolled += 1
+      diag.lastReason = null
+      // Re-apply a few frames later so late setTree commits (lazy child
+      // loading) that shift the row's offset can't leave the reveal stale.
+      // The settle window was set up front, so these retries and their
+      // resulting scroll events won't wake the persistent scroll restorer.
+      for (const delayMs of [120, 260, 520, 900]) {
+        window.setTimeout(() => applyReveal(`retry-${delayMs}`), delayMs)
+      }
+    },
+    [applyExpandedDirectories]
+  )
+
+  const handleLocateCurrentFile = useCallback(() => {
+    const path = activeFilePathRef.current
+    if (!path) return
+    void revealFileInBrowser(path, { force: true })
+  }, [revealFileInBrowser])
+
+  // When the user returns to Files mode (tree remounts), replay a pending
+  // reveal that was deferred while the tree was unmounted under Search mode.
+  useEffect(() => {
+    if (sidebarMode !== 'files') return
+    const pending = pendingRevealPathRef.current
+    if (!pending) return
+    if (pending !== activeFilePathRef.current) {
+      pendingRevealPathRef.current = null
+      return
+    }
+    pendingRevealPathRef.current = null
+    requestAnimationFrame(() => {
+      void revealFileInBrowser(pending, { force: true })
+    })
+  }, [sidebarMode, revealFileInBrowser])
+
+  const handleFileTreeScroll = useCallback(() => {
+    if (performance.now() >= fileTreeProgrammaticScrollUntilRef.current) {
+      fileTreeUserScrollAtRef.current = performance.now()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeFilePath) return
+    if (suppressNextRevealRef.current) {
+      suppressNextRevealRef.current = false
+      return
+    }
+    void revealFileInBrowser(activeFilePath)
+  }, [activeFilePath, revealFileInBrowser])
 
   const toggleDirectory = useCallback(async (node: TreeNode) => {
     setSelectedPath(node.path)
@@ -4677,6 +4867,11 @@ export function ProjectEditor({
     const treeEl = fileTreeContainerRef.current
     if (!treeEl || !isOpen) return
     const handler = () => {
+      // Skip during programmatic reveals so intermediate smooth-scroll
+      // frames don't overwrite the reveal's committed target, which would
+      // then cause queueFileTreeScrollRestore to pull the tree back to a
+      // stale mid-animation position.
+      if (performance.now() < fileTreeProgrammaticScrollUntilRef.current) return
       const key = getScrollScopeKey(lastEditorScopeRef.current)
       if (key) fileTreeScrollTopRef.current.set(key, treeEl.scrollTop)
       scheduleProjectStateSave()
@@ -4687,6 +4882,10 @@ export function ProjectEditor({
 
   useEffect(() => {
     if (!isOpen || sidebarMode !== 'files') return
+    // While a revealFileInBrowser pass is still in its settle window,
+    // queueFileTreeScrollRestore must not run — it would fight the reveal
+    // and snap the tree back to the pre-reveal saved scrollTop.
+    if (performance.now() < fileTreeProgrammaticScrollUntilRef.current) return
     queueFileTreeScrollRestore()
   }, [isOpen, queueFileTreeScrollRestore, sidebarMode, tree])
 
@@ -5193,6 +5392,59 @@ export function ProjectEditor({
       getFileBrowserScrollTop: () => fileTreeContainerRef.current?.scrollTop ?? 0,
       getFileBrowserScrollHeight: () => fileTreeContainerRef.current?.scrollHeight ?? 0,
       scrollFileBrowserToFraction,
+      getFileBrowserActiveRowBounds: () => {
+        const container = fileTreeContainerRef.current
+        const path = activeFilePathRef.current
+        if (!container || !path) return null
+        const row = container.querySelector<HTMLElement>(
+          `.project-editor-tree-item[data-path="${CSS.escape(path)}"]`
+        )
+        const containerRect = container.getBoundingClientRect()
+        if (!row) {
+          return {
+            found: false,
+            containerTop: containerRect.top,
+            containerHeight: containerRect.height,
+            rowTop: 0,
+            rowHeight: 0,
+            centerOffsetRatio: 1
+          }
+        }
+        const rowRect = row.getBoundingClientRect()
+        const rowCenter = rowRect.top + rowRect.height / 2
+        const containerCenter = containerRect.top + containerRect.height / 2
+        const ratio = containerRect.height === 0
+          ? 1
+          : Math.abs(rowCenter - containerCenter) / containerRect.height
+        return {
+          found: true,
+          containerTop: containerRect.top,
+          containerHeight: containerRect.height,
+          rowTop: rowRect.top,
+          rowHeight: rowRect.height,
+          centerOffsetRatio: ratio
+        }
+      },
+      getFileBrowserExpandedDirs: () => {
+        const container = fileTreeContainerRef.current
+        if (!container) return []
+        const toggles = container.querySelectorAll('.project-editor-tree-toggle.open')
+        const out: string[] = []
+        toggles.forEach((toggle) => {
+          const item = toggle.closest('.project-editor-tree-item') as HTMLElement | null
+          const path = item?.dataset.path
+          if (path) out.push(path)
+        })
+        return out
+      },
+      clickLocateFileButton: () => {
+        const btn = modalRef.current?.querySelector<HTMLButtonElement>(
+          '.project-editor-sidebar-action-btn'
+        )
+        if (!btn || btn.disabled) return false
+        btn.click()
+        return true
+      },
       isMarkdownEditorVisible: () => isMarkdownEditorVisibleRef.current,
       setMarkdownEditorVisible: (visible: boolean) => {
         setMarkdownEditorVisibleState(visible)
@@ -5305,6 +5557,36 @@ export function ProjectEditor({
       },
       getOutlineSymbolCount: () => countSymbols(outlineSymbolsRef.current),
       getOutlineActiveItemName: () => outlineActiveItemRef.current?.name ?? null,
+      getOutlineActiveItemBounds: () => {
+        const container = getOutlineScrollContainer()
+        if (!container) return null
+        const active = container.querySelector<HTMLElement>('.outline-panel-item.active')
+        const containerRect = container.getBoundingClientRect()
+        if (!active) {
+          return {
+            found: false,
+            containerTop: containerRect.top,
+            containerHeight: containerRect.height,
+            itemTop: 0,
+            itemHeight: 0,
+            centerOffsetRatio: 1
+          }
+        }
+        const itemRect = active.getBoundingClientRect()
+        const itemCenter = itemRect.top + itemRect.height / 2
+        const containerCenter = containerRect.top + containerRect.height / 2
+        const ratio = containerRect.height === 0
+          ? 1
+          : Math.abs(itemCenter - containerCenter) / containerRect.height
+        return {
+          found: true,
+          containerTop: containerRect.top,
+          containerHeight: containerRect.height,
+          itemTop: itemRect.top,
+          itemHeight: itemRect.height,
+          centerOffsetRatio: ratio
+        }
+      },
       getOutlineScrollTop: () => getOutlineScrollContainer()?.scrollTop ?? 0,
       getOutlineScrollHeight: () => getOutlineScrollContainer()?.scrollHeight ?? 0,
       getOutlineScrollMax: () => {
@@ -6153,6 +6435,7 @@ export function ProjectEditor({
         <div key={node.path}>
           <div
             className={itemClass}
+            data-path={node.path}
             style={{ paddingLeft: `${12 + depth * 14}px` }}
             onContextMenu={(event) => openContextMenu(event, {
               path: node.path,
@@ -6164,7 +6447,10 @@ export function ProjectEditor({
                 void toggleDirectory(node)
               } else {
                 setSelectedPath(node.path)
-                void openFile(node.path, 'user', { trackRecent: true })
+                void openFile(node.path, 'user', {
+                  trackRecent: true,
+                  suppressFileBrowserReveal: true
+                })
               }
             }}
           >
@@ -6421,10 +6707,30 @@ export function ProjectEditor({
               <>
                 <div className="project-editor-sidebar-header">
                   <span className="project-editor-sidebar-title">{t('projectEditor.fileBrowser')}</span>
+                  <button
+                    type="button"
+                    className="project-editor-sidebar-action-btn"
+                    onClick={handleLocateCurrentFile}
+                    disabled={!activeFilePath}
+                    title={t('projectEditor.locateCurrentFile')}
+                    aria-label={t('projectEditor.locateCurrentFile')}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden={true}>
+                      <circle cx="8" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.4" />
+                      <circle cx="8" cy="8" r="1" fill="currentColor" />
+                      <path
+                        d="M8 1.5v2.25M8 12.25v2.25M1.5 8h2.25M12.25 8h2.25"
+                        stroke="currentColor"
+                        strokeWidth="1.4"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
                 </div>
                 <div
                   className="project-editor-tree"
                   ref={fileTreeContainerRef}
+                  onScroll={handleFileTreeScroll}
                   onContextMenu={(event) => openContextMenu(event, { path: null, type: null })}
                 >
                   {rootError ? (

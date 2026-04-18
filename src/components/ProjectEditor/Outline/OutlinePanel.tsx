@@ -8,6 +8,7 @@ import { useI18n } from '../../../i18n/useI18n'
 import type { OutlineItem } from './types'
 import { OutlineSymbolKind } from './types'
 import { countSymbols } from './outlineParser'
+import { alignElementCenter } from '../utils/scrollCenter'
 import './OutlinePanel.css'
 
 export type OutlineTarget = 'editor' | 'preview'
@@ -30,7 +31,12 @@ interface OutlinePanelProps {
 }
 
 const FILTER_THRESHOLD = 8
-const INITIAL_SCROLL_ACTIVE_REVEAL_SUPPRESS_MS = 8000
+// Brief window after the outline's own scroll restoration during which we
+// don't re-center, so the restored scroll position is visible for a beat
+// before any active-item update smooth-scrolls away from it.
+const INITIAL_SCROLL_ACTIVE_REVEAL_SUPPRESS_MS = 500
+const USER_SCROLL_PAUSE_MS = 3000
+const PROGRAMMATIC_SCROLL_SETTLE_MS = 1000
 
 function headingSlug(text: string): string {
   return text
@@ -161,10 +167,16 @@ export function OutlinePanel({
   const activeRef = useRef<HTMLDivElement>(null)
   const treeRef = useRef<HTMLDivElement>(null)
   const initialScrollAppliedRef = useRef(false)
-  const skipNextActiveRevealRef = useRef(typeof initialScrollTop === 'number')
   const suppressActiveRevealUntilRef = useRef<number>(
     typeof initialScrollTop === 'number' ? Number.POSITIVE_INFINITY : 0
   )
+  // Capture the initial scroll target once per file switch. `initialScrollTop`
+  // is re-derived by the parent on every render (it reads from a live map),
+  // so we must not let effects react to every change — otherwise every
+  // user-driven scroll is immediately "restored" back to the saved value.
+  const initialScrollTargetRef = useRef<number | undefined>(initialScrollTop)
+  const lastUserScrollAtRef = useRef<number>(0)
+  const programmaticScrollUntilRef = useRef<number>(0)
 
   const totalCount = useMemo(() => countSymbols(symbols), [symbols])
   const showFilter = totalCount > FILTER_THRESHOLD
@@ -213,47 +225,86 @@ export function OutlinePanel({
     setCollapsed(new Set())
   }, [filePath])
 
-  // Auto-scroll to active item
+  // Smooth-center active item into the middle band of the outline panel
+  // when the highlighted heading / symbol changes. Pauses while the user is
+  // interacting with the outline themselves (3 s after the last user scroll).
   useEffect(() => {
-    if (!initialScrollAppliedRef.current && typeof initialScrollTop === 'number' && initialScrollTop > 0) {
+    const diag = ((window as unknown) as { __onwardOutlineAutoCenterDiag?: {
+      effectFires: number; skippedInitial: number; skippedSuppress: number;
+      skippedUserScroll: number; skippedNoActive: number; scrolled: number;
+      lastTriggerName: string | null; lastSkipReason: string | null
+    } }).__onwardOutlineAutoCenterDiag ??= {
+      effectFires: 0, skippedInitial: 0, skippedSuppress: 0,
+      skippedUserScroll: 0, skippedNoActive: 0, scrolled: 0,
+      lastTriggerName: null, lastSkipReason: null
+    }
+    diag.effectFires += 1
+    diag.lastTriggerName = effectiveActiveItem?.name ?? null
+    const initial = initialScrollTargetRef.current
+    if (!initialScrollAppliedRef.current && typeof initial === 'number' && initial > 0) {
+      diag.skippedInitial += 1
+      diag.lastSkipReason = 'initial'
       return
     }
-    if (activeRef.current) {
-      if (skipNextActiveRevealRef.current) {
-        if (effectiveActiveItem) {
-          skipNextActiveRevealRef.current = false
-        }
-        return
-      }
-      if (performance.now() < suppressActiveRevealUntilRef.current) return
-      activeRef.current.scrollIntoView({ block: 'nearest' })
+    const tree = treeRef.current
+    const active = activeRef.current
+    if (!tree || !active) {
+      diag.skippedNoActive += 1
+      diag.lastSkipReason = 'no-active-ref'
+      return
     }
-  }, [effectiveActiveItem, initialScrollTop])
+    const now = performance.now()
+    if (now < suppressActiveRevealUntilRef.current) {
+      diag.skippedSuppress += 1
+      diag.lastSkipReason = 'suppress-window'
+      return
+    }
+    if (now - lastUserScrollAtRef.current < USER_SCROLL_PAUSE_MS) {
+      diag.skippedUserScroll += 1
+      diag.lastSkipReason = 'user-scroll-pause'
+      return
+    }
+    programmaticScrollUntilRef.current = now + PROGRAMMATIC_SCROLL_SETTLE_MS
+    diag.scrolled += 1
+    diag.lastSkipReason = null
+    alignElementCenter(tree, active, { behavior: 'smooth' })
+  }, [effectiveActiveItem])
 
   useEffect(() => {
     const tree = treeRef.current
-    if (!tree || !onScrollCapture) return
+    if (!tree) return
     const handleScroll = () => {
-      onScrollCapture(tree.scrollTop)
+      if (performance.now() >= programmaticScrollUntilRef.current) {
+        lastUserScrollAtRef.current = performance.now()
+      }
+      onScrollCapture?.(tree.scrollTop)
     }
     tree.addEventListener('scroll', handleScroll, { passive: true })
     return () => tree.removeEventListener('scroll', handleScroll)
   }, [onScrollCapture])
 
   useEffect(() => {
+    // Snapshot the currently-exposed initialScrollTop as the one-shot target
+    // for this file; ignore subsequent `initialScrollTop` prop churn caused
+    // by parent re-renders reading from a live scroll map.
+    initialScrollTargetRef.current = initialScrollTop
     initialScrollAppliedRef.current = false
-    skipNextActiveRevealRef.current = typeof initialScrollTop === 'number'
     suppressActiveRevealUntilRef.current =
       typeof initialScrollTop === 'number' ? Number.POSITIVE_INFINITY : 0
-  }, [filePath, initialScrollTop])
+    lastUserScrollAtRef.current = 0
+    programmaticScrollUntilRef.current = 0
+    // initialScrollTop intentionally excluded from deps; see comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath])
 
   useEffect(() => {
     if (initialScrollAppliedRef.current) return
-    if (typeof initialScrollTop !== 'number') return
+    const snapshot = initialScrollTargetRef.current
+    if (typeof snapshot !== 'number') return
     if (!treeRef.current || symbols.length === 0) return
     let frameId = 0
     let attempts = 0
-    const targetScrollTop = Math.max(0, initialScrollTop)
+    const targetScrollTop = Math.max(0, snapshot)
     const maxAttempts = 60
 
     const applyInitialScroll = () => {
@@ -270,6 +321,7 @@ export function OutlinePanel({
       }
 
       const clampedTarget = Math.min(targetScrollTop, maxScrollTop)
+      programmaticScrollUntilRef.current = performance.now() + PROGRAMMATIC_SCROLL_SETTLE_MS
       tree.scrollTop = clampedTarget
       const isApplied = Math.abs(tree.scrollTop - clampedTarget) <= 2
 
@@ -290,7 +342,11 @@ export function OutlinePanel({
         cancelAnimationFrame(frameId)
       }
     }
-  }, [initialScrollTop, onScrollCapture, symbols.length])
+    // Depend on filePath instead of the churn-prone initialScrollTop prop; the
+    // snapshot inside initialScrollTargetRef is refreshed on filePath change
+    // by the reset effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, onScrollCapture, symbols.length])
 
   const scrollPreviewToHeading = useCallback((item: OutlineItem) => {
     const container = previewRef?.current

@@ -212,6 +212,24 @@ export interface ProjectEditorDebugApi {
   getFileBrowserScrollTop?: () => number
   getFileBrowserScrollHeight?: () => number
   scrollFileBrowserToFraction?: (fraction: number) => boolean
+  getFileBrowserActiveRowBounds?: () => {
+    found: boolean
+    containerTop: number
+    containerHeight: number
+    rowTop: number
+    rowHeight: number
+    centerOffsetRatio: number
+  } | null
+  getFileBrowserExpandedDirs?: () => string[]
+  clickLocateFileButton?: () => boolean
+  getOutlineActiveItemBounds?: () => {
+    found: boolean
+    containerTop: number
+    containerHeight: number
+    itemTop: number
+    itemHeight: number
+    centerOffsetRatio: number
+  } | null
   isMarkdownEditorVisible?: () => boolean
   setMarkdownEditorVisible?: (visible: boolean) => void
   setMarkdownPreviewVisible?: (visible: boolean) => void
