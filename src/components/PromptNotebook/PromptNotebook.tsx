@@ -218,7 +218,10 @@ export const PromptNotebook = memo(function PromptNotebook({
     return prompts.find(p => p.id === selectedId) || null
   }, [prompts, selectedId])
 
-  const promptTaskHistory = useMemo(() => buildPromptTaskHistorySummary(prompts), [prompts])
+  const promptTaskHistory = useMemo(
+    () => buildPromptTaskHistorySummary(prompts, terminals.length),
+    [prompts, terminals.length]
+  )
 
   const promptMatchesTaskFilter = useCallback((promptId: string, taskNumber: number) => {
     return promptTaskHistory.promptTaskNumbers.get(promptId)?.includes(taskNumber) ?? false
