@@ -1,12 +1,12 @@
 {
   "channel": "daily",
-  "version": "2.1.0-daily.20260416.2",
-  "tag": "v2.1.0-daily.20260416.2",
+  "version": "2.1.0-daily.20260419.1",
+  "tag": "v2.1.0-daily.20260419.1",
   "platform": "macos",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-daily.20260416.2-macos-x64.zip",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-daily.20260416.2/Onward.2-v2.1.0-daily.20260416.2-macos-x64.zip",
-  "sha256": "227ee8f74ce45cb1d3845728f6c47f37587baf83cdcd9a6b9bb67474d61993a9",
-  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260416.2\n\nChanges since `v2.1.0-daily.20260416.1`.\n\n## New Features\n- Improve task name styling in subpage headers\n- Add Markdown session cache restore\n\n## Bug Fixes\n- Scale outline badges with editor font size\n- Seti file tree icons and dist-dev auto-launch\n- Split updater download and install flows\n- Preserve subpage navigation lifecycle\n- Support CJK strong delimiters\n- Avoid disallowed autotest fixture literals\n",
-  "publishedAt": "2026-04-16T09:10:54.395Z"
+  "artifactName": "Onward.2-v2.1.0-daily.20260419.1-macos-x64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-daily.20260419.1/Onward.2-v2.1.0-daily.20260419.1-macos-x64.zip",
+  "sha256": "2a3daeb94a5e65bfe7f9e8c8215dde02c0fef51e8dec96e57edfa5b0e7e4d64f",
+  "releaseNotes": "# Onward Daily Build v2.1.0-daily.20260419.1\n\nChanges since `v2.1.0-daily.20260416.2`.\n\n## New Features\n- Add PDF + EPUB reader, Git Diff/History compare, and autotest to Project Editor\n- Add pan/zoom to Mermaid diagrams in preview\n- Add sidebar auto-scroll for Outline and File Browser\n- Add context-menu send-and-execute to Task(s) in Prompt Notebook\n- Add color-tag shortcut buttons in Prompt Notebook editor\n\n## Improvements\n- Adopt \"Under Development <version>-<branch>\" naming for dev builds\n- Auto-resize Tasks list to compress Prompt editor\n- Share filename-search index across Tabs via watcher-backed cache\n- Shorten pinned-drag long-press delay to 100ms\n- Align Git Diff Viewer visuals with Git History's Pierre palette\n- Unify PDF/EPUB/code outline into a shared OutlinePanel\n- Unify copy toast across views\n\n## Bug Fixes\n- Scope Esc handler to the active terminal\n- Cap Task Filter chips to the active task count\n- Fix click-jump and save-in-place in Git Diff Viewer; group diffs by repo\n- Fix async target capture in copy-path\n- Fix nested Git submodule history and diff handling\n- Stop fighting xterm's native scroll follow\n",
+  "publishedAt": "2026-04-19T08:51:40.726Z"
 }
