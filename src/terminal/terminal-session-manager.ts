@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Terminal as XTerm, type IDisposable } from '@xterm/xterm'
+import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
@@ -43,7 +43,9 @@ export interface TerminalFocusSessionDebugSnapshot {
 }
 
 type TerminalBufferType = 'normal' | 'alternate'
-type TerminalViewportRestoreReason = 'output' | 'fit' | 'attach'
+// Viewport restore is only needed when the terminal's geometry/mount changes.
+// Output is handled by xterm's native isUserScrolling — we don't intercept it.
+type TerminalViewportRestoreReason = 'fit' | 'attach'
 
 interface TerminalViewportRestoreState {
   followBottom: boolean
@@ -79,7 +81,6 @@ interface TerminalSession {
   terminal: XTerm
   fitAddon: FitAddon
   searchAddon: SearchAddon
-  writeParsedDisposable: IDisposable
   status: TerminalSessionStatus
   readyPromise: Promise<void> | null
   open: boolean
@@ -93,9 +94,6 @@ interface TerminalSession {
   pendingViewportRestore: TerminalViewportRestoreState | null
   pendingRestoreAnimationFrame: number | null
   pendingGeometryRefreshAnimationFrame: number | null
-  userWantsBottom: boolean
-  lastProgrammaticScrollAt: number
-  scrollTrackingDisposable: IDisposable | null
   // Visibility-based rendering optimization
   visible: boolean
   pendingData: string[]
@@ -122,7 +120,6 @@ const INTERACTIVE_BOOST_WINDOW_MS = 250
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 const AUTOFOLLOW_THRESHOLD_LINES = 2
-const PROGRAMMATIC_SCROLL_GUARD_MS = 50
 
 function resolveTerminalFontFamily(options: TerminalSessionOptions): string {
   const styleFontFamily = options.terminalStyle?.fontFamily
@@ -307,11 +304,10 @@ export class TerminalSessionManager {
       const session = this.sessions.get(termId)
       if (!session || session.pendingData.length === 0) continue
 
-      const pending = this.captureViewportIntent(session, 'output')
       const merged = this.consumePendingDataChunk(session, VISIBLE_WRITE_MAX_CHUNK_BYTES)
       if (!merged) continue
 
-      this.writeTerminalData(session, merged, pending)
+      this.writeTerminalData(session, merged)
 
       if (session.pendingData.length > 0) {
         requeue.push(termId)
@@ -380,8 +376,11 @@ export class TerminalSessionManager {
     if (session.pendingViewportRestore) return session.pendingViewportRestore
 
     const viewport = this.getActiveViewportState(session)
+    // "At bottom" before fit/attach means the user expects auto-follow; preserve
+    // that intent across the geometry change. Otherwise preserve the exact line.
+    const followBottom = this.isNearBottom(viewport.baseY, viewport.viewportY)
     const pending: TerminalViewportRestoreState = {
-      followBottom: session.userWantsBottom,
+      followBottom,
       viewportY: viewport.viewportY,
       bufferType: viewport.bufferType,
       reason,
@@ -421,68 +420,26 @@ export class TerminalSessionManager {
     })
   }
 
-  private scrollTerminalToBottom(session: TerminalSession): void {
-    session.lastProgrammaticScrollAt = Date.now()
-    session.terminal.scrollToBottom()
-  }
-
-  private scrollTerminalToTop(session: TerminalSession): void {
-    session.lastProgrammaticScrollAt = Date.now()
-    session.terminal.scrollToTop()
-  }
-
-  private scrollTerminalToLine(session: TerminalSession, line: number): void {
-    session.lastProgrammaticScrollAt = Date.now()
-    session.terminal.scrollToLine(line)
-  }
-
-  private isProgrammaticScroll(session: TerminalSession): boolean {
-    return Date.now() - session.lastProgrammaticScrollAt < PROGRAMMATIC_SCROLL_GUARD_MS
-  }
-
-  private scrollToBottomWithVerify(session: TerminalSession): void {
-    this.scrollTerminalToBottom(session)
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (session.status === 'disposed' || !session.open || !session.userWantsBottom) return
-        const viewport = this.getActiveViewportState(session)
-        if (!this.isNearBottom(viewport.baseY, viewport.viewportY)) {
-          this.scrollTerminalToBottom(session)
-        }
-      })
-    })
-  }
-
-  private installScrollTracking(session: TerminalSession): void {
-    session.scrollTrackingDisposable = session.terminal.onScroll(() => {
-      if (this.isProgrammaticScroll(session) || session.status === 'disposed') return
-      const viewport = this.getActiveViewportState(session)
-      session.userWantsBottom = this.isNearBottom(viewport.baseY, viewport.viewportY)
-    })
-  }
-
   private applyPendingViewportRestore(
     session: TerminalSession,
-    reason: TerminalViewportRestoreReason
+    _reason: TerminalViewportRestoreReason
   ): void {
     const pending = session.pendingViewportRestore
     if (!pending || session.status === 'disposed') return
 
     const before = this.getActiveViewportState(session)
-    if (!pending.followBottom && before.bufferType !== pending.bufferType) {
+    // Don't try to restore across an alternate-buffer boundary: the target
+    // viewportY doesn't map to the other buffer's coordinate space.
+    if (before.bufferType !== pending.bufferType) {
       session.pendingViewportRestore = null
       return
     }
 
     if (pending.followBottom) {
-      if (reason === 'output' && this.isNearBottom(before.baseY, before.viewportY)) {
-        session.pendingViewportRestore = null
-        return
-      }
-      this.scrollToBottomWithVerify(session)
+      session.terminal.scrollToBottom()
     } else {
       const targetLine = Math.max(0, Math.min(pending.viewportY, before.baseY))
-      this.scrollTerminalToLine(session, targetLine)
+      session.terminal.scrollToLine(targetLine)
     }
 
     session.pendingViewportRestore = null
@@ -498,18 +455,6 @@ export class TerminalSessionManager {
       session.pendingRestoreAnimationFrame = null
       this.applyPendingViewportRestore(session, reason)
     })
-  }
-
-  private applyOutputBottomFastPath(
-    session: TerminalSession,
-    pending: TerminalViewportRestoreState | null
-  ): void {
-    if (!pending || pending.reason !== 'output' || !pending.followBottom || session.status === 'disposed') {
-      return
-    }
-    if (session.pendingViewportRestore !== pending) return
-    this.scrollToBottomWithVerify(session)
-    session.pendingViewportRestore = null
   }
 
   getBufferContent(id: string, options?: TerminalBufferOptions): TerminalBufferResult {
@@ -637,6 +582,7 @@ export class TerminalSessionManager {
     if (!session) return null
 
     const viewport = this.getActiveViewportState(session)
+    const nearBottom = this.isNearBottom(viewport.baseY, viewport.viewportY)
     return {
       terminalId: id,
       bufferType: viewport.bufferType,
@@ -644,8 +590,11 @@ export class TerminalSessionManager {
       viewportY: viewport.viewportY,
       rows: session.terminal.rows,
       cols: session.terminal.cols,
-      isNearBottom: this.isNearBottom(viewport.baseY, viewport.viewportY),
-      userWantsBottom: session.userWantsBottom,
+      isNearBottom: nearBottom,
+      // In the simplified model there is no separate "user wants bottom" flag:
+      // auto-follow intent is synonymous with currently being near the bottom,
+      // which is exactly what xterm's isUserScrolling toggles on.
+      userWantsBottom: nearBottom,
       pendingRestore: session.pendingViewportRestore
     }
   }
@@ -668,8 +617,7 @@ export class TerminalSessionManager {
     if (!session?.open) return false
     this.clearPendingRestoreAnimationFrame(session)
     session.pendingViewportRestore = null
-    session.userWantsBottom = false
-    this.scrollTerminalToTop(session)
+    session.terminal.scrollToTop()
     return true
   }
 
@@ -679,13 +627,24 @@ export class TerminalSessionManager {
     this.clearPendingRestoreAnimationFrame(session)
     this.clearPendingGeometryRefreshAnimationFrame(session)
     session.pendingViewportRestore = null
-    session.userWantsBottom = true
-    this.scrollTerminalToBottom(session)
+    session.terminal.scrollToBottom()
+    return true
+  }
+
+  /**
+   * Scroll the terminal by a relative number of lines as if the user did it.
+   * `lines < 0` scrolls up (xterm sets isUserScrolling=true), `lines > 0`
+   * scrolls down (xterm clears the flag when it reaches the bottom).
+   * This is the correct way for tests to simulate a real wheel / PageUp.
+   */
+  scrollLinesAsUser(id: string, lines: number): boolean {
+    const session = this.sessions.get(id)
+    if (!session?.open || !Number.isFinite(lines) || lines === 0) return false
+    session.terminal.scrollLines(lines)
     return true
   }
 
   private createSession(id: string, options: TerminalSessionOptions): TerminalSession {
-    const noopDisposable: IDisposable = { dispose() {} }
     const terminal = new XTerm({
       theme: buildTheme(options),
       fontSize: resolveTerminalFontSize(options),
@@ -695,7 +654,11 @@ export class TerminalSessionManager {
       allowProposedApi: true,
       scrollback: 10000,
       tabStopWidth: 4,
-      rightClickSelectsWord: true
+      rightClickSelectsWord: true,
+      // Auto-follow semantics live entirely in xterm: when the user hasn't
+      // scrolled away, output stays pinned to the bottom; when they have,
+      // their position is preserved. Typing snaps back to the bottom.
+      scrollOnUserInput: true
     })
 
     const fitAddon = new FitAddon()
@@ -759,7 +722,6 @@ export class TerminalSessionManager {
       terminal,
       fitAddon,
       searchAddon,
-      writeParsedDisposable: noopDisposable,
       status: 'idle',
       readyPromise: null,
       open: false,
@@ -772,23 +734,13 @@ export class TerminalSessionManager {
       pendingViewportRestore: null,
       pendingRestoreAnimationFrame: null,
       pendingGeometryRefreshAnimationFrame: null,
-      userWantsBottom: true,
-      lastProgrammaticScrollAt: 0,
-      scrollTrackingDisposable: null,
       visible: true,
       pendingData: [],
       pendingDataBytes: 0,
       interactiveBoostUntil: 0
     }
 
-    session.writeParsedDisposable = terminal.onWriteParsed(() => {
-      const currentSession = this.sessions.get(id)
-      if (!currentSession) return
-      this.applyPendingViewportRestore(currentSession, 'output')
-    })
-
     this.sessions.set(id, session)
-    this.installScrollTracking(session)
     return session
   }
 
@@ -893,11 +845,10 @@ export class TerminalSessionManager {
   private flushPendingData(session: TerminalSession): void {
     if (session.pendingData.length === 0) return
 
-    const pending = this.captureViewportIntent(session, 'output')
     const merged = this.consumePendingDataChunk(session, PENDING_DATA_MAX_BYTES)
     if (!merged) return
 
-    this.writeTerminalData(session, merged, pending)
+    this.writeTerminalData(session, merged)
 
     if (session.pendingData.length > 0) {
       this.flushPendingData(session)
@@ -1169,12 +1120,20 @@ export class TerminalSessionManager {
 
     const textarea = this.getTextareaElementForSession(session)
     if (textarea) {
-      textarea.focus()
+      // preventScroll is critical: the xterm helper-textarea lives at
+      // `left:-9999em; top:0`, so a plain focus() triggers the browser's
+      // automatic scrollIntoView, which walks up through every
+      // overflow:auto|scroll ancestor (.xterm-viewport is one of them) and
+      // snaps its scrollTop to 0 — causing the terminal to "jump to the top
+      // of where this Task started". See xterm.js issue #1981.
+      textarea.focus({ preventScroll: true })
       if (document.activeElement === textarea) {
         return true
       }
     }
 
+    // xterm's own Terminal.focus() already uses { preventScroll: true }
+    // internally (CoreBrowserTerminal.ts), so this fallback is safe.
     session.terminal.focus()
 
     const focusedTextarea = this.getTextareaElementForSession(session)
@@ -1230,7 +1189,6 @@ export class TerminalSessionManager {
 
     this.clearPendingRestoreAnimationFrame(session)
     session.pendingViewportRestore = null
-    session.userWantsBottom = true
     session.terminal.clear()
     session.terminal.reset()
 
@@ -1251,8 +1209,6 @@ export class TerminalSessionManager {
 
     // Data/exit IPC listeners are global; no per-session cleanup needed
     window.electronAPI.terminal.dispose(id)
-    session.writeParsedDisposable.dispose()
-    session.scrollTrackingDisposable?.dispose()
     if (session.webglAddon) {
       session.webglAddon.dispose()
       session.webglAddon = undefined
@@ -1266,15 +1222,12 @@ export class TerminalSessionManager {
     this.sessions.delete(id)
   }
 
-  private writeTerminalData(
-    session: TerminalSession,
-    data: string,
-    pending = this.captureViewportIntent(session, 'output')
-  ): void {
+  private writeTerminalData(session: TerminalSession, data: string): void {
+    // Just hand the bytes to xterm. xterm's native isUserScrolling handles
+    // auto-follow: if the user is at the bottom we stay at the bottom; if they
+    // scrolled up we keep their position. No programmatic scroll on output.
     const t0 = performance.now()
-    session.terminal.write(data, () => {
-      this.applyOutputBottomFastPath(session, pending)
-    })
+    session.terminal.write(data)
     perfMonitor.recordXtermWrite(performance.now() - t0)
   }
 

@@ -377,6 +377,7 @@ export interface TerminalDebugApi {
   getTailText: (terminalId?: string, lastLines?: number) => string | null
   scrollToTop: (terminalId?: string) => boolean
   scrollToBottom: (terminalId?: string) => boolean
+  scrollLinesAsUser: (terminalId?: string, lines?: number) => boolean
   forceFit: (terminalId?: string) => boolean
   remountTerminal: (terminalId?: string) => boolean
 }

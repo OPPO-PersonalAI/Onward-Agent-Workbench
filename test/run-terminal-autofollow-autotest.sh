@@ -39,7 +39,7 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   exit 1
 fi
 
-if ! grep -q "TA-10-fixture-completed" "$LOG_FILE"; then
+if ! grep -q "TA-13-fixture-completed" "$LOG_FILE"; then
   echo "Terminal autofollow autotest did not complete. Log: $LOG_FILE" >&2
   tail -n 120 "$LOG_FILE" >&2
   exit 1
