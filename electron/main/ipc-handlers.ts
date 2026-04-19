@@ -4,7 +4,7 @@
  */
 
 import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron'
-import { join, resolve } from 'path'
+import { join, resolve, sep } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
 import { GitWatchManager } from './git-watch-manager'
@@ -673,6 +673,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   ipcMain.handle('changelog:get-current', (_event, locale?: string) => {
     return readCurrentChangelog(locale)
+  })
+
+  // URL for the vendored PDF viewer (resources/pdfjs/app/viewer.html).
+  // Returned as a properly-encoded file:// URL so the renderer can embed it
+  // in an iframe without platform-specific path fiddling.
+  ipcMain.handle('app:get-pdf-viewer-url', () => {
+    const basePath = app.isPackaged
+      ? join(process.resourcesPath, 'resources')
+      : join(app.getAppPath(), 'resources')
+    const viewerPath = join(basePath, 'pdfjs', 'app', 'viewer.html')
+    const segments = viewerPath.split(sep).join('/').split('/').map(seg => encodeURIComponent(seg))
+    const leading = viewerPath.startsWith(sep) || viewerPath.startsWith('/') ? '' : '/'
+    return `file://${leading}${segments.join('/')}`
   })
 
   ipcMain.handle('updater:get-status', () => {

@@ -1347,12 +1347,22 @@ function AppContent({
     if (activeTab.activeSubpage !== 'editor') return
     const terminalId = activeTab.subpageTerminalId || activeTab.activeTerminalId || activeTab.terminals[0]?.id
     if (!terminalId) return
+    // Another effect (e.g. autoOpenProjectEditor in debug/autotest mode) may
+    // have already opened the editor with the correct cwd before TerminalGrid
+    // synced activeSubpage='editor' back into tab state. Re-running this
+    // "restore" would then overwrite that cwd with the persisted (possibly
+    // null) lastCwd, triggering a rootError flash in the editor. Skip the
+    // restore in that case.
+    if (projectEditorOpen) {
+      editorSubpageRestoredRef.current = true
+      return
+    }
     editorSubpageRestoredRef.current = true
     const persistedCwd = activeTab.terminals.find(t => t.id === terminalId)?.lastCwd ?? null
     setProjectEditorTerminalId(terminalId)
     setProjectEditorCwd(persistedCwd)
     setProjectEditorOpen(true)
-  }, [isLoaded, activeTab])
+  }, [isLoaded, activeTab, projectEditorOpen])
 
   // Wait for loading to complete
   if (!isLoaded || !activeTab) {

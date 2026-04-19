@@ -273,6 +273,8 @@ export interface GitHistoryFile {
   deletions: number
   isImage?: boolean
   isSvg?: boolean
+  isPdf?: boolean
+  isEpub?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -320,10 +322,17 @@ export interface GitFileContentResult {
   isBinary: boolean
   isImage?: boolean
   isSvg?: boolean
+  isPdf?: boolean
+  isEpub?: boolean
   originalImageUrl?: string
   modifiedImageUrl?: string
   originalImageSize?: number
   modifiedImageSize?: number
+  /** Base64-encoded bytes for PDF/EPUB sides. Missing on the "added" / "removed" side. */
+  originalPreviewData?: string
+  modifiedPreviewData?: string
+  originalPreviewSize?: number
+  modifiedPreviewSize?: number
   error?: string
 }
 
@@ -368,7 +377,13 @@ export interface ProjectReadResult {
   isBinary: boolean
   isImage: boolean
   isSqlite: boolean
+  isPdf?: boolean
+  isEpub?: boolean
   previewUrl?: string
+  /** Base64-encoded file bytes for preview formats that load in-memory (EPUB). */
+  previewData?: string
+  /** Absolute filesystem path of the previewed file (PDF/EPUB). */
+  previewPath?: string
   error?: string
 }
 
@@ -576,6 +591,7 @@ export interface AppInfo {
 export interface AppInfoAPI {
   get: () => Promise<AppInfo>
   readNotice: (locale?: string) => Promise<string | null>
+  getPdfViewerUrl: () => Promise<string>
 }
 
 export type ChangelogLocale = 'en' | 'zh-CN'

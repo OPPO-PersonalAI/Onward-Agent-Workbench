@@ -4,11 +4,14 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
+import { app } from 'electron'
 import { readdir, stat, readFile, writeFile, mkdir, rename, rm, unlink, access } from 'fs/promises'
-import { resolve, relative, dirname, sep, normalize, extname } from 'path'
+import { resolve, relative, dirname, sep, normalize, extname, join } from 'path'
 import { MAX_IMAGE_FILE_SIZE, bufferToImageDataUrl, isSupportedImageFile } from './image-utils'
 
 const MAX_FILE_SIZE = 1024 * 1024
+const MAX_PDF_FILE_SIZE = 256 * 1024 * 1024
+const MAX_EPUB_FILE_SIZE = 64 * 1024 * 1024
 const SQLITE_DEFAULT_LIMIT = 100
 const SQLITE_MAX_LIMIT = 500
 const SQLITE_MAX_QUERY_ROWS = 500
@@ -20,6 +23,38 @@ const SQLITE_EXTENSIONS = new Set([
   '.db3',
   '.s3db'
 ])
+
+const PDF_EXTENSIONS = new Set(['.pdf'])
+const EPUB_EXTENSIONS = new Set(['.epub'])
+
+function isPdfExtension(fullPath: string): boolean {
+  return PDF_EXTENSIONS.has(extname(fullPath).toLowerCase())
+}
+
+function isEpubExtension(fullPath: string): boolean {
+  return EPUB_EXTENSIONS.has(extname(fullPath).toLowerCase())
+}
+
+function toFileUrl(fullPath: string): string {
+  // URL encode per-segment so Windows drive paths, spaces, and non-ASCII names round-trip.
+  const normalized = fullPath.split(sep).join('/')
+  const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`
+  const segments = withLeadingSlash.split('/').map(seg => encodeURIComponent(seg))
+  return `file://${segments.join('/')}`
+}
+
+function getResourcesBasePath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'resources') : join(app.getAppPath(), 'resources')
+}
+
+function buildPdfViewerUrl(fullPath: string): string {
+  const viewerPath = join(getResourcesBasePath(), 'pdfjs', 'app', 'viewer.html')
+  const viewerUrl = toFileUrl(viewerPath)
+  const fileUrl = toFileUrl(fullPath)
+  const parts = fullPath.split(sep)
+  const name = parts[parts.length - 1] || ''
+  return `${viewerUrl}?file=${encodeURIComponent(fileUrl)}&name=${encodeURIComponent(name)}`
+}
 
 const SQLITE_MAGIC_HEADER = Buffer.from('SQLite format 3\u0000', 'utf-8')
 
@@ -417,7 +452,15 @@ export async function readProjectFile(root: string, path: string) {
     const ext = extname(fullPath).toLowerCase()
     const isSqliteByExt = SQLITE_EXTENSIONS.has(ext)
     const isImageByExt = isSupportedImageFile(fullPath)
-    const sizeLimit = isImageByExt ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
+    const isPdfByExt = isPdfExtension(fullPath)
+    const isEpubByExt = isEpubExtension(fullPath)
+    const sizeLimit = isPdfByExt
+      ? MAX_PDF_FILE_SIZE
+      : isEpubByExt
+        ? MAX_EPUB_FILE_SIZE
+        : isImageByExt
+          ? MAX_IMAGE_FILE_SIZE
+          : MAX_FILE_SIZE
     if (fileStat.size > sizeLimit && !isSqliteByExt) {
       return {
         success: false,
@@ -440,6 +483,38 @@ export async function readProjectFile(root: string, path: string) {
         isBinary: true,
         isImage: false,
         isSqlite: true
+      }
+    }
+
+    if (isPdfByExt) {
+      // PDFs are loaded by the embedded pdf.js viewer via file:// — no buffer read needed.
+      return {
+        success: true,
+        root: rootPath,
+        path,
+        content: '',
+        isBinary: true,
+        isImage: false,
+        isSqlite: false,
+        isPdf: true,
+        previewUrl: buildPdfViewerUrl(fullPath),
+        previewPath: fullPath
+      }
+    }
+
+    if (isEpubByExt) {
+      const buffer = await readFile(fullPath)
+      return {
+        success: true,
+        root: rootPath,
+        path,
+        content: '',
+        isBinary: true,
+        isImage: false,
+        isSqlite: false,
+        isEpub: true,
+        previewData: buffer.toString('base64'),
+        previewPath: fullPath
       }
     }
 

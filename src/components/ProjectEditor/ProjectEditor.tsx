@@ -35,6 +35,8 @@ import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import type { PreviewSearchHandle } from './PreviewSearch/PreviewSearchBar'
 import { SORT_LINE_EPSILON_PX } from './PreviewSearch/usePreviewSearch'
 import { SqliteViewer } from './SqliteViewer'
+import { PdfReader } from './PdfReader'
+import { EpubReader } from './EpubReader'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import { usePathCopy } from '../../hooks/usePathCopy'
 import '../../hooks/usePathCopy.css'
@@ -859,7 +861,11 @@ export function ProjectEditor({
   const [isBinary, setIsBinary] = useState(false)
   const [isImage, setIsImage] = useState(false)
   const [isSqlite, setIsSqlite] = useState(false)
+  const [isPdf, setIsPdf] = useState(false)
+  const [isEpub, setIsEpub] = useState(false)
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+  const [epubPreviewData, setEpubPreviewData] = useState<string | null>(null)
   const [isMarkdownPreviewOpen, setIsMarkdownPreviewOpen] = useState(true)
   const isMarkdownPreviewOpenRef = useRef(true)
   const [isMarkdownEditorVisible, setIsMarkdownEditorVisible] = useState(() => {
@@ -959,6 +965,8 @@ export function ProjectEditor({
   const isBinaryRef = useRef(false)
   const isImageRef = useRef(false)
   const isSqliteRef = useRef(false)
+  const isPdfRef = useRef(false)
+  const isEpubRef = useRef(false)
   const editorSaveCommandIdRef = useRef<string | null>(null)
   const debugAutoOpenRef = useRef(false)
   const pendingViewStateRef = useRef<import('monaco-editor').editor.ICodeEditorViewState | null>(null)
@@ -2155,6 +2163,8 @@ export function ProjectEditor({
     isBinaryRef.current = false
     isImageRef.current = false
     isSqliteRef.current = false
+    isPdfRef.current = false
+    isEpubRef.current = false
     editorSaveCommandIdRef.current = null
     markdownWorkerInFlightRef.current = false
     markdownWorkerQueuedRef.current = false
@@ -2172,7 +2182,11 @@ export function ProjectEditor({
     setIsBinary(false)
     setIsImage(false)
     setIsSqlite(false)
+    setIsPdf(false)
+    setIsEpub(false)
     setImagePreviewUrl(null)
+    setPdfPreviewUrl(null)
+    setEpubPreviewData(null)
     setIsDirty(false)
     setIsLoadingFile(false)
     setIsMarkdownRenderEnabled(false)
@@ -2218,6 +2232,8 @@ export function ProjectEditor({
     isBinaryRef.current = false
     isImageRef.current = false
     isSqliteRef.current = false
+    isPdfRef.current = false
+    isEpubRef.current = false
     editorSaveCommandIdRef.current = null
     markdownWorkerInFlightRef.current = false
     markdownWorkerQueuedRef.current = false
@@ -2227,7 +2243,11 @@ export function ProjectEditor({
     setIsBinary(false)
     setIsImage(false)
     setIsSqlite(false)
+    setIsPdf(false)
+    setIsEpub(false)
     setImagePreviewUrl(null)
+    setPdfPreviewUrl(null)
+    setEpubPreviewData(null)
     setIsDirty(false)
     setIsLoadingFile(false)
     setIsMarkdownRenderEnabled(false)
@@ -2468,6 +2488,14 @@ export function ProjectEditor({
   useEffect(() => {
     isSqliteRef.current = isSqlite
   }, [isSqlite])
+
+  useEffect(() => {
+    isPdfRef.current = isPdf
+  }, [isPdf])
+
+  useEffect(() => {
+    isEpubRef.current = isEpub
+  }, [isEpub])
 
   const getImageFilePreviewState = useCallback(() => {
     if (!activeFilePathRef.current || !isImageRef.current) return null
@@ -3329,7 +3357,13 @@ export function ProjectEditor({
           isImageRef.current = false
           setIsSqlite(false)
           isSqliteRef.current = false
+          setIsPdf(false)
+          isPdfRef.current = false
+          setIsEpub(false)
+          isEpubRef.current = false
           setImagePreviewUrl(null)
+          setPdfPreviewUrl(null)
+          setEpubPreviewData(null)
           setFileContent('')
           fileContentRef.current = ''
           originalContentRef.current = ''
@@ -3373,13 +3407,21 @@ export function ProjectEditor({
     }
 
     const binaryFile = Boolean(result.isBinary) && !sqliteFile
+    const pdfFile = Boolean(result.isPdf)
+    const epubFile = Boolean(result.isEpub)
     setIsBinary(binaryFile)
     isBinaryRef.current = binaryFile
     setIsImage(result.isImage)
     isImageRef.current = result.isImage
     setIsSqlite(sqliteFile)
     isSqliteRef.current = sqliteFile
-    setImagePreviewUrl(result.previewUrl ?? null)
+    setIsPdf(pdfFile)
+    isPdfRef.current = pdfFile
+    setIsEpub(epubFile)
+    isEpubRef.current = epubFile
+    setImagePreviewUrl(result.isImage ? (result.previewUrl ?? null) : null)
+    setPdfPreviewUrl(pdfFile ? (result.previewUrl ?? null) : null)
+    setEpubPreviewData(epubFile ? (result.previewData ?? null) : null)
     let markdownCacheEntry: MarkdownSessionCacheEntry | null = null
     if (!binaryFile && !result.isImage && !sqliteFile && isMarkdownPath(path)) {
       const cacheRead = readMarkdownSessionCache(root, path, result.content ?? '')
@@ -5189,6 +5231,52 @@ export function ProjectEditor({
       isSqliteViewerVisible: () => {
         return Boolean(activeFilePathRef.current && isSqliteRef.current)
       },
+      isPdfReaderVisible: () => {
+        return Boolean(activeFilePathRef.current && isPdfRef.current)
+      },
+      getPdfReaderState: () => {
+        if (!activeFilePathRef.current || !isPdfRef.current) return null
+        const root: ParentNode = modalRef.current ?? document
+        const iframe = root.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
+        return {
+          visible: Boolean(iframe),
+          src: iframe?.src ?? null,
+          filePath: activeFilePathRef.current
+        }
+      },
+      isEpubReaderVisible: () => {
+        return Boolean(activeFilePathRef.current && isEpubRef.current)
+      },
+      getEpubReaderState: () => {
+        if (!activeFilePathRef.current || !isEpubRef.current) return null
+        const root: ParentNode = modalRef.current ?? document
+        const container = root.querySelector('.project-editor-epub-reader') as HTMLElement | null
+        const contentNode = container?.querySelector('.project-editor-epub-content') as HTMLElement | null
+        const tocNodes = container?.querySelectorAll('.project-editor-epub-toc > li') ?? []
+        const fontSizeLabel = container?.querySelector('.project-editor-epub-fontsize-value')?.textContent?.trim() ?? null
+        const errorNode = container?.querySelector('.project-editor-epub-error') as HTMLElement | null
+        const errorMessage = errorNode?.textContent?.trim() ?? null
+        // Content is rendered when epub.js has added any descendant node (it injects
+        // a wrapper <div> and an <iframe>) or when text content exists in the DOM.
+        const hasContent = Boolean(
+          contentNode && (
+            contentNode.querySelector('iframe') ||
+            contentNode.childElementCount > 0 ||
+            (contentNode.textContent && contentNode.textContent.trim().length > 0)
+          )
+        )
+        const progress = (window as unknown as { __onwardEpubReaderProgress?: { lastLocationHref?: string | null } }).__onwardEpubReaderProgress
+        return {
+          visible: Boolean(container),
+          hasContent,
+          tocCount: tocNodes.length,
+          fontSizeLabel,
+          filePath: activeFilePathRef.current,
+          errorMessage,
+          contentHtmlLen: contentNode?.innerHTML?.length ?? 0,
+          currentLocationHref: progress?.lastLocationHref ?? null
+        }
+      },
       getImageFilePreviewState,
       getFileBrowserScrollTop: () => fileTreeContainerRef.current?.scrollTop ?? 0,
       getFileBrowserScrollHeight: () => fileTreeContainerRef.current?.scrollHeight ?? 0,
@@ -6733,7 +6821,7 @@ export function ProjectEditor({
                     {isMarkdownEditorVisible ? t('projectEditor.closeEdit') : t('projectEditor.openEdit')}
                   </button>
                 )}
-                {activeFilePath && !isBinary && !isImage && !isSqlite && (
+                {activeFilePath && (isPdf || isEpub || (!isBinary && !isImage && !isSqlite)) && (
                   <button
                     className="project-editor-action-btn project-editor-preview-toggle"
                     onClick={() => {
@@ -6787,6 +6875,57 @@ export function ProjectEditor({
                 <div className="project-editor-image-preview">
                   <img ref={imagePreviewRef} src={imagePreviewUrl} alt={activeFilePath} />
                 </div>
+              ) : activeFilePath && isPdf && pdfPreviewUrl ? (
+                (() => {
+                  const normalized = normalizePath(activeFilePath)
+                  const memory = fileMemoryRef.current.get(normalized)
+                  return (
+                    <PdfReader
+                      viewerUrl={pdfPreviewUrl}
+                      filePath={activeFilePath}
+                      outlineOpen={isOutlineVisible}
+                      initialState={{
+                        page: memory?.pdfPageNumber,
+                        scrollTop: memory?.pdfScrollTop,
+                        scale: memory?.pdfScale
+                      }}
+                      onStateChange={(state) => {
+                        const current = fileMemoryRef.current.get(normalized) ?? {}
+                        const merged: FileViewMemory = {
+                          ...current,
+                          pdfPageNumber: state.page,
+                          pdfScrollTop: state.scrollTop,
+                          ...(state.scale ? { pdfScale: state.scale } : {})
+                        }
+                        upsertFileMemory(normalized, merged)
+                        scheduleProjectStateSave()
+                      }}
+                    />
+                  )
+                })()
+              ) : activeFilePath && isEpub && epubPreviewData ? (
+                (() => {
+                  const normalized = normalizePath(activeFilePath)
+                  const memory = fileMemoryRef.current.get(normalized)
+                  return (
+                    <EpubReader
+                      previewData={epubPreviewData}
+                      filePath={activeFilePath}
+                      initialFontPct={memory?.epubFontPct}
+                      initialLocation={memory?.epubLocation ?? null}
+                      outlineOpen={isOutlineVisible}
+                      onMemoryChange={(patch) => {
+                        // Merge into the per-file memory keyed by the normalized
+                        // path so the next open of the same file restores the
+                        // same reader state. NOT persisted as a global setting.
+                        const current = fileMemoryRef.current.get(normalized) ?? {}
+                        const merged: FileViewMemory = { ...current, ...patch }
+                        upsertFileMemory(normalized, merged)
+                        scheduleProjectStateSave()
+                      }}
+                    />
+                  )
+                })()
               ) : activeFilePath && isSqlite && (rootRef.current ?? rootPath) ? (
                 <SqliteViewer
                   rootPath={(rootRef.current ?? rootPath) as string}

@@ -14,6 +14,19 @@ import { ptyManager } from './pty-manager'
 import { gitRuntimeManager, type GitTaskKind, type GitTaskPriority } from './git-runtime-manager'
 import { MAX_IMAGE_FILE_SIZE, bufferToImageDataUrl, isSupportedImageFile } from './image-utils'
 
+const PDF_EXT = '.pdf'
+const EPUB_EXT = '.epub'
+const MAX_PDF_DIFF_FILE_SIZE = 32 * 1024 * 1024
+const MAX_EPUB_DIFF_FILE_SIZE = 16 * 1024 * 1024
+
+function isPdfFilename(filename: string | undefined): boolean {
+  return Boolean(filename && filename.toLowerCase().endsWith(PDF_EXT))
+}
+
+function isEpubFilename(filename: string | undefined): boolean {
+  return Boolean(filename && filename.toLowerCase().endsWith(EPUB_EXT))
+}
+
 const rawExecAsync = promisify(exec)
 const rawExecFileAsync = promisify(execFile)
 
@@ -154,6 +167,8 @@ export interface GitHistoryFile {
   deletions: number
   isImage?: boolean
   isSvg?: boolean
+  isPdf?: boolean
+  isEpub?: boolean
 }
 
 export interface GitHistoryDiffOptions {
@@ -1916,6 +1931,8 @@ export async function getGitHistoryDiff(
         const stat = stats.get(entry.filename)
         const isImage = isSupportedImageFile(entry.filename) || Boolean(entry.originalFilename && isSupportedImageFile(entry.originalFilename))
         const isSvg = entry.filename.toLowerCase().endsWith('.svg') || Boolean(entry.originalFilename && entry.originalFilename.toLowerCase().endsWith('.svg'))
+        const isPdf = isPdfFilename(entry.filename) || isPdfFilename(entry.originalFilename)
+        const isEpub = isEpubFilename(entry.filename) || isEpubFilename(entry.originalFilename)
         return {
           filename: entry.filename,
           originalFilename: entry.originalFilename,
@@ -1923,7 +1940,9 @@ export async function getGitHistoryDiff(
           additions: stat?.additions ?? 0,
           deletions: stat?.deletions ?? 0,
           ...(isImage ? { isImage: true } : {}),
-          ...(isSvg ? { isSvg: true } : {})
+          ...(isSvg ? { isSvg: true } : {}),
+          ...(isPdf ? { isPdf: true } : {}),
+          ...(isEpub ? { isEpub: true } : {})
         }
       })
     }
@@ -1958,19 +1977,46 @@ export async function getGitHistoryDiff(
   }
 }
 
-async function readWorkingFile(
-  fullPath: string,
-  filename?: string
-): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+type GitReaderResult = {
+  content: string
+  isBinary: boolean
+  imageDataUrl?: string
+  imageSize?: number
+  isSvg?: boolean
+  isPdf?: boolean
+  isEpub?: boolean
+  previewData?: string
+  previewSize?: number
+}
+
+async function readWorkingFile(fullPath: string, filename?: string): Promise<GitReaderResult> {
   const isImage = filename ? isSupportedImageFile(filename) : false
   const isSvg = filename ? filename.toLowerCase().endsWith('.svg') : false
-  const sizeLimit = isImage ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
+  const isPdf = isPdfFilename(filename)
+  const isEpub = isEpubFilename(filename)
+  const sizeLimit = isPdf
+    ? MAX_PDF_DIFF_FILE_SIZE
+    : isEpub
+      ? MAX_EPUB_DIFF_FILE_SIZE
+      : isImage
+        ? MAX_IMAGE_FILE_SIZE
+        : MAX_FILE_SIZE
   const fileStat = await stat(fullPath)
   if (fileStat.size > sizeLimit) {
     throw new Error(`File is too large to load (>${Math.floor(sizeLimit / 1024)}KB).`)
   }
   const buffer = await readFile(fullPath)
   const isBinary = buffer.includes(0)
+  if (isPdf || isEpub) {
+    return {
+      content: '',
+      isBinary: true,
+      isPdf: isPdf || undefined,
+      isEpub: isEpub || undefined,
+      previewData: buffer.toString('base64'),
+      previewSize: buffer.length
+    }
+  }
   if (isBinary) {
     if (isImage && filename) {
       const imageSize = buffer.length
@@ -1992,10 +2038,18 @@ async function readGitFileByRef(
   gitExecutable: string,
   ref: string,
   filename?: string
-): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+): Promise<GitReaderResult> {
   const isImage = filename ? isSupportedImageFile(filename) : false
   const isSvg = filename ? filename.toLowerCase().endsWith('.svg') : false
-  const sizeLimit = isImage ? MAX_IMAGE_FILE_SIZE : MAX_FILE_SIZE
+  const isPdf = isPdfFilename(filename)
+  const isEpub = isEpubFilename(filename)
+  const sizeLimit = isPdf
+    ? MAX_PDF_DIFF_FILE_SIZE
+    : isEpub
+      ? MAX_EPUB_DIFF_FILE_SIZE
+      : isImage
+        ? MAX_IMAGE_FILE_SIZE
+        : MAX_FILE_SIZE
 
   try {
     const sizeResult = await execFileAsync(gitExecutable, ['cat-file', '-s', ref], {
@@ -2044,6 +2098,27 @@ async function readGitFileByRef(
     return { content: '', isBinary: true, imageDataUrl: bufferToImageDataUrl(buffer, filename), imageSize }
   }
 
+  if (isPdf || isEpub) {
+    const blobResult = await execFileAsync(gitExecutable, ['cat-file', 'blob', ref], {
+      cwd,
+      timeout: EXEC_TIMEOUT,
+      env: getExecEnv(),
+      maxBuffer: sizeLimit * 2,
+      encoding: 'buffer' as BufferEncoding
+    })
+    const buffer = Buffer.isBuffer(blobResult.stdout)
+      ? blobResult.stdout
+      : Buffer.from(blobResult.stdout as unknown as ArrayBufferLike)
+    return {
+      content: '',
+      isBinary: true,
+      isPdf: isPdf || undefined,
+      isEpub: isEpub || undefined,
+      previewData: buffer.toString('base64'),
+      previewSize: buffer.length
+    }
+  }
+
   const contentResult = await execFileAsync(gitExecutable, ['-c', 'core.quotepath=false', 'show', ref], {
     cwd,
     timeout: EXEC_TIMEOUT,
@@ -2063,7 +2138,7 @@ async function readGitHeadFile(
   gitExecutable: string,
   gitPath: string,
   filename?: string
-): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+): Promise<GitReaderResult> {
   return readGitFileByRef(cwd, gitExecutable, `HEAD:${gitPath}`, filename)
 }
 
@@ -2072,7 +2147,7 @@ async function readGitIndexFile(
   gitExecutable: string,
   gitPath: string,
   filename?: string
-): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+): Promise<GitReaderResult> {
   return readGitFileByRef(cwd, gitExecutable, `:${gitPath}`, filename)
 }
 
@@ -2082,7 +2157,7 @@ async function readGitRevisionFile(
   revision: string,
   gitPath: string,
   filename?: string
-): Promise<{ content: string; isBinary: boolean; imageDataUrl?: string; imageSize?: number; isSvg?: boolean }> {
+): Promise<GitReaderResult> {
   return readGitFileByRef(cwd, gitExecutable, `${revision}:${gitPath}`, filename)
 }
 
@@ -2140,6 +2215,8 @@ export async function getGitHistoryFileContent(
   const repoRoot = (await getGitRoot(cwd, gitExecutable)) || cwd
   const originalTarget = file.originalFilename || filename
   const isImage = isSupportedImageFile(filename) || isSupportedImageFile(originalTarget)
+  const isPdf = isPdfFilename(filename) || isPdfFilename(originalTarget)
+  const isEpub = isEpubFilename(filename) || isEpubFilename(originalTarget)
   let originalContent = ''
   let modifiedContent = ''
   let isBinary = false
@@ -2148,6 +2225,10 @@ export async function getGitHistoryFileContent(
   let modifiedImageUrl: string | undefined
   let originalImageSize: number | undefined
   let modifiedImageSize: number | undefined
+  let originalPreviewData: string | undefined
+  let modifiedPreviewData: string | undefined
+  let originalPreviewSize: number | undefined
+  let modifiedPreviewSize: number | undefined
 
   try {
     if (file.status !== 'A' && file.status !== '?') {
@@ -2178,6 +2259,12 @@ export async function getGitHistoryFileContent(
       }
       if (originalResult.imageSize !== undefined) {
         originalImageSize = originalResult.imageSize
+      }
+      if (originalResult.previewData !== undefined) {
+        originalPreviewData = originalResult.previewData
+      }
+      if (originalResult.previewSize !== undefined) {
+        originalPreviewSize = originalResult.previewSize
       }
     }
 
@@ -2210,6 +2297,12 @@ export async function getGitHistoryFileContent(
       if (modifiedResult.imageSize !== undefined) {
         modifiedImageSize = modifiedResult.imageSize
       }
+      if (modifiedResult.previewData !== undefined) {
+        modifiedPreviewData = modifiedResult.previewData
+      }
+      if (modifiedResult.previewSize !== undefined) {
+        modifiedPreviewSize = modifiedResult.previewSize
+      }
     }
 
     return {
@@ -2223,10 +2316,16 @@ export async function getGitHistoryFileContent(
       isBinary,
       ...(isImage ? { isImage: true } : {}),
       ...(isSvg ? { isSvg: true } : {}),
+      ...(isPdf ? { isPdf: true } : {}),
+      ...(isEpub ? { isEpub: true } : {}),
       ...(originalImageUrl ? { originalImageUrl } : {}),
       ...(modifiedImageUrl ? { modifiedImageUrl } : {}),
       ...(originalImageSize !== undefined ? { originalImageSize } : {}),
-      ...(modifiedImageSize !== undefined ? { modifiedImageSize } : {})
+      ...(modifiedImageSize !== undefined ? { modifiedImageSize } : {}),
+      ...(originalPreviewData !== undefined ? { originalPreviewData } : {}),
+      ...(modifiedPreviewData !== undefined ? { modifiedPreviewData } : {}),
+      ...(originalPreviewSize !== undefined ? { originalPreviewSize } : {}),
+      ...(modifiedPreviewSize !== undefined ? { modifiedPreviewSize } : {})
     }
   } catch (error) {
     return {
@@ -2423,10 +2522,29 @@ export async function getGitFileContent(
   let isBinary = false
   const isImage = isSupportedImageFile(filename)
   const isSvg = filename.toLowerCase().endsWith('.svg')
+  const isPdf = isPdfFilename(filename)
+  const isEpub = isEpubFilename(filename)
   let originalImageUrl: string | undefined
   let modifiedImageUrl: string | undefined
   let originalImageSize: number | undefined
   let modifiedImageSize: number | undefined
+  let originalPreviewData: string | undefined
+  let modifiedPreviewData: string | undefined
+  let originalPreviewSize: number | undefined
+  let modifiedPreviewSize: number | undefined
+
+  const captureOriginal = (r: GitReaderResult) => {
+    if (r.imageDataUrl) originalImageUrl = r.imageDataUrl
+    if (r.imageSize !== undefined) originalImageSize = r.imageSize
+    if (r.previewData !== undefined) originalPreviewData = r.previewData
+    if (r.previewSize !== undefined) originalPreviewSize = r.previewSize
+  }
+  const captureModified = (r: GitReaderResult) => {
+    if (r.imageDataUrl) modifiedImageUrl = r.imageDataUrl
+    if (r.imageSize !== undefined) modifiedImageSize = r.imageSize
+    if (r.previewData !== undefined) modifiedPreviewData = r.previewData
+    if (r.previewSize !== undefined) modifiedPreviewSize = r.previewSize
+  }
 
   try {
     if (changeType === 'staged') {
@@ -2448,12 +2566,7 @@ export async function getGitFileContent(
         if (originalResult.isBinary) {
           isBinary = true
         }
-        if (originalResult.imageDataUrl) {
-          originalImageUrl = originalResult.imageDataUrl
-        }
-        if (originalResult.imageSize !== undefined) {
-          originalImageSize = originalResult.imageSize
-        }
+        captureOriginal(originalResult)
       }
 
       if (file.status !== 'D') {
@@ -2474,12 +2587,7 @@ export async function getGitFileContent(
         if (modifiedResult.isBinary) {
           isBinary = true
         }
-        if (modifiedResult.imageDataUrl) {
-          modifiedImageUrl = modifiedResult.imageDataUrl
-        }
-        if (modifiedResult.imageSize !== undefined) {
-          modifiedImageSize = modifiedResult.imageSize
-        }
+        captureModified(modifiedResult)
       }
     } else if (changeType === 'unstaged') {
       if (file.status !== 'A' && file.status !== '?') {
@@ -2500,12 +2608,7 @@ export async function getGitFileContent(
         if (originalResult.isBinary) {
           isBinary = true
         }
-        if (originalResult.imageDataUrl) {
-          originalImageUrl = originalResult.imageDataUrl
-        }
-        if (originalResult.imageSize !== undefined) {
-          originalImageSize = originalResult.imageSize
-        }
+        captureOriginal(originalResult)
       }
 
       if (file.status !== 'D') {
@@ -2526,12 +2629,7 @@ export async function getGitFileContent(
         if (workingResult.isBinary) {
           isBinary = true
         }
-        if (workingResult.imageDataUrl) {
-          modifiedImageUrl = workingResult.imageDataUrl
-        }
-        if (workingResult.imageSize !== undefined) {
-          modifiedImageSize = workingResult.imageSize
-        }
+        captureModified(workingResult)
       }
     } else {
       if (file.status !== 'D') {
@@ -2552,12 +2650,7 @@ export async function getGitFileContent(
         if (workingResult.isBinary) {
           isBinary = true
         }
-        if (workingResult.imageDataUrl) {
-          modifiedImageUrl = workingResult.imageDataUrl
-        }
-        if (workingResult.imageSize !== undefined) {
-          modifiedImageSize = workingResult.imageSize
-        }
+        captureModified(workingResult)
       }
     }
 
@@ -2570,10 +2663,16 @@ export async function getGitFileContent(
       isBinary,
       ...(isImage ? { isImage: true } : {}),
       ...(isSvg ? { isSvg: true } : {}),
+      ...(isPdf ? { isPdf: true } : {}),
+      ...(isEpub ? { isEpub: true } : {}),
       ...(originalImageUrl ? { originalImageUrl } : {}),
       ...(modifiedImageUrl ? { modifiedImageUrl } : {}),
       ...(originalImageSize !== undefined ? { originalImageSize } : {}),
-      ...(modifiedImageSize !== undefined ? { modifiedImageSize } : {})
+      ...(modifiedImageSize !== undefined ? { modifiedImageSize } : {}),
+      ...(originalPreviewData !== undefined ? { originalPreviewData } : {}),
+      ...(modifiedPreviewData !== undefined ? { modifiedPreviewData } : {}),
+      ...(originalPreviewSize !== undefined ? { originalPreviewSize } : {}),
+      ...(modifiedPreviewSize !== undefined ? { modifiedPreviewSize } : {})
     }
   } catch (error) {
     return {

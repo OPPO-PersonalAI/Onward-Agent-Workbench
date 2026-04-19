@@ -25,6 +25,8 @@ import {
   type ImageDisplayMode,
   type SvgViewMode
 } from '../GitImagePreview/GitImagePreview'
+import { GitPdfCompare, type GitPdfStatus } from '../GitPdfCompare/GitPdfCompare'
+import { GitEpubCompare, type GitEpubStatus } from '../GitEpubCompare/GitEpubCompare'
 import { usePathCopy } from '../../hooks/usePathCopy'
 import { useGitDiffFileWatch } from './useGitDiffFileWatch'
 import '../../hooks/usePathCopy.css'
@@ -114,10 +116,16 @@ interface FileContentState {
   isBinary: boolean
   isImage?: boolean
   isSvg?: boolean
+  isPdf?: boolean
+  isEpub?: boolean
   originalImageUrl?: string
   modifiedImageUrl?: string
   originalImageSize?: number
   modifiedImageSize?: number
+  originalPreviewData?: string
+  modifiedPreviewData?: string
+  originalPreviewSize?: number
+  modifiedPreviewSize?: number
   error?: string
 }
 
@@ -148,6 +156,70 @@ type DiffViewMemory = {
 type RestoredAnchor = {
   line: number | null
   scrollTop: number
+}
+
+type CompareStatus = 'added' | 'deleted' | 'modified' | null
+type ChapterKind = 'added' | 'deleted' | 'modified' | 'unchanged'
+
+function resolveCompareStatus(container: Element | null): CompareStatus {
+  if (!container) return null
+  if (container.querySelector('.git-pdf-compare-status-added, .git-epub-compare-status-added')) return 'added'
+  if (container.querySelector('.git-pdf-compare-status-deleted, .git-epub-compare-status-deleted')) return 'deleted'
+  return 'modified'
+}
+
+// Shared DOM inspection helpers used by both GitDiffViewer and GitHistoryViewer
+// debug APIs. Querying the DOM keeps these decoupled from React state and lets
+// autotests verify what the user actually sees.
+export function inspectPdfCompareDom() {
+  const root = document.querySelector('.git-pdf-compare')
+  if (!root) return { visible: false, status: null, originalSrc: null, modifiedSrc: null, originalHasEmpty: false, modifiedHasEmpty: false }
+  const panes = Array.from(root.querySelectorAll('.git-pdf-compare-pane')) as HTMLElement[]
+  const [leftPane, rightPane] = [panes[0] ?? null, panes[1] ?? null]
+  const readSrc = (pane: HTMLElement | null) =>
+    (pane?.querySelector('iframe.git-pdf-compare-frame') as HTMLIFrameElement | null)?.src ?? null
+  return {
+    visible: true,
+    status: resolveCompareStatus(root),
+    originalSrc: readSrc(leftPane),
+    modifiedSrc: readSrc(rightPane),
+    originalHasEmpty: Boolean(leftPane?.querySelector('.git-pdf-compare-empty')),
+    modifiedHasEmpty: Boolean(rightPane?.querySelector('.git-pdf-compare-empty'))
+  }
+}
+
+export function inspectEpubCompareDom() {
+  const root = document.querySelector('.git-epub-compare')
+  if (!root) {
+    return { visible: false, status: null, chapterCount: 0, selectedHref: null, chapterBadges: [], diffCounts: null }
+  }
+  const chapterButtons = Array.from(root.querySelectorAll('.git-epub-compare-chapter-list > li .git-epub-compare-chapter-item')) as HTMLElement[]
+  const chapterBadges = chapterButtons.map(btn => {
+    const label = btn.querySelector('.git-epub-compare-chapter-label')?.textContent?.trim() ?? ''
+    const cls = btn.className
+    let kind: ChapterKind = 'unchanged'
+    if (cls.includes('git-epub-compare-chapter-added')) kind = 'added'
+    else if (cls.includes('git-epub-compare-chapter-deleted')) kind = 'deleted'
+    else if (cls.includes('git-epub-compare-chapter-modified')) kind = 'modified'
+    const href = btn.dataset?.href ?? ''
+    return { href, label, kind }
+  })
+  const active = chapterButtons.find(btn => btn.classList.contains('active')) ?? null
+  const selectedHref = active?.dataset?.href ?? null
+  // Count diff lines in the currently visible panes. These come from the
+  // annotateLines helper: .git-epub-compare-line-add / -del / -same.
+  const countClass = (cls: string) => root.querySelectorAll(`.${cls}`).length
+  const diffCounts = chapterButtons.length > 0
+    ? { add: countClass('git-epub-compare-line-add'), del: countClass('git-epub-compare-line-del'), same: countClass('git-epub-compare-line-same') }
+    : null
+  return {
+    visible: true,
+    status: resolveCompareStatus(root),
+    chapterCount: chapterButtons.length,
+    selectedHref,
+    chapterBadges,
+    diffCounts
+  }
 }
 
 type GitDiffDebugApi = {
@@ -207,6 +279,8 @@ type GitDiffDebugApi = {
     pending: boolean
   } | null
   triggerFileAction: (action: 'keep' | 'deny') => Promise<boolean>
+  getPdfCompareState: () => ReturnType<typeof inspectPdfCompareDom>
+  getEpubCompareState: () => ReturnType<typeof inspectEpubCompareDom>
 }
 
 function clampDiffSplitRatio(value: number): number {
@@ -450,6 +524,22 @@ export function GitDiffViewer({
   })
   const [diffEditorResetNonce] = useState(0)
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
+  const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const url = await window.electronAPI.appInfo?.getPdfViewerUrl?.()
+        if (!cancelled && typeof url === 'string') setPdfViewerUrl(url)
+      } catch {
+        /* ignore — PDF diff will show a fallback message if URL unavailable */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const diffEditorRef = useRef<monacoTypes.editor.IStandaloneDiffEditor | null>(null)
   const monacoRef = useRef<typeof monacoTypes | null>(null)
   const diffEditorBindingDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
@@ -1439,10 +1529,16 @@ export function GitDiffViewer({
               isBinary: result.isBinary,
               isImage: result.isImage,
               isSvg: result.isSvg,
+              isPdf: result.isPdf,
+              isEpub: result.isEpub,
               originalImageUrl: result.originalImageUrl,
               modifiedImageUrl: result.modifiedImageUrl,
               originalImageSize: result.originalImageSize,
-              modifiedImageSize: result.modifiedImageSize
+              modifiedImageSize: result.modifiedImageSize,
+              originalPreviewData: result.originalPreviewData,
+              modifiedPreviewData: result.modifiedPreviewData,
+              originalPreviewSize: result.originalPreviewSize,
+              modifiedPreviewSize: result.modifiedPreviewSize
             }
           }
         })
@@ -2629,7 +2725,9 @@ export function GitDiffViewer({
         }
         await handleDeny()
         return true
-      }
+      },
+      getPdfCompareState: () => inspectPdfCompareDom(),
+      getEpubCompareState: () => inspectEpubCompareDom()
     }
     ;(window as any).__onwardGitDiffDebug = api
     return () => {
@@ -3150,7 +3248,67 @@ export function GitDiffViewer({
           {fileState && !fileState.loading && !fileState.error && fileState.isImage && (fileState.isBinary || fileState.isSvg) && (
             renderImagePreview(fileState, selectedFile)
           )}
-          {fileState && !fileState.loading && !fileState.error && fileState.isBinary && !fileState.isImage && (
+          {fileState && !fileState.loading && !fileState.error && fileState.isPdf && (
+            <GitPdfCompare
+              status={
+                (selectedFile?.status === 'A' || selectedFile?.status === '?') ? 'added'
+                  : selectedFile?.status === 'D' ? 'deleted'
+                    : 'modified' as GitPdfStatus
+              }
+              originalPreviewData={fileState.originalPreviewData}
+              modifiedPreviewData={fileState.modifiedPreviewData}
+              originalSize={fileState.originalPreviewSize}
+              modifiedSize={fileState.modifiedPreviewSize}
+              filename={selectedFile?.filename ?? ''}
+              viewerUrl={pdfViewerUrl}
+              labels={{
+                statusAdded: t('gitDiff.pdfCompare.statusAdded'),
+                statusDeleted: t('gitDiff.pdfCompare.statusDeleted'),
+                statusModified: t('gitDiff.pdfCompare.statusModified'),
+                labelOriginal: t('gitDiff.pdfCompare.labelOriginal'),
+                labelAdded: t('gitDiff.pdfCompare.labelAdded'),
+                labelModified: t('gitDiff.pdfCompare.labelModified'),
+                noOriginal: t('gitDiff.pdfCompare.noOriginal'),
+                noModified: t('gitDiff.pdfCompare.noModified')
+              }}
+            />
+          )}
+          {fileState && !fileState.loading && !fileState.error && fileState.isEpub && (
+            <GitEpubCompare
+              status={
+                (selectedFile?.status === 'A' || selectedFile?.status === '?') ? 'added'
+                  : selectedFile?.status === 'D' ? 'deleted'
+                    : 'modified' as GitEpubStatus
+              }
+              originalPreviewData={fileState.originalPreviewData}
+              modifiedPreviewData={fileState.modifiedPreviewData}
+              originalSize={fileState.originalPreviewSize}
+              modifiedSize={fileState.modifiedPreviewSize}
+              filename={selectedFile?.filename ?? ''}
+              labels={{
+                statusAdded: t('gitDiff.epubCompare.statusAdded'),
+                statusDeleted: t('gitDiff.epubCompare.statusDeleted'),
+                statusModified: t('gitDiff.epubCompare.statusModified'),
+                chapterAdded: t('gitDiff.epubCompare.chapterAdded'),
+                chapterDeleted: t('gitDiff.epubCompare.chapterDeleted'),
+                chapterModified: t('gitDiff.epubCompare.chapterModified'),
+                chapterUnchanged: t('gitDiff.epubCompare.chapterUnchanged'),
+                labelOriginal: t('gitDiff.epubCompare.labelOriginal'),
+                labelModified: t('gitDiff.epubCompare.labelModified'),
+                noOriginal: t('gitDiff.epubCompare.noOriginal'),
+                noModified: t('gitDiff.epubCompare.noModified'),
+                loading: t('gitDiff.epubCompare.loading'),
+                error: t('gitDiff.epubCompare.error'),
+                chapters: t('gitDiff.epubCompare.chapters'),
+                resources: t('gitDiff.epubCompare.resources'),
+                noResourceChanges: t('gitDiff.epubCompare.noResourceChanges'),
+                resourceAdded: t('gitDiff.epubCompare.resourceAdded'),
+                resourceDeleted: t('gitDiff.epubCompare.resourceDeleted'),
+                resourceModified: t('gitDiff.epubCompare.resourceModified')
+              }}
+            />
+          )}
+          {fileState && !fileState.loading && !fileState.error && fileState.isBinary && !fileState.isImage && !fileState.isPdf && !fileState.isEpub && (
             <div className="git-diff-no-content">
               {t('gitDiff.binaryUnsupported')}
             </div>

@@ -713,6 +713,7 @@ export interface AppInfo {
 export interface AppInfoAPI {
   get: () => Promise<AppInfo>
   readNotice: () => Promise<string | null>
+  getPdfViewerUrl: () => Promise<string>
 }
 
 export type ChangelogLocale = 'en' | 'zh-CN'
@@ -1415,6 +1416,9 @@ const appInfoAPI: AppInfoAPI = {
   },
   readNotice: () => {
     return ipcRenderer.invoke('app:read-notice')
+  },
+  getPdfViewerUrl: () => {
+    return ipcRenderer.invoke('app:get-pdf-viewer-url')
   }
 }
 

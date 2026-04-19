@@ -63,6 +63,22 @@ export interface GitDiffDebugApi {
     pending: boolean
   } | null
   triggerFileAction?: (action: 'keep' | 'deny') => Promise<boolean>
+  getPdfCompareState?: () => {
+    visible: boolean
+    status: 'added' | 'deleted' | 'modified' | null
+    originalSrc: string | null
+    modifiedSrc: string | null
+    originalHasEmpty: boolean
+    modifiedHasEmpty: boolean
+  } | null
+  getEpubCompareState?: () => {
+    visible: boolean
+    status: 'added' | 'deleted' | 'modified' | null
+    chapterCount: number
+    selectedHref: string | null
+    chapterBadges: Array<{ href: string; label: string; kind: 'added' | 'deleted' | 'modified' | 'unchanged' }>
+    diffCounts: { add: number; del: number; same: number } | null
+  } | null
 }
 
 export interface PromptSenderDebugApi {
@@ -99,6 +115,22 @@ export interface GitHistoryDebugApi {
   setImageCompareMode?: (mode: '2up' | 'swipe' | 'onion') => void
   setImageDisplayMode?: (mode: 'original' | 'fit') => void
   setSvgViewMode?: (mode: 'visual' | 'text') => void
+  getPdfCompareState?: () => {
+    visible: boolean
+    status: 'added' | 'deleted' | 'modified' | null
+    originalSrc: string | null
+    modifiedSrc: string | null
+    originalHasEmpty: boolean
+    modifiedHasEmpty: boolean
+  } | null
+  getEpubCompareState?: () => {
+    visible: boolean
+    status: 'added' | 'deleted' | 'modified' | null
+    chapterCount: number
+    selectedHref: string | null
+    chapterBadges: Array<{ href: string; label: string; kind: 'added' | 'deleted' | 'modified' | 'unchanged' }>
+    diffCounts: { add: number; del: number; same: number } | null
+  } | null
   isLoading: () => boolean
   getActiveCwd: () => string | null
   getRepoState: () => {
@@ -199,10 +231,27 @@ export interface ProjectEditorDebugApi {
   setEditorContent?: (content: string) => boolean
   getEditorLineCount: () => number
   openFileByPath: (filePath: string) => Promise<void>
-  openFileByPathAsUser?: (filePath: string, options?: { trackRecent?: boolean }) => Promise<void>
+  openFileByPathAsUser: (filePath: string, options?: { trackRecent?: boolean }) => Promise<void>
   triggerEditorSaveCommand: () => boolean
   triggerToolbarSave: () => Promise<boolean>
   isSqliteViewerVisible: () => boolean
+  isPdfReaderVisible?: () => boolean
+  getPdfReaderState?: () => {
+    visible: boolean
+    src: string | null
+    filePath: string
+  } | null
+  isEpubReaderVisible?: () => boolean
+  getEpubReaderState?: () => {
+    visible: boolean
+    hasContent: boolean
+    tocCount: number
+    fontSizeLabel: string | null
+    filePath: string
+    errorMessage: string | null
+    contentHtmlLen: number
+    currentLocationHref: string | null
+  } | null
   getImageFilePreviewState?: () => {
     visible: boolean
     loaded: boolean

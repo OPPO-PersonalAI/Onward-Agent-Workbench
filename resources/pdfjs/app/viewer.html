@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: 2026 OPPO
+  SPDX-License-Identifier: Apache-2.0
+
+  Embedded PDF viewer for Onward. Loaded via <iframe src="file://.../viewer.html?file=...&lang=...">.
+  Theme follows the host window via postMessage (message type "onward:pdf:theme").
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Onward PDF Reader</title>
+    <link rel="stylesheet" href="../web/pdf_viewer.css" />
+    <link rel="stylesheet" href="./viewer.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="toolbar">
+        <div class="toolbar-group">
+          <span id="fileName" title=""></span>
+        </div>
+
+        <div class="toolbar-group">
+          <button id="prevPageBtn" type="button" title="Previous page" data-i18n-title="prevPage">◀</button>
+          <input id="pageNumberInput" type="number" min="1" value="1" />
+          <span id="pageCountLabel">/ 0</span>
+          <button id="nextPageBtn" type="button" title="Next page" data-i18n-title="nextPage">▶</button>
+        </div>
+
+        <div class="toolbar-group">
+          <button id="zoomOutBtn" type="button" title="Zoom out" data-i18n-title="zoomOut">-</button>
+          <select id="zoomSelect" title="Zoom level" data-i18n-title="zoom">
+            <option value="page-width" data-i18n="fitWidth">Fit Width</option>
+            <option value="page-fit" data-i18n="fitPage">Fit Page</option>
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1">100%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+            <option value="3">300%</option>
+            <option value="4">400%</option>
+            <option id="customZoomOption" value="1" hidden>100%</option>
+          </select>
+          <button id="zoomInBtn" type="button" title="Zoom in" data-i18n-title="zoomIn">+</button>
+        </div>
+
+        <div class="toolbar-group grow">
+          <input id="searchInput" type="search" placeholder="Search text (Enter for next)" data-i18n-placeholder="searchPlaceholder" />
+          <button id="searchPrevBtn" type="button" title="Previous match" data-i18n-title="prevMatch">↑</button>
+          <button id="searchNextBtn" type="button" title="Next match" data-i18n-title="nextMatch">↓</button>
+          <span id="searchResult">0 / 0</span>
+        </div>
+
+        <div class="toolbar-group">
+          <button id="colorToggleBtn" type="button" title="" data-i18n-title-on="colorToggleTitleOn" data-i18n-title-off="colorToggleTitleOff" data-i18n-on="colorToggleOn" data-i18n-off="colorToggleOff">Temporarily disable dark</button>
+        </div>
+      </header>
+
+      <div id="errorBanner" hidden>
+        <div id="errorMessage"></div>
+        <div id="errorActions">
+          <button id="errorCloseBtn" type="button" data-i18n="close">Close</button>
+        </div>
+      </div>
+
+      <main id="workspace">
+        <section id="viewerSection">
+          <div id="viewerContainer">
+            <div id="viewer" class="pdfViewer dark-invert"></div>
+          </div>
+          <div id="emptyState" data-i18n="emptyState">No PDF loaded</div>
+        </section>
+
+        <aside id="outlinePanel" class="collapsed">
+          <div id="outlineHeader" data-i18n="toc">Outline</div>
+          <div id="outlineContainer"></div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="passwordDialogBackdrop" hidden>
+      <div id="passwordDialog" role="dialog" aria-modal="true" aria-labelledby="passwordDialogTitle">
+        <h2 id="passwordDialogTitle" data-i18n="passwordTitle">Enter PDF password</h2>
+        <p id="passwordPrompt" data-i18n="passwordPrompt">This PDF is encrypted. Please enter the password.</p>
+        <input id="passwordInput" type="password" autocomplete="off" />
+        <div class="dialog-actions">
+          <button id="passwordCancelBtn" type="button" data-i18n="cancel">Cancel</button>
+          <button id="passwordConfirmBtn" type="button" data-i18n="confirm">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="../build/pdf.js"></script>
+    <script src="../web/pdf_viewer.js"></script>
+    <script src="./viewer.js"></script>
+  </body>
+</html>

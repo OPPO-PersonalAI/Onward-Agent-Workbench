@@ -34,6 +34,8 @@ import { testTerminalPerf } from './test-terminal-perf'
 import { testTerminalFocusActivation } from './test-terminal-focus-activation'
 import { testTerminalStress } from './test-terminal-stress'
 import { testImageDiff } from './test-image-diff'
+import { testPdfEpubPreview } from './test-pdf-epub-preview'
+import { testPdfEpubDiff } from './test-pdf-epub-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 import { testGlobalSearch } from './test-global-search'
 import { testSettingsUpdate } from './test-settings-update'
@@ -95,7 +97,12 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
   const { log, sleep } = ctx
   const suiteFilter = (window.electronAPI.debug.autotestSuite || '').trim().toLowerCase()
   const runSingleSuite = suiteFilter.length > 0 && suiteFilter !== 'all'
-  const shouldRun = (suiteId: string) => !runSingleSuite || suiteFilter === suiteId
+  // Accept comma-separated suite names (e.g. "pdf-epub-preview,pdf-epub-diff")
+  // so a single autotest run can exercise multiple cooperating suites.
+  const suiteAllowList = runSingleSuite
+    ? new Set(suiteFilter.split(',').map(s => s.trim()).filter(Boolean))
+    : null
+  const shouldRun = (suiteId: string) => !suiteAllowList || suiteAllowList.has(suiteId)
   const runtimeErrors: Array<{ type: 'error' | 'unhandledrejection'; message: string }> = []
   const handleWindowError = (event: ErrorEvent) => {
     const message = normalizeRuntimeMessage(event.error ?? event.message)
@@ -463,6 +470,26 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testImageDiff(ctx)
       collectSuiteResults('ImageDiff', results)
       await ctx.reopenProjectEditor('phase5.55-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('pdf-epub-preview')) {
+      log('phase5.56:begin')
+      await ctx.reopenProjectEditor('phase5.56-setup')
+      await sleep(300)
+      const results = await testPdfEpubPreview(ctx)
+      collectSuiteResults('PdfEpubPreview', results)
+      await ctx.reopenProjectEditor('phase5.56-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('pdf-epub-diff')) {
+      log('phase5.57:begin')
+      await ctx.reopenProjectEditor('phase5.57-setup')
+      await sleep(300)
+      const results = await testPdfEpubDiff(ctx)
+      collectSuiteResults('PdfEpubDiff', results)
+      await ctx.reopenProjectEditor('phase5.57-cleanup')
       await sleep(500)
     }
 

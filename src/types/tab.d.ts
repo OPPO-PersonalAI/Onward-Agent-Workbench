@@ -104,6 +104,14 @@ export interface FileViewMemory {
   isPreviewOpen?: boolean
   isEditorVisible?: boolean
   outlineTarget?: 'editor' | 'preview'
+  // EPUB-specific reader preferences, scoped per file
+  epubFontPct?: number
+  epubLocation?: string | null
+  // PDF-specific: where the user last scrolled to, so reopening the same PDF
+  // lands on the same page / scroll offset.
+  pdfPageNumber?: number
+  pdfScrollTop?: number
+  pdfScale?: string
 }
 
 /**
