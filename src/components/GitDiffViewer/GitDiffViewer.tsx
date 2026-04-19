@@ -289,6 +289,30 @@ function buildFileKey(repoRoot: string, file: GitFileStatus): string {
   return `${repoRoot}::${file.changeType}::${file.status}::${original}::${file.filename}`
 }
 
+// Rough line-level diff stats via multiset symmetric difference. Used to keep
+// the sidebar +/- counters in sync after a local save without re-fetching the
+// whole repo diff. Not intended to match git's diff algorithm exactly —
+// accuracy is secondary to avoiding a full refresh.
+function quickLineDiffStats(original: string, modified: string): { additions: number; deletions: number } {
+  if (original === modified) return { additions: 0, deletions: 0 }
+  // An empty file has zero lines, not one empty line — otherwise the multiset
+  // treats the single empty-string entry as a phantom add/delete pair.
+  const splitLines = (text: string): string[] => (text === '' ? [] : text.split('\n'))
+  const originalLines = splitLines(original)
+  const modifiedLines = splitLines(modified)
+  const counts = new Map<string, number>()
+  for (const line of originalLines) counts.set(line, (counts.get(line) ?? 0) + 1)
+  let additions = 0
+  for (const line of modifiedLines) {
+    const c = counts.get(line) ?? 0
+    if (c > 0) counts.set(line, c - 1)
+    else additions += 1
+  }
+  let deletions = 0
+  for (const c of counts.values()) deletions += c
+  return { additions, deletions }
+}
+
 function sortRepoContexts(a: GitRepoContext, b: GitRepoContext): number {
   if (a.isSubmodule !== b.isSubmodule) {
     return a.isSubmodule ? 1 : -1
@@ -491,11 +515,11 @@ export function GitDiffViewer({
     const saved = localStorage.getItem(IMAGE_COMPARE_MODE_STORAGE_KEY)
     return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
   })
-  const [diffSplitRatio, setDiffSplitRatio] = useState(() => {
+  const diffSplitRatioRef = useRef<number>((() => {
     const prefs = getUIPreferences()
     if (prefs.gitDiffSplitViewRatio !== undefined) return prefs.gitDiffSplitViewRatio
     return readStoredDiffSplitRatio()
-  })
+  })())
   const [diffEditorResetNonce] = useState(0)
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
   const diffEditorRef = useRef<monacoTypes.editor.IStandaloneDiffEditor | null>(null)
@@ -505,6 +529,7 @@ export function GitDiffViewer({
   const isDraftDirtyRef = useRef(false)
   const autoRefreshInFlightRef = useRef(false)
   const autoRefreshQueuedRef = useRef(false)
+  const selfSaveSuppressUntilRef = useRef(0)
   const originalDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const modifiedDecorationsRef = useRef<monacoTypes.editor.IEditorDecorationsCollection | null>(null)
   const selectedFileRef = useRef<GitFileStatus | null>(null)
@@ -601,9 +626,9 @@ export function GitDiffViewer({
 
   const persistDiffSplitRatio = useCallback((nextRatio: number) => {
     const normalized = clampDiffSplitRatio(nextRatio)
-    setDiffSplitRatio((prev) => (
-      Math.abs(prev - normalized) <= DIFF_SPLIT_RATIO_EPSILON ? prev : normalized
-    ))
+    const prev = diffSplitRatioRef.current
+    if (Math.abs(prev - normalized) <= DIFF_SPLIT_RATIO_EPSILON) return prev
+    diffSplitRatioRef.current = normalized
     localStorage.setItem(STORAGE_KEY_DIFF_SPLIT_RATIO, String(normalized))
     updateUIPreferences({ gitDiffSplitViewRatio: normalized })
     return normalized
@@ -1561,6 +1586,14 @@ export function GitDiffViewer({
       return
     }
 
+    // Skip watcher-driven refresh for a short window after a local save —
+    // the save path already updates state in place, and letting the watcher
+    // through would cause the exact full-refresh flicker we're avoiding.
+    if (Date.now() < selfSaveSuppressUntilRef.current) {
+      debugLog('auto-refresh:skip:self-save')
+      return
+    }
+
     if (autoRefreshInFlightRef.current) {
       autoRefreshQueuedRef.current = true
       return
@@ -1628,7 +1661,6 @@ export function GitDiffViewer({
     const nextKey = getFileKey(file)
     const memory = getMemoryStore()
     if (selectedFileKey && nextKey !== selectedFileKey) {
-      persistCurrentDiffSplitRatio()
       captureDiffView(selectedFileKey)
       setDiffRestoreNotice(null)
     }
@@ -1663,7 +1695,7 @@ export function GitDiffViewer({
       memory.selectedFileKey = nextKey
     }
     setSelectedFile(file)
-  }, [captureDiffView, enterDiffWaiting, getFileKey, getMemoryStore, isDraftDirty, persistCurrentDiffSplitRatio, selectedFileKey, t])
+  }, [captureDiffView, enterDiffWaiting, getFileKey, getMemoryStore, isDraftDirty, selectedFileKey, t])
 
   const clearLineSelection = useCallback(() => {
     setSelectedLineRange(null)
@@ -1819,6 +1851,11 @@ export function GitDiffViewer({
       disposeDiffEditorBindings()
       diffEditorRef.current = editor
       monacoRef.current = monaco
+
+      // Apply persisted split ratio once at mount. Do NOT keep it in
+      // diffEditorOptions — otherwise any options-identity change would
+      // re-apply the initial ratio and reset the user's drag.
+      editor.updateOptions({ splitViewDefaultRatio: diffSplitRatioRef.current })
 
       // Begin render-then-reveal cycle: editor just mounted, hide until diff is computed
       enterDiffWaiting()
@@ -2129,6 +2166,12 @@ export function GitDiffViewer({
         showEditMessage({ type: 'error', text: result.error || t('gitDiff.error.saveFailed') })
         return
       }
+      // Suppress the upcoming file-watch 'changed' event triggered by our own
+      // save. The main-process watcher already calls suppressNext on this path,
+      // but timing is platform-dependent — this client-side window is a belt
+      // and braces against races.
+      selfSaveSuppressUntilRef.current = Date.now() + 800
+      const originalContent = selectedFileState.originalContent ?? ''
       setFileContents((prev) => {
         const current = prev[selectedFileKey]
         if (!current) return prev
@@ -2141,7 +2184,30 @@ export function GitDiffViewer({
           }
         }
       })
-      await loadDiff({ silent: true, force: true })
+      // Patch sidebar +/- stats locally — avoid the full loadDiff({force:true})
+      // round-trip which otherwise re-builds diffResult, re-keys fileContents,
+      // and causes the whole UI to flicker on save. VS Code-style minimal update.
+      const { additions, deletions } = quickLineDiffStats(originalContent, draft)
+      if (additions === 0 && deletions === 0) {
+        // Save brought the file back to its original content — git no longer
+        // considers it a change, so the entry should leave the sidebar. Let
+        // the authoritative diff refresh remove it; our suppress window
+        // continues to short-circuit the concurrent file-watcher path.
+        await loadDiff({ silent: true, force: true })
+      } else {
+        setDiffResult((prev) => {
+          if (!prev) return prev
+          let mutated = false
+          const files = prev.files.map((f) => {
+            const key = buildFileKey(f.repoRoot || prev.cwd || '', f)
+            if (key !== selectedFileKey) return f
+            if (f.additions === additions && f.deletions === deletions) return f
+            mutated = true
+            return { ...f, additions, deletions }
+          })
+          return mutated ? { ...prev, files } : prev
+        })
+      }
       showEditMessage({ type: 'success', text: t('gitDiff.saved') })
     } catch (error) {
       showEditMessage({ type: 'error', text: t('gitDiff.error.saveFailedWithReason', { error: String(error) }) })
@@ -2510,7 +2576,6 @@ export function GitDiffViewer({
     renderSideBySide: true,
     useInlineViewWhenSpaceIsLimited: false,
     enableSplitViewResizing: true,
-    splitViewDefaultRatio: diffSplitRatio,
     readOnly: !canEditFile,
     originalEditable: false,
     minimap: { enabled: false },
@@ -2530,7 +2595,7 @@ export function GitDiffViewer({
       contextLineCount: 3,
       revealLineCount: 20
     }
-  }), [diffFontSize, canEditFile, diffSplitRatio])
+  }), [diffFontSize, canEditFile])
 
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
@@ -2823,6 +2888,68 @@ export function GitDiffViewer({
     ]
     return groups.filter(group => group.files.length > 0)
   }, [fileGroups, t])
+
+  // Multi-repo layout: group by project first, then by change type. Keeps the
+  // sidebar readable when several repos (e.g. submodules) share the workspace
+  // instead of squeezing a truncated repo badge onto every file row.
+  const repoSections = useMemo(() => {
+    if (!hasMultipleRepos || !diffResult) return null
+    type Section = {
+      repoRoot: string
+      repoLabel: string
+      isSubmodule: boolean
+      depth: number
+      unstaged: GitFileStatus[]
+      staged: GitFileStatus[]
+      untracked: GitFileStatus[]
+    }
+    const map = new Map<string, Section>()
+    const ensureSection = (root: string, label: string, isSubmodule: boolean, depth: number) => {
+      const existing = map.get(root)
+      if (existing) return existing
+      const section: Section = {
+        repoRoot: root,
+        repoLabel: label,
+        isSubmodule,
+        depth,
+        unstaged: [],
+        staged: [],
+        untracked: []
+      }
+      map.set(root, section)
+      return section
+    }
+    for (const repo of diffResult.repos ?? []) {
+      ensureSection(repo.root, repo.label, repo.isSubmodule, repo.depth)
+    }
+    const fallbackCwd = diffResult.cwd || ''
+    for (const file of diffResult.files) {
+      if (repoFilter && file.repoRoot !== repoFilter) continue
+      const root = file.repoRoot || fallbackCwd
+      const label = file.repoLabel || root.split('/').pop() || root
+      const section = ensureSection(root, label, Boolean(file.isSubmoduleEntry), 0)
+      section[file.changeType].push(file)
+    }
+    return Array.from(map.values())
+      .map((section) => ({
+        repoRoot: section.repoRoot,
+        repoLabel: section.repoLabel,
+        isSubmodule: section.isSubmodule,
+        depth: section.depth,
+        totalCount: section.unstaged.length + section.staged.length + section.untracked.length,
+        groups: [
+          { key: 'unstaged', label: t('gitDiff.changeType.unstaged'), files: section.unstaged },
+          { key: 'staged', label: t('gitDiff.changeType.staged'), files: section.staged },
+          { key: 'untracked', label: t('gitDiff.changeType.untracked'), files: section.untracked }
+        ].filter((group) => group.files.length > 0)
+      }))
+      .filter((section) => section.totalCount > 0)
+      .sort((a, b) => {
+        if (a.isSubmodule !== b.isSubmodule) return a.isSubmodule ? 1 : -1
+        if (a.depth !== b.depth) return a.depth - b.depth
+        return a.repoLabel.localeCompare(b.repoLabel)
+      })
+  }, [diffResult, hasMultipleRepos, repoFilter, t])
 
   useEffect(() => {
     if (!repoFilter || !selectedFile) return
@@ -3353,68 +3480,78 @@ export function GitDiffViewer({
             {t('gitDiff.fileList', { count: filteredFileCount })}
           </div>
           <div className="git-diff-file-list-content">
-            {groupedFileList.map((group) => (
-              <div key={group.key} className="git-diff-file-group">
-                <div className="git-diff-file-group-title">
-                  {group.label} ({group.files.length})
-                </div>
-                {group.files.map((file) => {
-                  const fileKey = diffResult?.cwd ? buildFileKey(file.repoRoot || diffResult.cwd, file) : file.filename
-                  const isSelected = selectedFileKey === fileKey
-                  const fileState = fileContents[fileKey]
-                  const isDirty = fileState?.draftContent !== undefined &&
-                    fileState.draftContent !== fileState.modifiedContent
-                  return (
-                    <div
-                      key={fileKey}
-                      className={`git-diff-file-item ${isSelected ? 'selected' : ''}`}
-                      onClick={() => handleFileSelect(file)}
-                      onContextMenu={(e) => handleFileContextMenu(e, file)}
+            {(() => {
+              const renderFileItem = (file: GitFileStatus) => {
+                const fileKey = diffResult?.cwd ? buildFileKey(file.repoRoot || diffResult.cwd, file) : file.filename
+                const isSelected = selectedFileKey === fileKey
+                const fileState = fileContents[fileKey]
+                const isDirty = fileState?.draftContent !== undefined &&
+                  fileState.draftContent !== fileState.modifiedContent
+                return (
+                  <div
+                    key={fileKey}
+                    className={`git-diff-file-item ${isSelected ? 'selected' : ''}`}
+                    onClick={() => handleFileSelect(file)}
+                    onContextMenu={(e) => handleFileContextMenu(e, file)}
+                  >
+                    <span
+                      className="git-diff-file-status"
+                      style={{ color: statusColors[file.status] }}
+                      title={statusText[file.status]}
                     >
+                      {file.status}
+                    </span>
+                    {file.isSubmoduleEntry && (
                       <span
-                        className="git-diff-file-status"
-                        style={{ color: statusColors[file.status] }}
-                        title={statusText[file.status]}
+                        className="git-diff-submodule-badge"
+                        title={t('gitDiff.status.submodule')}
                       >
-                        {file.status}
+                        S
                       </span>
-                      {file.isSubmoduleEntry && (
-                        <span
-                          className="git-diff-submodule-badge"
-                          title={t('gitDiff.status.submodule')}
-                        >
-                          S
-                        </span>
+                    )}
+                    <span
+                      className="git-diff-file-name"
+                      title={file.originalFilename && (file.status === 'R' || file.status === 'C')
+                        ? `${file.originalFilename} → ${file.filename}`
+                        : file.filename}
+                    >
+                    {file.filename}
+                    </span>
+                    {isDirty && (
+                      <span className="git-diff-file-dirty">{t('gitDiff.unsaved')}</span>
+                    )}
+                    <span className="git-diff-file-stats">
+                      {file.additions > 0 && (
+                        <span className="git-diff-stat-add">+{file.additions}</span>
                       )}
-                      {hasMultipleRepos && file.repoLabel && (
-                        <span className="git-diff-repo-badge" title={file.repoRoot || ''}>
-                          {file.repoLabel}
-                        </span>
+                      {file.deletions > 0 && (
+                        <span className="git-diff-stat-del">-{file.deletions}</span>
                       )}
-                      <span
-                        className="git-diff-file-name"
-                        title={file.originalFilename && (file.status === 'R' || file.status === 'C')
-                          ? `${file.originalFilename} → ${file.filename}`
-                          : file.filename}
-                      >
-                      {file.filename}
-                      </span>
-                      {isDirty && (
-                        <span className="git-diff-file-dirty">{t('gitDiff.unsaved')}</span>
-                      )}
-                      <span className="git-diff-file-stats">
-                        {file.additions > 0 && (
-                          <span className="git-diff-stat-add">+{file.additions}</span>
-                        )}
-                        {file.deletions > 0 && (
-                          <span className="git-diff-stat-del">-{file.deletions}</span>
-                        )}
-                      </span>
+                    </span>
+                  </div>
+                )
+              }
+              const renderGroup = (group: { key: string; label: string; files: GitFileStatus[] }) => (
+                <div key={group.key} className="git-diff-file-group">
+                  <div className="git-diff-file-group-title">
+                    {group.label} ({group.files.length})
+                  </div>
+                  {group.files.map(renderFileItem)}
+                </div>
+              )
+              if (repoSections) {
+                return repoSections.map((section) => (
+                  <div key={section.repoRoot} className="git-diff-repo-section">
+                    <div className="git-diff-repo-header" title={section.repoRoot}>
+                      <span className="git-diff-repo-name">{section.repoLabel}</span>
+                      <span className="git-diff-repo-count">{section.totalCount}</span>
                     </div>
-                  )
-                })}
-              </div>
-            ))}
+                    {section.groups.map(renderGroup)}
+                  </div>
+                ))
+              }
+              return groupedFileList.map(renderGroup)
+            })()}
           </div>
 
           {/* Width adjustment drag bar */}

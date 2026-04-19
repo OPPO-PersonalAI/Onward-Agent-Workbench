@@ -353,6 +353,47 @@ body.git-diff-resizing * {
   text-transform: uppercase;
 }
 
+.git-diff-repo-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.git-diff-repo-section:last-child {
+  border-bottom: none;
+}
+
+.git-diff-repo-section > .git-diff-file-group:last-child {
+  border-bottom: none;
+}
+
+.git-diff-repo-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  background-color: var(--bg-1);
+}
+
+.git-diff-repo-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.git-diff-repo-count {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--text-3);
+  background-color: var(--bg-2);
+}
+
 .git-diff-file-item {
   display: flex;
   align-items: flex-start;
@@ -1393,20 +1434,6 @@ body.git-diff-resizing * {
   line-height: 16px;
 }
 
-.git-diff-repo-badge {
-  flex-shrink: 0;
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 10px;
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-  margin-right: 4px;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 1px;
-}
 
 .git-diff-superproject-hint {
   display: flex;
