@@ -5,5 +5,5 @@ dist/
 .pnpm-store/
 *.log
 test/e2e-update-test/
-# Local scheduled-task lock produced by the /loop skill runtime.
-.claude/scheduled_tasks.lock
+# Local scheduled-task lock and other .claude/*.lock files produced by skill runtimes.
+.claude/*.lock

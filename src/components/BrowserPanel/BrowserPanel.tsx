@@ -15,6 +15,7 @@ interface BrowserPanelProps {
   initialUrl?: string | null
   onUrlChange?: (url: string) => void
   forceHidden?: boolean
+  isActive?: boolean
 }
 
 let browserIdCounter = 0
@@ -41,7 +42,8 @@ export function BrowserPanel({
   terminalId,
   initialUrl,
   onUrlChange,
-  forceHidden = false
+  forceHidden = false,
+  isActive = true
 }: BrowserPanelProps) {
   const { t } = useI18n()
   const [url, setUrl] = useState('')
@@ -62,7 +64,7 @@ export function BrowserPanel({
   const forceHiddenRef = useRef(forceHidden)
   const hasVisibleViewRef = useRef(false)
 
-  useSubpageEscape({ isOpen: isOpen && !forceHidden, onEscape: onClose })
+  useSubpageEscape({ isOpen: isOpen && !forceHidden && isActive, onEscape: onClose })
 
   useEffect(() => {
     setRememberCookies(sharedRememberCookies)

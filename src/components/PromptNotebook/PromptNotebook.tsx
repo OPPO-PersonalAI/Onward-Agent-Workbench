@@ -19,6 +19,7 @@ import { useI18n } from '../../i18n/useI18n'
 import type { ImportPrepareResult } from '../../utils/prompt-io'
 import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
 import { buildPromptTaskHistorySummary } from './promptTaskHistory'
+import { PROMPT_COLORS, type PromptColor } from './prompt-colors'
 import './PromptNotebook.css'
 
 type PromptColorFilter = 'red' | 'yellow' | 'green' | null
@@ -217,7 +218,10 @@ export const PromptNotebook = memo(function PromptNotebook({
     return prompts.find(p => p.id === selectedId) || null
   }, [prompts, selectedId])
 
-  const promptTaskHistory = useMemo(() => buildPromptTaskHistorySummary(prompts), [prompts])
+  const promptTaskHistory = useMemo(
+    () => buildPromptTaskHistorySummary(prompts, terminals.length),
+    [prompts, terminals.length]
+  )
 
   const promptMatchesTaskFilter = useCallback((promptId: string, taskNumber: number) => {
     return promptTaskHistory.promptTaskNumbers.get(promptId)?.includes(taskNumber) ?? false
@@ -916,6 +920,44 @@ export const PromptNotebook = memo(function PromptNotebook({
     }
   }, [onExecute, applySuccessSideEffects])
 
+  // Send-and-execute triggered from the prompt context menu. Unlike the main
+  // sender, this must NOT clear the editor, drop the current selection, or
+  // exit editing state — the user may have unrelated content in the editor.
+  // It still records send history and touches lastUsedAt on the target prompt.
+  const runContextMenuSendAndExecute = useCallback(async (prompt: Prompt, terminalIds: string[]) => {
+    if (terminalIds.length === 0) return
+    try {
+      const rawResult = await onSendAndExecute(terminalIds, prompt.content)
+      if (!hasDeliveredTerminals(rawResult)) return
+      const sendRecords = [
+        ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
+        ...buildSendRecords(rawResult.sentOnlyIds, 'sendAndExecute', 'sent-only')
+      ]
+      // Merge lastUsedAt refresh and sendHistory into a single updatePrompt to
+      // avoid a stale-object overwrite: touchPromptLastUsed + updatePrompt in
+      // two hops would race on the same prev snapshot, and the second hop —
+      // carrying the closure's old lastUsedAt under preserveTimestamp — wins.
+      const existingHistory = prompt.sendHistory ?? []
+      const mergedHistory = sendRecords.length > 0
+        ? [...sendRecords, ...existingHistory].slice(0, 100)
+        : existingHistory
+      onUpdatePrompt(
+        { ...prompt, lastUsedAt: Date.now(), sendHistory: mergedHistory },
+        true
+      )
+    } catch (error) {
+      console.error('Prompt context-menu send-and-execute failed:', error)
+    }
+  }, [onSendAndExecute, onUpdatePrompt, buildSendRecords])
+
+  const handleContextMenuSendAndExecute = useCallback((prompt: Prompt, terminalId: string) => {
+    void runContextMenuSendAndExecute(prompt, [terminalId])
+  }, [runContextMenuSendAndExecute])
+
+  const handleContextMenuSendAndExecuteAll = useCallback((prompt: Prompt) => {
+    void runContextMenuSendAndExecute(prompt, terminals.map(t => t.id))
+  }, [runContextMenuSendAndExecute, terminals])
+
   // Send and execute (wrapper, add save and clear logic)
   const handleSendAndExecute = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
     const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
@@ -1086,6 +1128,9 @@ export const PromptNotebook = memo(function PromptNotebook({
           onResumeSchedule={handleResumeSchedule}
           onViewSendHistory={handleViewSendHistory}
           onCopyPrompt={handleCopyPrompt}
+          terminals={terminals}
+          onSendAndExecuteToTask={handleContextMenuSendAndExecute}
+          onSendAndExecuteToAllTasks={handleContextMenuSendAndExecuteAll}
         />
 
         {/* input area */}
@@ -1341,7 +1386,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   const { t } = useI18n()
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
-  const MIN_EDITOR_HEIGHT = 100
+  const MIN_EDITOR_HEIGHT = 180
   const [height, setHeight] = useState(() => Math.max(promptEditorHeight, MIN_EDITOR_HEIGHT))
   const heightRef = useRef(height)
   const isDraggingRef = useRef(false)
@@ -1495,16 +1540,35 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     onSaveSuccess?.()
   }, [title, content, editingPrompt, onSubmit, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
-  // Submit processing (add new Prompt)
-  const handleSubmit = useCallback(() => {
+  // Submit processing (add new Prompt, optionally with a color tag)
+  const handleSubmit = useCallback((color?: PromptColor | null) => {
     if (!content.trim()) return
 
-    onSubmit(title.trim(), content.trim())
+    onSubmit(title.trim(), content.trim(), color ?? null)
     setTitle('')
     setContent('')
     // Clear draft after submission
     onEditorDraftChange(null)
   }, [title, content, onSubmit, onEditorDraftChange])
+
+  // Edit mode: apply a color and save the current edit in one action
+  const handleSaveWithColor = useCallback((color: PromptColor) => {
+    if (!content.trim() || !editingPrompt) return
+
+    onUpdatePrompt({
+      ...editingPrompt,
+      title: title.trim(),
+      content: content.trim(),
+      color,
+      lastUsedAt: Date.now()
+    }, true)
+
+    setTitle('')
+    setContent('')
+    onCancelEdit()
+    onEditorDraftChange(null)
+    onSaveSuccess?.()
+  }, [title, content, editingPrompt, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
   // Cancel edit
   const handleCancel = useCallback(() => {
@@ -1610,6 +1674,31 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       </div>
 
       <div className="prompt-editor-actions">
+        <div
+          className="prompt-editor-color-picker"
+          role="group"
+          aria-label={t('promptEditor.colorPickerLabel')}
+        >
+          {PROMPT_COLORS.map(({ key, hex }) => {
+            const label = editingPrompt
+              ? t(`promptEditor.saveWith.${key}`)
+              : t(`promptEditor.addWith.${key}`)
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`prompt-editor-color-btn prompt-editor-color-btn-${key}`}
+                style={{ ['--color' as string]: hex } as React.CSSProperties}
+                disabled={!content.trim()}
+                onClick={() => editingPrompt ? handleSaveWithColor(key) : handleSubmit(key)}
+                title={label}
+                aria-label={label}
+              >
+                <span className="prompt-editor-color-dot" />
+              </button>
+            )
+          })}
+        </div>
         {editingPrompt ? (
           <>
             <button
@@ -1639,7 +1728,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         ) : (
           <button
             className="prompt-editor-btn prompt-editor-btn-submit"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit()}
             disabled={!content.trim()}
           >
             {t('promptEditor.addToHistory')}

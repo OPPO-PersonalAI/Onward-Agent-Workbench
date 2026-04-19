@@ -1571,6 +1571,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                     setLastBrowserUrls(prev => ({ ...prev, [termInfo.id]: nextUrl }))
                   }}
                   forceHidden={hidden || globalOverlayActive}
+                  isActive={activeTerminalId === termInfo.id}
                 />
                 {showTerminalOverlay && (
                   <div

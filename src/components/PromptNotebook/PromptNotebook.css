@@ -651,14 +651,65 @@ body.dragging-prompt * {
   box-shadow: 0 0 0 1px var(--bg-2), 0 0 0 2px var(--color);
 }
 
+/* Submenu parent item + nested submenu */
+.prompt-context-submenu-wrapper {
+  position: relative;
+}
+
+.prompt-context-item.has-submenu {
+  justify-content: flex-start;
+}
+
+.prompt-context-item.has-submenu .prompt-context-label {
+  flex: 1;
+}
+
+.prompt-context-submenu-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.prompt-context-item.has-submenu:hover .prompt-context-submenu-chevron,
+.prompt-context-item.has-submenu.submenu-open .prompt-context-submenu-chevron {
+  color: var(--text-2);
+}
+
+.prompt-context-item.has-submenu.submenu-open {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.prompt-context-submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 2px);
+  z-index: 1001;
+  min-width: 180px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  animation: prompt-context-fade-in 0.15s ease;
+}
+
+.prompt-context-submenu.flip {
+  left: auto;
+  right: calc(100% + 2px);
+}
+
 /* Prompt input editor */
 .prompt-editor {
   display: flex;
   flex-direction: column;
-  min-height: 350px;
+  min-height: 180px;
   border-top: 1px solid var(--border);
   position: relative;
-  flex-shrink: 0;
+  flex-shrink: 1;
 }
 
 .prompt-editor-resizer {
@@ -744,10 +795,55 @@ body.resizing-editor-height * {
 
 .prompt-editor-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.prompt-editor-color-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 2px;
+}
+
+.prompt-editor-color-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.prompt-editor-color-btn:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.prompt-editor-color-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.prompt-editor-color-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.prompt-editor-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background-color: var(--color);
+  box-shadow: 0 0 0 1px var(--bg-2);
+  pointer-events: none;
 }
 
 .prompt-editor-btn {
@@ -794,6 +890,10 @@ body.resizing-editor-height * {
   flex-shrink: 0;
   padding: 8px;
   border-top: 1px solid var(--border);
+  max-height: 50%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .prompt-sender-terminals {
@@ -803,8 +903,9 @@ body.resizing-editor-height * {
   grid-auto-flow: row;
   gap: 8px 12px;
   margin-bottom: 12px;
-  max-height: 140px;
   overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .prompt-sender-empty {
