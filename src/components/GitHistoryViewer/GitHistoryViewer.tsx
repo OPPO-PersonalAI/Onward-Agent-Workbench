@@ -35,7 +35,7 @@ import { GitPdfCompare, type GitPdfStatus } from '../GitPdfCompare/GitPdfCompare
 import { GitEpubCompare, type GitEpubStatus } from '../GitEpubCompare/GitEpubCompare'
 import { inspectPdfCompareDom, inspectEpubCompareDom } from '../GitDiffViewer/GitDiffViewer'
 import { usePathCopy } from '../../hooks/usePathCopy'
-import '../../hooks/usePathCopy.css'
+import '../../styles/path-copy-toast.css'
 import './GitHistoryViewer.css'
 
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
@@ -383,13 +383,14 @@ export function GitHistoryViewer({
 
   const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!selectedFile) return
+    const target = e.currentTarget as HTMLElement
     const rootCwd = activeCwd || ''
     const isAbsolute = e.altKey
     const relativePath = selectedFile.filename
     const pathToCopy = isAbsolute ? `${rootCwd}/${relativePath}` : relativePath
     const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
     const ok = await copyToClipboard(pathToCopy, label)
-    if (ok) flashCopyFeedback(e)
+    if (ok) flashCopyFeedback(target)
   }, [selectedFile, activeCwd, copyToClipboard, flashCopyFeedback, t])
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: GitHistoryFile) => {

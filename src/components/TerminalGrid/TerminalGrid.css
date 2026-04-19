@@ -366,16 +366,7 @@
   top: 28px;
   right: 8px;
   max-width: 70%;
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.88);
-  color: var(--text-1);
-  font-size: var(--font-xs);
-  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.25);
   pointer-events: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   z-index: 2;
 }
 
