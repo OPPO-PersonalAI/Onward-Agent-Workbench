@@ -35,8 +35,8 @@ import { PreviewSearchBar } from './PreviewSearch/PreviewSearchBar'
 import type { PreviewSearchHandle } from './PreviewSearch/PreviewSearchBar'
 import { SORT_LINE_EPSILON_PX } from './PreviewSearch/usePreviewSearch'
 import { SqliteViewer } from './SqliteViewer'
-import { PdfReader } from './PdfReader'
-import { EpubReader } from './EpubReader'
+import { PdfReader, type PdfReaderHandle } from './PdfReader'
+import { EpubReader, type EpubReaderHandle } from './EpubReader'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import { usePathCopy } from '../../hooks/usePathCopy'
 import '../../hooks/usePathCopy.css'
@@ -881,6 +881,13 @@ export function ProjectEditor({
   const [isSqlite, setIsSqlite] = useState(false)
   const [isPdf, setIsPdf] = useState(false)
   const [isEpub, setIsEpub] = useState(false)
+  // PDF / EPUB outline state feeds directly into the shared OutlinePanel so
+  // Markdown / code / PDF / EPUB all share the same surface (and the same
+  // auto-center behavior from the 0418-wk3 merge).
+  const [pdfOutlineSymbols, setPdfOutlineSymbols] = useState<OutlineItem[]>([])
+  const [pdfActivePage, setPdfActivePage] = useState<number>(1)
+  const [epubOutlineSymbols, setEpubOutlineSymbols] = useState<OutlineItem[]>([])
+  const [epubActiveHref, setEpubActiveHref] = useState<string | null>(null)
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
   const [epubPreviewData, setEpubPreviewData] = useState<string | null>(null)
@@ -962,6 +969,8 @@ export function ProjectEditor({
   const globalSearchInputRef = useRef<HTMLInputElement>(null)
 
   const editorRef = useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(null)
+  const pdfReaderRef = useRef<PdfReaderHandle | null>(null)
+  const epubReaderRef = useRef<EpubReaderHandle | null>(null)
   const editorScrollDisposableRef = useRef<import('monaco-editor').IDisposable | null>(null)
   const editorCursorDisposableRef = useRef<import('monaco-editor').IDisposable | null>(null)
   const editorModelDisposableRef = useRef<import('monaco-editor').IDisposable | null>(null)
@@ -1555,7 +1564,14 @@ export function ProjectEditor({
     }
   }, [outlineWidth])
 
-  const outlineShowInSplit = isOutlineVisible && !isBinary && !isImage && !isSqlite && !!activeFilePath
+  // PDFs and EPUBs are flagged as binary by the backend (their raw bytes are
+  // binary even though the reader renders them richly). Allow the outline for
+  // those two file types explicitly so the unified OutlinePanel can drive
+  // PDF / EPUB navigation.
+  const outlineShowInSplit =
+    isOutlineVisible &&
+    (isPdf || isEpub || (!isBinary && !isImage && !isSqlite)) &&
+    !!activeFilePath
   const outlineShowInSplitRef = useRef(outlineShowInSplit)
   useEffect(() => {
     outlineShowInSplitRef.current = outlineShowInSplit
@@ -1584,6 +1600,59 @@ export function ProjectEditor({
   useEffect(() => {
     outlineActiveItemRef.current = outlineActiveItem
   }, [outlineActiveItem])
+  const epubOutlineSymbolsRef = useRef(epubOutlineSymbols)
+  useEffect(() => {
+    epubOutlineSymbolsRef.current = epubOutlineSymbols
+  }, [epubOutlineSymbols])
+
+  // For PDF: deepest outline item whose `target.page` is <= current page.
+  // Mirrors how a reader would expect the outline to track their position:
+  // the current chapter / section stays highlighted as they scroll within it.
+  const pdfActiveItem = useMemo<OutlineItem | null>(() => {
+    if (!isPdf || pdfOutlineSymbols.length === 0) return null
+    let best: OutlineItem | null = null
+    let bestPage = 0
+    const walk = (list: OutlineItem[]) => {
+      for (const item of list) {
+        if (item.target?.kind === 'pdf-page' && item.target.page <= pdfActivePage) {
+          if (item.target.page >= bestPage) {
+            best = item
+            bestPage = item.target.page
+          }
+        }
+        if (item.children.length > 0) walk(item.children)
+      }
+    }
+    walk(pdfOutlineSymbols)
+    return best ?? pdfOutlineSymbols[0] ?? null
+  }, [isPdf, pdfActivePage, pdfOutlineSymbols])
+
+  // For EPUB: match at the chapter level. The outline may carry deep hrefs
+  // like `chapter1.xhtml#section-2` (preserved for precise navigation), while
+  // epub.js's `relocated` event reports a fragment-free chapter href. Strip
+  // the fragment on the item side at compare time so the right row is
+  // highlighted without losing the full href used for navigation.
+  const epubActiveItem = useMemo<OutlineItem | null>(() => {
+    if (!isEpub || !epubActiveHref || epubOutlineSymbols.length === 0) return null
+    const target = epubActiveHref
+    const chapterOf = (href: string): string => {
+      const idx = href.indexOf('#')
+      return idx === -1 ? href : href.slice(0, idx)
+    }
+    let found: OutlineItem | null = null
+    const walk = (list: OutlineItem[]) => {
+      for (const item of list) {
+        if (found) return
+        if (item.target?.kind === 'epub-href' && chapterOf(item.target.href) === target) {
+          found = item
+          return
+        }
+        if (item.children.length > 0) walk(item.children)
+      }
+    }
+    walk(epubOutlineSymbols)
+    return found
+  }, [isEpub, epubActiveHref, epubOutlineSymbols])
 
   const expandedDirs = useMemo(() => collectExpandedPaths(tree), [tree])
   const quickFileLabels = useMemo(() => {
@@ -2213,6 +2282,10 @@ export function ProjectEditor({
     setIsSqlite(false)
     setIsPdf(false)
     setIsEpub(false)
+    setPdfOutlineSymbols([])
+    setPdfActivePage(1)
+    setEpubOutlineSymbols([])
+    setEpubActiveHref(null)
     setImagePreviewUrl(null)
     setPdfPreviewUrl(null)
     setEpubPreviewData(null)
@@ -2274,6 +2347,10 @@ export function ProjectEditor({
     setIsSqlite(false)
     setIsPdf(false)
     setIsEpub(false)
+    setPdfOutlineSymbols([])
+    setPdfActivePage(1)
+    setEpubOutlineSymbols([])
+    setEpubActiveHref(null)
     setImagePreviewUrl(null)
     setPdfPreviewUrl(null)
     setEpubPreviewData(null)
@@ -3390,6 +3467,10 @@ export function ProjectEditor({
           isPdfRef.current = false
           setIsEpub(false)
           isEpubRef.current = false
+          setPdfOutlineSymbols([])
+          setPdfActivePage(1)
+          setEpubOutlineSymbols([])
+          setEpubActiveHref(null)
           setImagePreviewUrl(null)
           setPdfPreviewUrl(null)
           setEpubPreviewData(null)
@@ -3456,6 +3537,12 @@ export function ProjectEditor({
     isPdfRef.current = pdfFile
     setIsEpub(epubFile)
     isEpubRef.current = epubFile
+    // Clear the last file's PDF/EPUB outline state. The new reader will push
+    // its outline + location through the new callbacks once it mounts.
+    setPdfOutlineSymbols([])
+    setPdfActivePage(1)
+    setEpubOutlineSymbols([])
+    setEpubActiveHref(null)
     setImagePreviewUrl(result.isImage ? (result.previewUrl ?? null) : null)
     setPdfPreviewUrl(pdfFile ? (result.previewUrl ?? null) : null)
     setEpubPreviewData(epubFile ? (result.previewData ?? null) : null)
@@ -5451,7 +5538,11 @@ export function ProjectEditor({
         const root: ParentNode = modalRef.current ?? document
         const container = root.querySelector('.project-editor-epub-reader') as HTMLElement | null
         const contentNode = container?.querySelector('.project-editor-epub-content') as HTMLElement | null
-        const tocNodes = container?.querySelectorAll('.project-editor-epub-toc > li') ?? []
+        // TOC now lives in the shared OutlinePanel; fall back to the state
+        // snapshot so this stays accurate regardless of whether the panel
+        // is currently visible (e.g. outline collapsed by the user).
+        const outlineNodes = root.querySelectorAll('.outline-panel .outline-panel-item')
+        const tocNodes = outlineNodes.length > 0 ? outlineNodes : (epubOutlineSymbolsRef.current ?? [])
         const fontSizeLabel = container?.querySelector('.project-editor-epub-fontsize-value')?.textContent?.trim() ?? null
         const errorNode = container?.querySelector('.project-editor-epub-error') as HTMLElement | null
         const errorMessage = errorNode?.textContent?.trim() ?? null
@@ -6403,10 +6494,17 @@ export function ProjectEditor({
 
     const startX = event.clientX
     const startWidth = outlineWidthRef.current
-    const containerWidth = previewLayoutRef.current?.clientWidth ?? 0
-    // Non-Markdown: resizer to the right of outline, drag right → widen (direction = 1)
-    // Markdown: resizer to the left of outline, drag left → widen (direction = -1)
-    const direction = isMarkdownFile ? -1 : 1
+    // Fallback to the parent's width if previewLayoutRef isn't wired yet on
+    // this render path. Without a fallback, containerWidth = 0 caps
+    // maxOutlineWidth at MIN_OUTLINE_WIDTH and the user can only shrink the
+    // pane, never widen it back.
+    const resizerEl = event.currentTarget as HTMLElement
+    const parentWidth = (resizerEl.parentElement as HTMLElement | null)?.clientWidth ?? 0
+    const containerWidth = previewLayoutRef.current?.clientWidth || parentWidth
+    // Outline now lives on the right for every file type, so the resizer is
+    // always to the LEFT of the outline pane — drag left widens, drag right
+    // narrows.
+    const direction = -1
     const previewOccupied = isMarkdownPreviewVisible && isMarkdownEditorVisibleRef.current
       ? (markdownPreviewWidthRef.current + 6)
       : 0
@@ -7186,27 +7284,66 @@ export function ProjectEditor({
                   const normalized = normalizePath(activeFilePath)
                   const memory = fileMemoryRef.current.get(normalized)
                   return (
-                    <PdfReader
-                      viewerUrl={pdfPreviewUrl}
-                      filePath={activeFilePath}
-                      outlineOpen={isOutlineVisible}
-                      initialState={{
-                        page: memory?.pdfPageNumber,
-                        scrollTop: memory?.pdfScrollTop,
-                        scale: memory?.pdfScale
-                      }}
-                      onStateChange={(state) => {
-                        const current = fileMemoryRef.current.get(normalized) ?? {}
-                        const merged: FileViewMemory = {
-                          ...current,
-                          pdfPageNumber: state.page,
-                          pdfScrollTop: state.scrollTop,
-                          ...(state.scale ? { pdfScale: state.scale } : {})
-                        }
-                        upsertFileMemory(normalized, merged)
-                        scheduleProjectStateSave()
-                      }}
-                    />
+                    <div className="project-editor-split" ref={previewLayoutRef}>
+                      <div className="project-editor-editor-pane" style={{ flex: '1 1 0%' }}>
+                        <PdfReader
+                          ref={pdfReaderRef}
+                          viewerUrl={pdfPreviewUrl}
+                          filePath={activeFilePath}
+                          initialState={{
+                            page: memory?.pdfPageNumber,
+                            scrollTop: memory?.pdfScrollTop,
+                            scale: memory?.pdfScale
+                          }}
+                          onOutlineLoaded={setPdfOutlineSymbols}
+                          onPageChange={setPdfActivePage}
+                          onStateChange={(state) => {
+                            const current = fileMemoryRef.current.get(normalized) ?? {}
+                            const merged: FileViewMemory = {
+                              ...current,
+                              pdfPageNumber: state.page,
+                              pdfScrollTop: state.scrollTop,
+                              ...(state.scale ? { pdfScale: state.scale } : {})
+                            }
+                            upsertFileMemory(normalized, merged)
+                            scheduleProjectStateSave()
+                          }}
+                        />
+                      </div>
+                      {outlineShowInSplit && (
+                        <>
+                          <div className="project-editor-outline-resizer" onMouseDown={handleOutlineResizeMouseDown} />
+                          <div className="project-editor-outline-pane" style={outlinePaneStyle}>
+                            <OutlinePanel
+                              symbols={pdfOutlineSymbols}
+                              activeItem={pdfActiveItem}
+                              isLoading={false}
+                              filePath={activeFilePath}
+                              editor={null}
+                              initialScrollTop={(() => {
+                                const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+                                return key ? outlineScrollTopRef.current.get(key) : undefined
+                              })()}
+                              onScrollCapture={handleOutlineScrollCapture}
+                              onItemNavigate={(item) => {
+                                if (item.target?.kind === 'pdf-page') {
+                                  // Prefer the full destination when available
+                                  // so /XYZ / /FitH and multi-anchor outlines
+                                  // navigate with pixel precision. Fall back
+                                  // to page-level jump only when no dest was
+                                  // preserved.
+                                  if (item.target.dest != null) {
+                                    pdfReaderRef.current?.goToDest(item.target.dest)
+                                  } else {
+                                    pdfReaderRef.current?.goToPage(item.target.page)
+                                  }
+                                }
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )
                 })()
               ) : activeFilePath && isEpub && epubPreviewData ? (
@@ -7214,22 +7351,53 @@ export function ProjectEditor({
                   const normalized = normalizePath(activeFilePath)
                   const memory = fileMemoryRef.current.get(normalized)
                   return (
-                    <EpubReader
-                      previewData={epubPreviewData}
-                      filePath={activeFilePath}
-                      initialFontPct={memory?.epubFontPct}
-                      initialLocation={memory?.epubLocation ?? null}
-                      outlineOpen={isOutlineVisible}
-                      onMemoryChange={(patch) => {
-                        // Merge into the per-file memory keyed by the normalized
-                        // path so the next open of the same file restores the
-                        // same reader state. NOT persisted as a global setting.
-                        const current = fileMemoryRef.current.get(normalized) ?? {}
-                        const merged: FileViewMemory = { ...current, ...patch }
-                        upsertFileMemory(normalized, merged)
-                        scheduleProjectStateSave()
-                      }}
-                    />
+                    <div className="project-editor-split" ref={previewLayoutRef}>
+                      <div className="project-editor-editor-pane" style={{ flex: '1 1 0%' }}>
+                        <EpubReader
+                          ref={epubReaderRef}
+                          previewData={epubPreviewData}
+                          filePath={activeFilePath}
+                          initialFontPct={memory?.epubFontPct}
+                          initialLocation={memory?.epubLocation ?? null}
+                          initialScrollTop={memory?.epubScrollTop}
+                          onOutlineLoaded={setEpubOutlineSymbols}
+                          onLocationChange={setEpubActiveHref}
+                          onMemoryChange={(patch) => {
+                            // Merge into the per-file memory keyed by the normalized
+                            // path so the next open of the same file restores the
+                            // same reader state. NOT persisted as a global setting.
+                            const current = fileMemoryRef.current.get(normalized) ?? {}
+                            const merged: FileViewMemory = { ...current, ...patch }
+                            upsertFileMemory(normalized, merged)
+                            scheduleProjectStateSave()
+                          }}
+                        />
+                      </div>
+                      {outlineShowInSplit && (
+                        <>
+                          <div className="project-editor-outline-resizer" onMouseDown={handleOutlineResizeMouseDown} />
+                          <div className="project-editor-outline-pane" style={outlinePaneStyle}>
+                            <OutlinePanel
+                              symbols={epubOutlineSymbols}
+                              activeItem={epubActiveItem}
+                              isLoading={false}
+                              filePath={activeFilePath}
+                              editor={null}
+                              initialScrollTop={(() => {
+                                const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+                                return key ? outlineScrollTopRef.current.get(key) : undefined
+                              })()}
+                              onScrollCapture={handleOutlineScrollCapture}
+                              onItemNavigate={(item) => {
+                                if (item.target?.kind === 'epub-href') {
+                                  epubReaderRef.current?.goToHref(item.target.href)
+                                }
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )
                 })()
               ) : activeFilePath && isSqlite && (rootRef.current ?? rootPath) ? (
@@ -7240,27 +7408,6 @@ export function ProjectEditor({
                 />
               ) : activeFilePath && !isBinary ? (
                 <div className="project-editor-split" ref={previewLayoutRef}>
-                  {/* Non-Markdown: Outline is on the left side of the editor (between the directory tree and the editor) */}
-                  {outlineShowInSplit && !isMarkdownFile && (
-                    <>
-                      <div className="project-editor-outline-pane" style={outlinePaneStyle}>
-                        <OutlinePanel
-                          symbols={outlineSymbols}
-                          activeItem={outlineActiveItem}
-                          isLoading={outlineLoading}
-                          filePath={activeFilePath}
-                          editor={editorRef.current}
-                          initialScrollTop={(() => {
-                            const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
-                            return key ? outlineScrollTopRef.current.get(key) : undefined
-                          })()}
-                          onScrollCapture={handleOutlineScrollCapture}
-                        />
-                      </div>
-                      <div className="project-editor-outline-resizer" onMouseDown={handleOutlineResizeMouseDown} />
-                    </>
-                  )}
-
                   <div
                     className="project-editor-editor-pane"
                     style={{
@@ -7409,30 +7556,49 @@ export function ProjectEditor({
                     </>
                   )}
 
-                  {/* Markdown: TOC is on the right side of the preview (far right) */}
-                  {outlineShowInSplit && isMarkdownFile && (
+                  {/* Outline lives on the right for every file type so the
+                      placement stays consistent across Markdown / code /
+                      PDF / EPUB. The Markdown variant gets a few extra props
+                      (preview sync, active-slug tracking); everything else
+                      uses the plain editor-driven outline. */}
+                  {outlineShowInSplit && (
                     <>
                       <div className="project-editor-outline-resizer" onMouseDown={handleOutlineResizeMouseDown} />
                       <div className="project-editor-outline-pane" style={outlinePaneStyle}>
-                        <OutlinePanel
-                          symbols={outlineSymbols}
-                          activeItem={outlineActiveItem}
-                          isLoading={outlineLoading}
-                          filePath={activeFilePath}
-                          editor={editorRef.current}
-                          isMarkdown
-                          previewRef={previewRef}
-                          outlineTarget={outlineTarget}
-                          isEditorVisible={isMarkdownEditorVisible}
-                          isPreviewVisible={isMarkdownPreviewVisible}
-                          previewActiveSlug={previewActiveSlug}
-                          initialScrollTop={(() => {
-                            const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
-                            return key ? outlineScrollTopRef.current.get(key) : undefined
-                          })()}
-                          onScrollCapture={handleOutlineScrollCapture}
-                          onOutlineTargetChange={setOutlineTargetPreference}
-                        />
+                        {isMarkdownFile ? (
+                          <OutlinePanel
+                            symbols={outlineSymbols}
+                            activeItem={outlineActiveItem}
+                            isLoading={outlineLoading}
+                            filePath={activeFilePath}
+                            editor={editorRef.current}
+                            isMarkdown
+                            previewRef={previewRef}
+                            outlineTarget={outlineTarget}
+                            isEditorVisible={isMarkdownEditorVisible}
+                            isPreviewVisible={isMarkdownPreviewVisible}
+                            previewActiveSlug={previewActiveSlug}
+                            initialScrollTop={(() => {
+                              const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+                              return key ? outlineScrollTopRef.current.get(key) : undefined
+                            })()}
+                            onScrollCapture={handleOutlineScrollCapture}
+                            onOutlineTargetChange={setOutlineTargetPreference}
+                          />
+                        ) : (
+                          <OutlinePanel
+                            symbols={outlineSymbols}
+                            activeItem={outlineActiveItem}
+                            isLoading={outlineLoading}
+                            filePath={activeFilePath}
+                            editor={editorRef.current}
+                            initialScrollTop={(() => {
+                              const key = getFileScrollKey(lastEditorScopeRef.current, activeFilePath)
+                              return key ? outlineScrollTopRef.current.get(key) : undefined
+                            })()}
+                            onScrollCapture={handleOutlineScrollCapture}
+                          />
+                        )}
                       </div>
                     </>
                   )}

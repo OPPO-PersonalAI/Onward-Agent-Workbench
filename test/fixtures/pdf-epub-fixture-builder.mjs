@@ -16,6 +16,9 @@
 
 import { deflateRawSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // ---------- PDF ----------
 
@@ -300,18 +303,37 @@ const epubAltBuf = buildEpubBuffer('alt')
 
 const sha = buf => createHash('sha256').update(buf).digest('hex').slice(0, 12)
 
-process.stdout.write(`PDF_BYTES=${pdfBuf.length}\n`)
-process.stdout.write(`PDF_SHA=${sha(pdfBuf)}\n`)
-process.stdout.write(`PDF_BASE64=${pdfBuf.toString('base64')}\n`)
-process.stdout.write(`PDF_ALT_BYTES=${pdfAltBuf.length}\n`)
-process.stdout.write(`PDF_ALT_SHA=${sha(pdfAltBuf)}\n`)
-process.stdout.write(`PDF_ALT_BASE64=${pdfAltBuf.toString('base64')}\n`)
-process.stdout.write(`PDF_OUTLINE_BYTES=${pdfOutlineBuf.length}\n`)
-process.stdout.write(`PDF_OUTLINE_SHA=${sha(pdfOutlineBuf)}\n`)
-process.stdout.write(`PDF_OUTLINE_BASE64=${pdfOutlineBuf.toString('base64')}\n`)
-process.stdout.write(`EPUB_BYTES=${epubBuf.length}\n`)
-process.stdout.write(`EPUB_SHA=${sha(epubBuf)}\n`)
-process.stdout.write(`EPUB_BASE64=${epubBuf.toString('base64')}\n`)
-process.stdout.write(`EPUB_ALT_BYTES=${epubAltBuf.length}\n`)
-process.stdout.write(`EPUB_ALT_SHA=${sha(epubAltBuf)}\n`)
-process.stdout.write(`EPUB_ALT_BASE64=${epubAltBuf.toString('base64')}\n`)
+// --write: emit the fixture files to test/fixtures/pdf-epub/ for autotests to
+// copy from (see CLAUDE.md rule "fixtures must live on disk").
+if (process.argv.includes('--write')) {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const outDir = join(here, 'pdf-epub')
+  mkdirSync(outDir, { recursive: true })
+  const files = [
+    ['onward-autotest.pdf', pdfBuf],
+    ['onward-autotest.alt.pdf', pdfAltBuf],
+    ['onward-autotest.outlined.pdf', pdfOutlineBuf],
+    ['onward-autotest.epub', epubBuf],
+    ['onward-autotest.alt.epub', epubAltBuf]
+  ]
+  for (const [name, buf] of files) {
+    writeFileSync(join(outDir, name), buf)
+    process.stdout.write(`wrote ${name} (${buf.length} bytes, sha=${sha(buf)})\n`)
+  }
+} else {
+  process.stdout.write(`PDF_BYTES=${pdfBuf.length}\n`)
+  process.stdout.write(`PDF_SHA=${sha(pdfBuf)}\n`)
+  process.stdout.write(`PDF_BASE64=${pdfBuf.toString('base64')}\n`)
+  process.stdout.write(`PDF_ALT_BYTES=${pdfAltBuf.length}\n`)
+  process.stdout.write(`PDF_ALT_SHA=${sha(pdfAltBuf)}\n`)
+  process.stdout.write(`PDF_ALT_BASE64=${pdfAltBuf.toString('base64')}\n`)
+  process.stdout.write(`PDF_OUTLINE_BYTES=${pdfOutlineBuf.length}\n`)
+  process.stdout.write(`PDF_OUTLINE_SHA=${sha(pdfOutlineBuf)}\n`)
+  process.stdout.write(`PDF_OUTLINE_BASE64=${pdfOutlineBuf.toString('base64')}\n`)
+  process.stdout.write(`EPUB_BYTES=${epubBuf.length}\n`)
+  process.stdout.write(`EPUB_SHA=${sha(epubBuf)}\n`)
+  process.stdout.write(`EPUB_BASE64=${epubBuf.toString('base64')}\n`)
+  process.stdout.write(`EPUB_ALT_BYTES=${epubAltBuf.length}\n`)
+  process.stdout.write(`EPUB_ALT_SHA=${sha(epubAltBuf)}\n`)
+  process.stdout.write(`EPUB_ALT_BASE64=${epubAltBuf.toString('base64')}\n`)
+}

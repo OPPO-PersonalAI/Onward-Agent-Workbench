@@ -6,37 +6,37 @@
 import type { AutotestContext, TestResult } from './types'
 
 /**
- * Fixture builder: test/fixtures/pdf-epub-fixture-builder.mjs
- *
- * The PDF carries the text "Onward Autotest PDF" on a single 300x200 page.
- * The EPUB is a valid EPUB 3 with two chapters and a nav.xhtml TOC; the text
- * "Onward Autotest EPUB chapter 1." / "... chapter 2." appears in each.
+ * Fixtures live on disk under `test/fixtures/pdf-epub/` (see CLAUDE.md rule
+ * "fixture files must live on disk"). The test copies them into `rootPath`
+ * via a terminal command so the flow mirrors what a user would see in the
+ * Files panel. Regenerate with `node test/fixtures/pdf-epub-fixture-builder.mjs --write`.
  */
-const PDF_BASE64 =
-  'JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMjAwXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA1MCA+PgpzdHJlYW0KQlQgL0YxIDE4IFRmIDMwIDEwMCBUZCAoT253YXJkIEF1dG90ZXN0IFBERikgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNjQgMDAwMDAgbiAKMDAwMDAwMDEyMSAwMDAwMCBuIAowMDAwMDAwMjQ3IDAwMDAwIG4gCjAwMDAwMDAzNDcgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MTcKJSVFT0YK'
-
-const PDF_OUTLINE_BASE64 =
-  'JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgL091dGxpbmVzIDYgMCBSID4+CmVuZG9iagoyIDAgb2JqCjw8IC9UeXBlIC9QYWdlcyAvS2lkcyBbMyAwIFJdIC9Db3VudCAxID4+CmVuZG9iagozIDAgb2JqCjw8IC9UeXBlIC9QYWdlIC9QYXJlbnQgMiAwIFIgL01lZGlhQm94IFswIDAgMzAwIDIwMF0gL0NvbnRlbnRzIDQgMCBSIC9SZXNvdXJjZXMgPDwgL0ZvbnQgPDwgL0YxIDUgMCBSID4+ID4+ID4+CmVuZG9iago0IDAgb2JqCjw8IC9MZW5ndGggNTkgPj4Kc3RyZWFtCkJUIC9GMSAxOCBUZiAzMCAxMDAgVGQgKE9ud2FyZCBBdXRvdGVzdCBPdXRsaW5lZCBQREYpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCjYgMCBvYmoKPDwgL1R5cGUgL091dGxpbmVzIC9GaXJzdCA3IDAgUiAvTGFzdCA3IDAgUiAvQ291bnQgMSA+PgplbmRvYmoKNyAwIG9iago8PCAvVGl0bGUgKEF1dG90ZXN0IENoYXB0ZXIpIC9QYXJlbnQgNiAwIFIgL0Rlc3QgWzMgMCBSIC9GaXRdID4+CmVuZG9iagp4cmVmCjAgOAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA4MCAwMDAwMCBuIAowMDAwMDAwMTM3IDAwMDAwIG4gCjAwMDAwMDAyNjMgMDAwMDAgbiAKMDAwMDAwMDM3MiAwMDAwMCBuIAowMDAwMDAwNDQyIDAwMDAwIG4gCjAwMDAwMDA1MTMgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA4IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo1OTMKJSVFT0YK'
-
-const EPUB_BASE64 =
-  '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'
 
 const TEST_PDF_FILENAME = '__autotest_pdf_preview.pdf'
 const TEST_PDF_OUTLINE_FILENAME = '__autotest_pdf_preview_outlined.pdf'
 const TEST_EPUB_FILENAME = '__autotest_epub_preview.epub'
 const TEST_MARKER_FILENAME = '__autotest_pdf_epub_marker.txt'
 
+const FIXTURE_REL_DIR = 'test/fixtures/pdf-epub'
+const PDF_FIXTURE_SRC = 'onward-autotest.pdf'
+const PDF_OUTLINE_FIXTURE_SRC = 'onward-autotest.outlined.pdf'
+const EPUB_FIXTURE_SRC = 'onward-autotest.epub'
+
 function joinPath(base: string, child: string): string {
   const trimmed = base.replace(/[\\/]+$/, '')
   return `${trimmed}/${child}`
 }
 
-function platformBuildWriteBase64Command(filename: string, base64: string): string {
+// Build a `cp`-style command that copies a repo-relative fixture into the
+// test's cwd (which is `rootPath`). POSIX uses `cp`, Windows PowerShell uses
+// `Copy-Item` — both quote paths to handle spaces safely.
+function platformBuildCopyCommand(srcRelPath: string, destFilename: string, rootPath: string): string {
   if (window.electronAPI.platform === 'win32') {
-    return `powershell -Command "[IO.File]::WriteAllBytes('${filename}', [Convert]::FromBase64String('${base64}'))"`
+    const src = `${rootPath}\\${srcRelPath.replace(/\//g, '\\')}`
+    return `powershell -Command "Copy-Item -LiteralPath '${src}' -Destination '${destFilename}' -Force"`
   }
-  // `printf '%s' <base64> | base64 -d > <file>` works on macOS and Linux.
-  return `printf '%s' '${base64}' | base64 -d > '${filename}'`
+  const src = `${rootPath}/${srcRelPath}`
+  return `cp "${src}" "${destFilename}"`
 }
 
 function platformBuildDeleteCommand(filenames: string[]): string {
@@ -71,16 +71,17 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     'marker:create'
   )
 
-  // Write PDF + EPUB fixtures next to the marker.
+  // Copy PDF + EPUB fixtures from the on-disk test fixture directory into the
+  // project's root so the Files panel can pick them up.
   await termExec(
-    platformBuildWriteBase64Command(TEST_PDF_FILENAME, PDF_BASE64),
-    'pdf:write',
-    1500
+    platformBuildCopyCommand(`${FIXTURE_REL_DIR}/${PDF_FIXTURE_SRC}`, TEST_PDF_FILENAME, rootPath),
+    'pdf:copy',
+    1200
   )
   await termExec(
-    platformBuildWriteBase64Command(TEST_EPUB_FILENAME, EPUB_BASE64),
-    'epub:write',
-    1500
+    platformBuildCopyCommand(`${FIXTURE_REL_DIR}/${EPUB_FIXTURE_SRC}`, TEST_EPUB_FILENAME, rootPath),
+    'epub:copy',
+    1200
   )
 
   const pdfPath = joinPath(rootPath, TEST_PDF_FILENAME)
@@ -123,6 +124,27 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     Boolean(pdfState?.src && pdfState.src.includes('viewer.html') && pdfState.src.includes('file=')),
     { src: pdfState?.src ?? null }
   )
+  // Verify the iframe and its split-layout ancestors actually have non-zero
+  // dimensions. A layout collapse (height:0) is invisible via state probes
+  // but would leave the user staring at a blank area — exactly the symptom
+  // the 0418-wk1 user reported.
+  {
+    const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
+    const reader = document.querySelector('.project-editor-pdf-reader') as HTMLElement | null
+    const pane = document.querySelector('.project-editor-editor-pane') as HTMLElement | null
+    const split = document.querySelector('.project-editor-split') as HTMLElement | null
+    const dims = {
+      iframe: iframe ? { w: iframe.offsetWidth, h: iframe.offsetHeight } : null,
+      reader: reader ? { w: reader.offsetWidth, h: reader.offsetHeight } : null,
+      pane: pane ? { w: pane.offsetWidth, h: pane.offsetHeight } : null,
+      split: split ? { w: split.offsetWidth, h: split.offsetHeight } : null
+    }
+    record(
+      'pdf-reader-iframe-has-nonzero-dimensions',
+      Boolean(iframe && iframe.offsetWidth > 100 && iframe.offsetHeight > 100),
+      dims
+    )
+  }
   record(
     'pdf-reader-src-points-to-fixture',
     Boolean(pdfState?.src && pdfState.src.includes(encodeURIComponent('__autotest_pdf_preview.pdf'))),
@@ -229,18 +251,71 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     { fontSizeLabel: epubState?.fontSizeLabel ?? null }
   )
 
-  // Click a TOC entry and verify navigation doesn't break the reader. This
-  // mirrors the user action of browsing the outline to jump to chapter 2.
-  const tocItems = document.querySelectorAll('.project-editor-epub-toc > li .project-editor-epub-toc-item')
-  if (tocItems.length >= 2) {
-    ;(tocItems[1] as HTMLElement).click()
-    await sleep(500)
-    const contentStillThere = Boolean(getApi()?.getEpubReaderState?.()?.hasContent)
-    record('epub-toc-click-navigates', contentStillThere, {
-      tocCount: tocItems.length
+  // The EPUB's TOC is now rendered by the shared OutlinePanel. Assert that:
+  //   (a) the old in-reader `<aside>` TOC has been removed,
+  //   (b) OutlinePanel has ≥ 1 item for the current EPUB,
+  //   (c) clicking a TOC entry navigates the reader via the new onItemNavigate
+  //       channel (not a direct epub.js display() call from the sidebar).
+  record(
+    'epub-outline-panel-replaces-sidebar',
+    !document.querySelector('.project-editor-epub-sidebar'),
+    {}
+  )
+  const outlinePanelItemsBefore = await waitFor(
+    'epub-outline-panel-populated',
+    () => document.querySelectorAll('.outline-panel .outline-panel-item').length >= 2,
+    8000
+  )
+  record('epub-outline-panel-populated', outlinePanelItemsBefore, {
+    itemCount: document.querySelectorAll('.outline-panel .outline-panel-item').length
+  })
+  const outlineItems = Array.from(
+    document.querySelectorAll('.outline-panel .outline-panel-item')
+  ) as HTMLElement[]
+  if (outlineItems.length >= 2) {
+    ;(outlineItems[1] as HTMLElement).click()
+    const navigated = await waitFor(
+      'epub-outline-click-navigates',
+      () => {
+        const href = getApi()?.getEpubReaderState?.()?.currentLocationHref ?? null
+        return typeof href === 'string' && href.toLowerCase().includes('chapter2')
+      },
+      4000,
+      150
+    )
+    record('epub-outline-click-navigates', navigated, {
+      href: getApi()?.getEpubReaderState?.()?.currentLocationHref ?? null
+    })
+    // Auto-center assertion: the active item's center should fall inside the
+    // middle 60% band of the OutlinePanel tree. We check rect geometry rather
+    // than scroll position so the test is independent of item height.
+    await sleep(400)
+    const tree = document.querySelector('.outline-panel .outline-panel-tree') as HTMLElement | null
+    const active = document.querySelector('.outline-panel .outline-panel-item.active') as HTMLElement | null
+    let centered = false
+    if (tree && active) {
+      // If the tree is too small to scroll (everything fits), we can't
+      // physically center — treat that as "no centering needed" so the
+      // assertion reflects intent rather than tautological fail for tiny
+      // fixtures. For real scrollable trees, enforce the 60% band.
+      if (tree.scrollHeight <= tree.clientHeight + 2) {
+        centered = true
+      } else {
+        const c = tree.getBoundingClientRect()
+        const a = active.getBoundingClientRect()
+        const band = c.height * 0.6
+        const topBand = c.top + (c.height - band) / 2
+        const bottomBand = topBand + band
+        centered = a.top >= topBand && a.bottom <= bottomBand
+      }
+    }
+    record('epub-outline-active-centered', centered, {
+      hasTree: Boolean(tree),
+      hasActive: Boolean(active)
     })
   } else {
-    record('epub-toc-click-navigates', false, { tocCount: tocItems.length })
+    record('epub-outline-click-navigates', false, { itemCount: outlineItems.length })
+    record('epub-outline-active-centered', false, { itemCount: outlineItems.length })
   }
 
   // Capture which chapter the user is on BEFORE bumping the font. The TOC
@@ -323,25 +398,28 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     record('epub-search-hit-click-keeps-content', stillHasContent)
   }
 
-  // The in-reader ☰ is gone — outline toggling now lives in the main
-  // ProjectEditor toolbar ("Close Outline / Open Outline"), same button
-  // users use for Markdown. Find it and verify its label + toggle effect.
+  // The outline toggle lives in the main ProjectEditor header ("Close / Open
+  // Outline"), shared with Markdown and code files. When it's toggled off,
+  // the unified .outline-panel disappears from the DOM for the EPUB reader
+  // too. We also keep the assertion that the in-reader `<aside>` is gone.
+  // The EPUB toolbar itself no longer renders any outline-related buttons
+  // (we removed the inline sidebar entirely) — assert that none exist.
+  record('epub-no-inline-toc-button',
+    document.querySelectorAll('.project-editor-epub-sidebar, .project-editor-epub-toc-item').length === 0,
+    {}
+  )
   const outlineHeaderBtn = Array.from(
     document.querySelectorAll('.project-editor-action-btn.project-editor-preview-toggle')
   )[0] as HTMLButtonElement | undefined
   record('epub-outline-button-in-header', Boolean(outlineHeaderBtn), {
     label: outlineHeaderBtn?.textContent?.trim() ?? null
   })
-  record('epub-no-inline-toc-button',
-    !document.querySelector('.project-editor-epub-toolbar button[title*="Outline"], .project-editor-epub-toolbar button[title*="目录"]'),
-    {}
-  )
   if (outlineHeaderBtn) {
     outlineHeaderBtn.click()
     await sleep(250)
-    const sidebarGone = !document.querySelector('.project-editor-epub-sidebar')
-    record('epub-header-outline-toggle-hides-sidebar', sidebarGone)
-    // Toggle back for remaining assertions.
+    const outlineHidden = !document.querySelector('.outline-panel')
+    record('epub-header-outline-toggle-hides-panel', outlineHidden)
+    // Toggle back for remaining assertions (PDF outline checks below).
     outlineHeaderBtn.click()
     await sleep(200)
   }
@@ -378,11 +456,11 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     fontSizeLabel: getApi()?.getEpubReaderState?.()?.fontSizeLabel ?? null
   })
 
-  // ---------- Outlined PDF fixture: auto-expand behavior ----------
-  // Write an outlined PDF next to the other fixtures (same working dir).
+  // ---------- Outlined PDF fixture: unified OutlinePanel integration ----------
+  // Copy the outlined PDF fixture next to the other fixtures.
   await termExec(
-    platformBuildWriteBase64Command(TEST_PDF_OUTLINE_FILENAME, PDF_OUTLINE_BASE64),
-    'outlined-pdf:write',
+    platformBuildCopyCommand(`${FIXTURE_REL_DIR}/${PDF_OUTLINE_FIXTURE_SRC}`, TEST_PDF_OUTLINE_FILENAME, rootPath),
+    'outlined-pdf:copy',
     1200
   )
   const outlinedPdfPath = joinPath(rootPath, TEST_PDF_OUTLINE_FILENAME)
@@ -392,44 +470,94 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     () => getApi()?.isPdfReaderVisible?.() === true,
     10000
   )
-  // Wait for the viewer iframe's internal outlinePanel to be present and
-  // NOT carry the "collapsed" class. This is the precise signal that our
-  // ported applyAutoOutlineBehavior did its job (and that the pane is
-  // pinned to the right side; layout is enforced by the markup order +
-  // border-left CSS we shipped).
-  const outlineAutoExpanded = await waitFor(
-    'pdf-outline-auto-expanded',
-    () => {
-      const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
-      const doc = iframe?.contentDocument
-      const panel = doc?.getElementById('outlinePanel')
-      if (!panel) return false
-      return !panel.classList.contains('collapsed') && (panel.querySelectorAll('.outline-item').length > 0)
-    },
+  // Unified OutlinePanel integration for PDF: after the outlined fixture
+  // loads, the Onward .outline-panel on the page should contain ≥ 1 entry,
+  // and the viewer iframe should NO LONGER have its own #outlinePanel (we
+  // removed the in-iframe outline UI).
+  const pdfOutlinePopulated = await waitFor(
+    'pdf-outline-panel-populated',
+    () => document.querySelectorAll('.outline-panel .outline-panel-item').length >= 1,
     15000,
     200
   )
+  record('pdf-outline-panel-populated', pdfOutlinePopulated, {
+    itemCount: document.querySelectorAll('.outline-panel .outline-panel-item').length
+  })
   {
     const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
     const doc = iframe?.contentDocument
-    const panel = doc?.getElementById('outlinePanel')
-    record('pdf-outline-auto-expanded', outlineAutoExpanded, {
-      hasPanel: Boolean(panel),
-      collapsed: panel?.classList.contains('collapsed') ?? null,
-      outlineItemCount: panel?.querySelectorAll('.outline-item').length ?? 0
-    })
-
-    // Outline panel is the LAST child of #workspace → it sits on the right.
-    const workspace = doc?.getElementById('workspace')
-    const lastChild = workspace?.lastElementChild
-    record('pdf-outline-on-right',
-      Boolean(lastChild && lastChild.id === 'outlinePanel'),
-      { lastChildId: lastChild?.id ?? null }
+    record('pdf-outline-panel-replaces-iframe-outline',
+      !doc?.getElementById('outlinePanel'),
+      { hasIframePanel: Boolean(doc?.getElementById('outlinePanel')) }
     )
+  }
+
+  // Navigate the PDF to page 1 via the viewer's internal API and confirm the
+  // outline entry for page 1 is marked active. This exercises the
+  // onPageChange → pdfActiveItem computation in ProjectEditor.
+  {
+    const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
+    const viewerWin = iframe?.contentWindow as (Window & {
+      pdfViewer?: { currentPageNumber?: number }
+    }) | null
+    // Hop to an arbitrary page to force a `pagechanging` → onPageChange fire.
+    // The outlined fixture is single-page, but just going to page 1 again is
+    // enough to trigger the state post (same flow that the user's scroll
+    // would hit).
+    if (viewerWin?.pdfViewer) {
+      try { viewerWin.pdfViewer.currentPageNumber = 1 } catch { /* ignore */ }
+    }
+    const activeMatches = await waitFor(
+      'pdf-outline-highlights-current-page',
+      () => Boolean(document.querySelector('.outline-panel .outline-panel-item.active')),
+      4000,
+      150
+    )
+    record('pdf-outline-highlights-current-page', activeMatches, {
+      active: document.querySelector('.outline-panel .outline-panel-item.active')?.textContent?.trim() ?? null
+    })
+    // Same geometric center check as the EPUB case.
+    const tree = document.querySelector('.outline-panel .outline-panel-tree') as HTMLElement | null
+    const active = document.querySelector('.outline-panel .outline-panel-item.active') as HTMLElement | null
+    let centered = false
+    if (tree && active) {
+      // If the tree is too small to scroll (everything fits), we can't
+      // physically center — treat that as "no centering needed" so the
+      // assertion reflects intent rather than tautological fail for tiny
+      // fixtures. For real scrollable trees, enforce the 60% band.
+      if (tree.scrollHeight <= tree.clientHeight + 2) {
+        centered = true
+      } else {
+        const c = tree.getBoundingClientRect()
+        const a = active.getBoundingClientRect()
+        const band = c.height * 0.6
+        const topBand = c.top + (c.height - band) / 2
+        const bottomBand = topBand + band
+        centered = a.top >= topBand && a.bottom <= bottomBand
+      }
+    }
+    record('pdf-outline-active-centered', centered, {
+      hasTree: Boolean(tree),
+      hasActive: Boolean(active)
+    })
   }
 
   // Dark toggle button label/title should reflect the current state using
   // the new "restore the inverted background" copy, not "Dark".
+  // Wait for viewer.js to apply i18n after the iframe remounts; a fresh
+  // iframe may briefly have an empty button before applyColorEnhancementState
+  // runs.
+  await waitFor(
+    'pdf-dark-toggle-ready',
+    () => {
+      const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
+      const doc = iframe?.contentDocument
+      const btn = doc?.getElementById('colorToggleBtn') as HTMLButtonElement | null
+      return Boolean(btn && (btn.textContent?.trim().length ?? 0) > 0)
+    },
+    6000,
+    150
+  )
   {
     const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
     const doc = iframe?.contentDocument

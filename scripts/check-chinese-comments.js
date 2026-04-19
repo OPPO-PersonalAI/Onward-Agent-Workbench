@@ -48,7 +48,11 @@ const EXTRA_TEXT_FILES = new Set([
 function isAllowlistedPath(relPath) {
   if (ALLOWLIST.has(relPath)) return true
   // Local skill definitions are project documentation, not product copy.
-  return relPath.startsWith('.claude/skills/')
+  if (relPath.startsWith('.claude/skills/')) return true
+  // Vendored pdf.js ships Unicode normalization ranges that include Han
+  // script blocks; it is third-party code we don't modify.
+  if (relPath.startsWith('resources/pdfjs/')) return true
+  return false
 }
 
 function getTrackedFiles() {

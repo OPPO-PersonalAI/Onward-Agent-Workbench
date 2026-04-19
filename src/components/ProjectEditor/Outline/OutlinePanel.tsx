@@ -28,6 +28,9 @@ interface OutlinePanelProps {
   previewActiveSlug?: string | null
   onScrollCapture?: (scrollTop: number) => void
   initialScrollTop?: number
+  /** Override for non-text readers (PDF / EPUB). When set, takes precedence
+   * over the default editor cursor jump for items that carry a `target`. */
+  onItemNavigate?: (item: OutlineItem) => void
 }
 
 const FILTER_THRESHOLD = 8
@@ -159,6 +162,7 @@ export function OutlinePanel({
   previewActiveSlug,
   onScrollCapture,
   initialScrollTop,
+  onItemNavigate,
 }: OutlinePanelProps) {
   const { t } = useI18n()
   const [filter, setFilter] = useState('')
@@ -364,6 +368,10 @@ export function OutlinePanel({
 
   const handleItemClick = useCallback(
     (item: OutlineItem) => {
+      if (item.target && onItemNavigate) {
+        onItemNavigate(item)
+        return
+      }
       const isHeading = item.kind >= OutlineSymbolKind.Heading1 && item.kind <= OutlineSymbolKind.Heading6
       if (isMarkdown && effectiveOutlineTarget === 'preview' && isHeading && scrollPreviewToHeading(item)) {
         return
@@ -373,7 +381,7 @@ export function OutlinePanel({
       editor.revealLineInCenter(item.startLine)
       editor.focus()
     },
-    [editor, effectiveOutlineTarget, isMarkdown, scrollPreviewToHeading]
+    [editor, effectiveOutlineTarget, isMarkdown, onItemNavigate, scrollPreviewToHeading]
   )
 
   const handleOutlineTargetButtonClick = useCallback(
@@ -414,13 +422,31 @@ export function OutlinePanel({
 
   const renderItem = useCallback(
     (item: OutlineItem, parentKey: string, _index: number) => {
-      const key = `${parentKey}/${item.name}:${item.startLine}`
+      const targetKey = item.target
+        ? item.target.kind === 'pdf-page'
+          ? `pdf:${item.target.page}`
+          : `epub:${item.target.href}`
+        : `ln:${item.startLine}`
+      const key = `${parentKey}/${item.name}:${targetKey}`
       const hasChildren = item.children.length > 0
       const isCollapsed = collapsed.has(key)
+      const matchesByTarget = (a: OutlineItem, b: OutlineItem): boolean => {
+        if (!a.target || !b.target) return false
+        if (a.target.kind !== b.target.kind) return false
+        if (a.target.kind === 'pdf-page' && b.target.kind === 'pdf-page') {
+          return a.target.page === b.target.page
+        }
+        if (a.target.kind === 'epub-href' && b.target.kind === 'epub-href') {
+          return a.target.href === b.target.href
+        }
+        return false
+      }
       const isActive =
         effectiveActiveItem !== null &&
-        effectiveActiveItem.startLine === item.startLine &&
-        effectiveActiveItem.name === item.name
+        (item.target
+          ? matchesByTarget(effectiveActiveItem, item)
+          : effectiveActiveItem.startLine === item.startLine &&
+            effectiveActiveItem.name === item.name)
       const icon = getIconInfo(item.kind)
       const indent = item.depth * 16
 

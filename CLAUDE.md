@@ -33,6 +33,7 @@ For platform-related commands, always consider these three platforms:
     - Expand test cases from the requirements to cover different operation paths and entry points.
     - Add as complete a set of test cases as possible and run them all; only report completion after all tests pass.
     - Newly created test scripts must be stored under the `test` directory, and the relevant documentation must be updated for reuse.
+    - Fixture files must live on disk, not inlined. Any binary or non-trivial fixture a test constructs — PDF, EPUB, images, sample source files, sample git repos — must be written as a real file under `test/` (or `test/fixtures/<suite>/`). Do NOT embed base64 blobs inside `.ts` / `.js` test sources. Rationale: fixtures are reusable across tests, regenerable from a builder script, diffable, and inspectable by opening them directly. Tests should copy the fixture into their working directory via a terminal command (`cp` on POSIX, `Copy-Item` on Windows) so the flow mirrors what a real user would see.
 - Icon sizing guidelines
     - The macOS app icon must follow the safe-area proportions from Apple Design Resources to avoid appearing oversized in the Dock / Mission Control.
     - Use `resources/icon.svg` as the single source of truth. After changes, fully regenerate `resources/icons/**`, `icon.icns`, `icon.ico`, and `icon.png`.

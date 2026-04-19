@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import ePub from 'epubjs'
 import type { Book, NavItem, Rendition } from 'epubjs'
 import { useI18n } from '../../i18n/useI18n'
+import type { OutlineItem } from './Outline/types'
+import { OutlineSymbolKind } from './Outline/types'
 
 interface EpubReaderProps {
   /** Base64-encoded EPUB bytes delivered by the main process. */
@@ -15,10 +17,25 @@ interface EpubReaderProps {
   /** Optional per-file memory restored by the host. */
   initialFontPct?: number
   initialLocation?: string | null
-  /** Host-driven outline visibility (controlled, matches Markdown preview UX). */
-  outlineOpen: boolean
+  /** Precise scroll offset captured last time the file was open. Applied after
+   * rendition.display() settles so restore lands pixel-exactly, not just on
+   * the correct chapter. */
+  initialScrollTop?: number
   /** Invoked when the user changes a persistable setting. */
-  onMemoryChange?: (patch: { epubFontPct?: number; epubLocation?: string | null }) => void
+  onMemoryChange?: (patch: {
+    epubFontPct?: number
+    epubLocation?: string | null
+    epubScrollTop?: number
+  }) => void
+  /** Fires once after book.loaded.navigation with the TOC as OutlineItem[]. */
+  onOutlineLoaded?: (items: OutlineItem[]) => void
+  /** Fires when the rendition settles on a new chapter. Href is fragment-free. */
+  onLocationChange?: (href: string | null) => void
+}
+
+export interface EpubReaderHandle {
+  /** Navigate to a chapter by its spine href (fragment-free form is fine). */
+  goToHref(href: string): void
 }
 
 type EpubSearchHit = {
@@ -61,30 +78,90 @@ function clampFontPct(v: number | undefined | null): number {
   return Math.max(MIN_FONT_PCT, Math.min(MAX_FONT_PCT, n))
 }
 
-export function EpubReader({
-  previewData,
-  filePath,
-  initialFontPct,
-  initialLocation,
-  outlineOpen,
-  onMemoryChange
-}: EpubReaderProps) {
+// Strip trailing fragment (#...) so activeHref comparisons match the href
+// shape we store in OutlineItem.target.
+function stripFragment(href: string | undefined | null): string | null {
+  if (!href) return null
+  const hashIdx = href.indexOf('#')
+  return hashIdx === -1 ? href : href.slice(0, hashIdx)
+}
+
+function flattenNavItems(items: NavItem[], depth = 0): OutlineItem[] {
+  return items.map((item) => {
+    const children = (item.subitems && item.subitems.length > 0)
+      ? flattenNavItems(item.subitems, depth + 1)
+      : []
+    // Preserve the ORIGINAL href (including any `#anchor` fragment) so
+    // navigation lands on the exact section. Active-item matching (done on
+    // the host) strips the fragment at compare time instead.
+    const href = item.href ?? ''
+    return {
+      name: item.label?.trim() || item.href || ' ',
+      kind: OutlineSymbolKind.Heading1,
+      startLine: 0,
+      startColumn: 0,
+      endLine: 0,
+      endColumn: 0,
+      children,
+      depth,
+      target: { kind: 'epub-href' as const, href }
+    }
+  })
+}
+
+export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function EpubReader(
+  { previewData, filePath, initialFontPct, initialLocation, initialScrollTop, onMemoryChange, onOutlineLoaded, onLocationChange },
+  ref
+) {
   const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const bookRef = useRef<Book | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
+  // Keep initialLocation / initialScrollTop fresh across file switches. These
+  // refs are snapshotted at the start of the main mount effect (which re-runs
+  // whenever previewData changes — i.e. per file open). Updating them on
+  // prop change keeps them ready for the next effect run without triggering
+  // a re-mount of the book.
   const initialLocationRef = useRef<string | null>(initialLocation ?? null)
+  const initialScrollTopRef = useRef<number | undefined>(initialScrollTop)
+  useEffect(() => {
+    initialLocationRef.current = initialLocation ?? null
+    initialScrollTopRef.current = initialScrollTop
+  }, [filePath, initialLocation, initialScrollTop])
   const onMemoryChangeRef = useRef(onMemoryChange)
   useEffect(() => { onMemoryChangeRef.current = onMemoryChange }, [onMemoryChange])
+  const onOutlineLoadedRef = useRef(onOutlineLoaded)
+  useEffect(() => { onOutlineLoadedRef.current = onOutlineLoaded }, [onOutlineLoaded])
+  const onLocationChangeRef = useRef(onLocationChange)
+  useEffect(() => { onLocationChangeRef.current = onLocationChange }, [onLocationChange])
+  // Suppress the very first `relocated` that epub.js fires as part of its
+  // initial display; otherwise the first active-item computation would be
+  // done before the rendition has settled.
+  const bookReadyRef = useRef(false)
+  // Debounce scroll-persist so we don't hammer the host on every scroll tick.
+  // Uses the same idea as PdfReader's queueReadingStatePost.
+  const scrollPersistTimerRef = useRef<number | null>(null)
+  // While we're applying a restored scrollTop, ignore incoming scroll events
+  // so the programmatic scroll doesn't get immediately re-persisted at a
+  // slightly different value due to epub.js's internal layout shifts.
+  const programmaticScrollUntilRef = useRef<number>(0)
 
-  const [toc, setToc] = useState<NavItem[]>([])
   const [fontPct, setFontPct] = useState(clampFontPct(initialFontPct))
   const [searchQuery, setSearchQuery] = useState('')
   const [searchHits, setSearchHits] = useState<EpubSearchHit[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchHitsOpen, setSearchHitsOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const themeName = useMemo(() => 'onward-theme', [])
+
+  useImperativeHandle(ref, () => ({
+    goToHref(href: string) {
+      const rendition = renditionRef.current
+      if (!rendition) return
+      try { void rendition.display(href) } catch { /* ignore */ }
+    }
+  }), [])
 
   const applyTheme = useCallback(() => {
     const rendition = renditionRef.current
@@ -124,10 +201,12 @@ export function EpubReader({
     if (!containerRef.current) return
     const container = containerRef.current
     setError(null)
+    bookReadyRef.current = false
 
     let disposed = false
     let book: Book | null = null
     let rendition: Rendition | null = null
+    let handleScroll: (() => void) | null = null
 
     try {
       const buffer = base64ToArrayBuffer(previewData)
@@ -148,6 +227,7 @@ export function EpubReader({
       void (readyThen ?? Promise.resolve()).then(() => {
         if (disposed) return
         applyTheme()
+        bookReadyRef.current = true
       })
 
       // Track display progress for autotest visibility. These refs get
@@ -182,19 +262,52 @@ export function EpubReader({
       // rendition relocates. We debounce by swapping onMemoryChangeRef.
       rendition.on('relocated', (loc: { start?: { cfi?: string; href?: string } }) => {
         const cfi = loc?.start?.cfi ?? loc?.start?.href ?? null
-        const href = loc?.start?.href ?? null
+        const rawHref = loc?.start?.href ?? null
+        const href = stripFragment(rawHref)
         if (progress.__onwardEpubReaderProgress) {
           ;(progress.__onwardEpubReaderProgress as Record<string, unknown>).lastLocationHref = href
           ;(progress.__onwardEpubReaderProgress as Record<string, unknown>).lastLocationCfi = cfi
         }
         onMemoryChangeRef.current?.({ epubLocation: cfi })
+        // Suppress the first `relocated` until the book has fully settled so
+        // the outline doesn't flash-highlight chapter 1 on restore.
+        if (bookReadyRef.current) {
+          onLocationChangeRef.current?.(href)
+        }
       })
+      // Pixel-exact scroll restore: after display() resolves AND the content
+      // has laid out enough for the host container to be scrollable, write
+      // the saved scrollTop. epub.js's scrolled-doc manager lays out the
+      // book incrementally as iframes render, so we poll briefly until
+      // scrollHeight can accommodate the target, then assign.
+      const applySavedScroll = () => {
+        const savedTop = initialScrollTopRef.current
+        if (typeof savedTop !== 'number' || savedTop <= 0) return
+        let attempts = 0
+        const maxAttempts = 60
+        const tick = () => {
+          if (disposed) return
+          const el = containerRef.current
+          if (!el) return
+          const maxTop = Math.max(0, el.scrollHeight - el.clientHeight)
+          if (maxTop < savedTop - 2 && attempts < maxAttempts) {
+            attempts += 1
+            window.requestAnimationFrame(tick)
+            return
+          }
+          const clamped = Math.min(savedTop, maxTop)
+          programmaticScrollUntilRef.current = performance.now() + 600
+          el.scrollTop = clamped
+        }
+        window.requestAnimationFrame(tick)
+      }
       let resolved = false
       rendition.display(initialTarget).then(() => {
         resolved = true
         if (progress.__onwardEpubReaderProgress) {
           progress.__onwardEpubReaderProgress.displayResolved = Date.now()
         }
+        applySavedScroll()
       }).catch((err: unknown) => {
         if (disposed) return
         if (progress.__onwardEpubReaderProgress) {
@@ -202,6 +315,23 @@ export function EpubReader({
         }
         setError(String((err as { message?: string })?.message ?? err))
       })
+
+      // Persist precise scroll offset whenever the user scrolls. Debounced
+      // to 250 ms the same way PdfReader debounces `onward:pdf:state`.
+      handleScroll = () => {
+        if (disposed) return
+        if (performance.now() < programmaticScrollUntilRef.current) return
+        if (scrollPersistTimerRef.current) {
+          window.clearTimeout(scrollPersistTimerRef.current)
+        }
+        scrollPersistTimerRef.current = window.setTimeout(() => {
+          scrollPersistTimerRef.current = null
+          const el = containerRef.current
+          if (!el) return
+          onMemoryChangeRef.current?.({ epubScrollTop: el.scrollTop })
+        }, 250)
+      }
+      container.addEventListener('scroll', handleScroll, { passive: true })
       // epub.js's DefaultViewManager occasionally stalls its first display()
       // against our sandboxed file:// iframe — the Promise never resolves but
       // no error is raised either. Retry a few times until we see a real
@@ -215,14 +345,17 @@ export function EpubReader({
             if (disposed || resolved) return
             const iframeNow = container && container.querySelector('iframe')
             if (iframeNow) return
-            try { void rendition.display(initialTarget) } catch { /* ignore */ }
+            const r = renditionRef.current
+            if (!r) return
+            try { void r.display(initialTarget) } catch { /* ignore */ }
           }, delay)
         }
       }).catch(() => { /* ignore — nothing to retry */ })
 
       void book.loaded.navigation.then((nav: { toc: NavItem[] }) => {
         if (disposed) return
-        setToc(nav?.toc ?? [])
+        const toc = nav?.toc ?? []
+        onOutlineLoadedRef.current?.(flattenNavItems(toc))
       })
     } catch (err) {
       setError(String((err as { message?: string })?.message ?? err))
@@ -230,6 +363,17 @@ export function EpubReader({
 
     return () => {
       disposed = true
+      if (scrollPersistTimerRef.current) {
+        window.clearTimeout(scrollPersistTimerRef.current)
+        scrollPersistTimerRef.current = null
+      }
+      if (handleScroll) {
+        try {
+          container.removeEventListener('scroll', handleScroll)
+        } catch {
+          /* ignore */
+        }
+      }
       try {
         renditionRef.current?.destroy()
       } catch {
@@ -308,10 +452,6 @@ export function EpubReader({
   }, [])
   const goNext = useCallback(() => {
     void renditionRef.current?.next()
-  }, [])
-
-  const jumpTo = useCallback((href: string) => {
-    void renditionRef.current?.display(href)
   }, [])
 
   const runSearch = useCallback(
@@ -439,6 +579,7 @@ export function EpubReader({
       const { hits, trace } = await runSearch(searchQuery)
       ;(window as unknown as { __onwardEpubSearchTrace?: Record<string, unknown> }).__onwardEpubSearchTrace = trace
       setSearchHits(hits)
+      setSearchHitsOpen(hits.length > 0)
     } finally {
       setSearching(false)
     }
@@ -452,6 +593,7 @@ export function EpubReader({
         const result = await runSearch(query)
         ;(window as unknown as { __onwardEpubSearchTrace?: Record<string, unknown> }).__onwardEpubSearchTrace = result.trace
         setSearchHits(result.hits)
+        setSearchHitsOpen(result.hits.length > 0)
         return result
       }
     }
@@ -508,81 +650,59 @@ export function EpubReader({
             value={searchQuery}
             onChange={event => setSearchQuery(event.target.value)}
             onKeyDown={onSearchKeyDown}
+            onFocus={() => searchHits.length > 0 && setSearchHitsOpen(true)}
             placeholder={t('projectEditor.epubReader.searchPlaceholder')}
           />
           <button type="button" className="project-editor-epub-btn" onClick={() => void handleSearch()} disabled={searching}>
             {searching ? t('projectEditor.epubReader.searching') : t('projectEditor.epubReader.search')}
           </button>
+          {searchHitsOpen && searchHits.length > 0 && (
+            <div className="project-editor-epub-search-popover">
+              <div className="project-editor-epub-search-popover-heading">
+                {t('projectEditor.epubReader.searchResults', { count: String(searchHits.length) })}
+                <button
+                  type="button"
+                  className="project-editor-epub-search-popover-close"
+                  onClick={() => setSearchHitsOpen(false)}
+                  title={t('projectEditor.epubReader.closeSearchResults')}
+                >
+                  ×
+                </button>
+              </div>
+              <ul className="project-editor-epub-search-hits">
+                {searchHits.slice(0, 100).map(hit => (
+                  <li key={hit.cfi}>
+                    <button
+                      type="button"
+                      className="project-editor-epub-search-hit"
+                      onClick={() => {
+                        // Navigate to the hit's chapter. We build our own
+                        // pseudo-CFI from (href, index) during search; epub.js
+                        // won't accept it as a CFI, but `href` is a valid
+                        // spine target that takes the user close to the
+                        // match. Wrap in try/catch so an invalid target
+                        // never kicks the rendition into an empty state.
+                        try {
+                          if (hit.href) void renditionRef.current?.display(hit.href)
+                        } catch {
+                          /* ignore */
+                        }
+                        setSearchHitsOpen(false)
+                      }}
+                    >
+                      {hit.excerpt}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
       <div className="project-editor-epub-body">
         <div className="project-editor-epub-content" ref={containerRef} />
-        {outlineOpen && (
-          <aside className="project-editor-epub-sidebar">
-            <div className="project-editor-epub-sidebar-section">
-              <div className="project-editor-epub-sidebar-heading">{t('projectEditor.epubReader.toc')}</div>
-              {toc.length === 0 ? (
-                <div className="project-editor-epub-sidebar-empty">{t('projectEditor.epubReader.noToc')}</div>
-              ) : (
-                <ul className="project-editor-epub-toc">
-                  {renderTocItems(toc, jumpTo)}
-                </ul>
-              )}
-            </div>
-            {searchHits.length > 0 && (
-              <div className="project-editor-epub-sidebar-section">
-                <div className="project-editor-epub-sidebar-heading">
-                  {t('projectEditor.epubReader.searchResults', { count: String(searchHits.length) })}
-                </div>
-                <ul className="project-editor-epub-search-hits">
-                  {searchHits.slice(0, 100).map(hit => (
-                    <li key={hit.cfi}>
-                      <button
-                        type="button"
-                        className="project-editor-epub-search-hit"
-                        onClick={() => {
-                          // Navigate to the hit's chapter. We build our own
-                          // pseudo-CFI from (href, index) during search; epub.js
-                          // won't accept it as a CFI, but `href` is a valid
-                          // spine target that takes the user close to the
-                          // match. Wrap in try/catch so an invalid target
-                          // never kicks the rendition into an empty state.
-                          try {
-                            if (hit.href) void renditionRef.current?.display(hit.href)
-                          } catch {
-                            /* ignore */
-                          }
-                        }}
-                      >
-                        {hit.excerpt}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </aside>
-        )}
       </div>
       {error && <div className="project-editor-epub-error">{error}</div>}
     </div>
   )
-}
-
-function renderTocItems(items: NavItem[], onJump: (href: string) => void): JSX.Element[] {
-  return items.map(item => (
-    <li key={item.id || item.href}>
-      <button
-        type="button"
-        className="project-editor-epub-toc-item"
-        onClick={() => onJump(item.href)}
-        title={item.label}
-      >
-        {item.label?.trim() || item.href}
-      </button>
-      {item.subitems && item.subitems.length > 0 && (
-        <ul className="project-editor-epub-toc-sub">{renderTocItems(item.subitems, onJump)}</ul>
-      )}
-    </li>
-  ))
-}
+})

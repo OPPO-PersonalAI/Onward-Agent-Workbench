@@ -16,11 +16,7 @@ const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
 const SCALE_STEP = 1.1;
 
-let outlineAutoFitTimer = null;
-let outlineAutoFitVersion = 0;
-
 const I18N_DEFAULTS = {
-  toc: "Outline",
   prevPage: "Previous page",
   nextPage: "Next page",
   zoomOut: "Zoom out",
@@ -64,8 +60,6 @@ const els = {
   searchNextBtn: document.getElementById("searchNextBtn"),
   searchResult: document.getElementById("searchResult"),
   colorToggleBtn: document.getElementById("colorToggleBtn"),
-  outlinePanel: document.getElementById("outlinePanel"),
-  outlineContainer: document.getElementById("outlineContainer"),
   viewerSection: document.getElementById("viewerSection"),
   viewerContainer: document.getElementById("viewerContainer"),
   viewer: document.getElementById("viewer"),
@@ -110,7 +104,6 @@ function init() {
   bindUiEvents();
   bindViewerEvents();
   bindHostMessages();
-  clearOutline();
   updatePageControls(1, 0);
   updateZoomUi({ scale: 1, presetValue: DEFAULT_SCALE_VALUE });
   applyI18nToDom();
@@ -137,15 +130,20 @@ function bindHostMessages() {
         scale: typeof data.scale === "string" ? data.scale : null
       };
       applyRestoreStateIfReady();
-    } else if (data.type === "onward:pdf:setOutlineOpen") {
-      // Host drives outline visibility now that the in-viewer toggle is
-      // gone — keeps the UX consistent with the Markdown outline button.
-      if (data.open) {
-        els.outlinePanel.classList.remove("collapsed");
-        scheduleOutlineAwarePageWidth();
-      } else {
-        cancelOutlineAutoFit();
-        els.outlinePanel.classList.add("collapsed");
+    } else if (data.type === "onward:pdf:goToPage") {
+      if (!currentDocument) return;
+      const page = Number(data.page);
+      if (!Number.isFinite(page)) return;
+      pdfViewer.currentPageNumber = clamp(page, 1, currentDocument.numPages);
+    } else if (data.type === "onward:pdf:goToDest") {
+      // Preserve full PDF destinations so outline entries that target a
+      // specific coordinate (/XYZ, /FitH, etc.) or a named location keep
+      // working. pdf.js's LinkService handles both array and string forms.
+      if (!currentDocument || data.dest == null) return;
+      try {
+        linkService.goToDestination(data.dest);
+      } catch (_err) {
+        /* ignore — fall back to staying on the current page */
       }
     }
   });
@@ -416,18 +414,15 @@ async function openPdfUrl(url, displayName) {
   setDocumentVisible(true);
 
   try {
-    const hasOutline = await renderOutline(pdfDocument);
-    applyAutoOutlineBehavior(hasOutline);
+    const items = await buildOutlineTreeForHost(pdfDocument);
     try {
-      window.parent.postMessage({ type: "onward:pdf:outlineStatus", hasOutline }, "*");
+      window.parent.postMessage({ type: "onward:pdf:outline", items }, "*");
     } catch (_err) {
       /* ignore */
     }
   } catch (_error) {
-    clearOutline();
-    applyAutoOutlineBehavior(false);
     try {
-      window.parent.postMessage({ type: "onward:pdf:outlineStatus", hasOutline: false }, "*");
+      window.parent.postMessage({ type: "onward:pdf:outline", items: [] }, "*");
     } catch (_err) {
       /* ignore */
     }
@@ -462,7 +457,11 @@ async function resetCurrentDocument() {
     }
   }
 
-  clearOutline();
+  try {
+    window.parent.postMessage({ type: "onward:pdf:outline", items: [] }, "*");
+  } catch (_err) {
+    /* ignore */
+  }
   updatePageControls(1, 0);
   updateSearchCount({ current: 0, total: 0 });
   setDocumentVisible(false);
@@ -501,126 +500,55 @@ function runFind({ type = "", findPrevious = false }) {
   });
 }
 
-async function renderOutline(pdfDocument) {
+// Serialize the PDF outline into a plain tree that the host's OutlinePanel can
+// render. Each entry's `dest` is resolved to a 1-based page number up front so
+// the host can both navigate and compare against the current page without
+// needing pdf.js APIs on its side.
+async function buildOutlineTreeForHost(pdfDocument) {
   const outline = await pdfDocument.getOutline();
-  if (!outline?.length) {
-    clearOutline();
-    return false;
-  }
-  els.outlineContainer.textContent = "";
-  const root = document.createElement("ul");
-  appendOutlineItems(root, outline);
-  els.outlineContainer.appendChild(root);
-  return true;
-}
+  if (!outline?.length) return [];
 
-// Matches the Dark_PDF_Reader behavior: when the document ships with an
-// outline, auto-expand the outline pane. The initial zoom calculation was
-// made against the collapsed layout, so we nudge to page-fit and then back
-// to page-width once the panel's width transition settles — giving
-// pdf.js a chance to measure the new viewport.
-function applyAutoOutlineBehavior(hasOutline) {
-  if (hasOutline) {
-    els.outlinePanel.classList.remove("collapsed");
-    scheduleOutlineAwarePageWidth();
-    return;
-  }
-  cancelOutlineAutoFit();
-  els.outlinePanel.classList.add("collapsed");
-}
-
-function scheduleOutlineAwarePageWidth() {
-  cancelOutlineAutoFit();
-  const runId = outlineAutoFitVersion;
-  const panel = els.outlinePanel;
-
-  const applyPageWidth = () => {
-    if (runId !== outlineAutoFitVersion) return;
-    if (!currentDocument || panel.classList.contains("collapsed")) return;
-    pdfViewer.currentScaleValue = "page-fit";
-    requestAnimationFrame(() => {
-      if (runId !== outlineAutoFitVersion) return;
-      if (!currentDocument || panel.classList.contains("collapsed")) return;
-      pdfViewer.currentScaleValue = DEFAULT_SCALE_VALUE;
-    });
-  };
-
-  const onTransitionEnd = event => {
-    if (event.target !== panel) return;
-    if (event.propertyName !== "width" && event.propertyName !== "opacity") return;
-    panel.removeEventListener("transitionend", onTransitionEnd);
-    clearTimeout(outlineAutoFitTimer);
-    outlineAutoFitTimer = null;
-    applyPageWidth();
-  };
-
-  panel.addEventListener("transitionend", onTransitionEnd);
-  const transitionMs = getMaxTransitionTimeMs(panel);
-  outlineAutoFitTimer = setTimeout(() => {
-    panel.removeEventListener("transitionend", onTransitionEnd);
-    outlineAutoFitTimer = null;
-    applyPageWidth();
-  }, Math.max(120, transitionMs + 80));
-}
-
-function cancelOutlineAutoFit() {
-  outlineAutoFitVersion += 1;
-  if (outlineAutoFitTimer) {
-    clearTimeout(outlineAutoFitTimer);
-    outlineAutoFitTimer = null;
-  }
-}
-
-function getMaxTransitionTimeMs(element) {
-  const style = getComputedStyle(element);
-  const durations = parseTransitionTimeList(style.transitionDuration);
-  const delays = parseTransitionTimeList(style.transitionDelay);
-  if (!durations.length) return 0;
-  const count = Math.max(durations.length, delays.length || 1);
-  let maxTime = 0;
-  for (let i = 0; i < count; i += 1) {
-    const d = durations[i % durations.length] || 0;
-    const g = (delays.length ? delays[i % delays.length] : 0) || 0;
-    maxTime = Math.max(maxTime, d + g);
-  }
-  return maxTime;
-}
-
-function parseTransitionTimeList(value) {
-  return String(value || "")
-    .split(",")
-    .map(item => item.trim())
-    .filter(Boolean)
-    .map(item => {
-      if (item.endsWith("ms")) { const ms = Number.parseFloat(item.slice(0, -2)); return Number.isFinite(ms) ? ms : 0; }
-      if (item.endsWith("s")) { const s = Number.parseFloat(item.slice(0, -1)); return Number.isFinite(s) ? s * 1000 : 0; }
-      const f = Number.parseFloat(item); return Number.isFinite(f) ? f * 1000 : 0;
-    });
-}
-
-function appendOutlineItems(parent, items) {
-  for (const item of items) {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "outline-item";
-    button.textContent = item.title || "";
-    button.addEventListener("click", () => {
-      if (item.dest) linkService.goToDestination(item.dest);
-      else if (item.url) window.open(item.url, "_blank", "noopener");
-    });
-    li.appendChild(button);
-    if (item.items?.length) {
-      const childList = document.createElement("ul");
-      appendOutlineItems(childList, item.items);
-      li.appendChild(childList);
+  async function resolvePage(dest) {
+    if (!dest) return null;
+    try {
+      const resolvedDest = typeof dest === "string"
+        ? await pdfDocument.getDestination(dest)
+        : dest;
+      if (!Array.isArray(resolvedDest) || resolvedDest.length === 0) return null;
+      const pageRef = resolvedDest[0];
+      // pdf.js destinations can use a zero-based page INDEX instead of a Ref
+      // (valid per the PDF spec). getPageIndex(number) throws, so short-
+      // circuit that form here or we'd lose click targets on such outlines.
+      if (typeof pageRef === "number" && Number.isFinite(pageRef)) {
+        return pageRef + 1;
+      }
+      const pageIndex = await pdfDocument.getPageIndex(pageRef);
+      if (typeof pageIndex !== "number" || pageIndex < 0) return null;
+      return pageIndex + 1;
+    } catch (_err) {
+      return null;
     }
-    parent.appendChild(li);
   }
-}
 
-function clearOutline() {
-  els.outlineContainer.textContent = "";
+  async function walk(items) {
+    const out = [];
+    for (const item of items) {
+      const page = await resolvePage(item.dest);
+      const children = item.items?.length ? await walk(item.items) : [];
+      // Keep the original `dest` on each node so the host can ask pdf.js to
+      // navigate with full precision (fine-grained `/XYZ`, `/FitH`, etc.).
+      // Falling back to `page` is only for the active-item highlight math.
+      out.push({
+        title: (item.title || "").trim(),
+        page,
+        dest: item.dest ?? null,
+        children
+      });
+    }
+    return out;
+  }
+
+  return walk(outline);
 }
 
 function updatePageControls(pageNumber, pageCount) {

@@ -107,6 +107,10 @@ export interface FileViewMemory {
   // EPUB-specific reader preferences, scoped per file
   epubFontPct?: number
   epubLocation?: string | null
+  // Precise pixel offset inside the EPUB scroll container. The CFI in
+  // epubLocation only identifies the chapter / section; this captures the
+  // scroll offset inside the rendered flow so restore is pixel-accurate.
+  epubScrollTop?: number
   // PDF-specific: where the user last scrolled to, so reopening the same PDF
   // lands on the same page / scroll offset.
   pdfPageNumber?: number

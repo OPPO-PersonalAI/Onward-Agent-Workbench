@@ -91,38 +91,6 @@ input[type="number"] { padding: 0 8px; }
 
 #workspace { display: flex; flex: 1; min-height: 0; }
 
-#outlinePanel {
-  width: 260px;
-  border-left: 1px solid var(--onward-pdf-line);
-  background: var(--onward-pdf-panel);
-  display: flex;
-  flex-direction: column;
-  transition: width 0.2s ease, opacity 0.2s ease;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-#outlinePanel.collapsed { width: 0; opacity: 0; border-left: none; }
-#outlineHeader { padding: 10px; font-size: 12px; color: var(--onward-pdf-muted); border-bottom: 1px solid var(--onward-pdf-line); }
-#outlineContainer { overflow: auto; padding: 6px 8px 14px; flex: 1; }
-#outlineContainer ul { list-style: none; margin: 0; padding-left: 12px; }
-#outlineContainer li { margin: 2px 0; }
-
-.outline-item {
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--onward-pdf-text);
-  height: auto;
-  padding: 5px 7px;
-  line-height: 1.35;
-  font-size: 13px;
-}
-
-.outline-item:hover { border-color: var(--onward-pdf-line); background: color-mix(in srgb, var(--onward-pdf-accent) 15%, transparent); }
-
 #viewerSection {
   flex: 1;
   min-width: 0;
