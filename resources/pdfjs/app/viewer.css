@@ -1,0 +1,158 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Styles for the embedded Onward PDF viewer. Adapted from the Dark_PDF_Reader
+ * reference (ISC-licensed) with theme tokens wired to Onward CSS variables
+ * injected by the host via postMessage.
+ */
+
+:root {
+  /* These fall back values are overridden at runtime by the host window. */
+  --onward-pdf-bg: #0a0a0a;
+  --onward-pdf-panel: #121212;
+  --onward-pdf-panel-elevated: #1a1a1a;
+  --onward-pdf-line: rgba(153, 153, 153, 0.28);
+  --onward-pdf-text: #f0f0f0;
+  --onward-pdf-muted: #a9a9a9;
+  --onward-pdf-accent: #7d8796;
+  --onward-pdf-danger-bg: rgba(248, 69, 69, 0.16);
+  --onward-pdf-danger-line: rgba(255, 120, 120, 0.48);
+  --onward-pdf-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  --onward-pdf-page-tint: #121212;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--onward-pdf-bg);
+  color: var(--onward-pdf-text);
+  font-family: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", -apple-system, sans-serif;
+}
+
+[hidden] { display: none !important; }
+
+#app { display: flex; flex-direction: column; height: 100%; }
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--onward-pdf-line);
+  background: var(--onward-pdf-panel);
+  z-index: 10;
+}
+
+.toolbar-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.toolbar-group.grow { flex: 1; }
+
+button,
+select,
+input[type="search"],
+input[type="number"] {
+  border: 1px solid var(--onward-pdf-line);
+  border-radius: 6px;
+  color: var(--onward-pdf-text);
+  background: var(--onward-pdf-panel-elevated);
+  height: 30px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+button { cursor: pointer; padding: 0 10px; }
+button:hover { border-color: var(--onward-pdf-accent); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+select,
+input[type="search"],
+input[type="number"] { padding: 0 8px; }
+
+#pageNumberInput { width: 54px; }
+#zoomSelect { min-width: 104px; }
+#searchInput { flex: 1; min-width: 140px; }
+#searchResult { color: var(--onward-pdf-muted); min-width: 48px; text-align: center; font-size: 12px; }
+#fileName { max-width: 280px; color: var(--onward-pdf-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+
+#errorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--onward-pdf-danger-line);
+  background: var(--onward-pdf-danger-bg);
+}
+
+#errorMessage { font-size: 13px; line-height: 1.4; }
+#errorMessage strong { display: block; margin-bottom: 2px; }
+#errorMessage span { display: block; color: #ffcfcf; }
+
+#workspace { display: flex; flex: 1; min-height: 0; }
+
+#viewerSection {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  background: var(--onward-pdf-bg);
+}
+
+#viewerContainer {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 12px 0;
+  background: var(--onward-pdf-page-tint);
+  isolation: isolate;
+}
+
+:root.color-enhancement-off #viewerContainer { background: #f1f1f1; }
+
+#viewer { margin: 0 auto; }
+
+.pdfViewer .canvasWrapper { border-radius: 4px; }
+.pdfViewer .textLayer { z-index: 5; overflow: visible; opacity: 1; }
+.pdfViewer .textLayer :is(span, br) { letter-spacing: 1px; }
+.pdfViewer .textLayer ::selection { background: rgba(0, 80, 255, 0.3); }
+.pdfViewer .textLayer .endOfContent.active { top: 100%; }
+
+.pdfViewer.dark-invert .page { background: var(--onward-pdf-page-tint); }
+.pdfViewer.dark-invert .canvasWrapper { filter: invert(1) hue-rotate(180deg); }
+.pdfViewer.dark-invert .textLayer ::selection { background: rgba(30, 100, 255, 0.45); }
+
+#emptyState {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--onward-pdf-muted);
+  font-size: 14px;
+  pointer-events: none;
+}
+#viewerSection.has-document #emptyState { display: none; }
+
+#passwordDialogBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+#passwordDialog {
+  width: min(420px, calc(100vw - 40px));
+  border: 1px solid var(--onward-pdf-line);
+  border-radius: 10px;
+  background: var(--onward-pdf-panel-elevated);
+  padding: 16px;
+  box-shadow: var(--onward-pdf-shadow);
+}
+
+#passwordDialog h2 { margin: 0 0 10px; font-size: 16px; }
+#passwordPrompt { margin: 0 0 12px; color: var(--onward-pdf-muted); font-size: 13px; }
+#passwordInput { width: 100%; height: 34px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }

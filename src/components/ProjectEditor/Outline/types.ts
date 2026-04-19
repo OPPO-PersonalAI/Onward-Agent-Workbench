@@ -39,6 +39,18 @@ export enum OutlineSymbolKind {
   Heading6,
 }
 
+export type OutlineNavigationTarget =
+  | {
+      kind: 'pdf-page'
+      page: number
+      // Full pdf.js destination (string for named dests, array for explicit
+      // dests). Preserves /XYZ, /FitH, etc. so navigation is pixel-accurate.
+      // The `page` field above remains the coarse anchor used for active-
+      // item highlight math.
+      dest?: unknown
+    }
+  | { kind: 'epub-href'; href: string }
+
 export interface OutlineItem {
   name: string
   detail?: string
@@ -49,4 +61,5 @@ export interface OutlineItem {
   endColumn: number
   children: OutlineItem[]
   depth: number
+  target?: OutlineNavigationTarget
 }

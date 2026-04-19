@@ -245,7 +245,9 @@
 
 .project-editor-sidebar-header {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--border);
@@ -256,6 +258,31 @@
   font-size: var(--font-sm);
   color: var(--text-2);
   font-weight: 600;
+}
+
+.project-editor-sidebar-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.project-editor-sidebar-action-btn:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.project-editor-sidebar-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .project-editor-sidebar-actions {
@@ -1969,4 +1996,182 @@ body.project-editor-modal-resizing * {
   text-overflow: ellipsis;
   margin-top: 2px;
   font-size: 10px;
+}
+
+/* PDF reader (iframe embedding the vendored pdf.js viewer) */
+.project-editor-pdf-reader {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--background);
+}
+
+.project-editor-pdf-reader-iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--background);
+}
+
+/* EPUB reader (epub.js rendition + toolbar + TOC sidebar) */
+.project-editor-epub-reader {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--text);
+}
+
+.project-editor-epub-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.project-editor-epub-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-elevated, var(--panel));
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.project-editor-epub-btn:hover {
+  border-color: var(--accent);
+}
+
+.project-editor-epub-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-editor-epub-fontsize {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.project-editor-epub-fontsize-value {
+  min-width: 40px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-editor-epub-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 220px;
+}
+
+.project-editor-epub-search input[type='search'] {
+  flex: 1;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-elevated, var(--panel));
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.project-editor-epub-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* The epub TOC now lives in the shared OutlinePanel. Search hits appear
+   as a popover under the search input (see rules below). */
+.project-editor-epub-search { position: relative; }
+
+.project-editor-epub-search-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, 80vw);
+  max-height: 320px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+  padding: 6px;
+}
+
+.project-editor-epub-search-popover-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.project-editor-epub-search-popover-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.project-editor-epub-search-popover-close:hover { color: var(--text); }
+
+.project-editor-epub-search-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-editor-epub-search-hit {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.project-editor-epub-search-hit:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.project-editor-epub-content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--background);
+}
+
+.project-editor-epub-error {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(239, 68, 68, 0.12);
+  color: #ffcfcf;
+  font-size: 12px;
 }

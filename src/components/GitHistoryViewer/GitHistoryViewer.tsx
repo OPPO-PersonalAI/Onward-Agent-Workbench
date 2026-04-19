@@ -31,6 +31,9 @@ import {
   type ImageDisplayMode,
   type SvgViewMode
 } from '../GitImagePreview/GitImagePreview'
+import { GitPdfCompare, type GitPdfStatus } from '../GitPdfCompare/GitPdfCompare'
+import { GitEpubCompare, type GitEpubStatus } from '../GitEpubCompare/GitEpubCompare'
+import { inspectPdfCompareDom, inspectEpubCompareDom } from '../GitDiffViewer/GitDiffViewer'
 import { usePathCopy } from '../../hooks/usePathCopy'
 import '../../hooks/usePathCopy.css'
 import './GitHistoryViewer.css'
@@ -210,6 +213,22 @@ export function GitHistoryViewer({
     return saved === '2up' || saved === 'swipe' || saved === 'onion' ? saved : '2up'
   })
   const [svgViewMode, setSvgViewMode] = useState<SvgViewMode>('visual')
+  const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const url = await window.electronAPI.appInfo?.getPdfViewerUrl?.()
+        if (!cancelled && typeof url === 'string') setPdfViewerUrl(url)
+      } catch {
+        /* ignore — GitPdfCompare shows a fallback if URL unavailable */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [diffOptionsOpen, setDiffOptionsOpen] = useState(false)
   const diffOptionsRef = useRef<HTMLDivElement | null>(null)
   const [fileContextMenu, setFileContextMenu] = useState<{ x: number; y: number; targetFile: GitHistoryFile } | null>(null)
@@ -872,7 +891,7 @@ export function GitHistoryViewer({
       setSelectedFileContent(null)
       return
     }
-    if (selectedFile.isImage) {
+    if (selectedFile.isImage || selectedFile.isPdf || selectedFile.isEpub) {
       ++patchTokenRef.current
       ++fileContentTokenRef.current
       setDiffPatch('')
@@ -942,8 +961,20 @@ export function GitHistoryViewer({
       isOpen: () => isOpen,
       getCommitCount: () => commits.length,
       getSelectedShas: () => selectedShas,
-      getFiles: () => files.map(f => ({ filename: f.filename, status: f.status })),
-      getSelectedFile: () => selectedFile ? { filename: selectedFile.filename } : null,
+      getFiles: () => files.map(f => ({
+        filename: f.filename,
+        status: f.status,
+        isImage: f.isImage,
+        isPdf: f.isPdf,
+        isEpub: f.isEpub
+      })),
+      getSelectedFile: () => selectedFile ? {
+        filename: selectedFile.filename,
+        status: selectedFile.status,
+        isImage: selectedFile.isImage,
+        isPdf: selectedFile.isPdf,
+        isEpub: selectedFile.isEpub
+      } : null,
       getImagePreviewState: () => {
         if (!selectedFile?.isImage) return null
         return {
@@ -1021,7 +1052,9 @@ export function GitHistoryViewer({
         setHideWhitespace(value)
         localStorage.setItem(STORAGE_KEY_HIDE_WHITESPACE, String(value))
         updateUIPreferences({ gitHistoryHideWhitespace: value })
-      }
+      },
+      getPdfCompareState: () => inspectPdfCompareDom(),
+      getEpubCompareState: () => inspectEpubCompareDom()
     }
     ;(window as any).__onwardGitHistoryDebug = api
     return () => {
@@ -1559,6 +1592,78 @@ export function GitHistoryViewer({
       }
       return renderImagePreview(selectedFileContent, selectedFile)
     }
+    if (selectedFile.isPdf) {
+      if (!selectedFileContent) {
+        return <div className="git-history-no-selection">{t('gitHistory.diff.empty')}</div>
+      }
+      const status: GitPdfStatus = selectedFile.status === 'A' || selectedFile.status === '?'
+        ? 'added'
+        : selectedFile.status === 'D'
+          ? 'deleted'
+          : 'modified'
+      return (
+        <GitPdfCompare
+          status={status}
+          originalPreviewData={selectedFileContent.originalPreviewData}
+          modifiedPreviewData={selectedFileContent.modifiedPreviewData}
+          originalSize={selectedFileContent.originalPreviewSize}
+          modifiedSize={selectedFileContent.modifiedPreviewSize}
+          filename={selectedFile.filename}
+          viewerUrl={pdfViewerUrl}
+          labels={{
+            statusAdded: t('gitDiff.pdfCompare.statusAdded'),
+            statusDeleted: t('gitDiff.pdfCompare.statusDeleted'),
+            statusModified: t('gitDiff.pdfCompare.statusModified'),
+            labelOriginal: t('gitDiff.pdfCompare.labelOriginal'),
+            labelAdded: t('gitDiff.pdfCompare.labelAdded'),
+            labelModified: t('gitDiff.pdfCompare.labelModified'),
+            noOriginal: t('gitDiff.pdfCompare.noOriginal'),
+            noModified: t('gitDiff.pdfCompare.noModified')
+          }}
+        />
+      )
+    }
+    if (selectedFile.isEpub) {
+      if (!selectedFileContent) {
+        return <div className="git-history-no-selection">{t('gitHistory.diff.empty')}</div>
+      }
+      const status: GitEpubStatus = selectedFile.status === 'A' || selectedFile.status === '?'
+        ? 'added'
+        : selectedFile.status === 'D'
+          ? 'deleted'
+          : 'modified'
+      return (
+        <GitEpubCompare
+          status={status}
+          originalPreviewData={selectedFileContent.originalPreviewData}
+          modifiedPreviewData={selectedFileContent.modifiedPreviewData}
+          originalSize={selectedFileContent.originalPreviewSize}
+          modifiedSize={selectedFileContent.modifiedPreviewSize}
+          filename={selectedFile.filename}
+          labels={{
+            statusAdded: t('gitDiff.epubCompare.statusAdded'),
+            statusDeleted: t('gitDiff.epubCompare.statusDeleted'),
+            statusModified: t('gitDiff.epubCompare.statusModified'),
+            chapterAdded: t('gitDiff.epubCompare.chapterAdded'),
+            chapterDeleted: t('gitDiff.epubCompare.chapterDeleted'),
+            chapterModified: t('gitDiff.epubCompare.chapterModified'),
+            chapterUnchanged: t('gitDiff.epubCompare.chapterUnchanged'),
+            labelOriginal: t('gitDiff.epubCompare.labelOriginal'),
+            labelModified: t('gitDiff.epubCompare.labelModified'),
+            noOriginal: t('gitDiff.epubCompare.noOriginal'),
+            noModified: t('gitDiff.epubCompare.noModified'),
+            loading: t('gitDiff.epubCompare.loading'),
+            error: t('gitDiff.epubCompare.error'),
+            chapters: t('gitDiff.epubCompare.chapters'),
+            resources: t('gitDiff.epubCompare.resources'),
+            noResourceChanges: t('gitDiff.epubCompare.noResourceChanges'),
+            resourceAdded: t('gitDiff.epubCompare.resourceAdded'),
+            resourceDeleted: t('gitDiff.epubCompare.resourceDeleted'),
+            resourceModified: t('gitDiff.epubCompare.resourceModified')
+          }}
+        />
+      )
+    }
     if (!hideWhitespace && selectedFileContent && !selectedFileContent.isBinary) {
       const lang = getFiletypeFromFileName(selectedFileContent.filename)
       const oldFile = {
@@ -1771,7 +1876,7 @@ export function GitHistoryViewer({
                       </>
                     )}
                   </div>
-                  {!selectedFile?.isImage && renderDiffOptions()}
+                  {!selectedFile?.isImage && !selectedFile?.isPdf && !selectedFile?.isEpub && renderDiffOptions()}
                 </div>
                 <div className="git-history-diff-content">
                   {renderDiff()}
