@@ -25,6 +25,7 @@ import { buildChangeDirectoryCommand, type TerminalShellKind } from '../../utils
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
+import '../../styles/path-copy-toast.css'
 
 const DEBUG_TERMINAL_GRID = Boolean(window.electronAPI?.debug?.enabled)
 
@@ -164,7 +165,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [codingAgentTerminalId, setCodingAgentTerminalId] = useState<string | null>(null)
   // codingAgentType state removed — modal handles command selection internally
   const [terminalInfos, setTerminalInfos] = useState<Record<string, TerminalGitInfo>>({})
-  const [copyNotice, setCopyNotice] = useState<{ terminalId: string; message: string } | null>(null)
+  const [copyNotice, setCopyNotice] = useState<{ terminalId: string; type: 'success' | 'error'; text: string } | null>(null)
   const copyNoticeTimerRef = useRef<number | null>(null)
   const lastShortcutTokenRef = useRef<number | null>(null)
   const gitDiffOpenTokenRef = useRef(0)
@@ -393,8 +394,8 @@ export const TerminalGrid = memo(function TerminalGrid({
     return `...${separator}${segments.slice(-TERMINAL_PATH_SEGMENTS).join(separator)}`
   }, [])
 
-  const showCopyNotice = useCallback((terminalId: string, message: string) => {
-    setCopyNotice({ terminalId, message })
+  const showCopyNotice = useCallback((terminalId: string, type: 'success' | 'error', text: string) => {
+    setCopyNotice({ terminalId, type, text })
     if (copyNoticeTimerRef.current) {
       window.clearTimeout(copyNoticeTimerRef.current)
     }
@@ -444,11 +445,23 @@ export const TerminalGrid = memo(function TerminalGrid({
     return typeof lastCwd === 'string' && lastCwd.trim() ? lastCwd : null
   }, [terminals])
 
-  const handleCopyText = useCallback(async (terminalId: string, label: string, text: string | null) => {
+  const handleCopyText = useCallback(async (
+    e: React.MouseEvent,
+    terminalId: string,
+    label: string,
+    text: string | null
+  ) => {
     if (!text) return
+    // Capture target synchronously — React clears SyntheticEvent.currentTarget after the handler returns.
+    const target = e.currentTarget as HTMLElement
     const success = await copyTextToClipboard(text)
     if (success) {
-      showCopyNotice(terminalId, t('terminalGrid.copyNotice', { label, text }))
+      showCopyNotice(terminalId, 'success', t('terminalGrid.copyNotice', { label, text }))
+      window.getSelection()?.removeAllRanges()
+      target.classList.add('copy-flash')
+      window.setTimeout(() => target.classList.remove('copy-flash'), 300)
+    } else {
+      showCopyNotice(terminalId, 'error', t('terminalGrid.copyFailed'))
     }
   }, [copyTextToClipboard, showCopyNotice, t])
 
@@ -1492,8 +1505,8 @@ export const TerminalGrid = memo(function TerminalGrid({
                       <span
                         className={`${branchClassName} terminal-grid-copyable`}
                         title={t('terminalGrid.branchTitle', { branch })}
-                        onDoubleClick={() => {
-                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
+                        onDoubleClick={(e) => {
+                          void handleCopyText(e, termInfo.id, t('terminalGrid.copyLabel.branch'), branch)
                         }}
                       >
                         <span className="terminal-grid-branch-name">{branch}</span>
@@ -1503,8 +1516,8 @@ export const TerminalGrid = memo(function TerminalGrid({
                       <span
                         className="terminal-grid-adaptive-repo terminal-grid-copyable"
                         title={t('terminalGrid.repoTitle', { repoName })}
-                        onDoubleClick={() => {
-                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.repo'), repoName)
+                        onDoubleClick={(e) => {
+                          void handleCopyText(e, termInfo.id, t('terminalGrid.copyLabel.repo'), repoName)
                         }}
                       >
                         <span className="terminal-grid-adaptive-expanded">{repoName}</span>
@@ -1520,8 +1533,8 @@ export const TerminalGrid = memo(function TerminalGrid({
                       <span
                         className="terminal-grid-adaptive-cwd terminal-grid-copyable"
                         title={cwd || ''}
-                        onDoubleClick={() => {
-                          void handleCopyText(termInfo.id, t('terminalGrid.copyLabel.path'), cwd)
+                        onDoubleClick={(e) => {
+                          void handleCopyText(e, termInfo.id, t('terminalGrid.copyLabel.path'), cwd)
                         }}
                       >
                         <span className="terminal-grid-adaptive-expanded">{compactCwd}</span>
@@ -1536,14 +1549,14 @@ export const TerminalGrid = memo(function TerminalGrid({
                   </div>
                 </div>
                 {copyNotice?.terminalId === termInfo.id && (
-                  <div
-                    className="terminal-grid-copy-notice"
+                  <span
+                    className={`path-copy-toast ${copyNotice.type} terminal-grid-copy-notice`}
                     role="status"
                     aria-live="polite"
-                    title={copyNotice.message}
+                    title={copyNotice.text}
                   >
-                    {copyNotice.message}
-                  </div>
+                    {copyNotice.text}
+                  </span>
                 )}
                 <div
                   ref={getContainerRef(termInfo.id)}

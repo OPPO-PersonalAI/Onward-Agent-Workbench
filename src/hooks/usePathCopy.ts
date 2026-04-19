@@ -44,9 +44,10 @@ export function usePathCopy(t: TranslatorFn, errorKey: TranslationKey) {
     setCopyMessage({ type: 'error', text })
   }, [])
 
-  const flashCopyFeedback = useCallback((e: React.MouseEvent) => {
+  // Callers must pass a pre-captured element (capture `e.currentTarget` synchronously before any await,
+  // since React clears SyntheticEvent.currentTarget after the handler returns).
+  const flashCopyFeedback = useCallback((target: HTMLElement) => {
     window.getSelection()?.removeAllRanges()
-    const target = e.currentTarget as HTMLElement
     target.classList.add('copy-flash')
     window.setTimeout(() => target.classList.remove('copy-flash'), 300)
   }, [])

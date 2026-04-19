@@ -27,7 +27,7 @@ import {
 } from '../GitImagePreview/GitImagePreview'
 import { usePathCopy } from '../../hooks/usePathCopy'
 import { useGitDiffFileWatch } from './useGitDiffFileWatch'
-import '../../hooks/usePathCopy.css'
+import '../../styles/path-copy-toast.css'
 import './GitDiffViewer.css'
 
 const DEBUG_GIT_DIFF = Boolean(window.electronAPI?.debug?.enabled)
@@ -566,13 +566,14 @@ export function GitDiffViewer({
 
   const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!selectedFile) return
+    const target = e.currentTarget as HTMLElement
     const rootCwd = selectedFile.repoRoot || activeCwd || ''
     const isAbsolute = e.altKey
     const relativePath = selectedFile.filename
     const pathToCopy = isAbsolute ? `${rootCwd}/${relativePath}` : relativePath
     const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
     const ok = await copyToClipboard(pathToCopy, label)
-    if (ok) flashCopyFeedback(e)
+    if (ok) flashCopyFeedback(target)
   }, [selectedFile, activeCwd, copyToClipboard, flashCopyFeedback, t])
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: GitFileStatus) => {

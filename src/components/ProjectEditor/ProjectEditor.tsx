@@ -37,7 +37,7 @@ import { SORT_LINE_EPSILON_PX } from './PreviewSearch/usePreviewSearch'
 import { SqliteViewer } from './SqliteViewer'
 import type { ProjectEditorOpenRequest, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
 import { usePathCopy } from '../../hooks/usePathCopy'
-import '../../hooks/usePathCopy.css'
+import '../../styles/path-copy-toast.css'
 import { renderMermaidDiagrams } from '../../utils/mermaidRenderer'
 import {
   normalizeQuickFilePaths,
@@ -2781,17 +2781,19 @@ export function ProjectEditor({
 
   const handleFilenameDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!activeFilePath || !rootPath) return
+    const target = e.currentTarget as HTMLElement
     const isAbsolute = e.altKey
     const pathToCopy = isAbsolute ? `${rootPath}/${activeFilePath}` : activeFilePath
     const label = isAbsolute ? t('common.absolutePath') : t('common.relativePath')
     const ok = await copyToClipboard(pathToCopy, label)
-    if (ok) flashCopyFeedback(e)
+    if (ok) flashCopyFeedback(target)
   }, [activeFilePath, copyToClipboard, flashCopyFeedback, rootPath, t])
 
   const handleCwdDblClick = useCallback(async (e: React.MouseEvent) => {
     if (!rootPath) return
+    const target = e.currentTarget as HTMLElement
     const ok = await copyToClipboard(rootPath, t('projectEditor.workingDirectory'))
-    if (ok) flashCopyFeedback(e)
+    if (ok) flashCopyFeedback(target)
   }, [copyToClipboard, flashCopyFeedback, rootPath, t])
 
   const resolveAbsolutePath = useCallback((relativePath: string): string | null => {
