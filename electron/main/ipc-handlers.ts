@@ -5,7 +5,7 @@
 
 import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron'
 import { join, resolve } from 'path'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, statSync, writeFileSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
 import { GitWatchManager } from './git-watch-manager'
 import { getPromptStorage, Prompt } from './prompt-storage'
@@ -472,6 +472,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   // to restart, we can restore the original working directory.
   const agentRestartCwdMap = new Map<string, string>()
 
+  const isUsableTerminalCwd = (cwd: string): boolean => {
+    try {
+      return statSync(cwd).isDirectory()
+    } catch {
+      return false
+    }
+  }
+
   const createTerminalProcess = (id: string, options?: PtyOptions) => {
     try {
       let restoredPersistedCwd: string | null = null
@@ -492,6 +500,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       }
       // Clear the saved cwd after using it once
       agentRestartCwdMap.delete(id)
+
+      if (options?.cwd && !isUsableTerminalCwd(options.cwd)) {
+        console.warn('[PTY] Ignoring unusable terminal cwd:', { id, cwd: options.cwd })
+        if (restoredPersistedCwd === options.cwd) {
+          appStateStorage.setTerminalLastCwd(id, null)
+        }
+        options = { ...options }
+        delete options.cwd
+      }
 
       let ptyProcess
       try {

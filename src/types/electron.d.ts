@@ -208,6 +208,7 @@ export interface GitRepoContext {
   isSubmodule: boolean
   depth: number
   changeCount: number
+  parentRoot?: string
   loading?: boolean
 }
 

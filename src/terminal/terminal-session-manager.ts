@@ -1039,7 +1039,9 @@ export class TerminalSessionManager {
     session.lastRows = rows
 
     if (session.status === 'ready' && (force || cols !== prevCols || rows !== prevRows)) {
-      window.electronAPI.terminal.resize(session.id, cols, rows)
+      void window.electronAPI.terminal.resize(session.id, cols, rows).catch((error) => {
+        console.warn('[TerminalSession] resize failed:', { id: session.id, error: String(error) })
+      })
     }
   }
 

@@ -84,6 +84,7 @@ src/autotest/
 ├── test-git-cross-platform.ts
 ├── test-git-diff-submodules.ts
 ├── test-git-diff-recursive-submodules.ts
+├── test-git-nested-submodules.ts
 ├── test-terminal-autofollow.ts
 ├── test-prompt-cleanup.ts
 ├── test-regression.ts
@@ -582,6 +583,30 @@ test/run-git-cross-platform-autotest.sh
 
 # Windows (PowerShell)
 test/run-git-cross-platform-autotest.ps1
+```
+
+### Phase 5.48: Git Nested Submodules
+
+Source set: five-level nested Git submodule validation suite
+
+This suite materializes a reusable fixture under `test/fixtures/git-nested-submodules/` and never uses the user's real repositories as test data.
+
+- `GNS-01`: Git History for the root shows only root commits
+- `GNS-02`: Git History discovers a five-level repository tree with parent links
+- `GNS-03`: Git History for a selected nested submodule shows that submodule's commits
+- `GNS-04`: Git Diff root-only loading keeps nested submodule files out of the root file list
+- `GNS-05`: Git Diff full loading attributes every changed file to its owning repository
+- `GNS-06` to `GNS-08`: Git History UI defaults to the current Git label, switches repository scope, and supports tree expand/collapse
+- `GNS-09` to `GNS-11`: Git Diff UI shows the five-level tree, isolates a selected submodule, and closes cleanly
+
+Launch:
+
+```bash
+# macOS / Linux
+test/run-git-nested-submodules-autotest.sh
+
+# Windows (PowerShell)
+test/run-git-nested-submodules-autotest.ps1
 ```
 
 ### Phase 5.7: Terminal Focus Activation
