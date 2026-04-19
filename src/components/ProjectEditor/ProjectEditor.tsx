@@ -40,6 +40,14 @@ import { usePathCopy } from '../../hooks/usePathCopy'
 import '../../hooks/usePathCopy.css'
 import { renderMermaidDiagrams } from '../../utils/mermaidRenderer'
 import {
+  enhanceMermaidDiagrams,
+  disposeMermaidPanZoom,
+  getMermaidPanZoomState,
+  triggerMermaidPanZoomAction,
+  simulateMermaidPan,
+  isFullscreenActive as isMermaidFullscreenActive
+} from '../../utils/mermaidPanZoom'
+import {
   normalizeQuickFilePaths,
   prependRecentFile,
   replaceQuickFilePath,
@@ -4622,6 +4630,16 @@ export function ProjectEditor({
       mermaidRenderInFlightRef.current = false
       if (signal.cancelled) return
 
+      enhanceMermaidDiagrams(preview, signal, {
+        zoomIn: t('mermaid.zoomIn'),
+        zoomOut: t('mermaid.zoomOut'),
+        resetZoom: t('mermaid.resetZoom'),
+        fitToScreen: t('mermaid.fitToScreen'),
+        fullscreen: t('mermaid.fullscreen'),
+        exitFullscreen: t('mermaid.exitFullscreen'),
+        dragHint: t('mermaid.dragHint')
+      })
+
       updatePreviewActiveSlug(scanPreviewNearestSlug())
 
 	      if (
@@ -4655,6 +4673,13 @@ export function ProjectEditor({
     t,
     updatePreviewActiveSlug
   ])
+
+  useEffect(() => {
+    const preview = previewRef.current
+    return () => {
+      if (preview) disposeMermaidPanZoom(preview)
+    }
+  }, [])
 
   useEffect(() => {
     if (!isMarkdownRenderAllowed) return
@@ -5281,6 +5306,22 @@ export function ProjectEditor({
         }
       },
 	      getMermaidPreviewState,
+	      getMermaidPanZoomState: () => {
+	        const preview = previewRef.current
+	        if (!preview) return []
+	        return getMermaidPanZoomState(preview)
+	      },
+	      triggerMermaidPanZoomAction: (diagramId: string, action: 'zoomIn' | 'zoomOut' | 'fit' | 'reset' | 'fullscreen') => {
+	        const preview = previewRef.current
+	        if (!preview) return false
+	        return triggerMermaidPanZoomAction(preview, diagramId, action)
+	      },
+	      simulateMermaidPan: (diagramId: string, dx: number, dy: number) => {
+	        const preview = previewRef.current
+	        if (!preview) return false
+	        return simulateMermaidPan(preview, diagramId, dx, dy)
+	      },
+	      isMermaidFullscreenActive: () => isMermaidFullscreenActive(),
 	      getMarkdownSessionCacheState: () => ({
 	        size: markdownSessionCacheStore.size,
 	        limit: getMarkdownSessionCacheLimit(),

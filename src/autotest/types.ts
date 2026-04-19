@@ -256,6 +256,20 @@ export interface ProjectEditorDebugApi {
     pending: number
     inFlight: boolean
   }
+  getMermaidPanZoomState?: () => Array<{
+    id: string | null
+    scale: number
+    x: number
+    y: number
+    fullscreen: boolean
+    enhanced: boolean
+  }>
+  triggerMermaidPanZoomAction?: (
+    diagramId: string,
+    action: 'zoomIn' | 'zoomOut' | 'fit' | 'reset' | 'fullscreen'
+  ) => boolean
+  simulateMermaidPan?: (diagramId: string, dx: number, dy: number) => boolean
+  isMermaidFullscreenActive?: () => boolean
   getMarkdownSessionCacheState?: () => {
     size: number
     limit: number

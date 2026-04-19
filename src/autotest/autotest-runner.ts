@@ -29,6 +29,7 @@ import { testGitDiffRecursiveSubmodules } from './test-git-diff-recursive-submod
 import { testGitCrossPlatform } from './test-git-cross-platform'
 import { testProjectEditorMultiTerminalScope } from './test-project-editor-multi-terminal-scope'
 import { testMarkdownLatexPreview } from './test-markdown-latex-preview'
+import { testMermaidPanZoom } from './test-mermaid-panzoom'
 import { testProjectEditorSqlite } from './test-project-editor-sqlite'
 import { testTerminalPerf } from './test-terminal-perf'
 import { testTerminalFocusActivation } from './test-terminal-focus-activation'
@@ -246,6 +247,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       log('phase0.8:begin')
       const results = await testMarkdownLatexPreview(ctx)
       collectSuiteResults('MarkdownLatexPreview', results)
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('mermaid-panzoom')) {
+      log('phase0.82:begin')
+      const results = await testMermaidPanZoom(ctx)
+      collectSuiteResults('MermaidPanZoom', results)
       await sleep(500)
     }
 

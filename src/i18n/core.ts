@@ -997,7 +997,14 @@ const en = {
   'settings.section.telemetry': 'Privacy & Telemetry',
   'settings.telemetry.toggle': 'Share anonymous usage data',
   'settings.telemetry.description': 'Help improve Onward by sharing anonymous usage data, performance metrics, and crash reports. No personal information is collected.',
-  'mermaid.syntaxError': 'Diagram syntax error'
+  'mermaid.syntaxError': 'Diagram syntax error',
+  'mermaid.zoomIn': 'Zoom in',
+  'mermaid.zoomOut': 'Zoom out',
+  'mermaid.resetZoom': 'Reset zoom',
+  'mermaid.fitToScreen': 'Fit to screen',
+  'mermaid.fullscreen': 'Enter fullscreen',
+  'mermaid.exitFullscreen': 'Exit fullscreen',
+  'mermaid.dragHint': 'Drag to pan · Scroll to zoom · Double-click to fit'
 } as const satisfies TranslationDictionary
 
 export type TranslationKey = keyof typeof en
@@ -1983,7 +1990,14 @@ const zhCN: LocaleTranslations = {
   'settings.section.telemetry': '隐私与遥测',
   'settings.telemetry.toggle': '分享匿名使用数据',
   'settings.telemetry.description': '通过分享匿名使用数据、性能指标和崩溃报告来帮助改进 Onward。不会收集任何个人信息。',
-  'mermaid.syntaxError': '图表语法错误'
+  'mermaid.syntaxError': '图表语法错误',
+  'mermaid.zoomIn': '放大',
+  'mermaid.zoomOut': '缩小',
+  'mermaid.resetZoom': '重置缩放',
+  'mermaid.fitToScreen': '适应窗口',
+  'mermaid.fullscreen': '进入全屏',
+  'mermaid.exitFullscreen': '退出全屏',
+  'mermaid.dragHint': '拖拽以平移 · 滚轮缩放 · 双击适应窗口'
 }
 
 const translations: Record<AppLocale, LocaleTranslations> = {
