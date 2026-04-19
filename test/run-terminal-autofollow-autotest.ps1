@@ -52,7 +52,7 @@ if ($logContent -match "\[AutoTest\] FAIL") {
   exit 1
 }
 
-if ($logContent -notmatch "TA-10-fixture-completed") {
+if ($logContent -notmatch "TA-13-fixture-completed") {
   Write-Error "Terminal autofollow autotest did not complete. Log: $LogFile"
   Get-Content $LogFile -Tail 120
   exit 1

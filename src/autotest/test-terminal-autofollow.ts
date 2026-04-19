@@ -16,7 +16,12 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   const debugApi = () => window.__onwardTerminalDebug
   const platform = window.electronAPI.platform
   const separator = platform === 'win32' ? '\\' : '/'
-  const fixturePath = `${rootPath}${separator}test${separator}fixtures${separator}terminal-autofollow-repro.mjs`
+  // Prefer the explicit ONWARD_AUTOTEST_CWD env — in some environments the
+  // Project Editor's rootPath resolves to the user's HOME instead of the
+  // repo root (seen in the worktree's autotest invocations), which would
+  // route the fixture lookup to ~/test/fixtures/... and fail immediately.
+  const fixtureRootPath = window.electronAPI.debug.autotestCwd || rootPath
+  const fixturePath = `${fixtureRootPath}${separator}test${separator}fixtures${separator}terminal-autofollow-repro.mjs`
 
   const execCommand = async (command: string, label: string, waitMs = 300) => {
     await window.electronAPI.terminal.write(terminalId, `${command}\r`)
@@ -68,6 +73,8 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
 
   record('TA-01-fixture-started', started, {
     fixturePath,
+    fixtureRootPath,
+    contextRootPath: rootPath,
     viewport: readViewport(api),
     tail: readTail(api)
   })
@@ -83,12 +90,47 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   )
   if (cancelled()) return results
 
+  // TA-03: simulate a real user wheel/PageUp scroll through xterm's own
+  // scrollLines() API. This differs from TA-05's api.scrollToTop() in that
+  // it matches the exact path a browser wheel event would take: xterm sets
+  // isUserScrolling=true internally when scrollLines(n<0) is called while
+  // ydisp>0. The viewport must detach from the bottom *and stay* there
+  // while the TUI fixture keeps redrawing.
+  const scrollLineCount = Math.max(6, Math.floor((readViewport(api)?.rows ?? 24) / 2))
+  const userScrollUp = api.scrollLinesAsUser(terminalId, -scrollLineCount)
+  await sleep(180)
+  const userScrollState = readViewport(api)
+  const userScrollSamples = await captureSamples(api, 8, 120)
+  record(
+    'TA-03-real-user-scroll-detaches-during-refresh',
+    userScrollUp &&
+      Boolean(userScrollState && !userScrollState.isNearBottom && !userScrollState.userWantsBottom) &&
+      userScrollSamples.every(sample => Boolean(
+        sample &&
+          sample.viewportY <= (userScrollState?.viewportY ?? 0) + 1 &&
+          !sample.isNearBottom &&
+          !sample.userWantsBottom
+      )),
+    { scrollLineCount, userScrollUp, userScrollState, samples: userScrollSamples }
+  )
+  if (cancelled()) return results
+
+  const userScrollBottomReset = api.scrollToBottom(terminalId)
+  await sleep(200)
+  const userScrollBottomSamples = await captureSamples(api, 6, 120)
+  record(
+    'TA-04-bottom-follow-recovers-after-user-scroll',
+    userScrollBottomReset && userScrollBottomSamples.every(sample => Boolean(sample?.isNearBottom && sample?.userWantsBottom)),
+    { userScrollBottomReset, samples: userScrollBottomSamples }
+  )
+  if (cancelled()) return results
+
   const manualScrollTop = api.scrollToTop(terminalId)
   await sleep(200)
   const topState = readViewport(api)
   const topSamples = await captureSamples(api, 6, 120)
   record(
-    'TA-03-manual-scroll-not-forced-bottom',
+    'TA-05-manual-scroll-not-forced-bottom',
     manualScrollTop &&
       Boolean(topState) &&
       topSamples.every(sample => Boolean(sample && sample.viewportY <= (topState?.viewportY ?? 0) + 1 && !sample.isNearBottom && !sample.userWantsBottom)),
@@ -100,7 +142,7 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   await sleep(200)
   const resumedBottomSamples = await captureSamples(api, 6, 120)
   record(
-    'TA-04-bottom-follow-recovers-after-manual-scroll',
+    'TA-06-bottom-follow-recovers-after-manual-scroll',
     resumedBottomScroll && resumedBottomSamples.every(sample => Boolean(sample?.isNearBottom && sample?.userWantsBottom)),
     { resumedBottomScroll, samples: resumedBottomSamples }
   )
@@ -110,7 +152,7 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   await sleep(220)
   const fitBottomSamples = await captureSamples(api, 4, 120)
   record(
-    'TA-05-fit-keeps-bottom-follow',
+    'TA-07-fit-keeps-bottom-follow',
     fitAtBottom && fitBottomSamples.every(sample => Boolean(sample?.isNearBottom && sample?.userWantsBottom)),
     { fitAtBottom, samples: fitBottomSamples }
   )
@@ -123,7 +165,7 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   await sleep(220)
   const fitTopSamples = await captureSamples(api, 4, 120)
   record(
-    'TA-06-fit-preserves-manual-scroll',
+    'TA-08-fit-preserves-manual-scroll',
     manualScrollTopAgain &&
       fitAtTop &&
       Boolean(beforeFitTopState) &&
@@ -138,7 +180,7 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   await sleep(260)
   const remountBottomSamples = await captureSamples(api, 4, 120)
   record(
-    'TA-07-remount-keeps-bottom-follow',
+    'TA-09-remount-keeps-bottom-follow',
     remountBottomReset && remountAtBottom && remountBottomSamples.every(sample => Boolean(sample?.isNearBottom && sample?.userWantsBottom)),
     { remountBottomReset, remountAtBottom, samples: remountBottomSamples }
   )
@@ -151,7 +193,7 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   await sleep(260)
   const remountTopSamples = await captureSamples(api, 4, 120)
   record(
-    'TA-08-remount-preserves-manual-scroll',
+    'TA-10-remount-preserves-manual-scroll',
     manualScrollTopBeforeRemount &&
       remountAtTop &&
       Boolean(beforeRemountTopState) &&
@@ -177,17 +219,48 @@ export async function testTerminalAutofollow(ctx: AutotestContext): Promise<Test
   }
   const stressSamples = await captureSamples(api, 4, 120)
   stressOk = stressOk && stressSamples.every(sample => Boolean(sample?.isNearBottom && sample?.userWantsBottom))
-  record('TA-09-fit-remount-stress-keeps-bottom', stressOk, {
+  record('TA-11-fit-remount-stress-keeps-bottom', stressOk, {
     stressBottomReset,
     operations,
     samples: stressSamples
   })
   if (cancelled()) return results
 
+  // TA-12: focus does not jump the viewport. With the old code path that
+  // called the bare textarea.focus() (without { preventScroll: true }), the
+  // browser would run scrollIntoView on the helper-textarea positioned at
+  // left:-9999em; top:0, and walk up the xterm-viewport chain to snap
+  // scrollTop to 0 — producing the "jump to where the Task started"
+  // symptom. With the preventScroll option set, focusing the terminal
+  // while the user is scrolled up must not change the viewport position.
+  const preFocusScrollTop = api.scrollToTop(terminalId)
+  await sleep(200)
+  const beforeFocusState = readViewport(api)
+  const manager = (window as any).__terminalSessionManager
+  const focusOk = typeof manager?.focus === 'function' ? manager.focus(terminalId) : false
+  // Sample for ~1.2s while the fixture (still in its last few ticks or
+  // already exited) produces any trailing output; viewport must hold.
+  const focusSamples = await captureSamples(api, 10, 120)
+  record(
+    'TA-12-focus-does-not-jump-viewport',
+    preFocusScrollTop &&
+      focusOk &&
+      Boolean(beforeFocusState) &&
+      focusSamples.every(sample =>
+        Boolean(
+          sample &&
+            sample.viewportY <= (beforeFocusState?.viewportY ?? 0) + 1 &&
+            !sample.isNearBottom
+        )
+      ),
+    { preFocusScrollTop, focusOk, beforeFocusState, samples: focusSamples }
+  )
+  if (cancelled()) return results
+
   const fixtureCompleted = await waitFor('terminal-autofollow-finished', () => {
     return readTail(api, 30).includes('[AUTOFOLLOW] end')
   }, 10000, 150)
-  record('TA-10-fixture-completed', fixtureCompleted, {
+  record('TA-13-fixture-completed', fixtureCompleted, {
     tail: readTail(api, 30),
     viewport: readViewport(api),
     sessionState: api.getSessionState(terminalId)

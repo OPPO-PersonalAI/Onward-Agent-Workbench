@@ -429,7 +429,9 @@ export const TerminalGrid = memo(function TerminalGrid({
       textarea.style.left = '-9999px'
       textarea.style.opacity = '0'
       document.body.appendChild(textarea)
-      textarea.focus()
+      // preventScroll avoids scrollIntoView side-effects from focusing an
+      // off-screen element while a terminal is visible behind us.
+      textarea.focus({ preventScroll: true })
       textarea.select()
       const ok = document.execCommand('copy')
       document.body.removeChild(textarea)
@@ -1018,6 +1020,10 @@ export const TerminalGrid = memo(function TerminalGrid({
       scrollToBottom: (terminalId) => {
         const resolved = resolveTerminalId(terminalId)
         return resolved ? terminalSessionManager.scrollToBottom(resolved) : false
+      },
+      scrollLinesAsUser: (terminalId, lines = -10) => {
+        const resolved = resolveTerminalId(terminalId)
+        return resolved ? terminalSessionManager.scrollLinesAsUser(resolved, lines) : false
       },
       forceFit: (terminalId) => {
         const resolved = resolveTerminalId(terminalId)
