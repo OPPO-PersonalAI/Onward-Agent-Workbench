@@ -186,6 +186,7 @@ body.git-diff-modal-resizing {
   flex-wrap: wrap;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
+  background-color: var(--bg-1);
   flex-shrink: 0;
 }
 
@@ -210,7 +211,7 @@ body.git-diff-modal-resizing {
   min-width: 0;
   max-width: 100%;
   font-size: var(--font-lg);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-1);
   flex-wrap: nowrap;
 }
@@ -291,6 +292,7 @@ body.git-diff-modal-resizing {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  background-color: var(--bg-1);
 }
 
 /* Width adjustment drag bar */
@@ -325,8 +327,8 @@ body.git-diff-resizing * {
 }
 
 .git-diff-file-list-header {
-  padding: 10px 12px;
-  font-size: var(--font-sm);
+  padding: 8px 10px;
+  font-size: var(--font-xs);
   color: var(--text-3);
   background-color: var(--bg-1);
   border-bottom: 1px solid var(--border);
@@ -351,11 +353,52 @@ body.git-diff-resizing * {
   text-transform: uppercase;
 }
 
+.git-diff-repo-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.git-diff-repo-section:last-child {
+  border-bottom: none;
+}
+
+.git-diff-repo-section > .git-diff-file-group:last-child {
+  border-bottom: none;
+}
+
+.git-diff-repo-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  background-color: var(--bg-1);
+}
+
+.git-diff-repo-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.git-diff-repo-count {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--text-3);
+  background-color: var(--bg-2);
+}
+
 .git-diff-file-item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 10px;
   cursor: pointer;
   transition: background-color 0.15s ease;
   border-bottom: 1px solid var(--border);
@@ -363,28 +406,31 @@ body.git-diff-resizing * {
 }
 
 .git-diff-file-item:hover {
-  background-color: var(--bg-1);
+  background-color: var(--bg-2);
 }
 
 .git-diff-file-item.selected {
-  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .git-diff-file-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: var(--bg-2);
   font-size: 11px;
   font-weight: 600;
-  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
-  width: 14px;
-  text-align: center;
+  font-family: 'SF Mono', Monaco, Consolas, 'Ubuntu Mono', monospace;
   flex-shrink: 0;
-  margin-top: 1px;
 }
 
 .git-diff-file-name {
   flex: 1;
   font-size: var(--font-sm);
-  color: var(--text-2);
+  color: var(--text-1);
   word-break: break-word;
   min-width: 0;
 }
@@ -990,18 +1036,18 @@ body.git-diff-resizing * {
 
 .git-diff-file-list-content::-webkit-scrollbar-track,
 .git-diff-detail-content::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--bg-1);
 }
 
 .git-diff-file-list-content::-webkit-scrollbar-thumb,
 .git-diff-detail-content::-webkit-scrollbar-thumb {
-  background-color: var(--border-strong);
-  border-radius: 6px;
+  background-color: var(--border);
+  border-radius: 4px;
 }
 
 .git-diff-file-list-content::-webkit-scrollbar-thumb:hover,
 .git-diff-detail-content::-webkit-scrollbar-thumb:hover {
-  background-color: var(--text-3);
+  background-color: var(--border-strong);
 }
 
 .git-diff-context-menu {
@@ -1388,20 +1434,6 @@ body.git-diff-resizing * {
   line-height: 16px;
 }
 
-.git-diff-repo-badge {
-  flex-shrink: 0;
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 10px;
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-  margin-right: 4px;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 1px;
-}
 
 .git-diff-superproject-hint {
   display: flex;

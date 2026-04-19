@@ -38,6 +38,7 @@ import { testPdfEpubPreview } from './test-pdf-epub-preview'
 import { testPdfEpubDiff } from './test-pdf-epub-diff'
 import { testProjectEditorMarkdownNavigation } from './test-project-editor-markdown-navigation'
 import { testGlobalSearch } from './test-global-search'
+import { testFileIndexCacheUi } from './test-file-index-cache-ui'
 import { testSettingsUpdate } from './test-settings-update'
 import { testGitHistoryMultiTerminalScope } from './test-git-history-multi-terminal-scope'
 import { testFileWatch } from './test-file-watch'
@@ -332,6 +333,13 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       collectSuiteResults('PreviewSearch', results)
       await ctx.reopenProjectEditor('phase0.895-cleanup')
       await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('file-index-cache-ui')) {
+      log('phase0.898:begin')
+      const results = await testFileIndexCacheUi(ctx)
+      collectSuiteResults('FileIndexCacheUi', results)
+      await sleep(300)
     }
 
     // Phase 0.9: Project Editor SQLite add/delete/update/query tests

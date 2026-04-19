@@ -1345,6 +1345,13 @@ function AppContent({
     if (editorSubpageRestoredRef.current) return
     if (!isLoaded || !activeTab) return
     if (activeTab.activeSubpage !== 'editor') return
+    // When the debug auto-open path has already taken over, skip restoration
+    // so it cannot clobber the injected cwd (e.g. ONWARD_AUTOTEST_CWD) with a
+    // stale or null terminal.lastCwd value.
+    if (projectEditorDebugOpenedRef.current) {
+      editorSubpageRestoredRef.current = true
+      return
+    }
     const terminalId = activeTab.subpageTerminalId || activeTab.activeTerminalId || activeTab.terminals[0]?.id
     if (!terminalId) return
     // Another effect (e.g. autoOpenProjectEditor in debug/autotest mode) may

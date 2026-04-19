@@ -612,6 +612,11 @@ export interface ProjectAPI {
   unwatchImageFiles: (root: string, paths: string[]) => Promise<{ success: boolean }>
   unwatchAllImageFiles: () => Promise<{ success: boolean }>
   onImageFileChanged: (callback: (relativePath: string) => void) => () => void
+  treeWatchStart: (cwd: string) => Promise<{ success: boolean }>
+  treeWatchStop: (cwd: string) => Promise<{ success: boolean }>
+  onTreeWatchEvent: (
+    callback: (event: { cwd: string; added: string[]; removed: string[]; resync?: boolean }) => void
+  ) => () => void
 }
 
 // Shortcut configuration
@@ -1350,6 +1355,29 @@ const projectAPI: ProjectAPI = {
     ipcRenderer.on('project:image-file-changed', listener)
     return () => {
       ipcRenderer.removeListener('project:image-file-changed', listener)
+    }
+  },
+
+  treeWatchStart: (cwd: string) => {
+    return ipcRenderer.invoke('project:tree-watch:start', cwd)
+  },
+
+  treeWatchStop: (cwd: string) => {
+    return ipcRenderer.invoke('project:tree-watch:stop', cwd)
+  },
+
+  onTreeWatchEvent: (
+    callback: (event: { cwd: string; added: string[]; removed: string[]; resync?: boolean }) => void
+  ) => {
+    const listener = (
+      _: Electron.IpcRendererEvent,
+      event: { cwd: string; added: string[]; removed: string[]; resync?: boolean }
+    ) => {
+      callback(event)
+    }
+    ipcRenderer.on('project:tree-watch:event', listener)
+    return () => {
+      ipcRenderer.removeListener('project:tree-watch:event', listener)
     }
   }
 }

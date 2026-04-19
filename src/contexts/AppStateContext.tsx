@@ -6,6 +6,9 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import type { AppState, TabState, GlobalPrompt, LocalPrompt, EditorDraft, ProjectEditorState, PromptCleanupConfig, PromptSchedule, UIPreferences } from '../types/tab.d.ts'
 import type { Prompt } from '../types/electron.d.ts'
+import { normalizeProjectCwd as normalizeProjectCwdImpl } from '../utils/pathNormalize'
+
+export const normalizeProjectCwd = normalizeProjectCwdImpl
 
 /**
  * Draft saving anti-shake time (milliseconds)
@@ -95,10 +98,6 @@ function getTerminalDisplayName(index: number, customName: string | null): strin
 type ProjectEditorScope = {
   terminalId: string | null
   cwd: string | null
-}
-
-function normalizeProjectCwd(path: string): string {
-  return path.replace(/\\/g, '/')
 }
 
 function normalizeProjectEditorQuickFiles(paths: unknown): string[] {

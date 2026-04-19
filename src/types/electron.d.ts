@@ -563,6 +563,11 @@ export interface ProjectAPI {
   watchFile: (root: string, path: string) => Promise<{ success: boolean; error?: string }>
   unwatchFile: (root: string, path: string) => Promise<{ success: boolean }>
   onFileChanged: (callback: (fullPath: string, changeType: 'changed' | 'deleted', content?: string) => void) => () => void
+  treeWatchStart: (cwd: string) => Promise<{ success: boolean }>
+  treeWatchStop: (cwd: string) => Promise<{ success: boolean }>
+  onTreeWatchEvent: (
+    callback: (event: { cwd: string; added: string[]; removed: string[]; resync?: boolean }) => void
+  ) => () => void
 }
 
 // Introducing the Settings type
