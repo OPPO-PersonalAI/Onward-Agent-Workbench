@@ -212,18 +212,23 @@
 
 /* Mermaid diagram rendering */
 .change-log-markdown .mermaid-diagram {
+  position: relative;
   margin: 16px 0;
-  overflow-x: auto;
+  overflow: hidden;
   border-radius: 6px;
   background-color: var(--bg-2);
   border: 1px solid var(--border);
-  padding: 12px;
+  padding: 0;
   text-align: center;
 }
 .change-log-markdown .mermaid-diagram.mermaid-rendered .mermaid-source {
   display: none;
 }
-.change-log-markdown .mermaid-diagram svg {
+.change-log-markdown .mermaid-diagram:not(.mermaid-panzoom-enabled) {
+  padding: 12px;
+  overflow-x: auto;
+}
+.change-log-markdown .mermaid-diagram:not(.mermaid-panzoom-enabled) svg {
   max-width: 100%;
   height: auto;
   display: block;
@@ -232,6 +237,8 @@
 }
 .change-log-markdown .mermaid-diagram.mermaid-error {
   border-color: rgba(239, 68, 68, 0.4);
+  padding: 12px;
+  overflow-x: auto;
 }
 .change-log-markdown .mermaid-diagram .mermaid-error-message {
   color: #ef4444;
@@ -241,6 +248,11 @@
 }
 .change-log-markdown .mermaid-diagram:not(.mermaid-rendered):not(.mermaid-error) .mermaid-source {
   opacity: 0.6;
+}
+.change-log-markdown .mermaid-diagram.mermaid-panzoom-enabled {
+  height: 56vh;
+  max-height: 480px;
+  min-height: 240px;
 }
 
 @media (max-width: 768px) {

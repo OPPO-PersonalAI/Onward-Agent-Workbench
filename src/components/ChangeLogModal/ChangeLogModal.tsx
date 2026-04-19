@@ -11,6 +11,7 @@ import type { ChangeLogDebugApi } from '../../autotest/types'
 import { useI18n } from '../../i18n/useI18n'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { buildMermaidPlaceholder, isMermaidLang, renderMermaidDiagrams } from '../../utils/mermaidRenderer'
+import { enhanceMermaidDiagrams, disposeMermaidPanZoom } from '../../utils/mermaidPanZoom'
 import './ChangeLogModal.css'
 
 interface ChangeLogModalProps {
@@ -87,8 +88,22 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
     if (!el || !renderedHtml) return
     if (el.querySelectorAll('.mermaid-diagram[data-mermaid-id]').length === 0) return
     const signal = { cancelled: false }
-    void renderMermaidDiagrams(el, signal, t('mermaid.syntaxError'))
-    return () => { signal.cancelled = true }
+    void renderMermaidDiagrams(el, signal, t('mermaid.syntaxError')).then(() => {
+      if (signal.cancelled) return
+      enhanceMermaidDiagrams(el, signal, {
+        zoomIn: t('mermaid.zoomIn'),
+        zoomOut: t('mermaid.zoomOut'),
+        resetZoom: t('mermaid.resetZoom'),
+        fitToScreen: t('mermaid.fitToScreen'),
+        fullscreen: t('mermaid.fullscreen'),
+        exitFullscreen: t('mermaid.exitFullscreen'),
+        dragHint: t('mermaid.dragHint')
+      })
+    })
+    return () => {
+      signal.cancelled = true
+      disposeMermaidPanZoom(el)
+    }
   }, [renderedHtml, t])
 
   const currentTag = result?.tag ?? null
