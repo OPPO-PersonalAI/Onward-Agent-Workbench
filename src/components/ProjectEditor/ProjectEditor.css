@@ -245,7 +245,9 @@
 
 .project-editor-sidebar-header {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--border);
@@ -256,6 +258,31 @@
   font-size: var(--font-sm);
   color: var(--text-2);
   font-weight: 600;
+}
+
+.project-editor-sidebar-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.project-editor-sidebar-action-btn:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.project-editor-sidebar-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .project-editor-sidebar-actions {
