@@ -26,6 +26,7 @@ import { testSubpageNavigation } from './test-subpage-navigation'
 import { testGitDiffSubdir } from './test-git-diff-subdir'
 import { testGitDiffSubmodules } from './test-git-diff-submodules'
 import { testGitDiffRecursiveSubmodules } from './test-git-diff-recursive-submodules'
+import { testGitNestedSubmodules } from './test-git-nested-submodules'
 import { testGitCrossPlatform } from './test-git-cross-platform'
 import { testProjectEditorMultiTerminalScope } from './test-project-editor-multi-terminal-scope'
 import { testMarkdownLatexPreview } from './test-markdown-latex-preview'
@@ -474,6 +475,16 @@ export async function runAllTests(ctx: AutotestContext): Promise<void> {
       const results = await testGitDiffRecursiveSubmodules(ctx)
       collectSuiteResults('GitDiffRecursiveSubmodules', results)
       await ctx.reopenProjectEditor('phase5.47-cleanup')
+      await sleep(500)
+    }
+
+    if (!ctx.cancelled() && shouldRun('git-nested-submodules')) {
+      log('phase5.48:begin')
+      await ctx.reopenProjectEditor('phase5.48-setup')
+      await sleep(300)
+      const results = await testGitNestedSubmodules(ctx)
+      collectSuiteResults('GitNestedSubmodules', results)
+      await ctx.reopenProjectEditor('phase5.48-cleanup')
       await sleep(500)
     }
 

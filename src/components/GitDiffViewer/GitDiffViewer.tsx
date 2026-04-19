@@ -273,7 +273,11 @@ export function inspectEpubCompareDom() {
 type GitDiffDebugApi = {
   isOpen: () => boolean
   getFileList: () => GitFileStatus[]
+  getVisibleFileList: () => GitFileStatus[]
   getRepoList: () => GitRepoContext[]
+  getVisibleRepoItems: () => RepoFilterTreeItem[]
+  setRepoExpanded: (repoRoot: string, expanded: boolean) => boolean
+  setRepoFilter: (repoRoot: string | null) => boolean
   getSelectedFile: () => {
     filename: string
     originalFilename?: string
@@ -395,6 +399,89 @@ function sortRepoContexts(a: GitRepoContext, b: GitRepoContext): number {
     return a.depth - b.depth
   }
   return a.label.localeCompare(b.label)
+}
+
+interface RepoFilterTreeItem extends GitRepoContext {
+  treeDepth: number
+  hasChildren: boolean
+  expanded: boolean
+  isCurrent: boolean
+  displayLabel: string
+}
+
+function normalizeRepoRoot(root: string | null | undefined): string {
+  return (root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function getRepoTreeDepth(repo: GitRepoContext): number {
+  return repo.isSubmodule ? repo.depth + 1 : 0
+}
+
+function getRepoLeafLabel(label: string): string {
+  const normalized = label.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).pop() || label
+}
+
+function buildRepoFilterTreeItems(
+  repos: GitRepoContext[] | undefined,
+  expandedRoots: Set<string>,
+  currentRoot: string | null,
+  currentLabel: string,
+  includeRepo: (repo: GitRepoContext) => boolean
+): RepoFilterTreeItem[] {
+  if (!repos || repos.length === 0) return []
+  const normalizedCurrent = normalizeRepoRoot(currentRoot)
+  const childrenByParent = new Map<string, GitRepoContext[]>()
+  const rootRepos: GitRepoContext[] = []
+  const includedRoots = new Set<string>()
+
+  for (const repo of repos) {
+    const parentRoot = normalizeRepoRoot(repo.parentRoot)
+    if (repo.isSubmodule && parentRoot) {
+      const existing = childrenByParent.get(parentRoot) ?? []
+      existing.push(repo)
+      childrenByParent.set(parentRoot, existing)
+    } else {
+      rootRepos.push(repo)
+    }
+  }
+
+  const markIncludedWithAncestors = (repo: GitRepoContext) => {
+    if (!includeRepo(repo)) return
+    includedRoots.add(normalizeRepoRoot(repo.root))
+    let parentRoot = normalizeRepoRoot(repo.parentRoot)
+    while (parentRoot) {
+      includedRoots.add(parentRoot)
+      const parent = repos.find((candidate) => normalizeRepoRoot(candidate.root) === parentRoot)
+      parentRoot = normalizeRepoRoot(parent?.parentRoot)
+    }
+  }
+  repos.forEach(markIncludedWithAncestors)
+
+  const output: RepoFilterTreeItem[] = []
+  const visit = (repo: GitRepoContext) => {
+    const root = normalizeRepoRoot(repo.root)
+    if (!includedRoots.has(root)) return
+    const children = [...(childrenByParent.get(root) ?? [])].sort(sortRepoContexts)
+    const visibleChildren = children.filter((child) => includedRoots.has(normalizeRepoRoot(child.root)))
+    const hasChildren = visibleChildren.length > 0
+    const expanded = expandedRoots.has(root)
+    const displayLabel = repo.isSubmodule ? getRepoLeafLabel(repo.label) : currentLabel
+    output.push({
+      ...repo,
+      treeDepth: getRepoTreeDepth(repo),
+      hasChildren,
+      expanded,
+      isCurrent: root === normalizedCurrent,
+      displayLabel
+    })
+    if (expanded) {
+      visibleChildren.forEach(visit)
+    }
+  }
+
+  rootRepos.sort(sortRepoContexts).forEach(visit)
+  return output
 }
 
 function getDiffPaneElement(
@@ -628,6 +715,8 @@ export function GitDiffViewer({
   const diffRevealPhaseRef = useRef<DiffRevealPhase>('idle')
   const diffRevealTimeoutRef = useRef<number | null>(null)
   const [repoFilter, setRepoFilter] = useState<string | null>(null)
+  const repoFilterRef = useRef<string | null>(null)
+  const [expandedRepoRoots, setExpandedRepoRoots] = useState<Set<string>>(() => new Set())
   const activeCwd = useMemo(() => diffResult?.cwd || cwd, [diffResult?.cwd, cwd])
   const getFileKey = useCallback((file: GitFileStatus, repoRoot = activeCwd || '') => {
     return buildFileKey(file.repoRoot || repoRoot, file)
@@ -693,12 +782,63 @@ export function GitDiffViewer({
   const canEditFile = editDisabledReason.length === 0
   const canSaveDraft = canEditFile && isDraftDirty && !isSavingEdit
   const hasMultipleRepos = Boolean(diffResult?.repos && diffResult.repos.length > 1)
-  const repoFilterItems = useMemo(() => {
+  useEffect(() => {
     const repos = diffResult?.repos ?? []
-    return [...repos]
-      .filter((repo) => repo.changeCount > 0 || repo.loading)
-      .sort(sortRepoContexts)
+    if (repos.length === 0) return
+    setExpandedRepoRoots((prev) => {
+      const next = new Set(prev)
+      for (const repo of repos) {
+        next.add(normalizeRepoRoot(repo.root))
+        if (repo.parentRoot) {
+          next.add(normalizeRepoRoot(repo.parentRoot))
+        }
+      }
+      return next
+    })
   }, [diffResult?.repos])
+  const visibleFileList = useMemo(() => {
+    const files = diffResult?.files ?? []
+    return repoFilter ? files.filter((file) => file.repoRoot === repoFilter) : files
+  }, [diffResult?.files, repoFilter])
+  const visibleRepoItems = useMemo(() => buildRepoFilterTreeItems(
+    diffResult?.repos,
+    expandedRepoRoots,
+    diffResult?.cwd || cwd || null,
+    t('gitDiff.repo.current'),
+    (repo) => repo.changeCount > 0 || Boolean(repo.loading) || !repo.isSubmodule
+  ), [cwd, diffResult?.cwd, diffResult?.repos, expandedRepoRoots, t])
+  const setRepoExpanded = useCallback((repoRoot: string, expanded: boolean) => {
+    const key = normalizeRepoRoot(repoRoot)
+    if (!key) return false
+    setExpandedRepoRoots((prev) => {
+      const next = new Set(prev)
+      if (expanded) {
+        next.add(key)
+      } else {
+        next.delete(key)
+      }
+      return next
+    })
+    return true
+  }, [])
+  const toggleRepoExpanded = useCallback((repoRoot: string) => {
+    const key = normalizeRepoRoot(repoRoot)
+    if (!key) return
+    setExpandedRepoRoots((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }, [])
+  const updateRepoFilter = useCallback((repoRoot: string | null) => {
+    repoFilterRef.current = repoRoot
+    setRepoFilter(repoRoot)
+    return true
+  }, [])
   const confirmCloseWithDraft = useCallback(() => {
     if (!hasAnyUnsavedDraft) return true
     return window.confirm(t('gitDiff.confirm.closeWithDraft'))
@@ -1073,25 +1213,35 @@ export function GitDiffViewer({
   const detachDiffEditor = useCallback(() => {
     disposeDiffEditorBindings()
     const editor = diffEditorRef.current
+    const modelUrisToDispose = new Set<string>()
     if (editor) {
+      const model = editor.getModel()
+      if (model?.original) modelUrisToDispose.add(model.original.uri.toString())
+      if (model?.modified) modelUrisToDispose.add(model.modified.uri.toString())
       try {
         editor.setModel(null)
       } catch (error) {
         debugLog('editor:detach:error', { error: String(error) })
       }
+      try {
+        editor.dispose()
+      } catch (error) {
+        debugLog('editor:dispose:error', { error: String(error) })
+      }
     }
     const monaco = monacoRef.current
-    if (monaco) {
+    if (monaco && modelUrisToDispose.size > 0) {
       window.setTimeout(() => {
         for (const model of monaco.editor.getModels()) {
           if (!model.uri.toString().startsWith('inmemory://model/onward-git-diff/')) continue
+          if (!modelUrisToDispose.has(model.uri.toString())) continue
           try {
             model.dispose()
           } catch (error) {
             debugLog('editor:model-dispose:error', { error: String(error), uri: model.uri.toString() })
           }
         }
-      }, 0)
+      }, 100)
     }
     originalDecorationsRef.current?.clear()
     modifiedDecorationsRef.current?.clear()
@@ -1106,7 +1256,9 @@ export function GitDiffViewer({
     setDiffResult(null)
     setSelectedFile(null)
     setFileContents({})
+    repoFilterRef.current = null
     setRepoFilter(null)
+    setExpandedRepoRoots(new Set())
     setActionMessage(null)
     setLineMessage(null)
     setSelectedLineRange(null)
@@ -1189,10 +1341,12 @@ export function GitDiffViewer({
     } else {
       setSelectedFile(null)
     }
-    if (result.files.length > 0 && repoFilter && !result.files.some((file) => file.repoRoot === repoFilter)) {
+    const currentRepoFilter = repoFilterRef.current
+    if (result.files.length > 0 && currentRepoFilter && !result.files.some((file) => file.repoRoot === currentRepoFilter)) {
+      repoFilterRef.current = null
       setRepoFilter(null)
     }
-  }, [getMemoryKey, repoFilter, t])
+  }, [getMemoryKey, t])
 
   const loadDiff = useCallback(async (options?: { reset?: boolean; silent?: boolean; force?: boolean }) => {
     if (DEBUG_GIT_DIFF) {
@@ -1265,6 +1419,10 @@ export function GitDiffViewer({
       const deferForSubmodules = stagedLoad && initialResult.success && initialResult.submodulesLoading
       if (!deferForSubmodules) {
         applyLoadedDiffResult(initialResult, cwd, previousSelection)
+      } else {
+        // Expose the nested repository outline while suppressing the partial
+        // root-only file list until the full recursive diff is ready.
+        setDiffResult({ ...initialResult, files: [] })
       }
       debugLog('diff:load:done', {
         cwd: initialResult.cwd || cwd,
@@ -1333,6 +1491,7 @@ export function GitDiffViewer({
 
   const loadDiffFromRoot = useCallback(async (rootPath: string) => {
     if (!rootPath) return
+    repoFilterRef.current = null
     setRepoFilter(null)
     resetViewerState()
     const result = await window.electronAPI.git.getDiff(rootPath)
@@ -2696,10 +2855,21 @@ export function GitDiffViewer({
 
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
+    if (!isOpen) {
+      if ((window as any).__onwardGitDiffDebugTerminalId === terminalId) {
+        delete (window as any).__onwardGitDiffDebug
+        delete (window as any).__onwardGitDiffDebugTerminalId
+      }
+      return
+    }
     const api: GitDiffDebugApi = {
       isOpen: () => isOpen,
       getFileList: () => diffResult?.files ?? [],
+      getVisibleFileList: () => visibleFileList,
       getRepoList: () => diffResult?.repos ?? [],
+      getVisibleRepoItems: () => visibleRepoItems,
+      setRepoExpanded,
+      setRepoFilter: updateRepoFilter,
       getSelectedFile: () => (selectedFile ? {
         filename: selectedFile.filename,
         originalFilename: selectedFile.originalFilename,
@@ -2848,15 +3018,19 @@ export function GitDiffViewer({
       getEpubCompareState: () => inspectEpubCompareDom()
     }
     ;(window as any).__onwardGitDiffDebug = api
+    ;(window as any).__onwardGitDiffDebugTerminalId = terminalId
     return () => {
       if ((window as any).__onwardGitDiffDebug === api) {
         delete (window as any).__onwardGitDiffDebug
+        delete (window as any).__onwardGitDiffDebugTerminalId
       }
     }
   }, [
     activeCwd,
     diffRestoreNotice,
     diffResult,
+    visibleFileList,
+    visibleRepoItems,
     dragDiffSplitRatio,
     measureDiffSplitState,
     handleDeny,
@@ -2870,10 +3044,12 @@ export function GitDiffViewer({
     canShowFileActionPanel,
     canShowLineActionPanel,
     persistDiffSplitRatio,
+    setRepoExpanded,
     selectedFile,
     selectedFileKey,
     selectedFileState,
-    terminalId
+    terminalId,
+    updateRepoFilter
   ])
 
   // Make sure the readOnly switch takes effect immediately
@@ -2971,13 +3147,11 @@ export function GitDiffViewer({
       staged: [],
       untracked: []
     }
-    if (!diffResult) return groups
-    diffResult.files.forEach((file) => {
-      if (repoFilter && file.repoRoot !== repoFilter) return
+    visibleFileList.forEach((file) => {
       groups[file.changeType].push(file)
     })
     return groups
-  }, [diffResult, repoFilter])
+  }, [visibleFileList])
 
   const groupedFileList = useMemo(() => {
     const groups = [
@@ -3580,9 +3754,7 @@ export function GitDiffViewer({
       return renderNoChanges()
     }
 
-    const filteredFileCount = repoFilter
-      ? diffResult.files.filter((file) => file.repoRoot === repoFilter).length
-      : diffResult.files.length
+    const filteredFileCount = visibleFileList.length
 
     return (
       <div className="git-diff-main">
@@ -3608,25 +3780,39 @@ export function GitDiffViewer({
             <div className="git-diff-repo-filter">
               <div
                 className={`git-diff-repo-filter-item${repoFilter === null ? ' active' : ''}`}
-                onClick={() => setRepoFilter(null)}
+                onClick={() => updateRepoFilter(null)}
               >
                 <span className="git-diff-repo-filter-label">{t('gitDiff.repo.all')}</span>
                 <span className="git-diff-repo-filter-count">{diffResult.files.length}</span>
               </div>
-              {repoFilterItems.map((repo) => {
+              {visibleRepoItems.map((repo) => {
                 const canSelectRepo = !repo.loading && repo.changeCount > 0
                 return (
                   <div
                     key={repo.root}
                     className={`git-diff-repo-filter-item${repoFilter === repo.root ? ' active' : ''}${repo.loading ? ' loading' : ''}`}
+                    style={{ paddingLeft: `${12 + (repo.treeDepth * 14)}px` }}
                     onClick={() => {
                       if (canSelectRepo) {
-                        setRepoFilter(repo.root)
+                        updateRepoFilter(repo.root)
                       }
                     }}
                     title={repo.root}
                   >
-                    <span className="git-diff-repo-filter-label">{repo.label}</span>
+                    <button
+                      type="button"
+                      className={`git-diff-repo-toggle${repo.hasChildren ? '' : ' hidden'}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        toggleRepoExpanded(repo.root)
+                      }}
+                      aria-label={repo.expanded ? t('gitDiff.repo.collapse') : t('gitDiff.repo.expand')}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                        <path d={repo.expanded ? 'M4 6l4 4 4-4H4z' : 'M6 4l4 4-4 4V4z'} />
+                      </svg>
+                    </button>
+                    <span className="git-diff-repo-filter-label">{repo.displayLabel}</span>
                     <span className={`git-diff-repo-filter-count${repo.loading ? ' loading' : ''}`}>
                       {repo.loading ? '...' : repo.changeCount}
                     </span>

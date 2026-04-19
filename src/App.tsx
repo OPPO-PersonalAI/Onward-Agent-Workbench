@@ -1503,6 +1503,7 @@ function SettingsProviderWithHandler() {
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null)
   const terminalShortcutSeqRef = useRef(0)
   const terminalFocusSeqRef = useRef(0)
+  const restoreFocusSeqRef = useRef(0)
 
   const requestTerminalFocus = useCallback((terminalId: string, reason: TerminalFocusRequest['reason']) => {
     const immediateFocused = terminalSessionManager.focusIfNeeded(terminalId)
@@ -1697,7 +1698,13 @@ function SettingsProviderWithHandler() {
   const restoreLastFocus = useCallback((reason: TerminalFocusRestoreReason) => {
     if (!activeTab) return
 
+    restoreFocusSeqRef.current += 1
+    const restoreToken = restoreFocusSeqRef.current
     window.setTimeout(() => {
+      if (restoreToken !== restoreFocusSeqRef.current) {
+        return
+      }
+
       const activeElement = document.activeElement as HTMLElement | null
       const shouldPreserveCurrentFocus = reason !== 'shortcut-activated'
       if (
@@ -1771,7 +1778,7 @@ function SettingsProviderWithHandler() {
     if (!window.electronAPI?.settings?.onActivated) return
 
     const unsubscribe = window.electronAPI.settings.onActivated(() => {
-      restoreLastFocus('shortcut-activated')
+      restoreLastFocus('window-focus')
     })
 
     return unsubscribe

@@ -13,8 +13,12 @@
 
 export interface GitDiffDebugApi {
   isOpen: () => boolean
-  getFileList: () => Array<{ filename: string; originalFilename?: string; status?: string; changeType?: string }>
-  getRepoList: () => Array<{ root: string; label: string; isSubmodule: boolean; depth: number; changeCount: number; loading?: boolean }>
+  getFileList: () => Array<{ filename: string; originalFilename?: string; status?: string; changeType?: string; repoRoot?: string; repoLabel?: string }>
+  getVisibleFileList?: () => Array<{ filename: string; originalFilename?: string; status?: string; changeType?: string; repoRoot?: string; repoLabel?: string }>
+  getRepoList: () => Array<{ root: string; label: string; isSubmodule: boolean; depth: number; changeCount: number; parentRoot?: string; loading?: boolean }>
+  getVisibleRepoItems?: () => Array<{ root: string; label: string; isSubmodule: boolean; depth: number; treeDepth: number; changeCount: number; parentRoot?: string; loading?: boolean; hasChildren: boolean; expanded: boolean; isCurrent: boolean }>
+  setRepoExpanded?: (repoRoot: string, expanded: boolean) => boolean
+  setRepoFilter?: (repoRoot: string | null) => boolean
   getSelectedFile: () => { filename: string; originalFilename?: string; status?: string; changeType?: string } | null
   selectFileByPath: (path: string) => boolean
   selectFileByIndex: (index: number) => boolean
@@ -99,6 +103,7 @@ export interface PromptSenderDebugApi {
 export interface GitHistoryDebugApi {
   isOpen: () => boolean
   getCommitCount: () => number
+  getCommits?: () => Array<{ sha: string; summary: string }>
   getSelectedShas: () => string[]
   getFiles: () => Array<{ filename: string; status: string }>
   getSelectedFile: () => { filename: string } | null
@@ -139,6 +144,8 @@ export interface GitHistoryDebugApi {
     repoSearch: string
     cachedRepoCount: number
   }
+  getVisibleRepoItems?: () => Array<{ root: string; label: string; isSubmodule: boolean; depth: number; treeDepth: number; changeCount: number; parentRoot?: string; loading?: boolean; hasChildren: boolean; expanded: boolean; isCurrent: boolean }>
+  setRepoExpanded?: (repoRoot: string, expanded: boolean) => boolean
   switchRepo?: (repoRoot: string | null) => void
   injectRepoState: (state: {
     selectedRepoRoot: string | null
@@ -150,6 +157,7 @@ export interface GitHistoryDebugApi {
       isSubmodule?: boolean
       depth?: number
       changeCount?: number
+      parentRoot?: string
     }>
   }) => boolean
   selectCommitByIndex: (index: number) => boolean

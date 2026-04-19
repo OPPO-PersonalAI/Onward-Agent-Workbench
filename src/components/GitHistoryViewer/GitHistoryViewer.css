@@ -896,6 +896,32 @@ body.git-history-resizing {
   transition: background 0.12s ease;
 }
 
+.git-history-repo-toggle {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.git-history-repo-toggle.hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.git-history-repo-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .git-history-repo-item:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--text-1);

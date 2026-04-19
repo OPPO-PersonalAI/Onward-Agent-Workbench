@@ -275,13 +275,17 @@ export class PtyManager {
 
   resize(id: string, cols: number, rows: number): boolean {
     const record = this.instances.get(id)
-    if (record) {
-      record.pty.resize(cols, rows)
-      return true
+    if (record && !record.disposed && !record.exited) {
+      try {
+        record.pty.resize(cols, rows)
+        return true
+      } catch (error) {
+        console.warn('[PTY] resize failed:', { id, cols, rows, error: String(error) })
+        return false
+      }
     }
     return false
   }
-
   // Parse OSC 9;9 CWD reports from PTY data stream
   detectCwd(id: string, data: string): void {
     const match = PtyManager.OSC_CWD_RE.exec(data)

@@ -3904,7 +3904,11 @@ export function ProjectEditor({
       return
     }
 
-    if (!cwd) {
+    const effectiveCwd = cwd || (window.electronAPI?.debug?.autotest
+      ? window.electronAPI.debug.autotestCwd
+      : null)
+
+    if (!effectiveCwd) {
       setRootError(t('projectEditor.error.noWorkingDirectory'))
       setRootPath(null)
       setPinnedFiles([])
@@ -3916,7 +3920,7 @@ export function ProjectEditor({
       return
     }
 
-    const normalizedCwd = normalizePath(cwd)
+    const normalizedCwd = normalizePath(effectiveCwd)
     const previousRoot = rootRef.current ? normalizePath(rootRef.current) : null
     if (previousRoot && previousRoot !== normalizedCwd) {
       if (DEBUG_PROJECT_EDITOR) {
@@ -3939,10 +3943,11 @@ export function ProjectEditor({
 
     setRootError(null)
     gitDiffOpenRef.current = false
-    setRootPath(cwd)
-    rootRef.current = cwd
+    setRootPath(effectiveCwd)
+    rootRef.current = effectiveCwd
+    fileIndexRef.current = []
     setSearchResults([])
-    void loadRoot(cwd)
+    void loadRoot(effectiveCwd)
   }, [cwd, isOpen, loadRoot, resetActiveFileState, t])
 
   useEffect(() => {

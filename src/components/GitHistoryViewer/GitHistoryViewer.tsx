@@ -126,6 +126,86 @@ interface RefBadge {
   type: 'head' | 'local-branch' | 'remote-branch' | 'tag'
 }
 
+interface RepoTreeItem extends GitRepoContext {
+  treeDepth: number
+  hasChildren: boolean
+  expanded: boolean
+  isCurrent: boolean
+  displayLabel: string
+}
+
+function normalizeRepoRoot(root: string | null | undefined): string {
+  return (root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function getRepoTreeDepth(repo: GitRepoContext): number {
+  return repo.isSubmodule ? repo.depth + 1 : 0
+}
+
+function getRepoLeafLabel(label: string): string {
+  const normalized = label.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).pop() || label
+}
+
+function buildRepoTreeItems(
+  repos: GitRepoContext[] | undefined,
+  expandedRoots: Set<string>,
+  currentRoot: string | null,
+  currentLabel: string,
+  query = ''
+): RepoTreeItem[] {
+  if (!repos || repos.length === 0) return []
+  const normalizedCurrent = normalizeRepoRoot(currentRoot)
+  const normalizedQuery = query.trim().toLowerCase()
+  const childrenByParent = new Map<string, GitRepoContext[]>()
+  const rootRepos: GitRepoContext[] = []
+
+  for (const repo of repos) {
+    const parentRoot = normalizeRepoRoot(repo.parentRoot)
+    if (repo.isSubmodule && parentRoot) {
+      const existing = childrenByParent.get(parentRoot) ?? []
+      existing.push(repo)
+      childrenByParent.set(parentRoot, existing)
+    } else {
+      rootRepos.push(repo)
+    }
+  }
+
+  const sortRepos = (a: GitRepoContext, b: GitRepoContext) => {
+    if (a.isSubmodule !== b.isSubmodule) return a.isSubmodule ? 1 : -1
+    if (a.depth !== b.depth) return a.depth - b.depth
+    return a.label.localeCompare(b.label)
+  }
+
+  const output: RepoTreeItem[] = []
+  const visit = (repo: GitRepoContext) => {
+    const root = normalizeRepoRoot(repo.root)
+    const children = [...(childrenByParent.get(root) ?? [])].sort(sortRepos)
+    const hasChildren = children.length > 0
+    const expanded = expandedRoots.has(root)
+    const isCurrent = root === normalizedCurrent
+    const displayLabel = repo.isSubmodule ? getRepoLeafLabel(repo.label) : currentLabel
+    const searchable = `${displayLabel} ${repo.label} ${repo.root}`.toLowerCase()
+    const matches = !normalizedQuery || searchable.includes(normalizedQuery)
+    if (matches) {
+      output.push({
+        ...repo,
+        treeDepth: getRepoTreeDepth(repo),
+        hasChildren,
+        expanded,
+        isCurrent,
+        displayLabel
+      })
+    }
+    if (normalizedQuery || expanded) {
+      children.forEach(visit)
+    }
+  }
+
+  rootRepos.sort(sortRepos).forEach(visit)
+  return output
+}
+
 function parseRefs(refs?: string): RefBadge[] {
   if (!refs || !refs.trim()) return []
   return refs.split(',').map(r => r.trim()).filter(Boolean).map(ref => {
@@ -286,6 +366,7 @@ export function GitHistoryViewer({
   const [repoSearch, setRepoSearch] = useState('')
   const [cachedRepos, setCachedRepos] = useState<GitHistoryResult['repos']>(undefined)
   const [cachedParentCwd, setCachedParentCwd] = useState<string | null>(null)
+  const [expandedRepoRoots, setExpandedRepoRoots] = useState<Set<string>>(() => new Set())
   const cachedParentCwdRef = useRef<string | null>(cachedParentCwd)
   const activeCwd = selectedRepoRoot || historyResult?.cwd || cachedParentCwd || cwd
   const activeCwdRef = useRef(activeCwd)
@@ -309,6 +390,56 @@ export function GitHistoryViewer({
   useEffect(() => {
     cachedParentCwdRef.current = cachedParentCwd
   }, [cachedParentCwd])
+
+  useEffect(() => {
+    if (!cachedRepos || cachedRepos.length === 0) return
+    setExpandedRepoRoots((prev) => {
+      const next = new Set(prev)
+      for (const repo of cachedRepos) {
+        next.add(normalizeRepoRoot(repo.root))
+        if (repo.parentRoot) {
+          next.add(normalizeRepoRoot(repo.parentRoot))
+        }
+      }
+      return next
+    })
+  }, [cachedRepos])
+
+  const repoTreeParentCwd = cachedParentCwd || historyResult?.cwd || ''
+  const visibleRepoItems = useMemo(() => buildRepoTreeItems(
+    cachedRepos,
+    expandedRepoRoots,
+    selectedRepoRoot || repoTreeParentCwd,
+    t('gitHistory.repo.current'),
+    repoSearch
+  ), [cachedRepos, expandedRepoRoots, repoTreeParentCwd, repoSearch, selectedRepoRoot, t])
+  const toggleRepoExpanded = useCallback((repoRoot: string) => {
+    const key = normalizeRepoRoot(repoRoot)
+    if (!key) return
+    setExpandedRepoRoots((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }, [])
+  const setRepoExpanded = useCallback((repoRoot: string, expanded: boolean) => {
+    const key = normalizeRepoRoot(repoRoot)
+    if (!key) return false
+    setExpandedRepoRoots((prev) => {
+      const next = new Set(prev)
+      if (expanded) {
+        next.add(key)
+      } else {
+        next.delete(key)
+      }
+      return next
+    })
+    return true
+  }, [])
 
   const commitIndexMap = useMemo(() => {
     const map = new Map<string, number>()
@@ -499,6 +630,7 @@ export function GitHistoryViewer({
     setCachedRepos(undefined)
     setCachedParentCwd(null)
     setRepoSearch('')
+    setExpandedRepoRoots(new Set())
     skipRepoReloadRef.current = true
   }, [])
 
@@ -551,8 +683,8 @@ export function GitHistoryViewer({
       isSwitchingRepoRef.current = false
       if (token === loadTokenRef.current) {
         setLoading(false)
+        loadingRef.current = false
       }
-      loadingRef.current = false
     }
   }, [])
 
@@ -712,17 +844,29 @@ export function GitHistoryViewer({
 
   const switchRepo = useCallback((repoRoot: string | null) => {
     isSwitchingRepoRef.current = true
+    skipRepoReloadRef.current = true
+    ++loadTokenRef.current
+    loadingRef.current = false
     fileCacheRef.current.clear()
     patchCacheRef.current.clear()
     fileContentCacheRef.current.clear()
     ++patchTokenRef.current
     ++fileContentTokenRef.current
+    commitsRef.current = []
+    setCommits([])
+    setHasMore(true)
+    setFiles([])
+    setSelectedShas([])
+    setSelectionAnchor(null)
+    setSelectedFile(null)
     setDiffPatch('')
+    setDiffError(null)
     setSelectedFileContent(null)
     didRestoreRef.current = false
     selectedRepoRootRef.current = repoRoot
     setSelectedRepoRoot(repoRoot)
-  }, [])
+    void loadHistory(true)
+  }, [loadHistory])
 
   const persistState = useCallback(() => {
     if (!historyStateKey) return
@@ -942,12 +1086,20 @@ export function GitHistoryViewer({
   // Debug API (only exposed in automated testing mode)
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
+    if (!isOpen) {
+      if ((window as any).__onwardGitHistoryDebugTerminalId === terminalId) {
+        delete (window as any).__onwardGitHistoryDebug
+        delete (window as any).__onwardGitHistoryDebugTerminalId
+      }
+      return
+    }
     const mapInjectedRepos = (repos?: Array<{
       root: string
       label: string
       isSubmodule?: boolean
       depth?: number
       changeCount?: number
+      parentRoot?: string
     }>): GitRepoContext[] | undefined => {
       if (!repos) return undefined
       return repos.map(repo => ({
@@ -955,12 +1107,14 @@ export function GitHistoryViewer({
         label: repo.label,
         isSubmodule: repo.isSubmodule ?? true,
         depth: repo.depth ?? 1,
+        parentRoot: repo.parentRoot,
         changeCount: repo.changeCount ?? 0
       }))
     }
     const api = {
       isOpen: () => isOpen,
       getCommitCount: () => commits.length,
+      getCommits: () => commits.map((commit) => ({ sha: commit.sha, summary: commit.summary })),
       getSelectedShas: () => selectedShas,
       getFiles: () => files.map(f => ({
         filename: f.filename,
@@ -1006,6 +1160,20 @@ export function GitHistoryViewer({
         repoSearch,
         cachedRepoCount: cachedRepos?.length ?? 0
       }),
+      getVisibleRepoItems: () => visibleRepoItems.map((repo) => ({
+        root: repo.root,
+        label: repo.displayLabel,
+        isSubmodule: repo.isSubmodule,
+        depth: repo.depth,
+        treeDepth: repo.treeDepth,
+        changeCount: repo.changeCount,
+        parentRoot: repo.parentRoot,
+        loading: repo.loading,
+        hasChildren: repo.hasChildren,
+        expanded: repo.expanded,
+        isCurrent: repo.isCurrent
+      })),
+      setRepoExpanded,
       switchRepo: (repoRoot: string | null) => {
         switchRepo(repoRoot)
       },
@@ -1019,6 +1187,7 @@ export function GitHistoryViewer({
           isSubmodule?: boolean
           depth?: number
           changeCount?: number
+          parentRoot?: string
         }>
       }) => {
         skipRepoReloadRef.current = true
@@ -1058,12 +1227,14 @@ export function GitHistoryViewer({
       getEpubCompareState: () => inspectEpubCompareDom()
     }
     ;(window as any).__onwardGitHistoryDebug = api
+    ;(window as any).__onwardGitHistoryDebugTerminalId = terminalId
     return () => {
       if ((window as any).__onwardGitHistoryDebug === api) {
         delete (window as any).__onwardGitHistoryDebug
+        delete (window as any).__onwardGitHistoryDebugTerminalId
       }
     }
-  }, [isOpen, commits, selectedShas, files, selectedFile, selectedFileContent, loading, filesLoading, diffLoading, diffStyle, hideWhitespace, imageCompareMode, imageDisplayMode, svgViewMode, selectedRepoRoot, cachedParentCwd, repoSearch, cachedRepos, toggleImageCompareMode, toggleImageDisplayMode, switchRepo])
+  }, [isOpen, commits, selectedShas, files, selectedFile, selectedFileContent, loading, filesLoading, diffLoading, diffStyle, hideWhitespace, imageCompareMode, imageDisplayMode, svgViewMode, selectedRepoRoot, cachedParentCwd, repoSearch, cachedRepos, visibleRepoItems, setRepoExpanded, toggleImageCompareMode, toggleImageDisplayMode, switchRepo])
 
   useSubpageEscape({ isOpen, onEscape: onClose })
 
@@ -1292,6 +1463,13 @@ export function GitHistoryViewer({
 
   const renderCommitList = () => {
     if (!historyResult) {
+      return (
+        <div className="git-history-loading">
+          <div className="git-history-spinner" />
+        </div>
+      )
+    }
+    if (loading && commits.length === 0) {
       return (
         <div className="git-history-loading">
           <div className="git-history-spinner" />
@@ -1739,7 +1917,7 @@ export function GitHistoryViewer({
   const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
   const keepMountedInPanel = isPanel
   const historyWorkingDirectory = historyResult?.cwd && historyResult.isGitRepo
-    ? (cachedParentCwd || historyResult.cwd)
+    ? historyResult.cwd
     : null
   const externalPanelActions = useMemo(() => (
     <SubpagePanelButton className="git-history-close" onClick={onClose} title={t('gitHistory.returnToTerminal')}>
@@ -1754,9 +1932,17 @@ export function GitHistoryViewer({
     actions: externalPanelActions,
     taskTitle
   }), [externalPanelActions, handleSelectSubpage, historyWorkingDirectory, t, taskTitle])
+  const displayedHistoryRoot = normalizeRepoRoot(historyResult?.cwd)
+  const selectedHistoryRoot = normalizeRepoRoot(selectedRepoRoot || cachedParentCwd || historyResult?.cwd || cwd)
+  const showSuperprojectHint = Boolean(
+    historyResult?.superprojectRoot &&
+    !selectedRepoRoot &&
+    displayedHistoryRoot &&
+    displayedHistoryRoot === selectedHistoryRoot
+  )
   const historyBody = (
     <>
-      {historyResult?.superprojectRoot && !selectedRepoRoot && (
+      {showSuperprojectHint && (
         <div
           className="git-history-superproject-hint"
           onClick={() => switchRepo(historyResult.superprojectRoot!)}
@@ -1767,12 +1953,7 @@ export function GitHistoryViewer({
       )}
       <div className="git-history-body">
         {cachedRepos && cachedRepos.length > 1 && (() => {
-          const parentCwd = cachedParentCwd || historyResult?.cwd || ''
-          const sorted = [...cachedRepos].sort((a, b) => a.label.localeCompare(b.label))
-          const query = repoSearch.toLowerCase()
-          const filtered = query
-            ? sorted.filter((repo) => repo.label.toLowerCase().includes(query))
-            : sorted
+          const sorted = cachedRepos
           return (
             <div className="git-history-repo-sidebar">
               <div className="git-history-repo-sidebar-header">{t('gitHistory.repo.title')}</div>
@@ -1795,31 +1976,42 @@ export function GitHistoryViewer({
                 </div>
               )}
               <div className="git-history-repo-list">
-                <div
-                  className={`git-history-repo-item${!selectedRepoRoot ? ' active' : ''}`}
-                  onClick={() => switchRepo(null)}
-                  title={parentCwd}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
-                    <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H7.71L6.85 2.57A1.5 1.5 0 0 0 5.57 2H1.5z" />
-                  </svg>
-                  <span className="git-history-repo-item-label">{t('gitHistory.repo.all')}</span>
-                </div>
-                <div className="git-history-repo-divider" />
-                {filtered.map((repo) => {
-                  if (repo.root === parentCwd) return null
+                {visibleRepoItems.map((repo) => {
+                  const repoRoot = normalizeRepoRoot(repo.root)
+                  const parentRoot = normalizeRepoRoot(repoTreeParentCwd)
+                  const isActive = repoRoot === normalizeRepoRoot(selectedRepoRoot || parentRoot)
+                  const targetRoot = repoRoot === parentRoot ? null : repo.root
                   return (
                     <div
                       key={repo.root}
-                      className={`git-history-repo-item${selectedRepoRoot === repo.root ? ' active' : ''}`}
-                      onClick={() => switchRepo(repo.root)}
+                      className={`git-history-repo-item${isActive ? ' active' : ''}`}
+                      style={{ paddingLeft: `${8 + (repo.treeDepth * 14)}px` }}
+                      onClick={() => switchRepo(targetRoot)}
                       title={repo.root}
                     >
-                      <span className="git-history-repo-item-label">{repo.label}</span>
+                      <button
+                        type="button"
+                        className={`git-history-repo-toggle${repo.hasChildren ? '' : ' hidden'}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          toggleRepoExpanded(repo.root)
+                        }}
+                        aria-label={repo.expanded ? t('gitHistory.repo.collapse') : t('gitHistory.repo.expand')}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                          <path d={repo.expanded ? 'M4 6l4 4 4-4H4z' : 'M6 4l4 4-4 4V4z'} />
+                        </svg>
+                      </button>
+                      <span className="git-history-repo-item-icon" aria-hidden="true">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H7.71L6.85 2.57A1.5 1.5 0 0 0 5.57 2H1.5z" />
+                        </svg>
+                      </span>
+                      <span className="git-history-repo-item-label">{repo.displayLabel}</span>
                     </div>
                   )
                 })}
-                {filtered.length === 0 && (
+                {visibleRepoItems.length === 0 && (
                   <div className="git-history-repo-empty">{t('gitHistory.repo.noMatch')}</div>
                 )}
               </div>

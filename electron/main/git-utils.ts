@@ -102,6 +102,7 @@ export interface GitRepoContext {
   isSubmodule: boolean
   depth: number
   changeCount: number
+  parentRoot?: string
   loading?: boolean
 }
 
@@ -525,7 +526,7 @@ export async function getTerminalCwd(terminalId: string): Promise<string | null>
     return inflight
   }
 
-  const task: Promise<{ files: GitFileStatus[]; error?: string }> = (async () => {
+  const task: Promise<string | null> = (async () => {
     const probeStartedAt = Date.now()
     const ptyProcess = ptyManager.get(terminalId)
     if (!ptyProcess) {
@@ -554,7 +555,7 @@ export async function getTerminalCwd(terminalId: string): Promise<string | null>
         const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
         const cwdLine = output.split('\n').find((line) => line.startsWith('n')) || ''
         const cwd = cwdLine.slice(1).trim()
-        const value = cwd || null
+        const value = cwd || ptyManager.getCwd(terminalId)
         terminalCwdCache.set(terminalId, { value, at: Date.now() })
         return value
       } else if (os === 'win32') {
@@ -571,8 +572,9 @@ export async function getTerminalCwd(terminalId: string): Promise<string | null>
       return null
     } catch (error) {
       console.error('Failed to get terminal cwd:', error)
-      terminalCwdCache.set(terminalId, { value: null, at: Date.now() })
-      return null
+      const fallbackCwd = ptyManager.getCwd(terminalId)
+      terminalCwdCache.set(terminalId, { value: fallbackCwd, at: Date.now() })
+      return fallbackCwd
     } finally {
       gitRuntimeManager.recordCwdProbeLatency(Date.now() - probeStartedAt)
     }
@@ -928,7 +930,7 @@ async function collectSubmodulesFromGitmodules(
 
 export async function detectSubmodulesRecursive(
   repoRoot: string,
-  _gitExecutable: string
+  gitExecutable: string
 ): Promise<GitSubmoduleInfo[]> {
   const normalizedRoot = resolve(repoRoot)
   const cached = submoduleCache.get(normalizedRoot)
@@ -942,6 +944,33 @@ export async function detectSubmodulesRecursive(
   } catch {
     submoduleCache.set(normalizedRoot, { value: [], at: Date.now() })
     return []
+  }
+
+  try {
+    const { stdout } = await execFileAsync(
+      gitExecutable,
+      ['-c', 'core.quotepath=false', 'submodule', 'status', '--recursive'],
+      {
+        cwd: repoRoot,
+        timeout: EXEC_TIMEOUT,
+        env: getExecEnv(),
+        maxBuffer: MAX_DIFF_OUTPUT
+      },
+      {
+        repoKey: repoRoot,
+        priority: 'normal',
+        dedupeKey: `repo:submodules:status:${normalizedRoot}`,
+        label: 'git submodule status --recursive'
+      }
+    )
+    const output = typeof stdout === 'string' ? stdout : stdout.toString('utf-8')
+    const statusSubmodules = parseSubmoduleStatusOutput(output, repoRoot)
+    if (statusSubmodules.length > 0) {
+      submoduleCache.set(normalizedRoot, { value: statusSubmodules, at: Date.now() })
+      return statusSubmodules
+    }
+  } catch {
+    // Fall through to .gitmodules parsing for partially initialized worktrees.
   }
 
   const allSubmodules = await collectSubmodulesFromGitmodules(repoRoot, repoRoot, 0)
@@ -1455,6 +1484,37 @@ function cloneGitFileStatuses(files: GitFileStatus[]): GitFileStatus[] {
   return files.map((file) => ({ ...file }))
 }
 
+function isGitPathAtOrInside(pathValue: string, parentPath: string): boolean {
+  return pathValue === parentPath || pathValue.startsWith(`${parentPath}/`)
+}
+
+function buildChildSubmodulePathsByParent(submodules: GitSubmoduleInfo[]): Map<string, string[]> {
+  const pathsByParent = new Map<string, string[]>()
+  for (const submodule of submodules) {
+    const parentRoot = resolve(submodule.parentRoot)
+    const relativePath = normalizeGitPath(relative(submodule.parentRoot, submodule.repoRoot)) || submodule.name
+    if (!relativePath || relativePath.startsWith('../')) {
+      continue
+    }
+    const existing = pathsByParent.get(parentRoot) ?? []
+    existing.push(relativePath)
+    pathsByParent.set(parentRoot, existing)
+  }
+  for (const [parentRoot, paths] of pathsByParent) {
+    pathsByParent.set(parentRoot, Array.from(new Set(paths)).sort((a, b) => b.length - a.length))
+  }
+  return pathsByParent
+}
+
+function filterFilesOwnedByRepo(files: GitFileStatus[], childSubmodulePaths: string[]): GitFileStatus[] {
+  if (childSubmodulePaths.length === 0) return files
+  return files.filter((file) => {
+    const childPath = childSubmodulePaths.find((pathValue) => isGitPathAtOrInside(file.filename, pathValue))
+    if (!childPath) return true
+    return file.filename === childPath && Boolean(file.isSubmoduleEntry)
+  })
+}
+
 function clearSingleRepoDiffCache(repoRoot: string): void {
   const prefix = `${resolve(repoRoot)}::`
   for (const key of Array.from(singleRepoDiffCache.keys())) {
@@ -1644,13 +1704,14 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
     ])
 
     const allRepos = [
-      { root: repoRoot, gitDir: meta.gitDir, label: repoName, isSubmodule: false, depth: 0 },
+      { root: repoRoot, gitDir: meta.gitDir, label: repoName, isSubmodule: false, depth: 0, parentRoot: undefined },
       ...submodules.map((submodule) => ({
         root: submodule.repoRoot,
         gitDir: null,
         label: submodule.path,
         isSubmodule: true,
-        depth: submodule.depth
+        depth: submodule.depth,
+        parentRoot: submodule.parentRoot
       }))
     ]
 
@@ -1662,7 +1723,7 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
     )
     const resultByRepoRoot = new Map(reposToLoad.map((repo, index) => [repo.root, results[index]]))
 
-    const submodulePaths = new Set(submodules.map((submodule) => submodule.path))
+    const childSubmodulePathsByParent = buildChildSubmodulePathsByParent(submodules)
     const files: GitFileStatus[] = []
     const repos: GitRepoContext[] = []
 
@@ -1673,6 +1734,7 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
           label: repo.label,
           isSubmodule: repo.isSubmodule,
           depth: repo.depth,
+          parentRoot: repo.parentRoot,
           changeCount: 0,
           loading: true
         })
@@ -1686,6 +1748,7 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
           label: repo.label,
           isSubmodule: repo.isSubmodule,
           depth: repo.depth,
+          parentRoot: repo.parentRoot,
           changeCount: 0
         })
         continue
@@ -1693,15 +1756,17 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
 
       if (result.status === 'fulfilled' && !result.value.error) {
         let repoFiles = result.value.files
-        if (!repo.isSubmodule && submodulePaths.size > 0) {
-          repoFiles = repoFiles.filter((file) => !submodulePaths.has(file.filename) || file.isSubmoduleEntry)
-        }
+        repoFiles = filterFilesOwnedByRepo(
+          repoFiles,
+          childSubmodulePathsByParent.get(resolve(repo.root)) ?? []
+        )
         files.push(...repoFiles)
         repos.push({
           root: repo.root,
           label: repo.label,
           isSubmodule: repo.isSubmodule,
           depth: repo.depth,
+          parentRoot: repo.parentRoot,
           changeCount: repoFiles.length
         })
       } else {
@@ -1714,6 +1779,7 @@ export async function getGitDiff(cwd: string, options?: GitDiffLoadOptions): Pro
           label: repo.label,
           isSubmodule: repo.isSubmodule,
           depth: repo.depth,
+          parentRoot: repo.parentRoot,
           changeCount: 0
         })
       }
@@ -1838,6 +1904,7 @@ export async function getGitHistory(
           label: submodule.path,
           isSubmodule: true,
           depth: submodule.depth,
+          parentRoot: submodule.parentRoot,
           changeCount: -1
         }))
       ]
