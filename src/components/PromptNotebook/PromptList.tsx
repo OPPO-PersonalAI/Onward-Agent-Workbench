@@ -5,6 +5,7 @@
 
 import { useMemo, useCallback, useEffect, useLayoutEffect, useRef, useState, memo } from 'react'
 import { Prompt } from '../../types/electron'
+import type { TerminalInfo } from '../../types/prompt'
 import type { PromptSchedule } from '../../types/tab.d.ts'
 import { formatShortTime } from '../../utils/schedule'
 import { useI18n } from '../../i18n/useI18n'
@@ -61,6 +62,10 @@ interface PromptListProps {
   onResumeSchedule?: (promptId: string) => void
   onViewSendHistory?: (prompt: Prompt) => void
   onCopyPrompt?: (prompt: Prompt) => void | Promise<void>
+  /** Active terminals to populate the "Send and execute to Task" submenu */
+  terminals?: TerminalInfo[]
+  onSendAndExecuteToTask?: (prompt: Prompt, terminalId: string) => void
+  onSendAndExecuteToAllTasks?: (prompt: Prompt) => void
 }
 
 const LONG_PRESS_DELAY = 100
@@ -273,11 +278,20 @@ export const PromptList = memo(function PromptList({
   onPauseSchedule,
   onResumeSchedule,
   onViewSendHistory,
-  onCopyPrompt
+  onCopyPrompt,
+  terminals,
+  onSendAndExecuteToTask,
+  onSendAndExecuteToAllTasks
 }: PromptListProps) {
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const listItemsRef = useRef<HTMLDivElement | null>(null)
+  const submenuWrapperRef = useRef<HTMLDivElement | null>(null)
+  const submenuRef = useRef<HTMLDivElement | null>(null)
+  const submenuCloseTimerRef = useRef<number | null>(null)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [submenuOpen, setSubmenuOpen] = useState<'sendToTask' | null>(null)
+  const [submenuFlipped, setSubmenuFlipped] = useState(false)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
   const longPressTimerRef = useRef<number | null>(null)
@@ -412,21 +426,54 @@ export const PromptList = memo(function PromptList({
     onColorChange(id, newColor)
   }, [prompts, onColorChange])
 
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null)
+  const clearSubmenuCloseTimer = useCallback(() => {
+    if (submenuCloseTimerRef.current) {
+      window.clearTimeout(submenuCloseTimerRef.current)
+      submenuCloseTimerRef.current = null
+    }
   }, [])
+
+  const closeContextMenu = useCallback(() => {
+    clearSubmenuCloseTimer()
+    setSubmenuOpen(null)
+    setSubmenuFlipped(false)
+    setContextMenu(null)
+  }, [clearSubmenuCloseTimer])
+
+  const openSendToTaskSubmenu = useCallback(() => {
+    clearSubmenuCloseTimer()
+    setSubmenuOpen('sendToTask')
+  }, [clearSubmenuCloseTimer])
+
+  const scheduleCloseSubmenu = useCallback(() => {
+    clearSubmenuCloseTimer()
+    submenuCloseTimerRef.current = window.setTimeout(() => {
+      setSubmenuOpen(null)
+      setSubmenuFlipped(false)
+      submenuCloseTimerRef.current = null
+    }, 140)
+  }, [clearSubmenuCloseTimer])
+
+  useEffect(() => {
+    return () => {
+      clearSubmenuCloseTimer()
+    }
+  }, [clearSubmenuCloseTimer])
 
   const handleContextMenu = useCallback((event: React.MouseEvent, prompt: Prompt) => {
     event.preventDefault()
     event.stopPropagation()
     if (dragStateRef.current?.active) return
     onSelect(prompt.id)
+    clearSubmenuCloseTimer()
+    setSubmenuOpen(null)
+    setSubmenuFlipped(false)
     setContextMenu({
       id: prompt.id,
       x: event.clientX,
       y: event.clientY
     })
-  }, [onSelect])
+  }, [onSelect, clearSubmenuCloseTimer])
 
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, prompt: Prompt, isPinned: boolean) => {
     if (!onReorderPinned || !isPinned) return
@@ -524,35 +571,61 @@ export const PromptList = memo(function PromptList({
   useEffect(() => {
     if (!contextMenu) return
 
+    const isInsideMenu = (target: Node | null): boolean => {
+      if (!target) return false
+      if (menuRef.current && menuRef.current.contains(target)) return true
+      if (submenuRef.current && submenuRef.current.contains(target)) return true
+      return false
+    }
+
     const handleMouseDown = (event: MouseEvent) => {
-      if (!menuRef.current) return
-      if (!menuRef.current.contains(event.target as Node)) {
-        setContextMenu(null)
+      if (!isInsideMenu(event.target as Node)) {
+        closeContextMenu()
       }
     }
 
-    const handleScroll = () => {
-      setContextMenu(null)
+    const dismissOnOwnScroll = () => {
+      closeContextMenu()
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setContextMenu(null)
+        closeContextMenu()
       }
     }
 
+    // Only react to scrolls inside the prompt list itself; terminal streams
+    // (xterm) must not dismiss the menu. Previously this used capture-phase
+    // `scroll` on window which caught every scroll on the page.
+    const listScrollTarget = listItemsRef.current
     document.addEventListener('mousedown', handleMouseDown)
     document.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', handleScroll)
-    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', dismissOnOwnScroll)
+    listScrollTarget?.addEventListener('scroll', dismissOnOwnScroll, { passive: true })
 
     return () => {
       document.removeEventListener('mousedown', handleMouseDown)
       document.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', handleScroll)
-      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', dismissOnOwnScroll)
+      listScrollTarget?.removeEventListener('scroll', dismissOnOwnScroll)
     }
-  }, [contextMenu])
+  }, [contextMenu, closeContextMenu])
+
+  useLayoutEffect(() => {
+    if (submenuOpen !== 'sendToTask') {
+      if (submenuFlipped) setSubmenuFlipped(false)
+      return
+    }
+    if (!submenuWrapperRef.current || !submenuRef.current) return
+    const wrapperRect = submenuWrapperRef.current.getBoundingClientRect()
+    const submenuRect = submenuRef.current.getBoundingClientRect()
+    const padding = 8
+    const overflowsRight = wrapperRect.right + submenuRect.width + padding > window.innerWidth
+    const shouldFlip = overflowsRight && wrapperRect.left - submenuRect.width - padding >= 0
+    if (shouldFlip !== submenuFlipped) {
+      setSubmenuFlipped(shouldFlip)
+    }
+  }, [submenuOpen, submenuFlipped, terminals])
 
   useLayoutEffect(() => {
     if (!contextMenu || !menuRef.current) return
@@ -657,7 +730,7 @@ export const PromptList = memo(function PromptList({
           </div>
         )}
       </div>
-      <div className="prompt-list-items">
+      <div className="prompt-list-items" ref={listItemsRef}>
         {sortedPrompts.length === 0 ? (
           <div className="prompt-list-empty">{t('promptList.empty')}</div>
         ) : (
@@ -902,6 +975,66 @@ export const PromptList = memo(function PromptList({
               </button>
             )
           })()}
+          {onSendAndExecuteToTask && terminals && terminals.length > 0 && (
+            <>
+              <div className="prompt-context-separator" role="separator" />
+              <div
+                className="prompt-context-submenu-wrapper"
+                ref={submenuWrapperRef}
+                onMouseEnter={openSendToTaskSubmenu}
+                onMouseLeave={scheduleCloseSubmenu}
+              >
+                <button
+                  className={`prompt-context-item has-submenu ${submenuOpen === 'sendToTask' ? 'submenu-open' : ''}`}
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={submenuOpen === 'sendToTask'}
+                  onClick={openSendToTaskSubmenu}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M15.854.146a.5.5 0 0 1 .11.54l-5.819 14.547a.75.75 0 0 1-1.329.124l-3.178-4.995L.643 7.184a.75.75 0 0 1 .124-1.33L15.314.037a.5.5 0 0 1 .54.11zM6.636 10.07l2.761 4.338L14.13 2.576 6.636 10.07zm6.787-8.201L1.591 6.602l4.339 2.76 7.494-7.493z" /></svg>
+                  <span className="prompt-context-label">{t('promptList.sendAndExecuteToTask')}</span>
+                  <svg className="prompt-context-submenu-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z" /></svg>
+                </button>
+                {submenuOpen === 'sendToTask' && (
+                  <div
+                    className={`prompt-context-submenu ${submenuFlipped ? 'flip' : ''}`}
+                    ref={submenuRef}
+                    role="menu"
+                    onMouseEnter={openSendToTaskSubmenu}
+                    onMouseLeave={scheduleCloseSubmenu}
+                    onMouseDown={(event) => event.stopPropagation()}
+                  >
+                    {terminals.map((terminal) => (
+                      <button
+                        key={terminal.id}
+                        className="prompt-context-item"
+                        role="menuitem"
+                        onClick={() => {
+                          onSendAndExecuteToTask(contextPrompt, terminal.id)
+                          closeContextMenu()
+                        }}
+                      >
+                        <span className="prompt-context-label">{terminal.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {onSendAndExecuteToAllTasks && (
+                <button
+                  className="prompt-context-item"
+                  role="menuitem"
+                  onClick={() => {
+                    onSendAndExecuteToAllTasks(contextPrompt)
+                    closeContextMenu()
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M15.854.146a.5.5 0 0 1 .11.54l-5.819 14.547a.75.75 0 0 1-1.329.124l-3.178-4.995L.643 7.184a.75.75 0 0 1 .124-1.33L15.314.037a.5.5 0 0 1 .54.11zM6.636 10.07l2.761 4.338L14.13 2.576 6.636 10.07zm6.787-8.201L1.591 6.602l4.339 2.76 7.494-7.493z" /></svg>
+                  <span className="prompt-context-label">{t('promptList.sendAndExecuteToAllTasks')}</span>
+                </button>
+              )}
+            </>
+          )}
           <div className="prompt-context-separator" role="separator" />
           <button
             className="prompt-context-item danger"

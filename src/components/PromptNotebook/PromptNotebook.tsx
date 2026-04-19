@@ -920,6 +920,44 @@ export const PromptNotebook = memo(function PromptNotebook({
     }
   }, [onExecute, applySuccessSideEffects])
 
+  // Send-and-execute triggered from the prompt context menu. Unlike the main
+  // sender, this must NOT clear the editor, drop the current selection, or
+  // exit editing state — the user may have unrelated content in the editor.
+  // It still records send history and touches lastUsedAt on the target prompt.
+  const runContextMenuSendAndExecute = useCallback(async (prompt: Prompt, terminalIds: string[]) => {
+    if (terminalIds.length === 0) return
+    try {
+      const rawResult = await onSendAndExecute(terminalIds, prompt.content)
+      if (!hasDeliveredTerminals(rawResult)) return
+      const sendRecords = [
+        ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
+        ...buildSendRecords(rawResult.sentOnlyIds, 'sendAndExecute', 'sent-only')
+      ]
+      // Merge lastUsedAt refresh and sendHistory into a single updatePrompt to
+      // avoid a stale-object overwrite: touchPromptLastUsed + updatePrompt in
+      // two hops would race on the same prev snapshot, and the second hop —
+      // carrying the closure's old lastUsedAt under preserveTimestamp — wins.
+      const existingHistory = prompt.sendHistory ?? []
+      const mergedHistory = sendRecords.length > 0
+        ? [...sendRecords, ...existingHistory].slice(0, 100)
+        : existingHistory
+      onUpdatePrompt(
+        { ...prompt, lastUsedAt: Date.now(), sendHistory: mergedHistory },
+        true
+      )
+    } catch (error) {
+      console.error('Prompt context-menu send-and-execute failed:', error)
+    }
+  }, [onSendAndExecute, onUpdatePrompt, buildSendRecords])
+
+  const handleContextMenuSendAndExecute = useCallback((prompt: Prompt, terminalId: string) => {
+    void runContextMenuSendAndExecute(prompt, [terminalId])
+  }, [runContextMenuSendAndExecute])
+
+  const handleContextMenuSendAndExecuteAll = useCallback((prompt: Prompt) => {
+    void runContextMenuSendAndExecute(prompt, terminals.map(t => t.id))
+  }, [runContextMenuSendAndExecute, terminals])
+
   // Send and execute (wrapper, add save and clear logic)
   const handleSendAndExecute = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
     const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
@@ -1090,6 +1128,9 @@ export const PromptNotebook = memo(function PromptNotebook({
           onResumeSchedule={handleResumeSchedule}
           onViewSendHistory={handleViewSendHistory}
           onCopyPrompt={handleCopyPrompt}
+          terminals={terminals}
+          onSendAndExecuteToTask={handleContextMenuSendAndExecute}
+          onSendAndExecuteToAllTasks={handleContextMenuSendAndExecuteAll}
         />
 
         {/* input area */}

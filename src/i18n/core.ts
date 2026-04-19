@@ -430,6 +430,8 @@ const en = {
   'promptList.resumeSchedule': 'Resume schedule',
   'promptList.cancelSchedule': 'Cancel scheduled execution',
   'promptList.setSchedule': 'Schedule execution',
+  'promptList.sendAndExecuteToTask': 'Send and execute to Task',
+  'promptList.sendAndExecuteToAllTasks': 'Send and execute to all Tasks',
 
   'promptNotebook.saved': 'Saved',
   'promptNotebook.import.success': 'Imported {{global}} global and {{local}} local Prompts',
@@ -1423,6 +1425,8 @@ const zhCN: LocaleTranslations = {
   'promptList.resumeSchedule': '恢复定时',
   'promptList.cancelSchedule': '取消定时执行',
   'promptList.setSchedule': '设置定时执行',
+  'promptList.sendAndExecuteToTask': '发送并执行到 Task',
+  'promptList.sendAndExecuteToAllTasks': '发送并执行到所有 Task',
 
   'promptNotebook.saved': '已保存',
   'promptNotebook.import.success': '已导入 {{global}} 个全局 Prompt 和 {{local}} 个本地 Prompt',

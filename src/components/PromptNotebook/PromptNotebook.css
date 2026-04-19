@@ -651,6 +651,57 @@ body.dragging-prompt * {
   box-shadow: 0 0 0 1px var(--bg-2), 0 0 0 2px var(--color);
 }
 
+/* Submenu parent item + nested submenu */
+.prompt-context-submenu-wrapper {
+  position: relative;
+}
+
+.prompt-context-item.has-submenu {
+  justify-content: flex-start;
+}
+
+.prompt-context-item.has-submenu .prompt-context-label {
+  flex: 1;
+}
+
+.prompt-context-submenu-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.prompt-context-item.has-submenu:hover .prompt-context-submenu-chevron,
+.prompt-context-item.has-submenu.submenu-open .prompt-context-submenu-chevron {
+  color: var(--text-2);
+}
+
+.prompt-context-item.has-submenu.submenu-open {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.prompt-context-submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 2px);
+  z-index: 1001;
+  min-width: 180px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  animation: prompt-context-fade-in 0.15s ease;
+}
+
+.prompt-context-submenu.flip {
+  left: auto;
+  right: calc(100% + 2px);
+}
+
 /* Prompt input editor */
 .prompt-editor {
   display: flex;
