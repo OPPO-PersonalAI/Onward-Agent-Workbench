@@ -75,6 +75,9 @@ import {
   installContentCacheInvalidatorOnce
 } from './git-diff-content-cache-wiring'
 import { gitStateMirrorRouter } from './git-state-mirror-router'
+import { appearanceService } from './appearance-service'
+import { resourcePackService } from './resource-pack-service'
+import { deactivateResourcePackReferences } from '../shared/resource-pack-lifecycle'
 import { shellIntegrationLiveness } from './shell-integration-liveness'
 import { executeVerifiedChangeWorkDir } from './terminal-change-workdir'
 import { gitAutofetchManager } from './git-autofetch-manager'
@@ -540,6 +543,55 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   }
 
   performanceTrace.startGitRuntimeMonitor(() => gitRuntimeManager.getMetrics())
+
+  ipcMain.handle(IPC.APPEARANCE_GET_SNAPSHOT, () => appearanceService.snapshot())
+
+  ipcMain.handle(IPC.RESOURCE_PACK_INSPECT, async (_event, path: string) => {
+    if (process.env.ONWARD_AUTOTEST !== '1') {
+      return { ok: false, error: { code: 'PACK_INVALID_MANIFEST', detail: 'Use the native file picker to import a resource pack.' } }
+    }
+    if (typeof path !== 'string' || !isAbsolute(path)) return { ok: false, error: { code: 'PACK_INVALID_MANIFEST', detail: 'A local absolute path is required.' } }
+    return resourcePackService.inspectPath(path)
+  })
+  ipcMain.handle(IPC.RESOURCE_PACK_PICK_AND_INSPECT, async (_event, kind: 'native' | 'vscode-theme') => {
+    const isVsCode = kind === 'vscode-theme'
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: isVsCode ? 'Import VS Code colors' : 'Import Onward resource pack',
+      properties: isVsCode ? ['openFile'] : ['openFile', 'openDirectory'],
+      filters: isVsCode
+        ? [{ name: 'VS Code color theme', extensions: ['json', 'jsonc'] }]
+        : [{ name: 'Onward resource pack', extensions: ['onward-pack'] }, { name: 'JSON manifest', extensions: ['json'] }]
+    })
+    if (result.canceled || result.filePaths.length === 0) return { ok: false, cancelled: true }
+    return resourcePackService.inspectPath(result.filePaths[0])
+  })
+  ipcMain.handle(IPC.RESOURCE_PACK_CONFIRM_INSTALL, (_event, token: string) => {
+    if (typeof token !== 'string') return { ok: false, error: { code: 'PACK_INVALID_MANIFEST', detail: 'Invalid inspection token.' } }
+    return resourcePackService.confirmInstall(token)
+  })
+  const deactivatePack = (packId: string, uninstall: boolean) => {
+    if (typeof packId !== 'string' || !resourcePackService.hasPack(packId)) {
+      return { ok: false, error: { code: 'PACK_NOT_FOUND', detail: 'The resource pack is no longer installed.' } }
+    }
+    const nextSettings = deactivateResourcePackReferences(settingsStorage.get(), packId)
+    if (!settingsStorage.save(nextSettings)) {
+      return { ok: false, error: { code: 'PACK_STORAGE_FAILED', detail: 'Settings could not be saved; the active resource pack was kept.' } }
+    }
+    options.onSettingsChanged?.(settingsStorage.get())
+    if (uninstall) {
+      const removed = resourcePackService.uninstall(packId)
+      if (!removed.ok) return removed
+    }
+    return { ok: true, settings: settingsStorage.get() }
+  }
+  ipcMain.handle(IPC.RESOURCE_PACK_DEACTIVATE, (_event, packId: string) => deactivatePack(packId, false))
+  ipcMain.handle(IPC.RESOURCE_PACK_UNINSTALL, (_event, packId: string) => deactivatePack(packId, true))
+  ipcMain.handle(IPC.RESOURCE_PACK_LIST, () => resourcePackService.list())
+  ipcMain.handle(IPC.RESOURCE_PACK_GET_THEME, (_event, packId: string, themeId: string) => resourcePackService.getTheme(packId, themeId))
+  ipcMain.handle(IPC.RESOURCE_PACK_GET_LOCALE_OVERLAY, (_event, packId: string, locale: 'en' | 'zh-CN') => {
+    if ((locale !== 'en' && locale !== 'zh-CN') || typeof packId !== 'string') return null
+    return resourcePackService.getLocaleOverlay(packId, locale)
+  })
 
   // --- Diagnostic counters (ONWARD_DEBUG=1 / ONWARD_PERF_TRACE=1) ---
   const ipcDataCounters = new Map<string, { messages: number; bytes: number }>()
@@ -3237,7 +3289,17 @@ async function runCleanupIpcHandlers(): Promise<void> {
   ipcMain.removeAllListeners(IPC.GIT_STATE_MIRROR_UNSUBSCRIBE)
   ipcMain.removeHandler(IPC.GIT_STATE_MIRROR_GET)
   ipcMain.removeHandler(IPC.GIT_STATE_MIRROR_REQUEST_FILE_BODY)
+  ipcMain.removeHandler(IPC.GIT_STATE_MIRROR_FORCE_REFRESH)
   ipcMain.removeHandler(IPC.GIT_STATE_MIRROR_DEBUG_INSPECT)
+  ipcMain.removeHandler(IPC.APPEARANCE_GET_SNAPSHOT)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_INSPECT)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_CONFIRM_INSTALL)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_DEACTIVATE)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_LIST)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_PICK_AND_INSPECT)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_UNINSTALL)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_GET_THEME)
+  ipcMain.removeHandler(IPC.RESOURCE_PACK_GET_LOCALE_OVERLAY)
   ipcMain.removeAllListeners(IPC.GIT_STATE_PUSH_CWD)
   ipcMain.removeHandler(IPC.APP_GET_INFO)
   ipcMain.removeHandler(IPC.FEEDBACK_LOAD)

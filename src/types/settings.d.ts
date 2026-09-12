@@ -7,6 +7,7 @@
 
 import type { ThemeSettings } from './theme'
 import type { AppLocale } from '../i18n/core'
+import type { AppearanceSettingsV1, LocalePackSettingsV1 } from '../../electron/shared/appearance-schema'
 
 // Shortcut configuration
 export interface ShortcutConfig {
@@ -74,6 +75,10 @@ export interface SettingsState {
   language: AppLocale
   /** Theme settings */
   theme: ThemeSettings
+  /** Normalized appearance settings. Legacy theme remains for migration only. */
+  appearance: AppearanceSettingsV1
+  /** The selected local declarative translation pack for each supported locale. */
+  localePacks: LocalePackSettingsV1
   /** Telemetry consent: null = not yet asked, true = opted in, false = opted out */
   telemetryConsent: boolean | null
   /** Anonymous instance ID for telemetry (random UUID, regenerated on re-opt-in) */

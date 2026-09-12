@@ -1142,7 +1142,7 @@ export function ProjectEditor({
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
   const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
-  const { getTerminalStyle, settings } = useSettings()
+  const { getTerminalStyle, resolvedAppearance, settings } = useSettings()
   const { locale, t } = useI18n()
   const {
     getProjectEditorState,
@@ -7933,7 +7933,8 @@ export function ProjectEditor({
       suppressPreviewSyncOnRestoreRef.current ||
       previewRestorePhaseRef.current !== 'idle'
 
-    void renderMermaidDiagrams(preview, signal, t('mermaid.syntaxError')).finally(() => {
+    disposeMermaidPanZoom(preview)
+    void renderMermaidDiagrams(preview, signal, t('mermaid.syntaxError'), resolvedAppearance ?? undefined).finally(() => {
       if (token !== mermaidRenderTokenRef.current) return
       mermaidRenderInFlightRef.current = false
       if (signal.cancelled) return
@@ -7991,6 +7992,7 @@ export function ProjectEditor({
     // re-run even though `markdownRenderedHtml` did not change. See nonce decl.
     markdownPreviewRenderNonce,
     queuePreviewReveal,
+    resolvedAppearance,
     scanPreviewNearestSlug,
     t,
     updatePreviewActiveSlug
@@ -11434,7 +11436,7 @@ export function ProjectEditor({
                       path={editorPath}
                       saveViewState={false}
                       language={editorLanguage}
-                      theme="vs-dark"
+                      theme={resolvedAppearance?.monacoTheme ?? 'vs-dark'}
                       value={fileContent}
                       onChange={handleEditorChange}
                       onMount={(editor, monaco) => {

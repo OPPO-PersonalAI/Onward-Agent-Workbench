@@ -1922,6 +1922,55 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   color: #ffa657;
 }
 
+html[data-color-mode='light'] .project-editor-preview-body .hljs,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-params,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-subst {
+  color: #17212f;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-comment,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-quote,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-meta {
+  color: #586477;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-keyword,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-selector-tag,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-type,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-deletion {
+  color: #b42318;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-string,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-addition,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-regexp {
+  color: #067647;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-number,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-literal,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-variable,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-attr,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-attribute,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-property,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-section {
+  color: #175cd3;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-built_in,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-builtin-name,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-symbol,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-bullet,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-template-variable {
+  color: #9a6700;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-function,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-title,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-title\.function_,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-selector-class,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-selector-id {
+  color: #6941c6;
+}
+html[data-color-mode='light'] .project-editor-preview-body .hljs-tag,
+html[data-color-mode='light'] .project-editor-preview-body .hljs-name {
+  color: #087443;
+}
+
 /* Mermaid diagram rendering */
 .project-editor-preview-body .mermaid-diagram {
   position: relative;

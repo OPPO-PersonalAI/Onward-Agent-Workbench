@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "test.onward.light",
+  "version": "1.0.0",
+  "kind": "theme",
+  "displayName": "Onward Light Test Pack",
+  "compatiblePackApi": 1,
+  "themes": [
+    {
+      "id": "light",
+      "label": "Test Light",
+      "kind": "light",
+      "entry": "theme.json"
+    }
+  ]
+}

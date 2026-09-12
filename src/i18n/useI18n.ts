@@ -15,12 +15,12 @@ import {
 } from './core'
 
 export function useI18n() {
-  const { settings, updateLanguage } = useSettings()
+  const { settings, updateLanguage, localeOverlayRevision } = useSettings()
   const locale = normalizeLocale(settings?.language ?? DEFAULT_LOCALE)
 
   const t = useCallback((key: TranslationKey, params?: TranslationParams) => {
     return createTranslator(locale)(key, params)
-  }, [locale])
+  }, [locale, localeOverlayRevision])
 
   return {
     locale,

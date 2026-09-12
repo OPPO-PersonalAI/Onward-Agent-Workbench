@@ -45,6 +45,7 @@ import { getAppStateStorage } from './app-state-storage'
 import { collectQuitActivitySummary, warmQuitActivityScanner } from './quit-activity-scan'
 import { initializeSessionLedger, markSessionLedgerClean } from './session-ledger'
 import { getSettingsStorage } from './settings-storage'
+import { appearanceService } from './appearance-service'
 import { getTerminalCwd } from './git-utils'
 import { gitAutofetchManager } from './git-autofetch-manager'
 import { getWindowStateStorage } from './window-state-storage'
@@ -657,7 +658,7 @@ function createWindow(displayName: string): void {
     minHeight: 400,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: appearanceService.snapshot().kind === 'light' ? '#f5f7fa' : '#101012',
     icon: iconPath,
     title: displayName,
     titleBarStyle: 'hiddenInset',
@@ -676,6 +677,7 @@ function createWindow(displayName: string): void {
   }
 
   mainWindow = new BrowserWindow(windowOptions)
+  appearanceService.attachWindow(mainWindow)
 
   if (process.env.ONWARD_AUTOTEST === '1') {
     // Keep the window unoccluded for the whole autotest run. Electron 43
@@ -930,6 +932,7 @@ function createWindow(displayName: string): void {
   // Register IPC handlers
   registerIpcHandlers(mainWindow, {
     onSettingsChanged: () => {
+      appearanceService.configure(getSettingsStorage().get().appearance)
       Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(displayName)))
     },
     onRestartToApplyUpdate: requestRestartToApplyUpdate,
@@ -1112,6 +1115,7 @@ app.whenReady().then(async () => {
     }
   }
 
+  appearanceService.configure(getSettingsStorage().get().appearance)
   createWindow(appInfo.displayName)
 
   // Start telemetry heartbeat with focus tracking (requires mainWindow)

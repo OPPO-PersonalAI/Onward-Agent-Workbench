@@ -11,6 +11,33 @@
   margin-bottom: 12px;
 }
 
+.theme-field-label {
+  display: block;
+  margin: 12px 0 6px;
+  color: var(--text-2);
+  font-size: var(--font-sm);
+}
+
+.theme-select {
+  width: 100%;
+}
+
+.theme-slot-summary {
+  display: flex;
+  justify-content: space-between;
+  margin: 12px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--font-sm);
+}
+
+.theme-slot-summary strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
 /* theme card */
 .theme-preset-card {
   position: relative;

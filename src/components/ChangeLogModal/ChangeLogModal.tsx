@@ -9,6 +9,7 @@ import { marked, type Tokens } from 'marked'
 import type { CurrentChangelogResult } from '../../types/electron.d.ts'
 import type { ChangeLogDebugApi } from '../../autotest/types'
 import { useI18n } from '../../i18n/useI18n'
+import { useSettings } from '../../contexts/SettingsContext'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { buildMermaidPlaceholder, isMermaidLang, renderMermaidDiagrams } from '../../utils/mermaidRenderer'
 import { enhanceMermaidDiagrams, disposeMermaidPanZoom } from '../../utils/mermaidPanZoom'
@@ -35,6 +36,7 @@ function getUnavailableMessage(
 
 export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLogModalProps) {
   const { t } = useI18n()
+  const { resolvedAppearance } = useSettings()
   const isAutotest = Boolean(window.electronAPI?.debug?.autotest)
   const modalRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -88,7 +90,8 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
     if (!el || !renderedHtml) return
     if (el.querySelectorAll('.mermaid-diagram[data-mermaid-id]').length === 0) return
     const signal = { cancelled: false }
-    void renderMermaidDiagrams(el, signal, t('mermaid.syntaxError')).then(() => {
+    disposeMermaidPanZoom(el)
+    void renderMermaidDiagrams(el, signal, t('mermaid.syntaxError'), resolvedAppearance ?? undefined).then(() => {
       if (signal.cancelled) return
       enhanceMermaidDiagrams(el, signal, {
         zoomIn: t('mermaid.zoomIn'),
@@ -104,7 +107,7 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
       signal.cancelled = true
       disposeMermaidPanZoom(el)
     }
-  }, [renderedHtml, t])
+  }, [renderedHtml, resolvedAppearance, t])
 
   const currentTag = result?.tag ?? null
   const unavailableMessage = getUnavailableMessage(result, t)

@@ -11,10 +11,12 @@ import type {
   GlobalTerminalStyle,
   ShortcutAction
 } from '../types/settings.d.ts'
-import type { ThemeSettings } from '../types/theme'
+import type { ThemeColors, ThemeSettings } from '../types/theme'
 import { DEFAULT_THEME_SETTINGS } from '../constants/themes'
-import { applyTheme, resolveThemeColors } from '../utils/theme-applier'
-import { DEFAULT_LOCALE, type AppLocale } from '../i18n/core'
+import { applyColorMode, applyTheme } from '../utils/theme-applier'
+import { DEFAULT_LOCALE, setLocaleOverlay, type AppLocale } from '../i18n/core'
+import { DEFAULT_APPEARANCE, DEFAULT_LOCALE_PACK_SETTINGS, type AppearanceSettingsV1, type LocalePackSettingsV1 } from '../../electron/shared/appearance-schema'
+import { legacyThemeRef, resolveAppearance, type ResolvedAppearance } from '../themes/resolve-appearance'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 
 /**
@@ -86,7 +88,7 @@ function createDefaultShortcuts(): ShortcutConfig {
  */
 function createDefaultSettings(): SettingsState {
   return {
-    version: 6,
+    version: 8,
     shortcuts: createDefaultShortcuts(),
     terminalStyles: {},
     globalTerminalStyle: createDefaultGlobalTerminalStyle(),
@@ -94,6 +96,8 @@ function createDefaultSettings(): SettingsState {
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
     theme: DEFAULT_THEME_SETTINGS,
+    appearance: DEFAULT_APPEARANCE,
+    localePacks: DEFAULT_LOCALE_PACK_SETTINGS,
     telemetryConsent: null,
     telemetryInstanceId: null,
     autoFollowGitBranchForTaskName: true,
@@ -106,6 +110,9 @@ interface SettingsContextValue {
   // state
   settings: SettingsState | null
   isLoaded: boolean
+  resolvedAppearance: ResolvedAppearance | null
+  localeOverlayRevision: number
+  editorLocaleAtBoot: AppLocale
 
   // Shortcut operations
   updateShortcut: (key: keyof ShortcutConfig, value: string | null) => void
@@ -130,6 +137,9 @@ interface SettingsContextValue {
 
   // theme
   updateTheme: (theme: ThemeSettings) => void
+  updateAppearance: (appearance: AppearanceSettingsV1) => void
+  updateLocalePacks: (localePacks: LocalePackSettingsV1) => void
+  replaceSettingsFromMain: (settings: SettingsState) => void
   updateLanguage: (language: AppLocale) => void
 
   // Auto-follow Git branch for Task name (default true)
@@ -149,6 +159,10 @@ interface SettingsProviderProps {
 export function SettingsProvider({ children, onShortcutAction }: SettingsProviderProps) {
   const [settings, setSettings] = useState<SettingsState | null>(null)
   const [isLoaded, setIsLoaded] = useState(false)
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true)
+  const [localeOverlayRevision, setLocaleOverlayRevision] = useState(0)
+  const [editorLocaleAtBoot] = useState<AppLocale>(() => window.__onwardEditorLocaleAtBoot ?? DEFAULT_LOCALE)
+  const [packTheme, setPackTheme] = useState<{ packId: string; themeId: string; kind: 'light' | 'dark'; colors: ThemeColors } | null>(null)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const shortcutCallbackRef = useRef<((action: ShortcutAction) => void) | null>(null)
 
@@ -170,6 +184,68 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       }
     }
     load()
+  }, [])
+
+  useEffect(() => {
+    const locale = settings?.language
+    const packId = locale ? settings.localePacks?.activePackByLocale[locale] : undefined
+    if (!locale || !packId || !window.electronAPI?.resourcePacks) {
+      if (locale) setLocaleOverlay(locale, null)
+      setLocaleOverlayRevision(value => value + 1)
+      return
+    }
+    let active = true
+    void window.electronAPI.resourcePacks.getLocaleOverlay(packId, locale).then(overlay => {
+      if (!active) return
+      setLocaleOverlay(locale, overlay)
+      setLocaleOverlayRevision(value => value + 1)
+    }).catch(() => {
+      if (!active) return
+      setLocaleOverlay(locale, null)
+      setLocaleOverlayRevision(value => value + 1)
+    })
+    return () => { active = false }
+  }, [settings?.language, settings?.localePacks])
+
+  const resolvedAppearance = useMemo(() => {
+    return settings?.appearance ? resolveAppearance(settings.appearance, systemPrefersDark, packTheme) : null
+  }, [settings?.appearance, systemPrefersDark, packTheme])
+
+  useEffect(() => {
+    const appearance = settings?.appearance
+    if (!appearance) return
+    const requested = resolveAppearance(appearance, systemPrefersDark).kind === 'light'
+      ? appearance.lightTheme
+      : appearance.darkTheme
+    if (requested.source !== 'pack' || !window.electronAPI?.resourcePacks) {
+      setPackTheme(null)
+      return
+    }
+    let active = true
+    void window.electronAPI.resourcePacks.getTheme(requested.packId, requested.themeId).then(value => {
+      if (!active || !value || typeof value !== 'object') return
+      const candidate = value as { kind?: unknown; colors?: unknown }
+      if ((candidate.kind !== 'light' && candidate.kind !== 'dark') || !candidate.colors || typeof candidate.colors !== 'object') return
+      setPackTheme({ packId: requested.packId, themeId: requested.themeId, kind: candidate.kind, colors: candidate.colors as ThemeColors })
+    }).catch(() => { if (active) setPackTheme(null) })
+    return () => { active = false }
+  }, [settings?.appearance, systemPrefersDark])
+
+  useEffect(() => {
+    if (!window.electronAPI?.appearance) {
+      const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+      if (!media) return
+      const onChange = () => setSystemPrefersDark(media.matches)
+      media.addEventListener('change', onChange)
+      return () => media.removeEventListener('change', onChange)
+    }
+    let active = true
+    void window.electronAPI.appearance.getSnapshot().then(snapshot => {
+      if (active) setSystemPrefersDark(snapshot.kind === 'dark')
+    }).catch(() => {})
+    return window.electronAPI.appearance.onSnapshotUpdated(snapshot => {
+      if (active) setSystemPrefersDark(snapshot.kind === 'dark')
+    })
   }, [])
 
   // Listen for shortcut events
@@ -236,18 +312,38 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
 
   // Applied to DOM when theme changes
   useEffect(() => {
-    if (!settings?.theme) return
-    applyTheme(resolveThemeColors(settings.theme))
-  }, [settings?.theme])
+    if (!resolvedAppearance) return
+    applyTheme(resolvedAppearance.colors)
+    applyColorMode(resolvedAppearance.kind)
+  }, [resolvedAppearance])
 
   // Update theme settings
   const updateTheme = useCallback((theme: ThemeSettings) => {
     trackFeatureUse('setting-change')
     updateSettings(prev => ({
       ...prev,
-      theme
+      theme,
+      appearance: {
+        ...prev.appearance,
+        darkTheme: legacyThemeRef(theme)
+      }
     }))
   }, [updateSettings])
+
+  const updateAppearance = useCallback((appearance: AppearanceSettingsV1) => {
+    trackFeatureUse('setting-change')
+    updateSettings(prev => ({ ...prev, appearance }))
+  }, [updateSettings])
+
+  const updateLocalePacks = useCallback((localePacks: LocalePackSettingsV1) => {
+    trackFeatureUse('setting-change')
+    updateSettings(prev => ({ ...prev, localePacks }))
+  }, [updateSettings])
+
+  const replaceSettingsFromMain = useCallback((nextSettings: SettingsState) => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+    setSettings(nextSettings)
+  }, [])
 
   // Update Git Diff font size
   const updateGitDiffFontSize = useCallback((value: number | null) => {
@@ -379,6 +475,9 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   const value: SettingsContextValue = useMemo(() => ({
     settings,
     isLoaded,
+    resolvedAppearance,
+    localeOverlayRevision,
+    editorLocaleAtBoot,
     updateShortcut,
     getShortcut,
     updateTerminalStyle,
@@ -391,6 +490,9 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateGitDiffFontSize,
     getGitDiffFontSize,
     updateTheme,
+    updateAppearance,
+    updateLocalePacks,
+    replaceSettingsFromMain,
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
@@ -398,6 +500,9 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   }), [
     settings,
     isLoaded,
+    resolvedAppearance,
+    localeOverlayRevision,
+    editorLocaleAtBoot,
     updateShortcut,
     getShortcut,
     updateTerminalStyle,
@@ -410,6 +515,9 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateGitDiffFontSize,
     getGitDiffFontSize,
     updateTheme,
+    updateAppearance,
+    updateLocalePacks,
+    replaceSettingsFromMain,
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,

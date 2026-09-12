@@ -1352,7 +1352,7 @@ export function GitDiffViewer({
   navigationTarget = null
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
-  const { getTerminalStyle, settings } = useSettings()
+  const { getTerminalStyle, resolvedAppearance, settings } = useSettings()
   const { t } = useI18n()
   const { getUIPreferences, updateUIPreferences } = useAppState()
   const perfCountersRef = useRef({
@@ -7449,7 +7449,7 @@ export function GitDiffViewer({
         modifiedModelPath={modifiedModelPath}
         keepCurrentOriginalModel={true}
         keepCurrentModifiedModel={true}
-        theme={PIERRE_LIKE_MONACO_THEME}
+        theme={resolvedAppearance?.kind === 'light' ? 'vs' : PIERRE_LIKE_MONACO_THEME}
         beforeMount={ensurePierreLikeMonacoTheme}
         options={diffEditorOptions}
         onMount={handleEditorDidMount}
@@ -7616,7 +7616,7 @@ export function GitDiffViewer({
           original={fileState.originalContent}
           modified={effectiveModifiedContent}
           language="xml"
-          theme="vs-dark"
+          theme={resolvedAppearance?.monacoTheme ?? 'vs-dark'}
           options={diffEditorOptions}
           onMount={handleEditorDidMount}
           className="git-diff-monaco"

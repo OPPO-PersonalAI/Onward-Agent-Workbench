@@ -25,6 +25,12 @@ export function applyTheme(colors: ThemeColors): void {
   }
 }
 
+/** Apply the DOM-level part of a resolved appearance without remounting React. */
+export function applyColorMode(kind: 'light' | 'dark'): void {
+  document.documentElement.dataset.colorMode = kind
+  document.documentElement.style.colorScheme = kind
+}
+
 /**
  * Parse out actual ThemeColors based on theme settings
  * - preset mode: search from preset table

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, type ChangeEvent } from 'react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_THEME_SETTINGS, THEME_PRESETS } from '../../constants/themes'
 import { ColorPickerAdvanced } from './ColorPickerAdvanced'
@@ -11,10 +11,11 @@ import type { ThemeSettings, PresetThemeId } from '../../types/theme'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
+import type { AppearanceSettingsV1 } from '../../../electron/shared/appearance-schema'
 import './ThemeSelector.css'
 
 export function ThemeSelector() {
-  const { settings, updateTheme } = useSettings()
+  const { settings, updateAppearance, updateTheme } = useSettings()
   const { t } = useI18n()
 
   const currentTheme = useMemo(() => {
@@ -22,8 +23,15 @@ export function ThemeSelector() {
   }, [settings?.theme])
 
   const isCustomMode = currentTheme.mode === 'custom'
+  const appearance = settings?.appearance
+
+  const updateAppearancePatch = useCallback((patch: Partial<AppearanceSettingsV1>) => {
+    if (!appearance) return
+    updateAppearance({ ...appearance, ...patch })
+  }, [appearance, updateAppearance])
 
   const handlePresetSelect = useCallback((id: PresetThemeId) => {
+    if (id === 'onward-light') return
     const newTheme: ThemeSettings = {
       mode: 'preset',
       presetId: id,
@@ -31,6 +39,20 @@ export function ThemeSelector() {
     }
     updateTheme(newTheme)
   }, [currentTheme.custom, updateTheme])
+
+  const handleColorModeChange = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
+    const colorMode = event.target.value as AppearanceSettingsV1['colorMode']
+    if (colorMode !== 'light' && colorMode !== 'dark' && colorMode !== 'system') return
+    updateAppearancePatch({ colorMode })
+  }, [updateAppearancePatch])
+
+  const handleTerminalPaletteChange = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
+    updateAppearancePatch({
+      terminal: event.target.value === 'independent'
+        ? { source: 'independent', paletteId: 'vscode-dark' }
+        : { source: 'application' }
+    })
+  }, [updateAppearancePatch])
 
   const handleCustomToggle = useCallback(() => {
     if (isCustomMode) {
@@ -63,9 +85,27 @@ export function ThemeSelector() {
 
   return (
     <div className="theme-selector">
-      {/* Default theme grid */}
+      <label className="theme-field-label" htmlFor="settings-color-mode-select">{t('settings.appearance.colorMode')}</label>
+      <select
+        id="settings-color-mode-select"
+        className="onward-select theme-select"
+        data-testid="settings-color-mode-select"
+        value={appearance?.colorMode ?? 'dark'}
+        onChange={handleColorModeChange}
+      >
+        <option value="light">{t('settings.appearance.mode.light')}</option>
+        <option value="dark">{t('settings.appearance.mode.dark')}</option>
+        <option value="system">{t('settings.appearance.mode.system')}</option>
+      </select>
+
+      <div className="theme-slot-summary">
+        <span>{t('settings.appearance.lightTheme')}</span>
+        <strong>{t('settings.theme.preset.onward-light.name')}</strong>
+      </div>
+
+      <span className="theme-field-label">{t('settings.appearance.darkTheme')}</span>
       <div className="theme-preset-grid">
-        {THEME_PRESETS.map(preset => {
+        {THEME_PRESETS.filter(preset => preset.id !== 'onward-light').map(preset => {
           const isSelected = !isCustomMode && currentTheme.presetId === preset.id
           const nameKey = `settings.theme.preset.${preset.id}.name` as TranslationKey
           const descriptionKey = `settings.theme.preset.${preset.id}.description` as TranslationKey
@@ -97,6 +137,18 @@ export function ThemeSelector() {
           )
         })}
       </div>
+
+      <label className="theme-field-label" htmlFor="settings-terminal-palette-select">{t('settings.appearance.terminalPalette')}</label>
+      <select
+        id="settings-terminal-palette-select"
+        className="onward-select theme-select"
+        data-testid="settings-terminal-palette-select"
+        value={appearance?.terminal.source === 'independent' ? 'independent' : 'application'}
+        onChange={handleTerminalPaletteChange}
+      >
+        <option value="application">{t('settings.appearance.terminal.application')}</option>
+        <option value="independent">{t('settings.appearance.terminal.independent')}</option>
+      </select>
 
       {/* Custom color area */}
       <div className="theme-custom-section">

@@ -5,9 +5,10 @@
 
 import { app } from 'electron'
 import { join } from 'path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs'
 import { isReservedShortcut } from './reserved-shortcuts'
 import { DEFAULT_LOCALE, isAppLocale, type AppLocale } from '../../src/i18n/core'
+import { DEFAULT_APPEARANCE, DEFAULT_LOCALE_PACK_SETTINGS, normalizeAppearance, normalizeLocalePackSettings, type AppearanceSettingsV1, type LegacyThemeSettings, type LocalePackSettingsV1 } from '../shared/appearance-schema'
 
 /**
  * Shortcut configuration
@@ -79,6 +80,9 @@ interface SettingsState {
   language: AppLocale
   /** Theme settings */
   theme: ThemeSettings
+  /** Normalized appearance settings. Legacy theme remains for migration only. */
+  appearance: AppearanceSettingsV1
+  localePacks: LocalePackSettingsV1
   /** Telemetry consent: null = not yet asked, true = opted in, false = opted out */
   telemetryConsent: boolean | null
   /** Anonymous instance ID for telemetry (random UUID, regenerated on re-opt-in) */
@@ -114,7 +118,7 @@ const MIGRATION_THEME: ThemeSettings = {
 // Current version number
 // v6: introduces autoFollowGitBranchForTaskName (default true).
 // v7: introduces performanceDiagnosticsEnabled (default false; legacy values reset on upgrade).
-const CURRENT_VERSION = 7
+const CURRENT_VERSION = 8
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
@@ -176,6 +180,8 @@ function createDefaultSettingsState(): SettingsState {
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
     theme: DEFAULT_THEME,
+    appearance: DEFAULT_APPEARANCE,
+    localePacks: DEFAULT_LOCALE_PACK_SETTINGS,
     telemetryConsent: null,
     telemetryInstanceId: null,
     autoFollowGitBranchForTaskName: true,
@@ -275,6 +281,12 @@ class SettingsStorage {
     // Determine whether it is an existing user (migrated from v1) and determine the default theme
     const isExistingUser = (state.version ?? 0) < 2 && !state.theme
     const theme = this.validateTheme(state.theme, isExistingUser)
+    const appearance = normalizeAppearance(
+      state.appearance,
+      theme as LegacyThemeSettings,
+      { existingUser: (state.version ?? 0) < CURRENT_VERSION }
+    ).appearance
+    const localePacks = normalizeLocalePackSettings(state.localePacks)
     const language = isAppLocale(state.language) ? state.language : DEFAULT_LOCALE
 
     // Telemetry fields (added in v5).
@@ -311,6 +323,8 @@ class SettingsStorage {
       settingsPanelWidth,
       language,
       theme,
+      appearance,
+      localePacks,
       telemetryConsent,
       telemetryInstanceId,
       autoFollowGitBranchForTaskName,
@@ -422,15 +436,19 @@ class SettingsStorage {
   /**
    * Save settings data to file
    */
-  private persist(): void {
+  private persist(state: SettingsState): boolean {
     try {
       const dir = app.getPath('userData')
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true })
       }
-      writeFileSync(this.storagePath, JSON.stringify(this.state, null, 2), 'utf-8')
+      const temporaryPath = `${this.storagePath}.${process.pid}.${Date.now()}.tmp`
+      writeFileSync(temporaryPath, JSON.stringify(state, null, 2), 'utf-8')
+      renameSync(temporaryPath, this.storagePath)
+      return true
     } catch (error) {
       console.error('Failed to save settings:', error)
+      return false
     }
   }
 
@@ -454,11 +472,12 @@ class SettingsStorage {
       // Preserve telemetry state — only setTelemetryConsent() may modify these
       validated.telemetryConsent = this.state.telemetryConsent
       validated.telemetryInstanceId = this.state.telemetryInstanceId
-      this.state = {
+      const nextState = {
         ...validated,
         updatedAt: Date.now()
       }
-      this.persist()
+      if (!this.persist(nextState)) return false
+      this.state = nextState
       return true
     } catch (error) {
       console.error('Failed to save settings:', error)
@@ -471,44 +490,51 @@ class SettingsStorage {
    */
   update(partial: Partial<SettingsState>): boolean {
     try {
+      const nextState = this.get()
       if (partial.shortcuts) {
-        this.state.shortcuts = {
-          ...this.state.shortcuts,
+        nextState.shortcuts = {
+          ...nextState.shortcuts,
           ...partial.shortcuts
         }
       }
       if (partial.gitDiffFontSize !== undefined) {
         if (partial.gitDiffFontSize === null) {
-          this.state.gitDiffFontSize = null
+          nextState.gitDiffFontSize = null
         } else if (
           typeof partial.gitDiffFontSize === 'number' &&
           partial.gitDiffFontSize >= MIN_GIT_DIFF_FONT_SIZE &&
           partial.gitDiffFontSize <= MAX_GIT_DIFF_FONT_SIZE
         ) {
-          this.state.gitDiffFontSize = partial.gitDiffFontSize
+          nextState.gitDiffFontSize = partial.gitDiffFontSize
         }
       }
       if (partial.terminalStyles) {
         for (const [terminalId, style] of Object.entries(partial.terminalStyles)) {
           if (style) {
-            this.state.terminalStyles[terminalId] = this.validateTerminalStyle(terminalId, style)
+            nextState.terminalStyles[terminalId] = this.validateTerminalStyle(terminalId, style)
           }
         }
       }
       if (partial.globalTerminalStyle) {
-        this.state.globalTerminalStyle = this.validateGlobalTerminalStyle(partial.globalTerminalStyle)
+        nextState.globalTerminalStyle = this.validateGlobalTerminalStyle(partial.globalTerminalStyle)
       }
       if (partial.theme) {
-        this.state.theme = this.validateTheme(partial.theme, false)
+        nextState.theme = this.validateTheme(partial.theme, false)
+      }
+      if (partial.appearance) {
+        nextState.appearance = normalizeAppearance(partial.appearance, nextState.theme as LegacyThemeSettings, {
+          existingUser: false
+        }).appearance
       }
       if (typeof partial.autoFollowGitBranchForTaskName === 'boolean') {
-        this.state.autoFollowGitBranchForTaskName = partial.autoFollowGitBranchForTaskName
+        nextState.autoFollowGitBranchForTaskName = partial.autoFollowGitBranchForTaskName
       }
       if (typeof partial.performanceDiagnosticsEnabled === 'boolean') {
-        this.state.performanceDiagnosticsEnabled = partial.performanceDiagnosticsEnabled
+        nextState.performanceDiagnosticsEnabled = partial.performanceDiagnosticsEnabled
       }
-      this.state.updatedAt = Date.now()
-      this.persist()
+      nextState.updatedAt = Date.now()
+      if (!this.persist(nextState)) return false
+      this.state = nextState
       return true
     } catch (error) {
       console.error('Failed to update settings:', error)
@@ -533,8 +559,7 @@ class SettingsStorage {
         ...style
       })
       this.state.updatedAt = Date.now()
-      this.persist()
-      return true
+      return this.persist(this.state)
     } catch (error) {
       console.error('Failed to set terminal style:', error)
       return false
@@ -548,8 +573,7 @@ class SettingsStorage {
     try {
       delete this.state.terminalStyles[terminalId]
       this.state.updatedAt = Date.now()
-      this.persist()
-      return true
+      return this.persist(this.state)
     } catch (error) {
       console.error('Failed to delete terminal style:', error)
       return false
@@ -578,7 +602,7 @@ class SettingsStorage {
     this.state.telemetryConsent = consent
     this.state.telemetryInstanceId = consent ? instanceId : null
     this.state.updatedAt = Date.now()
-    this.persist()
+    this.persist(this.state)
   }
 }
 

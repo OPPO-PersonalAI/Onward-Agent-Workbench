@@ -25,7 +25,7 @@ export interface ThemeColors {
 }
 
 /** 6 preset theme IDs */
-export type PresetThemeId = 'graphite' | 'starlight' | 'pine' | 'umber' | 'amethyst' | 'glacier'
+export type PresetThemeId = 'graphite' | 'starlight' | 'pine' | 'umber' | 'amethyst' | 'glacier' | 'onward-light'
 
 /** Default theme complete definition */
 export interface ThemePreset {

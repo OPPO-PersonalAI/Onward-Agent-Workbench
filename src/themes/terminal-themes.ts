@@ -6,6 +6,19 @@
 import { ITheme } from '@xterm/xterm'
 
 export const themes: Record<string, ITheme> = {
+  'onward-light': {
+    background: '#ffffff',
+    foreground: '#17212f',
+    cursor: '#175cd3',
+    cursorAccent: '#ffffff',
+    selectionBackground: '#d8e7ff',
+    selectionForeground: '#17212f',
+    selectionInactiveBackground: '#e6ebf2',
+    black: '#17212f', red: '#b42318', green: '#067647', yellow: '#8a5b00',
+    blue: '#175cd3', magenta: '#7a3e9d', cyan: '#087e8b', white: '#f5f7fa',
+    brightBlack: '#586477', brightRed: '#d92d20', brightGreen: '#039855', brightYellow: '#a66b00',
+    brightBlue: '#2970ff', brightMagenta: '#9e4fc4', brightCyan: '#0e9384', brightWhite: '#ffffff'
+  },
   'vscode-dark': {
     background: '#1e1e1e',
     foreground: '#cccccc',

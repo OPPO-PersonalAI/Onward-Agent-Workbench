@@ -11,6 +11,25 @@ import type { ThemePreset, PresetThemeId, ThemeSettings } from '../types/theme'
  */
 export const THEME_PRESETS: ThemePreset[] = [
   {
+    id: 'onward-light',
+    name: 'Onward Light',
+    description: 'Clear light surfaces for focused work',
+    colors: {
+      '--bg-0': '#f5f7fa',
+      '--bg-1': '#eff2f6',
+      '--bg-2': '#ffffff',
+      '--panel': '#ffffff',
+      '--border': '#d8dee8',
+      '--border-strong': '#79869a',
+      '--text-1': '#17212f',
+      '--text-2': '#465469',
+      '--text-3': '#586477',
+      '--accent': '#175cd3',
+      '--accent-strong': '#144faf',
+      '--shadow-1': '0 4px 14px rgba(23, 33, 47, 0.12)'
+    }
+  },
+  {
     id: 'graphite',
     name: 'Graphite',
     description: 'Steady and focused neutral gray',
