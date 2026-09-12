@@ -917,6 +917,22 @@ export interface AppInfoAPI {
   getPdfViewerUrl: () => Promise<string>
 }
 
+export interface AppearanceAPI {
+  getSnapshot: () => Promise<{ revision: number; kind: 'light' | 'dark' }>
+  onSnapshotUpdated: (callback: (snapshot: { revision: number; kind: 'light' | 'dark' }) => void) => () => void
+}
+
+export interface ResourcePackAPI {
+  pickAndInspect: (kind: 'native' | 'vscode-theme') => Promise<unknown>
+  inspect: (path: string) => Promise<unknown>
+  confirmInstall: (token: string) => Promise<unknown>
+  deactivate: (packId: string) => Promise<unknown>
+  list: () => Promise<unknown>
+  getTheme: (packId: string, themeId: string) => Promise<unknown>
+  getLocaleOverlay: (packId: string, locale: 'en' | 'zh-CN') => Promise<Record<string, string> | null>
+  uninstall: (packId: string) => Promise<unknown>
+}
+
 export type ChangelogLocale = 'en' | 'zh-CN'
 export type ChangelogChannel = 'daily' | 'stable'
 export type ChangelogReadReason = 'no-tag' | 'index-missing' | 'entry-missing' | 'file-missing' | 'invalid-index' | 'read-failed'
@@ -1464,6 +1480,8 @@ export interface ElectronAPI {
   git: GitAPI
   project: ProjectAPI
   settings: SettingsAPI
+  appearance: AppearanceAPI
+  resourcePacks: ResourcePackAPI
   appInfo: AppInfoAPI
   changelog: ChangelogAPI
   updater: UpdaterAPI
@@ -1481,5 +1499,6 @@ export interface ElectronAPI {
 declare global {
   interface Window {
     electronAPI: ElectronAPI
+    __onwardEditorLocaleAtBoot?: 'en' | 'zh-CN'
   }
 }

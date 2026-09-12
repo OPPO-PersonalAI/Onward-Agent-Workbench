@@ -9,6 +9,12 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 APP_BIN="${1:-}"
 LOG_FILE="${2:-$REPO_ROOT/traces/test-logs/settings-update-autotest.log}"
 mkdir -p "$(dirname "$LOG_FILE")"
+USER_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/onward-settings-update.XXXXXX")"
+
+cleanup() {
+  rm -r "$USER_DATA_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 if [[ -z "$APP_BIN" ]]; then
   APP_PATH="$(find "$ROOT_DIR/release" -maxdepth 2 -type d -name '*.app' | sort | head -1)"
   if [[ -z "$APP_PATH" ]]; then
@@ -34,6 +40,7 @@ ONWARD_AUTOTEST=1 \
 ONWARD_AUTOTEST_SUITE=settings-update \
 ONWARD_AUTOTEST_CWD="$ROOT_DIR" \
 ONWARD_AUTOTEST_EXIT=1 \
+ONWARD_USER_DATA_DIR="$USER_DATA_DIR" \
 "$APP_BIN" > "$LOG_FILE" 2>&1 || true
 
 if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then

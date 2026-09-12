@@ -106,7 +106,34 @@ const en = {
   'settings.update.placeholderBody': 'The app currently stays on the packaged channel. Stable and cross-platform channel controls are reserved for a later iteration.',
   'settings.language.label': 'Language',
   'settings.language.selectLabel': 'Display language',
+  'settings.language.editorNextLaunch': 'Display language updated. Built-in editor menus will update on the next launch. Running tasks will not restart.',
   'settings.theme.customAccent': 'Custom accent color',
+  'settings.appearance.colorMode': 'Color mode',
+  'settings.appearance.mode.light': 'Light',
+  'settings.appearance.mode.dark': 'Dark',
+  'settings.appearance.mode.system': 'Follow system',
+  'settings.appearance.lightTheme': 'Light theme',
+  'settings.appearance.darkTheme': 'Dark theme',
+  'settings.appearance.terminalPalette': 'Terminal colors',
+  'settings.appearance.terminal.application': 'Follow application',
+  'settings.appearance.terminal.independent': 'Keep independent dark palette',
+  'settings.theme.preset.onward-light.name': 'Onward Light',
+  'settings.theme.preset.onward-light.description': 'Clear light surfaces for focused work',
+  'settings.resourcePacks.title': 'Resource packs',
+  'settings.resourcePacks.importPack': 'Import Onward resource pack',
+  'settings.resourcePacks.importVsCode': 'Import VS Code colors',
+  'settings.resourcePacks.review': 'Review import',
+  'settings.resourcePacks.install': 'Install',
+  'settings.resourcePacks.cancel': 'Cancel',
+  'settings.resourcePacks.noPacks': 'No local resource packs installed.',
+  'settings.resourcePacks.active': 'Active',
+  'settings.resourcePacks.use': 'Use',
+  'settings.resourcePacks.disable': 'Disable',
+  'settings.resourcePacks.uninstall': 'Uninstall',
+  'settings.resourcePacks.confirmDisable': 'Disable this resource pack? Its affected appearance or language setting will return to the built-in default.',
+  'settings.resourcePacks.confirmUninstall': 'Uninstall this resource pack? Its affected appearance or language setting will return to the built-in default.',
+  'settings.resourcePacks.confirm': 'Confirm',
+  'settings.resourcePacks.status': 'Resource pack status: {{status}}',
   'settings.theme.preset.graphite.name': 'Graphite',
   'settings.theme.preset.graphite.description': 'Steady and focused neutral gray',
   'settings.theme.preset.starlight.name': 'Starlight',
@@ -1597,7 +1624,34 @@ const zhCN: LocaleTranslations = {
   'settings.update.placeholderBody': '当前应用会固定使用打包时附带的更新通道。Stable 与跨平台通道控制会在后续版本中开放。',
   'settings.language.label': '语言',
   'settings.language.selectLabel': '显示语言',
+  'settings.language.editorNextLaunch': '界面语言已更改。编辑器内置菜单将在下次启动时更新；正在运行的任务不会被重启。',
   'settings.theme.customAccent': '自定义强调色',
+  'settings.appearance.colorMode': '显示模式',
+  'settings.appearance.mode.light': '浅色',
+  'settings.appearance.mode.dark': '深色',
+  'settings.appearance.mode.system': '跟随系统',
+  'settings.appearance.lightTheme': '浅色主题',
+  'settings.appearance.darkTheme': '深色主题',
+  'settings.appearance.terminalPalette': '终端配色',
+  'settings.appearance.terminal.application': '跟随应用',
+  'settings.appearance.terminal.independent': '保持独立深色配色',
+  'settings.theme.preset.onward-light.name': 'Onward 浅色',
+  'settings.theme.preset.onward-light.description': '清晰的浅色工作界面',
+  'settings.resourcePacks.title': '资源包',
+  'settings.resourcePacks.importPack': '导入 Onward 资源包',
+  'settings.resourcePacks.importVsCode': '导入 VS Code 配色',
+  'settings.resourcePacks.review': '确认导入',
+  'settings.resourcePacks.install': '安装',
+  'settings.resourcePacks.cancel': '取消',
+  'settings.resourcePacks.noPacks': '尚未安装本地资源包。',
+  'settings.resourcePacks.active': '已启用',
+  'settings.resourcePacks.use': '使用',
+  'settings.resourcePacks.disable': '停用',
+  'settings.resourcePacks.uninstall': '卸载',
+  'settings.resourcePacks.confirmDisable': '停用该资源包？受影响的外观或语言设置会切回内置默认值。',
+  'settings.resourcePacks.confirmUninstall': '卸载该资源包？受影响的外观或语言设置会切回内置默认值。',
+  'settings.resourcePacks.confirm': '确认',
+  'settings.resourcePacks.status': '资源包状态：{{status}}',
   'settings.theme.preset.graphite.name': '石墨灰',
   'settings.theme.preset.graphite.description': '沉稳专注，纯中性灰',
   'settings.theme.preset.starlight.name': '星空蓝',
@@ -1654,7 +1708,7 @@ const zhCN: LocaleTranslations = {
   'menu.hideWindow': '隐藏窗口',
   'menu.quitApp': '退出 {{displayName}}',
 
-  'dialog.quit.title': '确认退出',
+  'dialog.quit.title': '确认退出 {{displayName}}',
   'dialog.quit.message': '确定要退出 {{displayName}} 吗？',
   'dialog.quit.detail': '退出将关闭所有终端会话。',
   'dialog.quit.activeMessage': '{{terminalCount}} 个终端中有 {{activeCount}} 个正在运行任务。',
@@ -2995,6 +3049,88 @@ const translations: Record<AppLocale, LocaleTranslations> = {
   'zh-CN': zhCN
 }
 
+let localeOverlays: Partial<Record<AppLocale, Record<string, string>>> = {}
+
+/** Replaces one locale overlay atomically; callers receive data only from the validated main-process pack registry. */
+export function setLocaleOverlay(locale: AppLocale, overlay: Record<string, string> | null): void {
+  localeOverlays = {
+    ...localeOverlays,
+    ...(overlay ? { [locale]: { ...overlay } } : { [locale]: undefined })
+  }
+}
+
+/** Returns a copy so local resource packs cannot mutate the bundled dictionary. */
+export function getOfficialTranslations(locale: AppLocale): Record<string, string> {
+  return { ...translations[locale] }
+}
+
+/** Safety-critical confirmations remain bundled so a pack cannot disguise an irreversible action. */
+export const PROTECTED_LOCALE_PACK_KEYS = new Set<string>([
+  'dialog.quit.title',
+  'dialog.quit.message',
+  'dialog.quit.detail',
+  'dialog.quit.activeMessage',
+  'telemetry.consent.title',
+  'telemetry.consent.description',
+  'telemetry.consent.accept',
+  'telemetry.consent.decline'
+])
+
+const ZH_CN_INTENTIONAL_ENGLISH_KEYS = new Set<TranslationKey>([
+  'subpageSwitcher.diff',
+  'subpageSwitcher.editor',
+  'subpageSwitcher.history',
+  'settings.section.agentTerminal',
+  'settings.diagnostics.performanceToggle',
+  'settings.update.channel.daily',
+  'settings.update.channel.dev',
+  'settings.update.detail.downloadProgress',
+  'sidebar.layout.custom.editor.cellLabel',
+  'promptSender.selection.caption',
+  'promptList.filter.toggle',
+  'promptList.targets.toggle',
+  'terminalGrid.placeholderTask',
+  'sqliteViewer.sql.lastInsertRowIdColon',
+  'gitHistory.title',
+  'gitDiff.fileListView.tree',
+  'gitDiff.fileListView.flat',
+  'gitDiff.image.svg',
+  'projectEditor.globalSearchIncludePlaceholder',
+  'projectEditor.globalSearchExcludePlaceholder',
+  'projectEditor.previewSearch.count'
+])
+
+export interface TranslationAudit {
+  missingKeys: TranslationKey[]
+  extraKeys: string[]
+  placeholderMismatches: TranslationKey[]
+  emptyValues: TranslationKey[]
+  unreviewedEnglishValues: TranslationKey[]
+}
+
+function extractPlaceholders(value: string): string[] {
+  return [...value.matchAll(/\{\{(.*?)\}\}/g)].map((match) => match[1].trim()).sort()
+}
+
+/** Audits built-in translations so fallback never masks an incomplete release locale. */
+export function auditOfficialTranslations(locale: AppLocale): TranslationAudit {
+  const dictionary = translations[locale]
+  const englishKeys = Object.keys(en) as TranslationKey[]
+  const localeKeys = Object.keys(dictionary)
+  const missingKeys = englishKeys.filter((key) => typeof dictionary[key] !== 'string')
+  const extraKeys = localeKeys.filter((key) => !(key in en))
+  const placeholderMismatches = englishKeys.filter((key) => {
+    const candidate = dictionary[key]
+    return typeof candidate === 'string' &&
+      extractPlaceholders(en[key]).join('\u0000') !== extractPlaceholders(candidate).join('\u0000')
+  })
+  const emptyValues = englishKeys.filter((key) => typeof dictionary[key] !== 'string' || dictionary[key].trim().length === 0)
+  const unreviewedEnglishValues = locale === 'zh-CN'
+    ? englishKeys.filter((key) => dictionary[key] === en[key] && !ZH_CN_INTENTIONAL_ENGLISH_KEYS.has(key))
+    : []
+  return { missingKeys, extraKeys, placeholderMismatches, emptyValues, unreviewedEnglishValues }
+}
+
 export function isAppLocale(value: unknown): value is AppLocale {
   return value === 'en' || value === 'zh-CN'
 }
@@ -3013,7 +3149,7 @@ function formatMessage(template: string, params?: TranslationParams): string {
 }
 
 export function translate(locale: AppLocale, key: TranslationKey, params?: TranslationParams): string {
-  const message = translations[locale][key] ?? en[key]
+  const message = localeOverlays[locale]?.[key] ?? translations[locale][key] ?? en[key]
   return formatMessage(message, params)
 }
 

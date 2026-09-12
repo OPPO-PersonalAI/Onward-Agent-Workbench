@@ -18,7 +18,7 @@ function querySettingsUpdateProgress(): HTMLElement | null {
 }
 
 export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResult[]> {
-  const { assert, cancelled, log, sleep, waitFor } = ctx
+  const { assert, cancelled, log, sleep, waitFor, rootPath } = ctx
   const results: TestResult[] = []
   const record = (name: string, ok: boolean, detail?: Record<string, unknown>) => {
     assert(name, ok, detail)
@@ -131,6 +131,80 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
     record('SU-00b-settings-selects-use-inset-arrow-spacing', selectsUseInsetArrow, {
       selects: selectStyleSummary
     })
+    const appearanceMode = querySettingsSelect('settings-color-mode-select')
+    const terminalPalette = querySettingsSelect('settings-terminal-palette-select')
+    const resourcePackPanel = document.querySelector('[data-testid="resource-packs-panel"]')
+    const nativeImport = document.querySelector('[data-testid="resource-pack-import-native"]')
+    const vscodeImport = document.querySelector('[data-testid="resource-pack-import-vscode"]')
+    record('SU-00c-appearance-and-resource-pack-controls-render',
+      Array.from(appearanceMode?.options ?? []).map(option => option.value).join(',') === 'light,dark,system' &&
+      Array.from(terminalPalette?.options ?? []).map(option => option.value).join(',') === 'application,independent' &&
+      Boolean(resourcePackPanel) && Boolean(nativeImport) && Boolean(vscodeImport), {
+        colorMode: appearanceMode?.value ?? null,
+        terminalPalette: terminalPalette?.value ?? null,
+        resourcePackPanel: Boolean(resourcePackPanel),
+        nativeImport: Boolean(nativeImport),
+      vscodeImport: Boolean(vscodeImport)
+      })
+    const fixturePath = `${rootPath}/test/autotest/fixtures/resource-packs/onward-light-sample`
+    const inspection = await window.electronAPI.resourcePacks.inspect(fixturePath) as {
+      ok?: boolean
+      token?: string
+      summary?: { id?: string }
+    }
+    const installed = inspection.ok && inspection.token
+      ? await window.electronAPI.resourcePacks.confirmInstall(inspection.token) as { ok?: boolean }
+      : { ok: false }
+    const packId = inspection.summary?.id ?? 'test.onward.light'
+    window.dispatchEvent(new Event('onward-resource-packs-changed'))
+    const resourcePackInstalled = await waitFor(
+      'settings-resource-pack-installed',
+      () => Boolean(document.querySelector(`[data-testid="resource-pack-use-${packId}"]`)),
+      2000,
+      40
+    )
+    const useButton = document.querySelector(`[data-testid="resource-pack-use-${packId}"]`) as HTMLButtonElement | null
+    useButton?.click()
+    await sleep(400)
+    const activatedSettings = await window.electronAPI.settings.load()
+    const resourcePackActivated = activatedSettings.appearance.lightTheme.source === 'pack' && activatedSettings.appearance.lightTheme.packId === packId
+    const disableButton = document.querySelector(`[data-testid="resource-pack-disable-${packId}"]`) as HTMLButtonElement | null
+    disableButton?.click()
+    const disableConfirmation = await waitFor(
+      'settings-resource-pack-disable-confirmation',
+      () => Boolean(document.querySelector('[data-testid="resource-pack-action-confirmation"]')),
+      1200,
+      40
+    )
+    const disableConfirm = document.querySelector('[data-testid="resource-pack-action-confirmation"] button') as HTMLButtonElement | null
+    disableConfirm?.click()
+    const resourcePackDisabled = await waitFor(
+      'settings-resource-pack-disabled',
+      () => Boolean(document.querySelector(`[data-testid="resource-pack-uninstall-${packId}"]`)),
+      1500,
+      40
+    )
+    const disabledSettings = await window.electronAPI.settings.load()
+    const fallbackApplied = disabledSettings.appearance.lightTheme.source === 'builtin' && disabledSettings.appearance.lightTheme.id === 'onward-light'
+    const uninstallButton = document.querySelector(`[data-testid="resource-pack-uninstall-${packId}"]`) as HTMLButtonElement | null
+    uninstallButton?.click()
+    const uninstallConfirmation = await waitFor(
+      'settings-resource-pack-uninstall-confirmation',
+      () => Boolean(document.querySelector('[data-testid="resource-pack-action-confirmation"]')),
+      1200,
+      40
+    )
+    const uninstallConfirm = document.querySelector('[data-testid="resource-pack-action-confirmation"] button') as HTMLButtonElement | null
+    uninstallConfirm?.click()
+    const resourcePackUninstalled = await waitFor(
+      'settings-resource-pack-uninstalled',
+      () => !document.querySelector(`[data-testid="resource-pack-uninstall-${packId}"]`),
+      2000,
+      40
+    )
+    record('SU-00d-resource-pack-install-use-disable-uninstall',
+      Boolean(installed.ok) && resourcePackInstalled && Boolean(useButton) && resourcePackActivated && disableConfirmation && resourcePackDisabled && fallbackApplied && uninstallConfirmation && resourcePackUninstalled,
+      { inspectionOk: inspection.ok === true, installed: installed.ok === true, resourcePackInstalled, resourcePackActivated, disableConfirmation, resourcePackDisabled, fallbackApplied, uninstallConfirmation, resourcePackUninstalled })
     if (cancelled()) return results
 
     api.resetMockUpdater()

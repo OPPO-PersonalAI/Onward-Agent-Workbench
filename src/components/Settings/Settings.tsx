@@ -11,6 +11,7 @@ import { FontSelector } from './FontSelector'
 import { NumberInput } from './NumberInput'
 import { ApplyToAllIcon } from './ApplyToAllIcon'
 import { ThemeSelector } from './ThemeSelector'
+import { ResourcePacksPanel } from './ResourcePacksPanel'
 import { DEFAULT_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE } from '../../constants/terminal'
 import { DEFAULT_GIT_DIFF_FONT_SIZE, MIN_GIT_DIFF_FONT_SIZE, MAX_GIT_DIFF_FONT_SIZE } from '../../constants/gitDiff'
 import type { SettingsDebugApi } from '../../autotest/types'
@@ -170,7 +171,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     updateTerminalStyle,
     getTerminalStyle,
     applyStyleGlobally,
-    updatePerformanceDiagnosticsEnabled
+    updatePerformanceDiagnosticsEnabled,
+    editorLocaleAtBoot
   } = useSettings()
   const { t, locale, locales, updateLanguage } = useI18n()
   const isAutotest = window.electronAPI.debug.autotest
@@ -805,6 +807,11 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   </p>
                 </div>
               </div>
+              {locale !== editorLocaleAtBoot && (
+                <p className="settings-group-description" data-testid="settings-editor-locale-next-launch">
+                  {t('settings.language.editorNextLaunch')}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -836,6 +843,11 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-title">{t('settings.resourcePacks.title')}</div>
+          <div className="settings-section-content"><ResourcePacksPanel /></div>
         </div>
 
         {/* Appearance Section */}

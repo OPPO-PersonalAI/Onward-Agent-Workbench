@@ -240,6 +240,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
   onSendAndExecutePinnedPrompt: (terminalId: string, prompt: Prompt) => void
 }) {
   const { state, getTerminalDisplayName, updateTabById } = useAppState()
+  const { resolvedAppearance } = useSettings()
   const terminals: TerminalInfo[] = useMemo(() => {
     return tab.terminals.map((t, index) => ({
       id: t.id,
@@ -287,7 +288,7 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       layoutMode={tab.layoutMode}
       terminals={terminals}
       activeTerminalId={tab.activeTerminalId}
-      theme="vscode-dark"
+      theme={resolvedAppearance?.terminalTheme ?? 'vscode-dark'}
       onTerminalFocus={handleTerminalFocus}
       onTerminalRename={handleTerminalRename}
       onTerminalAutoRename={handleTerminalAutoRename}

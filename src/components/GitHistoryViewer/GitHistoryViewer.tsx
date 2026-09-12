@@ -286,7 +286,7 @@ export function GitHistoryViewer({
   taskTitle
 }: GitHistoryViewerProps) {
   const isPanel = displayMode === 'panel'
-  const { settings } = useSettings()
+  const { resolvedAppearance, settings } = useSettings()
   const { locale, t } = useI18n()
   const { getUIPreferences, updateUIPreferences } = useAppState()
 
@@ -706,19 +706,19 @@ export function GitHistoryViewer({
     lineDiffType: 'word' as const,
     overflow: 'wrap' as const,
     disableFileHeader: true,
-    theme: 'pierre-dark' as const,
-    themeType: 'dark' as const
-  }), [diffStyle])
+    theme: resolvedAppearance?.pierreTheme ?? 'pierre-dark',
+    themeType: resolvedAppearance?.kind ?? 'dark'
+  }), [diffStyle, resolvedAppearance?.kind, resolvedAppearance?.pierreTheme])
   const multiFileDiffOptions = useMemo(() => ({
     diffStyle,
     diffIndicators: 'classic' as const,
     lineDiffType: 'word' as const,
     overflow: 'wrap' as const,
     disableFileHeader: true,
-    theme: 'pierre-dark' as const,
-    themeType: 'dark' as const,
+    theme: resolvedAppearance?.pierreTheme ?? 'pierre-dark',
+    themeType: resolvedAppearance?.kind ?? 'dark',
     expandUnchanged: false,
-  }), [diffStyle])
+  }), [diffStyle, resolvedAppearance?.kind, resolvedAppearance?.pierreTheme])
   const imageTextDiffOptions = useMemo(() => ({
     renderSideBySide: true,
     renderSideBySideInlineBreakpoint: DIFF_INLINE_BREAKPOINT,
@@ -2113,7 +2113,7 @@ export function GitHistoryViewer({
           modifiedModelPath={`inmemory://model/onward-git-history/${headSegment}/modified/${modifiedPath}`}
           keepCurrentOriginalModel={true}
           keepCurrentModifiedModel={true}
-          theme="vs-dark"
+          theme={resolvedAppearance?.monacoTheme ?? 'vs-dark'}
           options={imageTextDiffOptions}
           className="git-diff-monaco"
           height="100%"

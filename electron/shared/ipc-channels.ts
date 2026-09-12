@@ -10,6 +10,8 @@
 
 export const IPC = {
   // app / app-state
+  APPEARANCE_GET_SNAPSHOT: 'appearance:get-snapshot',
+  APPEARANCE_SNAPSHOT_UPDATED: 'appearance:snapshot-updated',
   APP_GET_INFO: 'app:get-info',
   APP_GET_PDF_VIEWER_URL: 'app:get-pdf-viewer-url',
   APP_READ_NOTICE: 'app:read-notice',
@@ -19,6 +21,16 @@ export const IPC = {
   APP_STATE_LOAD: 'app-state:load',
   APP_STATE_SAVE: 'app-state:save',
   APP_STATE_SAVE_PATCH: 'app-state:save-patch',
+
+  // declarative local resource packs
+  RESOURCE_PACK_CONFIRM_INSTALL: 'resource-pack:confirm-install',
+  RESOURCE_PACK_DEACTIVATE: 'resource-pack:deactivate',
+  RESOURCE_PACK_GET_LOCALE_OVERLAY: 'resource-pack:get-locale-overlay',
+  RESOURCE_PACK_GET_THEME: 'resource-pack:get-theme',
+  RESOURCE_PACK_INSPECT: 'resource-pack:inspect',
+  RESOURCE_PACK_LIST: 'resource-pack:list',
+  RESOURCE_PACK_PICK_AND_INSPECT: 'resource-pack:pick-and-inspect',
+  RESOURCE_PACK_UNINSTALL: 'resource-pack:uninstall',
 
   // browser
   BROWSER_CLEAR_COOKIES: 'browser:clear-cookies',

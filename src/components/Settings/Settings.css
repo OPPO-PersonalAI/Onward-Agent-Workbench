@@ -262,6 +262,20 @@
   line-height: 1.4;
 }
 
+.settings-resource-pack-actions,
+.settings-resource-pack-review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-resource-pack-review {
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 .settings-row-input-column {
   flex-direction: column;
   align-items: flex-end;

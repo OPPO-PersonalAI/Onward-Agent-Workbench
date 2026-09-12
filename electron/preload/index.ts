@@ -1016,6 +1016,22 @@ export interface SettingsAPI {
   onActivated: (callback: () => void) => () => void
 }
 
+export interface AppearanceAPI {
+  getSnapshot: () => Promise<{ revision: number; kind: 'light' | 'dark' }>
+  onSnapshotUpdated: (callback: (snapshot: { revision: number; kind: 'light' | 'dark' }) => void) => () => void
+}
+
+export interface ResourcePackAPI {
+  pickAndInspect: (kind: 'native' | 'vscode-theme') => Promise<unknown>
+  inspect: (path: string) => Promise<unknown>
+  confirmInstall: (token: string) => Promise<unknown>
+  deactivate: (packId: string) => Promise<unknown>
+  list: () => Promise<unknown>
+  getTheme: (packId: string, themeId: string) => Promise<unknown>
+  getLocaleOverlay: (packId: string, locale: 'en' | 'zh-CN') => Promise<Record<string, string> | null>
+  uninstall: (packId: string) => Promise<unknown>
+}
+
 export interface AppInfo {
   buildChannel: 'dev' | 'prod'
   branch: string | null
@@ -1559,6 +1575,8 @@ export interface ElectronAPI {
   git: GitAPI
   project: ProjectAPI
   settings: SettingsAPI
+  appearance: AppearanceAPI
+  resourcePacks: ResourcePackAPI
   appInfo: AppInfoAPI
   changelog: ChangelogAPI
   updater: UpdaterAPI
@@ -2222,6 +2240,26 @@ const settingsAPI: SettingsAPI = {
   }
 }
 
+const appearanceAPI: AppearanceAPI = {
+  getSnapshot: () => ipcRenderer.invoke(IPC.APPEARANCE_GET_SNAPSHOT),
+  onSnapshotUpdated: (callback) => {
+    const listener = (_: Electron.IpcRendererEvent, snapshot: { revision: number; kind: 'light' | 'dark' }) => callback(snapshot)
+    ipcRenderer.on(IPC.APPEARANCE_SNAPSHOT_UPDATED, listener)
+    return () => ipcRenderer.removeListener(IPC.APPEARANCE_SNAPSHOT_UPDATED, listener)
+  }
+}
+
+const resourcePackAPI: ResourcePackAPI = {
+  pickAndInspect: (kind) => ipcRenderer.invoke(IPC.RESOURCE_PACK_PICK_AND_INSPECT, kind),
+  inspect: (path) => ipcRenderer.invoke(IPC.RESOURCE_PACK_INSPECT, path),
+  confirmInstall: (token) => ipcRenderer.invoke(IPC.RESOURCE_PACK_CONFIRM_INSTALL, token),
+  deactivate: (packId) => ipcRenderer.invoke(IPC.RESOURCE_PACK_DEACTIVATE, packId),
+  list: () => ipcRenderer.invoke(IPC.RESOURCE_PACK_LIST),
+  getTheme: (packId, themeId) => ipcRenderer.invoke(IPC.RESOURCE_PACK_GET_THEME, packId, themeId),
+  getLocaleOverlay: (packId, locale) => ipcRenderer.invoke(IPC.RESOURCE_PACK_GET_LOCALE_OVERLAY, packId, locale),
+  uninstall: (packId) => ipcRenderer.invoke(IPC.RESOURCE_PACK_UNINSTALL, packId)
+}
+
 const appInfoAPI: AppInfoAPI = {
   get: () => {
     return ipcRenderer.invoke(IPC.APP_GET_INFO)
@@ -2881,6 +2919,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   git: gitAPI,
   project: projectAPI,
   settings: settingsAPI,
+  appearance: appearanceAPI,
+  resourcePacks: resourcePackAPI,
   appInfo: appInfoAPI,
   changelog: changelogAPI,
   updater: updaterAPI,

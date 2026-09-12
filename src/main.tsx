@@ -3,17 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import './monaco-env'
-import App from './App'
 import './types/electron.d.ts'
-import { installRendererPerfTrace } from './utils/perf-trace'
+import { DEFAULT_LOCALE, type AppLocale } from './i18n/core'
+import { loadBundledEditorLocale } from './monaco-nls'
 
-installRendererPerfTrace()
+async function bootstrap(): Promise<void> {
+  const settings = await window.electronAPI?.settings.load().catch(() => null)
+  const locale: AppLocale = settings?.language === 'zh-CN' ? 'zh-CN' : DEFAULT_LOCALE
+  window.__onwardEditorLocaleAtBoot = locale
+  document.documentElement.lang = locale
+  const editorLocale = await loadBundledEditorLocale(locale)
+  if (!editorLocale.loaded) {
+    console.warn(`Monaco locale ${locale} is unavailable in the installed Monaco bundle; editor menus remain English.`)
+  }
+  await import('./monaco-env')
+  const { mountApp } = await import('./mount-app')
+  mountApp()
+}
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-)
+void bootstrap()
