@@ -1,0 +1,9 @@
+{
+  "_spdx": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "dark-modern": { "name": "Dark Modern", "background": "#1f1f1f", "foreground": "#cccccc" },
+  "light-modern": { "name": "Light Modern", "background": "#ffffff", "foreground": "#3b3b3b" },
+  "dracula": { "name": "Dracula", "background": "#282a36", "foreground": "#f8f8f2" },
+  "one-dark-pro": { "name": "One Dark Pro", "background": "#282c34", "foreground": "#abb2bf" },
+  "nord": { "name": "Nord", "background": "#2e3440", "foreground": "#d8dee9" },
+  "solarized-light": { "name": "Solarized Light", "background": "#fdf6e3", "foreground": "#586e75" }
+}

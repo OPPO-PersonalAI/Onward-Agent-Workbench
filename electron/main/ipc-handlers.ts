@@ -51,6 +51,8 @@ import {
 import { projectFsWorkerClient } from './project-fs-worker-client'
 import { sqliteWorkerClient } from './sqlite-worker-client'
 import { getSettingsStorage, SettingsState, ShortcutConfig } from './settings-storage'
+import { registerThemeImportHandlers, cleanupThemeImportHandlers } from './theme-import-handlers'
+import { registerThemeExportHandlers, cleanupThemeExportHandlers } from './theme-export-handlers'
 import { getShortcutManager } from './shortcut-manager'
 import { getAppInfo } from './app-info'
 import { createDiagnosticBundle } from './diagnostic-bundle'
@@ -532,6 +534,8 @@ export function sendPromptViaBridge(
 }
 
 export function registerIpcHandlers(mainWindow: BrowserWindow, options: RegisterIpcHandlersOptions = {}): void {
+  registerThemeImportHandlers()
+  registerThemeExportHandlers()
   const shouldLog = process.env.ONWARD_DEBUG === '1' || process.env.ELECTRON_ENABLE_LOGGING === '1'
   const log = (...args: unknown[]) => {
     if (shouldLog) {
@@ -3002,6 +3006,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   // Load settings
   ipcMain.handle(IPC.SETTINGS_LOAD, () => {
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'load-received' })
     return settingsStorage.get()
   })
 
@@ -3166,6 +3171,8 @@ export function cleanupIpcHandlers(): Promise<void> {
 }
 
 async function runCleanupIpcHandlers(): Promise<void> {
+  await cleanupThemeImportHandlers()
+  await cleanupThemeExportHandlers()
   // One throwing dispose must never skip the rest of the chain: everything
   // below it — including the awaited GitStateMirror worker drain — would be
   // silently dropped, leaving the worker alive and hanging the quit until

@@ -6,6 +6,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { Editor } from '@monaco-editor/react'
+import { ACTIVE_EDITOR_THEME } from '../../themes/editor-theme'
+import { themeIcons } from 'seti-icons'
 import DOMPurify from 'dompurify'
 import { hexy } from 'hexy'
 import type { GitDiffResult, ProjectEntry, ProjectFileOpenMode } from '../../types/electron'
@@ -90,6 +92,7 @@ import {
 } from '../../utils/html-file'
 import '../../styles/path-copy-toast.css'
 import { renderMermaidDiagrams } from '../../utils/mermaidRenderer'
+import { PREVIEW_THEME_APPLIED_EVENT } from '../../utils/preview-theme-dom'
 import {
   enhanceMermaidDiagrams,
   disposeMermaidPanZoom,
@@ -110,7 +113,7 @@ import {
   getBaseName,
   getParentPath
 } from './quickFileUtils'
-import { createThemedSetiFileIconResolver, sanitizeSetiSvgOnce } from './setiFileIconTheme'
+import { buildSetiThemeFromAppColors, sanitizeSetiSvgOnce } from './setiFileIconTheme'
 import {
   buildDiffLocateRouteTarget,
   findDiffFileForEditorPath,
@@ -1142,7 +1145,7 @@ export function ProjectEditor({
 }: ProjectEditorProps) {
   const isPanel = displayMode === 'panel'
   const useSharedPanelHeader = isPanel && panelShellMode === 'internal'
-  const { getTerminalStyle, settings } = useSettings()
+  const { getTerminalStyle, settings, resolvedTheme } = useSettings()
   const { locale, t } = useI18n()
   const {
     getProjectEditorState,
@@ -7913,72 +7916,111 @@ export function ProjectEditor({
     if (!isMarkdownRenderAllowed || !markdownRenderedHtml) return
     const preview = previewRef.current
     if (!preview) return
-    const initialMermaidState = getMermaidPreviewState()
-    // Skip only when there is nothing at all to act on. A pending count of 0
-    // does not necessarily mean idle — when the markdown session cache
-    // restores a previously-enhanced HTML snapshot, every diagram already
-    // carries `.mermaid-rendered` (so pending===0) but the runtime panzoom
-    // instances were destroyed with the old DOM and need to be rebuilt.
-    if (initialMermaidState.total === 0) return
-    mdpTrace('mermaid:start', {
-      total: initialMermaidState.total,
-      pending: initialMermaidState.pending,
-      inFlight: initialMermaidState.inFlight
-    })
-    const signal = { cancelled: false }
-    const token = mermaidRenderTokenRef.current + 1
-    mermaidRenderTokenRef.current = token
-    mermaidRenderInFlightRef.current = true
-    const wasRestoring =
-      suppressPreviewSyncOnRestoreRef.current ||
-      previewRestorePhaseRef.current !== 'idle'
-
-    void renderMermaidDiagrams(preview, signal, t('mermaid.syntaxError')).finally(() => {
-      if (token !== mermaidRenderTokenRef.current) return
-      mermaidRenderInFlightRef.current = false
-      if (signal.cancelled) return
-      // Product telemetry: count once per file where mermaid diagrams render
-      // (ref-guarded so nonce/content re-renders of the same file don't re-fire).
-      const mermaidActiveFile = activeFilePathRef.current
-      if (mermaidActiveFile && mermaidTrackedFileRef.current !== mermaidActiveFile) {
-        mermaidTrackedFileRef.current = mermaidActiveFile
-        trackFeatureUse('mermaid')
+    let activeSignal: { cancelled: boolean } | null = null
+    let captureFrame: number | null = null
+    let captureTrace: { token: number; revision: string } | null = null
+    const applyMermaidTheme = () => {
+      if (activeSignal) activeSignal.cancelled = true
+      if (captureFrame !== null) window.cancelAnimationFrame(captureFrame)
+      if (captureTrace) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'mermaid', reason: 'settle-result', ...captureTrace, branch: 'cache', result: 'superseded'
+        })
+        captureTrace = null
       }
-      mdpTrace('mermaid:complete', { wasRestoring })
-
-      enhanceMermaidDiagrams(preview, signal, {
-        zoomIn: t('mermaid.zoomIn'),
-        zoomOut: t('mermaid.zoomOut'),
-        resetZoom: t('mermaid.resetZoom'),
-        fitToScreen: t('mermaid.fitToScreen'),
-        fullscreen: t('mermaid.fullscreen'),
-        exitFullscreen: t('mermaid.exitFullscreen'),
-        dragHint: t('mermaid.dragHint')
+      const initialMermaidState = getMermaidPreviewState()
+      const revision = document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+        surface: 'mermaid', reason: 'apply-request', diagrams: initialMermaidState.total, revision
       })
+      // Retained diagrams still need panzoom rehydration even when pending===0.
+      if (initialMermaidState.total === 0) return
+      mdpTrace('mermaid:start', {
+        total: initialMermaidState.total,
+        pending: initialMermaidState.pending,
+        inFlight: initialMermaidState.inFlight
+      })
+      const signal = { cancelled: false }
+      activeSignal = signal
+      const token = mermaidRenderTokenRef.current + 1
+      mermaidRenderTokenRef.current = token
+      mermaidRenderInFlightRef.current = true
+      const wasRestoring = suppressPreviewSyncOnRestoreRef.current || previewRestorePhaseRef.current !== 'idle'
 
-      updatePreviewActiveSlug(scanPreviewNearestSlug())
-
-	      if (
-	        wasRestoring ||
-	        suppressPreviewSyncOnRestoreRef.current ||
-        previewRestorePhaseRef.current !== 'idle'
-      ) {
-        if (previewRestorePhaseRef.current !== 'restoring-layout') {
-          previewRestorePhaseRef.current = 'restoring-layout'
-          setPreviewRestorePhase('restoring-layout')
+      void renderMermaidDiagrams(preview, signal, t('mermaid.syntaxError')).finally(() => {
+        if (token !== mermaidRenderTokenRef.current) {
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+            surface: 'mermaid', reason: 'stale-completion', token, revision, rejection: 'superseded'
+          })
+          return
         }
-	        queuePreviewReveal()
-	      } else {
-	        window.requestAnimationFrame(() => {
-	          captureMarkdownSessionCacheRef.current('mermaid-settled')
-	        })
-	      }
-	    })
-    return () => {
-      signal.cancelled = true
-      if (token === mermaidRenderTokenRef.current) {
         mermaidRenderInFlightRef.current = false
+        if (signal.cancelled) {
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+            surface: 'mermaid', reason: 'stale-completion', token, revision, rejection: 'canceled'
+          })
+          return
+        }
+        // Count once per file, not once per theme revision.
+        const mermaidActiveFile = activeFilePathRef.current
+        if (mermaidActiveFile && mermaidTrackedFileRef.current !== mermaidActiveFile) {
+          mermaidTrackedFileRef.current = mermaidActiveFile
+          trackFeatureUse('mermaid')
+        }
+        mdpTrace('mermaid:complete', { wasRestoring })
+
+        enhanceMermaidDiagrams(preview, signal, {
+          zoomIn: t('mermaid.zoomIn'),
+          zoomOut: t('mermaid.zoomOut'),
+          resetZoom: t('mermaid.resetZoom'),
+          fitToScreen: t('mermaid.fitToScreen'),
+          fullscreen: t('mermaid.fullscreen'),
+          exitFullscreen: t('mermaid.exitFullscreen'),
+          dragHint: t('mermaid.dragHint')
+        })
+        updatePreviewActiveSlug(scanPreviewNearestSlug())
+
+        if (wasRestoring || suppressPreviewSyncOnRestoreRef.current || previewRestorePhaseRef.current !== 'idle') {
+          if (previewRestorePhaseRef.current !== 'restoring-layout') {
+            previewRestorePhaseRef.current = 'restoring-layout'
+            setPreviewRestorePhase('restoring-layout')
+          }
+          queuePreviewReveal()
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+            surface: 'mermaid', reason: 'settle-result', token, revision, branch: 'restore', result: 'queued'
+          })
+        } else {
+          captureTrace = { token, revision }
+          captureFrame = window.requestAnimationFrame(() => {
+            captureFrame = null
+            captureTrace = null
+            if (!signal.cancelled) captureMarkdownSessionCacheRef.current('mermaid-settled')
+            perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+              surface: 'mermaid', reason: 'settle-result', token, revision, branch: 'cache',
+              result: signal.cancelled ? 'canceled' : 'invoked'
+            })
+          })
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+            surface: 'mermaid', reason: 'settle-result', token, revision, branch: 'cache', result: 'queued'
+          })
+        }
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'mermaid', reason: 'enhancement-complete', token, revision })
+      })
+    }
+    applyMermaidTheme()
+    window.addEventListener(PREVIEW_THEME_APPLIED_EVENT, applyMermaidTheme)
+    return () => {
+      window.removeEventListener(PREVIEW_THEME_APPLIED_EVENT, applyMermaidTheme)
+      if (activeSignal) activeSignal.cancelled = true
+      if (captureFrame !== null) window.cancelAnimationFrame(captureFrame)
+      if (captureTrace) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'mermaid', reason: 'settle-result', ...captureTrace, branch: 'cache', result: 'disposed'
+        })
+        captureTrace = null
       }
+      mermaidRenderInFlightRef.current = false
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'mermaid', reason: 'disposed' })
     }
   }, [
     getMermaidPreviewState,
@@ -10375,8 +10417,8 @@ export function ProjectEditor({
   }), [editorFontSize, isPanel, modalSize.height, modalSize.width])
 
   const resolveSetiFileIcon = useMemo(
-    () => createThemedSetiFileIconResolver(settings?.theme),
-    [settings?.theme]
+    () => themeIcons(buildSetiThemeFromAppColors(resolvedTheme.colors)),
+    [resolvedTheme.colors]
   )
 
   const renderTree = useCallback((nodes: TreeNode[], depth = 0) => {
@@ -11434,7 +11476,7 @@ export function ProjectEditor({
                       path={editorPath}
                       saveViewState={false}
                       language={editorLanguage}
-                      theme="vs-dark"
+                      theme={ACTIVE_EDITOR_THEME}
                       value={fileContent}
                       onChange={handleEditorChange}
                       onMount={(editor, monaco) => {

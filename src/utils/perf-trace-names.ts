@@ -29,6 +29,29 @@ import { CLICK_PHASE_EVENT_NAMES } from './click-phase-event-names.ts'
  * constants instead.
  */
 export const PERF_TRACE_EVENT = {
+  // Unified themes: selection, persistence, imports and consumer application.
+  MAIN_THEME_SETTINGS: 'main:themes.settings-changed',
+  MAIN_THEME_NATIVE_APPLY: 'main:themes.native-applied',
+  MAIN_THEME_IMPORT: 'main:themes.import-file',
+  WORKER_THEME_IMPORT: 'worker:themes.parse-import',
+  RENDERER_THEME_IMPORT_IPC: 'renderer:themes.import-ipc',
+  RENDERER_THEME_IMPORT_UI: 'renderer:themes.import-action',
+  RENDERER_THEME_CUSTOMIZE: 'renderer:themes.customize-action',
+  RENDERER_THEME_STATE: 'renderer:themes.state-changed',
+  RENDERER_THEME_BOOTSTRAP: 'renderer:themes.bootstrap',
+  RENDERER_THEME_SYSTEM: 'renderer:themes.system-changed',
+  RENDERER_THEME_APPLY: 'renderer:themes.applied',
+  RENDERER_THEME_PREVIEW_APPLY: 'renderer:themes.preview-applied',
+  RENDERER_THEME_MERMAID_APPLY: 'renderer:themes.mermaid-applied',
+  RENDERER_THEME_EDITOR_APPLY: 'renderer:themes.editor-applied',
+  RENDERER_THEME_TERMINAL_APPLY: 'renderer:themes.terminal-applied',
+  RENDERER_THEME_HISTORY_APPLY: 'renderer:themes.history-applied',
+  RENDERER_SETTINGS_FONTS: 'renderer:settings.fonts-changed',
+  RENDERER_SETTINGS_NAVIGATION: 'renderer:settings.page-changed',
+  RENDERER_SETTINGS_RESIZE: 'renderer:settings.panel-resized',
+  RENDERER_THEME_EXPORT: 'renderer:themes.export-action',
+  MAIN_THEME_EXPORT: 'main:themes.export-file',
+  WORKER_THEME_EXPORT: 'worker:themes.serialize-export',
   // ───────── Main process — lifecycle ─────────
   MAIN_TRACE_START: 'main:trace-start',
   MAIN_TRACE_STOP: 'main:trace-stop',

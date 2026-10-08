@@ -7,6 +7,9 @@ import { useEffect, useMemo, useState } from 'react'
 import ePub from 'epubjs'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import type { Book } from 'epubjs'
+import { PREVIEW_THEME_APPLIED_EVENT } from '../../utils/preview-theme-dom'
+import { perfTraceDiagnostic } from '../../utils/perf-trace'
+import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import './GitEpubCompare.css'
 
 export type GitEpubStatus = 'added' | 'deleted' | 'modified'
@@ -245,6 +248,21 @@ export function GitEpubCompare({
 
   // Product telemetry: count once per EPUB-diff view open (mount), never per re-render.
   useEffect(() => { trackFeatureUse('epub-diff') }, [])
+
+  useEffect(() => {
+    // This compare surface is host DOM. CSS tokens update its existing nodes;
+    // a theme revision must never restart extraction or reset the selected chapter.
+    const applied = () => perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+      surface: 'epub-compare', reason: 'css-applied', kind: document.documentElement.dataset.themeKind,
+      revision: document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+    })
+    applied()
+    window.addEventListener(PREVIEW_THEME_APPLIED_EVENT, applied)
+    return () => {
+      window.removeEventListener(PREVIEW_THEME_APPLIED_EVENT, applied)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'epub-compare', reason: 'disposed' })
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false

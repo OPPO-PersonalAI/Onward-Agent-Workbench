@@ -1,0 +1,6 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{
+  "colors": { "editor.background": "#202020", "editor.foreground": "#eeeeee" },
+  "tokenColors": [{ "scope": "keyword", "settings": { "foreground": "#123456" } }]
+}

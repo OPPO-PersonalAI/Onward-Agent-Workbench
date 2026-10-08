@@ -5,8 +5,8 @@
 
 /**
  * Seti UI file icons (VS Code theme-seti family via seti-icons).
- * Per-extension colors use Seti semantics mapped to theme-aware / fixed readable hues
- * so icons stay distinguishable on dark backgrounds (never near-black on black).
+ * Per-extension colors follow live semantic tokens, including System changes
+ * and draft edits that do not invalidate a React settings memo.
  */
 
 import DOMPurify from 'dompurify'
@@ -33,22 +33,21 @@ export function sanitizeSetiSvgOnce(svg: string): string {
 }
 
 /**
- * Map Seti semantic slots onto readable colors. Slots tied to `ThemeColors` follow the
- * active UI theme; saturated slots stay in a safe luminance range for dark panels.
+ * CSS references let existing file rows update without regenerating their SVGs.
  */
 export function buildSetiThemeFromAppColors(colors: ThemeColors) {
   return {
-    blue: colors['--accent'],
-    grey: colors['--text-2'],
-    'grey-light': colors['--text-2'],
-    green: '#4ade80',
-    orange: '#fb923c',
-    pink: '#f472b6',
-    purple: '#c084fc',
-    red: '#f87171',
-    white: colors['--text-1'],
-    yellow: '#facc15',
-    ignore: colors['--text-3']
+    blue: `var(--accent, ${colors['--accent']})`,
+    grey: `var(--text-2, ${colors['--text-2']})`,
+    'grey-light': `var(--text-2, ${colors['--text-2']})`,
+    green: 'var(--syntax-string, #4ade80)',
+    orange: 'var(--syntax-number, #fb923c)',
+    pink: 'var(--syntax-keyword, #f472b6)',
+    purple: 'var(--syntax-function, #c084fc)',
+    red: 'var(--danger, #f87171)',
+    white: `var(--text-1, ${colors['--text-1']})`,
+    yellow: 'var(--warning, #facc15)',
+    ignore: `var(--text-3, ${colors['--text-3']})`
   }
 }
 

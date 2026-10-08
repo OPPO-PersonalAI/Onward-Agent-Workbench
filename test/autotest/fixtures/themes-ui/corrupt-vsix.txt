@@ -1,0 +1,4 @@
+SPDX-FileCopyrightText: 2026 OPPO
+SPDX-License-Identifier: Apache-2.0
+This original fixture is deliberately not a ZIP file.
+The driver copies it to a .vsix filename to exercise archive-error handling.

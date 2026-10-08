@@ -1,0 +1,11 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{
+  /* A comment must not consume the URL-like label. */
+  "name": "Fixture // theme /* label */",
+  "include": "./nested/child.jsonc",
+  "colors": { "editor.foreground": "#fedcba", },
+  "tokenColors": [
+    { "scope": "comment", "settings": { "foreground": "#102030", "fontStyle": "" } },
+  ],
+}

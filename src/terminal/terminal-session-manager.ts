@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Terminal as XTerm } from '@xterm/xterm'
+import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { installOscCwdAddon } from '../components/Terminal/oscCwdAddon'
 import { getTheme, ThemeName } from '../themes/terminal-themes'
 import type { TerminalStyleConfig } from '../types/settings.d.ts'
+import type { ResolvedTheme } from '../types/theme'
 import type { TerminalBufferOptions, TerminalBufferResult } from '../types/electron.d.ts'
 import { requestOpenExternalHttpLink } from '../utils/externalLink'
 import { perfMonitor } from '../utils/perf-monitor'
@@ -35,7 +36,9 @@ export type { TerminalRendererSurfaceEvent } from './terminal-renderer-lifecycle
 export type TerminalSessionStatus = 'idle' | 'initializing' | 'ready' | 'error' | 'disposed'
 
 export interface TerminalSessionOptions {
-  theme: ThemeName
+  theme: ThemeName | ITheme
+  themeId?: string
+  minimumContrastRatio?: 1 | 4.5
   fontSize: number
   fontFamily: string
   terminalStyle?: TerminalStyleConfig | null
@@ -174,15 +177,27 @@ function handleTerminalLinkClick(_event: MouseEvent, uri: string) {
   })
 }
 
-function buildTheme(options: TerminalSessionOptions) {
-  const baseTheme = getTheme(options.theme)
-  const terminalStyle = options.terminalStyle
+export function resolveTerminalMinimumContrastRatio(theme: Pick<ResolvedTheme, 'kind' | 'isClassic'>): 1 | 4.5 {
+  return theme.kind === 'light' && !theme.isClassic ? 4.5 : 1
+}
 
-  return {
-    ...baseTheme,
-    ...(terminalStyle?.foregroundColor && { foreground: terminalStyle.foregroundColor }),
-    ...(terminalStyle?.backgroundColor && { background: terminalStyle.backgroundColor })
-  }
+export function buildTheme(options: TerminalSessionOptions): ITheme {
+  const baseTheme = typeof options.theme === 'string' ? getTheme(options.theme) : options.theme
+  return { ...baseTheme }
+}
+
+export function terminalThemesEqual(left: ITheme | undefined, right: ITheme): boolean {
+  if (left === right) return true
+  if (!left) return false
+  const keys = Object.keys(right) as Array<keyof ITheme>
+  if (Object.keys(left).length !== keys.length) return false
+  return keys.every(key => {
+    const a = left[key]
+    const b = right[key]
+    return Array.isArray(a) && Array.isArray(b)
+      ? a.length === b.length && a.every((color, index) => color === b[index])
+      : a === b
+  })
 }
 
 export class TerminalSessionManager {
@@ -678,9 +693,27 @@ export class TerminalSessionManager {
     const nextFontSize = resolveTerminalFontSize(options)
     const fontMetricsChanged = previousFontFamily !== nextFontFamily || previousFontSize !== nextFontSize
 
-    session.terminal.options.theme = buildTheme(options)
-    session.terminal.options.fontFamily = nextFontFamily
-    session.terminal.options.fontSize = nextFontSize
+    const nextTheme = buildTheme(options)
+    const paletteChanged = !terminalThemesEqual(session.terminal.options.theme, nextTheme)
+    const minimumContrastRatio = options.minimumContrastRatio ?? 1
+    const contrastChanged = session.terminal.options.minimumContrastRatio !== minimumContrastRatio
+    if (paletteChanged || contrastChanged) {
+      const startedAt = performance.now()
+      if (paletteChanged) session.terminal.options.theme = nextTheme
+      if (contrastChanged) session.terminal.options.minimumContrastRatio = minimumContrastRatio
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_TERMINAL_APPLY, {
+        terminalId: session.id,
+        themeIdHash: options.themeId ? performanceTrace.summarizeText('theme', options.themeId).themeHash : undefined,
+        phase: 'update',
+        visible: session.visible,
+        minimumContrastRatio,
+        paletteChanged,
+        contrastChanged,
+        durationMs: performance.now() - startedAt
+      })
+    }
+    if (previousFontFamily !== nextFontFamily) session.terminal.options.fontFamily = nextFontFamily
+    if (previousFontSize !== nextFontSize) session.terminal.options.fontSize = nextFontSize
     session.lastOptions = options
 
     if (fontMetricsChanged) {
@@ -746,6 +779,21 @@ export class TerminalSessionManager {
 
   getRendererRecoveryCount(): number {
     return this.rendererRecoveryCount
+  }
+
+  getThemeSnapshotsForAutotest(): Array<{ terminalId: string; visible: boolean; theme: ITheme; minimumContrastRatio: number | undefined; fontSize: number | undefined; fontFamily: string | undefined }> {
+    if (!window.electronAPI?.debug?.autotest) return []
+    return Array.from(this.sessions.values(), session => {
+      const theme = session.terminal.options.theme ?? {}
+      return {
+        terminalId: session.id,
+        visible: session.visible,
+        minimumContrastRatio: session.terminal.options.minimumContrastRatio,
+        fontSize: session.terminal.options.fontSize,
+        fontFamily: session.terminal.options.fontFamily,
+        theme: { ...theme, ...(theme.extendedAnsi && { extendedAnsi: [...theme.extendedAnsi] }) }
+      }
+    })
   }
 
   simulateRendererSurfaceLossForAutotest(id: string): boolean {
@@ -895,8 +943,10 @@ export class TerminalSessionManager {
   }
 
   private createSession(id: string, options: TerminalSessionOptions): TerminalSession {
+    const themeStartedAt = performance.now()
     const terminal = new XTerm({
       theme: buildTheme(options),
+      minimumContrastRatio: options.minimumContrastRatio ?? 1,
       fontSize: resolveTerminalFontSize(options),
       fontFamily: resolveTerminalFontFamily(options),
       cursorBlink: true,
@@ -909,6 +959,13 @@ export class TerminalSessionManager {
       // scrolled away, output stays pinned to the bottom; when they have,
       // their position is preserved. Typing snaps back to the bottom.
       scrollOnUserInput: true
+    })
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_TERMINAL_APPLY, {
+      terminalId: id,
+      themeIdHash: options.themeId ? performanceTrace.summarizeText('theme', options.themeId).themeHash : undefined,
+      phase: 'create',
+      minimumContrastRatio: terminal.options.minimumContrastRatio,
+      durationMs: performance.now() - themeStartedAt
     })
 
     const fitAddon = new FitAddon()

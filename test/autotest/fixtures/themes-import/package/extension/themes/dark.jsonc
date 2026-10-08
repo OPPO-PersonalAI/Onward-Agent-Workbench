@@ -1,0 +1,3 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{ "include": "./nested/dark-child.jsonc", "colors": { "terminal.foreground": "#999999" } }

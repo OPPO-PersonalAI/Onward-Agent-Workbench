@@ -1,0 +1,7 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "Missing Include Fixture",
+  "type": "dark",
+  "include": "./intentionally-absent-parent.json",
+  "colors": { "terminal.background": "#102030" }
+}

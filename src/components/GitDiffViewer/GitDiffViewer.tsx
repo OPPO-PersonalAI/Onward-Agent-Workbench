@@ -5,6 +5,8 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
 import { DiffEditor } from '@monaco-editor/react'
+import { ACTIVE_EDITOR_THEME } from '../../themes/editor-theme'
+import { themeIcons } from 'seti-icons'
 import { parseDiffFromFile, SPLIT_WITH_NEWLINES } from '@pierre/diffs'
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from '@pierre/diffs'
 import type * as monacoTypes from 'monaco-editor'
@@ -88,7 +90,7 @@ import { resolveDiffInlineGate, resolveGitDiffSplitViewMode, type GitDiffSplitVi
 import { applyFileActionToDiffResult, type GitFileLocalAction } from './gitDiffLocalPatch'
 import { GitDiffDebugPanel } from './GitDiffDebugPanel'
 import { LargeFileConfirmDialog } from '../LargeFileConfirmDialog/LargeFileConfirmDialog'
-import { createThemedSetiFileIconResolver, sanitizeSetiSvgOnce } from '../ProjectEditor/setiFileIconTheme'
+import { buildSetiThemeFromAppColors, sanitizeSetiSvgOnce } from '../ProjectEditor/setiFileIconTheme'
 import { perfTrace, perfTraceDiagnostic } from '../../utils/perf-trace'
 import { buildOpenSkeletonEntries } from './openSkeletonEntries'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
@@ -245,11 +247,7 @@ type DiffRestoreDecisionRecord = {
   revealTargetLine: number | null
 }
 
-// Monaco theme aligned with @pierre/diffs' pierre-dark palette so Git Diff
-// reads as the same visual family as the Git History viewer.
-const PIERRE_LIKE_MONACO_THEME = 'onward-pierre-dark'
 const PIERRE_LIKE_MONACO_FONT = "'SF Mono', Monaco, Consolas, 'Ubuntu Mono', 'Liberation Mono', 'Courier New', monospace"
-let pierreLikeMonacoThemeRegistered = false
 
 // SVG path constants reused by both the React icon components below and the
 // imperative DOM construction inside installDiffHunkActionWidgets (where we
@@ -367,48 +365,6 @@ function FlatViewIcon() {
       <path d="M3 3.25A.75.75 0 0 1 3.75 2.5h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 3.25zm0 4.75a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 8zm.75 4a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5z" />
     </svg>
   )
-}
-
-function ensurePierreLikeMonacoTheme(monaco: typeof monacoTypes) {
-  if (pierreLikeMonacoThemeRegistered) return
-  monaco.editor.defineTheme(PIERRE_LIKE_MONACO_THEME, {
-    base: 'vs-dark',
-    inherit: true,
-    rules: [],
-    colors: {
-      'editor.background': '#070707',
-      'editor.foreground': '#fbfbfb',
-      'editorLineNumber.foreground': '#84848a',
-      'editorLineNumber.activeForeground': '#adadb1',
-      'editorGutter.background': '#070707',
-      'editor.lineHighlightBackground': '#101010',
-      'editor.lineHighlightBorder': '#00000000',
-      'editorIndentGuide.background': '#1a1a1a',
-      'editorIndentGuide.activeBackground': '#2a2a2a',
-      'editorIndentGuide.background1': '#1a1a1a',
-      'editorIndentGuide.activeBackground1': '#2a2a2a',
-      'editor.selectionBackground': '#2a2a2a',
-      'editor.inactiveSelectionBackground': '#1a1a1a',
-      'editorWhitespace.foreground': '#2a2a2a',
-      'diffEditor.insertedLineBackground': '#00cab11a',
-      'diffEditor.insertedTextBackground': '#00cab140',
-      'diffEditor.removedLineBackground': '#ff2e3f1a',
-      'diffEditor.removedTextBackground': '#ff2e3f40',
-      'diffEditor.diagonalFill': '#14141400',
-      'diffEditor.border': '#1a1a1a',
-      'diffEditor.unchangedRegionBackground': '#0a0a0a',
-      'diffEditor.unchangedRegionForeground': '#79797f',
-      'diffEditor.unchangedCodeBackground': '#0a0a0a',
-      'diffEditorGutter.insertedLineBackground': '#00cab11a',
-      'diffEditorGutter.removedLineBackground': '#ff2e3f1a',
-      'diffEditorOverview.insertedForeground': '#00cab1',
-      'diffEditorOverview.removedForeground': '#ff2e3f',
-      'scrollbarSlider.background': '#1f1f1f80',
-      'scrollbarSlider.hoverBackground': '#2f2f2fa0',
-      'scrollbarSlider.activeBackground': '#3f3f3fc0'
-    }
-  })
-  pierreLikeMonacoThemeRegistered = true
 }
 
 // Pop-up window size limit
@@ -1352,7 +1308,7 @@ export function GitDiffViewer({
   navigationTarget = null
 }: GitDiffViewerProps) {
   const isPanel = displayMode === 'panel'
-  const { getTerminalStyle, settings } = useSettings()
+  const { getTerminalStyle, settings, resolvedTheme } = useSettings()
   const { t } = useI18n()
   const { getUIPreferences, updateUIPreferences } = useAppState()
   const perfCountersRef = useRef({
@@ -1867,8 +1823,8 @@ export function GitDiffViewer({
     conflict: t('gitDiff.changeType.conflict')
   }), [t])
   const resolveSetiFileIcon = useMemo(
-    () => createThemedSetiFileIconResolver(settings?.theme),
-    [settings?.theme]
+    () => themeIcons(buildSetiThemeFromAppColors(resolvedTheme.colors)),
+    [resolvedTheme.colors]
   )
   // Keep diffRevealPhase ref in sync with state
   useEffect(() => { diffRevealPhaseRef.current = diffRevealPhase }, [diffRevealPhase])
@@ -7449,8 +7405,7 @@ export function GitDiffViewer({
         modifiedModelPath={modifiedModelPath}
         keepCurrentOriginalModel={true}
         keepCurrentModifiedModel={true}
-        theme={PIERRE_LIKE_MONACO_THEME}
-        beforeMount={ensurePierreLikeMonacoTheme}
+        theme={ACTIVE_EDITOR_THEME}
         options={diffEditorOptions}
         onMount={handleEditorDidMount}
         className="git-diff-monaco"
@@ -7616,7 +7571,7 @@ export function GitDiffViewer({
           original={fileState.originalContent}
           modified={effectiveModifiedContent}
           language="xml"
-          theme="vs-dark"
+          theme={ACTIVE_EDITOR_THEME}
           options={diffEditorOptions}
           onMount={handleEditorDidMount}
           className="git-diff-monaco"

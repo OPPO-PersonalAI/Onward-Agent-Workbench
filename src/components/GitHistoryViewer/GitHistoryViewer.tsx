@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { DiffEditor } from '@monaco-editor/react'
+import { ACTIVE_EDITOR_THEME, ACTIVE_PIERRE_THEME, buildPierreThemeStyle } from '../../themes/editor-theme'
 import { PatchDiff, MultiFileDiff } from '@pierre/diffs/react'
 import { parsePatchFiles, getFiletypeFromFileName } from '@pierre/diffs'
 import type {
@@ -25,6 +26,7 @@ import { useGitStateMirror } from '../../hooks/useGitStateMirror'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { perfTrace, perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { performanceTrace } from '../../utils/performance-trace'
 import { resolveDefaultSelectedFile, resolveSelectionAfterReload } from './defaultFileSelection'
 import { DiffEmptyState } from '../common/DiffEmptyState'
 import type { ProjectEditorOpenEventDetail, SubpageId, SubpageNavigateEventDetail } from '../../types/subpage'
@@ -286,7 +288,7 @@ export function GitHistoryViewer({
   taskTitle
 }: GitHistoryViewerProps) {
   const isPanel = displayMode === 'panel'
-  const { settings } = useSettings()
+  const { settings, resolvedTheme } = useSettings()
   const { locale, t } = useI18n()
   const { getUIPreferences, updateUIPreferences } = useAppState()
 
@@ -700,25 +702,39 @@ export function GitHistoryViewer({
 
   const diffFontSize = settings?.gitDiffFontSize ?? DEFAULT_GIT_DIFF_FONT_SIZE
   const diffStyle = toGitHistoryPatchDiffStyle(diffDisplayMode)
+  const pierreTheme = useMemo(() => {
+    const startedAt = performance.now()
+    const style = buildPierreThemeStyle(resolvedTheme)
+    return { style, durationMs: performance.now() - startedAt }
+  }, [resolvedTheme])
+  useLayoutEffect(() => {
+    if (!isOpen) return
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_HISTORY_APPLY, {
+      themeIdHash: performanceTrace.summarizeText('theme', resolvedTheme.id).themeHash,
+      kind: resolvedTheme.kind,
+      phase: 'palette-commit',
+      durationMs: pierreTheme.durationMs
+    })
+  }, [isOpen, resolvedTheme, pierreTheme])
   const diffOptions = useMemo(() => ({
     diffStyle,
     diffIndicators: 'classic' as const,
     lineDiffType: 'word' as const,
     overflow: 'wrap' as const,
     disableFileHeader: true,
-    theme: 'pierre-dark' as const,
-    themeType: 'dark' as const
-  }), [diffStyle])
+    theme: ACTIVE_PIERRE_THEME,
+    themeType: resolvedTheme.kind
+  }), [diffStyle, resolvedTheme.kind])
   const multiFileDiffOptions = useMemo(() => ({
     diffStyle,
     diffIndicators: 'classic' as const,
     lineDiffType: 'word' as const,
     overflow: 'wrap' as const,
     disableFileHeader: true,
-    theme: 'pierre-dark' as const,
-    themeType: 'dark' as const,
+    theme: ACTIVE_PIERRE_THEME,
+    themeType: resolvedTheme.kind,
     expandUnchanged: false,
-  }), [diffStyle])
+  }), [diffStyle, resolvedTheme.kind])
   const imageTextDiffOptions = useMemo(() => ({
     renderSideBySide: true,
     renderSideBySideInlineBreakpoint: DIFF_INLINE_BREAKPOINT,
@@ -2113,7 +2129,7 @@ export function GitHistoryViewer({
           modifiedModelPath={`inmemory://model/onward-git-history/${headSegment}/modified/${modifiedPath}`}
           keepCurrentOriginalModel={true}
           keepCurrentModifiedModel={true}
-          theme="vs-dark"
+          theme={ACTIVE_EDITOR_THEME}
           options={imageTextDiffOptions}
           className="git-diff-monaco"
           height="100%"
@@ -2348,6 +2364,7 @@ export function GitHistoryViewer({
               options={multiFileDiffOptions}
               className="git-history-patch"
               style={{
+                ...pierreTheme.style,
                 fontSize: `${diffFontSize}px`,
                 lineHeight: `${Math.round(diffFontSize * 1.5)}px`
               }}
@@ -2387,6 +2404,7 @@ export function GitHistoryViewer({
             options={diffOptions}
             className="git-history-patch"
             style={{
+              ...pierreTheme.style,
               fontSize: `${diffFontSize}px`,
               lineHeight: `${Math.round(diffFontSize * 1.5)}px`
             }}

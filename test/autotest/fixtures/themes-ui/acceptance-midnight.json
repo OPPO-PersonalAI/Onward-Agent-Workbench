@@ -1,0 +1,37 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "Acceptance Midnight",
+  "type": "dark",
+  "colors": {
+    "onward.background": "#102030",
+    "onward.foreground": "#e1e2e3",
+    "onward.accent": "#e2913f",
+    "editor.background": "#132539",
+    "editor.foreground": "#f1eadb",
+    "terminal.background": "#152637",
+    "terminal.foreground": "#d8e9fa",
+    "terminalCursor.foreground": "#fedcba",
+    "terminalCursor.background": "#123456",
+    "terminal.selectionBackground": "#345678",
+    "panel.border": "#6789ab",
+    "terminal.ansiBlack": "#101112",
+    "terminal.ansiRed": "#c12345",
+    "terminal.ansiGreen": "#23b456",
+    "terminal.ansiYellow": "#d4a567",
+    "terminal.ansiBlue": "#4567d8",
+    "terminal.ansiMagenta": "#b567c9",
+    "terminal.ansiCyan": "#34b8ca",
+    "terminal.ansiWhite": "#c1c2c3",
+    "terminal.ansiBrightBlack": "#717273",
+    "terminal.ansiBrightRed": "#f17385",
+    "terminal.ansiBrightGreen": "#73e486",
+    "terminal.ansiBrightYellow": "#f4d597",
+    "terminal.ansiBrightBlue": "#8597f8",
+    "terminal.ansiBrightMagenta": "#e597f9",
+    "terminal.ansiBrightCyan": "#74e8fa",
+    "terminal.ansiBrightWhite": "#f1f2f3"
+  },
+  "tokenColors": [
+    { "scope": "comment", "settings": { "foreground": "#9ab187", "fontStyle": "italic" } }
+  ]
+}

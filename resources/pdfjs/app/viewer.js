@@ -27,10 +27,10 @@ const I18N_DEFAULTS = {
   searchPlaceholder: "Search text (Enter for next)",
   prevMatch: "Previous match",
   nextMatch: "Next match",
-  colorToggleOn: "Temporarily disable dark",
-  colorToggleOff: "Restore dark rendering",
-  colorToggleTitleOn: "Temporarily view original colors",
-  colorToggleTitleOff: "Restore Dark Mode rendering",
+  colorToggleOn: "Original colors",
+  colorToggleOff: "Dark page colors",
+  colorToggleTitleOn: "Show the PDF’s original page colors",
+  colorToggleTitleOff: "Use dark page colors without changing the PDF",
   close: "Close",
   cancel: "Cancel",
   confirm: "Confirm",
@@ -97,7 +97,8 @@ let readingStatePostTimer = null;
 let openToken = 0;
 let pendingPasswordUpdate = null;
 let passwordCancelledLoad = false;
-let colorEnhancementEnabled = true;
+let colorEnhancementEnabled = false;
+let themeRevision = "";
 let i18nDict = { ...I18N_DEFAULTS };
 
 init();
@@ -122,9 +123,15 @@ function bindHostMessages() {
       postReadyToHost();
     } else if (data.type === "onward:pdf:theme") {
       applyThemeFromHost(data.vars || {});
+      const kind = data.kind === "light" ? "light" : "dark";
+      document.documentElement.style.colorScheme = kind;
+      const revision = typeof data.revision === "string" ? data.revision.slice(0, 128) : "";
+      themeRevision = revision;
+      window.parent.postMessage({ type: "onward:pdf:themeApplied", kind, revision, enhancement: colorEnhancementEnabled }, "*");
     } else if (data.type === "onward:pdf:i18n") {
       i18nDict = { ...I18N_DEFAULTS, ...(data.strings || {}) };
       applyI18nToDom();
+      window.parent.postMessage({ type: "onward:pdf:i18nApplied", revision: themeRevision }, "*");
     } else if (data.type === "onward:pdf:colorEnhancement") {
       colorEnhancementEnabled = Boolean(data.enabled);
       applyColorEnhancementState();
@@ -251,6 +258,12 @@ function bindUiEvents() {
   els.colorToggleBtn.addEventListener("click", () => {
     colorEnhancementEnabled = !colorEnhancementEnabled;
     applyColorEnhancementState();
+    window.parent.postMessage({
+      type: "onward:pdf:enhancementApplied",
+      kind: document.documentElement.style.colorScheme === "light" ? "light" : "dark",
+      revision: themeRevision,
+      enhancement: colorEnhancementEnabled
+    }, "*");
   });
 
   els.errorCloseBtn.addEventListener("click", () => clearError());
@@ -753,10 +766,7 @@ function applyColorEnhancementState() {
   document.documentElement.classList.toggle("color-enhancement-off", !isEnabled);
   els.colorToggleBtn.classList.toggle("is-off", !isEnabled);
   els.colorToggleBtn.setAttribute("aria-pressed", !isEnabled ? "true" : "false");
-  // Reflect the current mode in the label so the button reads as an action the
-  // user can take from here (not the state they're currently in). When dark
-  // rendering is ON, the action is "temporarily disable dark"; when OFF, the
-  // action is "restore dark rendering". Matches the reference viewer's copy.
+  // The label describes the action. Page recoloring is independent of chrome.
   const labelKey = isEnabled ? "colorToggleOn" : "colorToggleOff";
   const titleKey = isEnabled ? "colorToggleTitleOn" : "colorToggleTitleOff";
   els.colorToggleBtn.textContent = i18nDict[labelKey] ?? I18N_DEFAULTS[labelKey];

@@ -1,0 +1,8 @@
+SPDX-FileCopyrightText: 2026 OPPO
+SPDX-License-Identifier: Apache-2.0
+\x1b[0mTHEMES_ACCEPTANCE_VISIBLE_OUTPUT
+Workbench theme acceptance: user-visible terminal output survives switching.
+\x1b[30m BLACK \x1b[31m RED \x1b[32m GREEN \x1b[33m YELLOW \x1b[34m BLUE \x1b[35m MAGENTA \x1b[36m CYAN \x1b[37m WHITE \x1b[0m
+\x1b[90m BRIGHT BLACK \x1b[91m RED \x1b[92m GREEN \x1b[93m YELLOW \x1b[94m BLUE \x1b[95m MAGENTA \x1b[96m CYAN \x1b[97m WHITE \x1b[0m
+\x1b[38;2;18;52;86;48;2;241;226;211mTRUECOLOR_SAMPLE\x1b[0m
+THEMES_ACCEPTANCE_BUFFER_END

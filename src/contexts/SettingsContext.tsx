@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react'
 import type {
   SettingsState,
   ShortcutConfig,
@@ -11,9 +11,15 @@ import type {
   GlobalTerminalStyle,
   ShortcutAction
 } from '../types/settings.d.ts'
-import type { ThemeSettings } from '../types/theme'
+import type { ThemeSettings, ResolvedTheme } from '../types/theme'
 import { DEFAULT_THEME_SETTINGS } from '../constants/themes'
-import { applyTheme, resolveThemeColors } from '../utils/theme-applier'
+import { applyResolvedTheme } from '../utils/theme-applier'
+import { resolveTheme, normalizeThemeSettings } from '../themes/theme-engine'
+import { patchTaskFonts, resolveTaskFonts } from '../themes/task-fonts'
+import { perfTraceDiagnostic } from '../utils/perf-trace'
+import { PERF_TRACE_EVENT } from '../utils/perf-trace-names'
+import { terminalSessionManager } from '../terminal/terminal-session-manager'
+import { getAppliedEditorTheme } from '../themes/editor-theme'
 import { DEFAULT_LOCALE, type AppLocale } from '../i18n/core'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 
@@ -27,26 +33,9 @@ const DEFAULT_SETTINGS_PANEL_WIDTH = 400
 
 function createDefaultGlobalTerminalStyle(): GlobalTerminalStyle {
   return {
-    foregroundColor: null,
-    backgroundColor: null,
     fontFamily: null,
     fontSize: null,
     gitDiffFontSize: null
-  }
-}
-
-function applyTerminalStylePatch(
-  terminalId: string,
-  previous: TerminalStyleConfig | null | undefined,
-  patch: Partial<TerminalStyleConfig>
-): TerminalStyleConfig {
-  return {
-    terminalId,
-    foregroundColor: 'foregroundColor' in patch ? (patch.foregroundColor ?? null) : (previous?.foregroundColor ?? null),
-    backgroundColor: 'backgroundColor' in patch ? (patch.backgroundColor ?? null) : (previous?.backgroundColor ?? null),
-    fontFamily: 'fontFamily' in patch ? (patch.fontFamily ?? null) : (previous?.fontFamily ?? null),
-    fontSize: 'fontSize' in patch ? (patch.fontSize ?? null) : (previous?.fontSize ?? null),
-    gitDiffFontSize: 'gitDiffFontSize' in patch ? (patch.gitDiffFontSize ?? null) : (previous?.gitDiffFontSize ?? null)
   }
 }
 
@@ -86,7 +75,7 @@ function createDefaultShortcuts(): ShortcutConfig {
  */
 function createDefaultSettings(): SettingsState {
   return {
-    version: 6,
+    version: 9,
     shortcuts: createDefaultShortcuts(),
     terminalStyles: {},
     globalTerminalStyle: createDefaultGlobalTerminalStyle(),
@@ -129,7 +118,10 @@ interface SettingsContextValue {
   getGitDiffFontSize: () => number | null
 
   // theme
-  updateTheme: (theme: ThemeSettings) => void
+  updateTheme: (theme: ThemeSettings) => Promise<boolean>
+  previewTheme: (theme: ThemeSettings | null) => void
+  resolvedTheme: ResolvedTheme
+  systemDark: boolean
   updateLanguage: (language: AppLocale) => void
 
   // Auto-follow Git branch for Task name (default true)
@@ -147,24 +139,64 @@ interface SettingsProviderProps {
 }
 
 export function SettingsProvider({ children, onShortcutAction }: SettingsProviderProps) {
-  const [settings, setSettings] = useState<SettingsState | null>(null)
-  const [isLoaded, setIsLoaded] = useState(false)
+  const [settings, setSettings] = useState<SettingsState | null>(() =>
+    (window as unknown as { onwardThemeBootstrap?: { settings: SettingsState } }).onwardThemeBootstrap?.settings ?? null)
+  const [isLoaded, setIsLoaded] = useState(Boolean(settings))
+  const settingsRef = useRef<SettingsState | null>(settings)
+  const savedThemeRef = useRef<ThemeSettings | null>(settings?.theme ?? null)
+  const settingsSaveRevision = useRef(0)
+  const acknowledgedSaveRevision = useRef(0)
+  const pendingSettingsSaves = useRef(new Map<number, Promise<boolean>>())
+  const pendingFontEdits = useRef(0)
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const [draftTheme, setDraftTheme] = useState<ThemeSettings | null>(null)
+  const previewActiveRef = useRef(false)
+  const themeCommitRevision = useRef(0)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const shortcutCallbackRef = useRef<((action: ShortcutAction) => void) | null>(null)
+
+  const resolvedTheme = useMemo(() => resolveTheme(draftTheme ?? settings?.theme ?? DEFAULT_THEME_SETTINGS, systemDark),
+    [draftTheme, settings?.theme, systemDark])
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const changed = () => {
+      setSystemDark(media.matches)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SYSTEM, {
+        dark: media.matches, mode: settingsRef.current?.theme.mode ?? 'system'
+      })
+    }
+    media.addEventListener('change', changed)
+    // Catch an appearance change between the render-time snapshot and subscription.
+    changed()
+    return () => media.removeEventListener('change', changed)
+  }, [])
 
   // Load settings
   useEffect(() => {
     const load = async () => {
+      if (settingsRef.current) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'bootstrap-loaded', mode: settingsRef.current.theme.mode })
+        return
+      }
       try {
         if (window.electronAPI?.settings) {
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'load-send' })
           const loadedSettings = await window.electronAPI.settings.load()
-          setSettings(loadedSettings)
+          const normalized = { ...loadedSettings, theme: normalizeThemeSettings(loadedSettings.theme) }
+          settingsRef.current = normalized
+          setSettings(normalized)
         } else {
-          setSettings(createDefaultSettings())
+          settingsRef.current = createDefaultSettings()
+          setSettings(settingsRef.current)
         }
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'loaded', mode: settingsRef.current?.theme.mode })
+        savedThemeRef.current = settingsRef.current?.theme ?? null
       } catch (error) {
         console.error('Failed to load settings:', error)
-        setSettings(createDefaultSettings())
+        settingsRef.current = createDefaultSettings()
+        setSettings(settingsRef.current)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'load-fallback' })
       } finally {
         setIsLoaded(true)
       }
@@ -188,33 +220,60 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     }
   }, [onShortcutAction])
 
+  // Both save paths share acknowledgement ordering and retain the snapshot actually sent.
+  const persistSettingsSnapshot = useCallback((snapshot: SettingsState): Promise<boolean> => {
+    const revision = ++settingsSaveRevision.current
+    if (pendingFontEdits.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'patch-batch', count: pendingFontEdits.current })
+      pendingFontEdits.current = 0
+    }
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'settings-send', revision })
+    const pending = (async () => {
+      const ok = window.electronAPI?.settings ? await window.electronAPI.settings.save(snapshot) : true
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'settings-received', revision, ok, acknowledged: ok && revision > acknowledgedSaveRevision.current })
+      if (ok && revision > acknowledgedSaveRevision.current) {
+        acknowledgedSaveRevision.current = revision
+        savedThemeRef.current = snapshot.theme
+      }
+      return ok
+    })()
+    pendingSettingsSaves.current.set(revision, pending)
+    const settled = () => { pendingSettingsSaves.current.delete(revision) }
+    void pending.then(settled, settled)
+    return pending
+  }, [])
+
   // Debounced settings save
   const saveSettings = useCallback((newSettings: SettingsState) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
     }
     saveTimeoutRef.current = setTimeout(async () => {
+      saveTimeoutRef.current = null
       try {
         if (window.electronAPI?.settings) {
-          await window.electronAPI.settings.save(newSettings)
+          const current = settingsRef.current ?? newSettings
+          const ok = await persistSettingsSnapshot(current)
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'settings-save', ok })
         }
       } catch (error) {
         console.error('Failed to save settings:', error)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'settings-save-error' })
       }
     }, SAVE_DEBOUNCE_MS)
-  }, [])
+  }, [persistSettingsSnapshot])
 
   // Update settings and save
   const updateSettings = useCallback((updater: (prev: SettingsState) => SettingsState) => {
-    setSettings(prev => {
-      if (!prev) return prev
-      const newSettings = {
-        ...updater(prev),
-        updatedAt: Date.now()
-      }
-      saveSettings(newSettings)
-      return newSettings
-    })
+    const prev = settingsRef.current
+    if (!prev) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'update-unavailable' })
+      return
+    }
+    const next = { ...updater(prev), updatedAt: Date.now() }
+    settingsRef.current = next
+    setSettings(next)
+    saveSettings(next)
   }, [saveSettings])
 
   // Update a single shortcut
@@ -234,20 +293,72 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     return settings?.shortcuts[key] ?? null
   }, [settings])
 
-  // Applied to DOM when theme changes
-  useEffect(() => {
-    if (!settings?.theme) return
-    applyTheme(resolveThemeColors(settings.theme))
-  }, [settings?.theme])
+  useLayoutEffect(() => {
+    applyResolvedTheme(resolvedTheme)
+  }, [resolvedTheme])
 
-  // Update theme settings
-  const updateTheme = useCallback((theme: ThemeSettings) => {
+  const previewTheme = useCallback((theme: ThemeSettings | null) => {
+    if (previewActiveRef.current !== Boolean(theme)) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: theme ? 'preview-start' : 'preview-end' })
+    }
+    previewActiveRef.current = Boolean(theme)
+    setDraftTheme(theme)
+  }, [])
+
+  // Commit selection separately from drafts; a failed write rolls back only the theme.
+  const updateTheme = useCallback(async (theme: ThemeSettings): Promise<boolean> => {
+    const previous = settingsRef.current
+    if (!previous) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-unavailable' })
+      return false
+    }
+    const request = ++themeCommitRevision.current
     trackFeatureUse('setting-change')
-    updateSettings(prev => ({
-      ...prev,
-      theme
-    }))
-  }, [updateSettings])
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    const precedingSaves = [...pendingSettingsSaves.current.values()]
+    const next = { ...previous, theme: normalizeThemeSettings(theme), updatedAt: Date.now() }
+    settingsRef.current = next
+    setSettings(next)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-request', mode: theme.mode, request })
+    try {
+      const ok = await persistSettingsSnapshot(next)
+      if (!ok) throw new Error('Theme settings were not saved')
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-saved', request })
+      return true
+    } catch {
+      // An earlier Task save may be persisted already while its acknowledgement is still in flight.
+      await Promise.allSettled(precedingSaves)
+      if (request === themeCommitRevision.current && settingsRef.current) {
+        const restored = { ...settingsRef.current, theme: savedThemeRef.current ?? previous.theme }
+        settingsRef.current = restored
+        setSettings(restored)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'rollback-applied', request })
+      } else {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'rollback-skipped', request })
+      }
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-rejected', request })
+      return false
+    }
+  }, [persistSettingsSnapshot])
+
+  useEffect(() => {
+    if (!window.electronAPI?.debug?.autotest) return
+    const host = window as unknown as { __onwardThemeDebug?: unknown }
+    host.__onwardThemeDebug = {
+      getState: () => ({ settings: settingsRef.current, systemDark, resolvedTheme, draft: Boolean(draftTheme) }),
+      getTerminalThemes: () => terminalSessionManager.getThemeSnapshotsForAutotest().map(entry => ({ ...entry, id: entry.terminalId,
+        status: terminalSessionManager.getSessionDebugState(entry.terminalId)?.status })),
+      getMonacoTheme: () => getAppliedEditorTheme()
+    }
+    return () => { delete host.__onwardThemeDebug }
+  }, [systemDark, resolvedTheme, draftTheme])
+
+  useEffect(() => () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+  }, [])
 
   // Update Git Diff font size
   const updateGitDiffFontSize = useCallback((value: number | null) => {
@@ -269,24 +380,17 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       ...prev,
       terminalStyles: {
         ...prev.terminalStyles,
-        [terminalId]: applyTerminalStylePatch(terminalId, prev.terminalStyles[terminalId], style)
+        [terminalId]: patchTaskFonts(terminalId, prev.terminalStyles[terminalId] ?? prev.globalTerminalStyle, style)
       }
     }))
+    // Aggregate numeric-input edits at the existing persistence boundary, never per keystroke.
+    pendingFontEdits.current = Math.min(65535, pendingFontEdits.current + 1)
   }, [updateSettings])
 
   // Get terminal style
   const getTerminalStyle = useCallback((terminalId: string): TerminalStyleConfig | null => {
-    const perTerminal = settings?.terminalStyles[terminalId]
-    if (perTerminal) return perTerminal
-    const globalStyle = settings?.globalTerminalStyle ?? createDefaultGlobalTerminalStyle()
-    return {
-      terminalId,
-      foregroundColor: globalStyle.foregroundColor,
-      backgroundColor: globalStyle.backgroundColor,
-      fontFamily: globalStyle.fontFamily,
-      fontSize: globalStyle.fontSize,
-      gitDiffFontSize: globalStyle.gitDiffFontSize
-    }
+    if (!settings) return null
+    return resolveTaskFonts(settings, terminalId)
   }, [settings])
 
   // Remove terminal style
@@ -299,6 +403,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
         terminalStyles: newStyles
       }
     })
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'remove-style' })
   }, [updateSettings])
 
   const applyStyleGlobally = useCallback((field: keyof GlobalTerminalStyle, value: string | number | null) => {
@@ -311,7 +416,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       const terminalStyles = Object.fromEntries(
         Object.entries(prev.terminalStyles).map(([terminalId, style]) => [
           terminalId,
-          applyTerminalStylePatch(terminalId, style, { [field]: value } as Partial<TerminalStyleConfig>)
+          patchTaskFonts(terminalId, style, { [field]: value } as Partial<TerminalStyleConfig>)
         ])
       )
       return {
@@ -320,6 +425,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
         terminalStyles
       }
     })
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'apply-all', field })
   }, [updateSettings])
 
   // Register a shortcut event callback
@@ -391,6 +497,9 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateGitDiffFontSize,
     getGitDiffFontSize,
     updateTheme,
+    previewTheme,
+    resolvedTheme,
+    systemDark,
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
@@ -410,6 +519,9 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateGitDiffFontSize,
     getGitDiffFontSize,
     updateTheme,
+    previewTheme,
+    resolvedTheme,
+    systemDark,
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,

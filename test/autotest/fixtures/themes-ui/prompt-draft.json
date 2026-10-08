@@ -1,0 +1,6 @@
+{
+  "_spdx": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "title": "Theme pressure unsent draft",
+  "content": "Keep this Prompt draft while six Tasks stream output and System appearance changes.",
+  "typedSuffixes": [" [one]", " [two]", " [three]", " [four]", " [five]"]
+}

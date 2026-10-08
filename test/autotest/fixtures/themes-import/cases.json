@@ -1,0 +1,11 @@
+{
+  "invalidDocuments": ["", "null", "[]", "42", "{ broken", "{\"colors\":[]}", "{\"include\":null}", "{\"include\":17}", "{\"tokenColors\":{}}", "{\"tokenColors\":[null]}"],
+  "invalidColors": [null, 1, "", "red", "#12", "#12345", "#1234567", "#123456789", "#gggggg", "rgb(1,2,3)", "var(--accent)", "#fff; background:url(x)"],
+  "validColors": { "#123": "#112233", "#AbCf": "#aabbccff", "#AB12ef": "#ab12ef", "#123456Ab": "#123456ab" },
+  "escapingReferences": ["../outside.json", "a/../../outside.json", "/outside.json", "C:\\outside.json", "C:outside.json", "\\\\host\\share\\outside.json", "file:///outside.json", "https://example.test/theme.json", "./bad\u0000.json"],
+  "missingInclude": "{\"include\":\"./missing.json\"}",
+  "selfCycle": "{\"include\":\"./theme.json\"}",
+  "inferredLight": "{\"colors\":{\"editor.background\":\"#fff\"}}",
+  "inferredDark": "{\"colors\":{\"editor.background\":\"#000\"}}",
+  "emptyTheme": "{\"colors\":{}}"
+}

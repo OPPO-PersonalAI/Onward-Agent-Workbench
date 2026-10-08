@@ -1,0 +1,6 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "Invalid Color Fixture",
+  "type": "dark",
+  "colors": { "terminal.background": "not-a-color" }
+}

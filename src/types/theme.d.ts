@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Theme system type definitions
+import type { ITheme } from '@xterm/xterm'
 
 /**
  * Theme CSS variable mapping
  * Corresponds to 12 themable variables in :root
  */
 export interface ThemeColors {
+  [name: string]: string
   '--bg-0': string
   '--bg-1': string
   '--bg-2': string
@@ -35,11 +36,56 @@ export interface ThemePreset {
   colors: ThemeColors
 }
 
-/** User persistent theme settings */
-export interface ThemeSettings {
+/** Original settings retained by the Classic theme. */
+export interface LegacyThemeSettings {
   mode: 'preset' | 'custom'
   presetId: PresetThemeId
   custom: {
     accent: string
   } | null
+}
+
+export interface ThemeTokenRule {
+  scope?: string | string[]
+  settings: {
+    foreground?: string
+    background?: string
+    fontStyle?: string
+  }
+}
+
+export interface ThemeDefinition {
+  id: string
+  name: string
+  kind: 'light' | 'dark'
+  colors: Record<string, string>
+  tokenColors?: ThemeTokenRule[]
+  source?: string
+  unsupported?: string[]
+}
+
+export interface ThemeSettings {
+  version: 3
+  mode: 'system' | 'manual'
+  themeId: string
+  lightThemeId: string
+  darkThemeId: string
+  classic: LegacyThemeSettings
+  overrides: Record<string, Record<string, string>>
+  imported: ThemeDefinition[]
+}
+
+export interface ResolvedTheme {
+  id: string
+  name: string
+  kind: 'light' | 'dark'
+  colors: ThemeColors
+  terminal: ITheme
+  editor: {
+    base: 'vs' | 'vs-dark'
+    inherit: boolean
+    rules: Array<{ token: string; foreground?: string; fontStyle?: string }>
+    colors: Record<string, string>
+  }
+  isClassic: boolean
 }

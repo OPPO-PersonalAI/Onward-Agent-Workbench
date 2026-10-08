@@ -1,0 +1,13 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "onward-import-fixture",
+  "publisher": "onward-tests",
+  "version": "1.0.0",
+  "main": "./main.js",
+  "contributes": {
+    "themes": [
+      { "id": "dark", "label": "Same label", "uiTheme": "vs-dark", "path": "./themes/dark.jsonc" },
+      { "id": "light", "label": "Same label", "uiTheme": "vs", "path": ".\\themes\\light.jsonc" }
+    ]
+  }
+}

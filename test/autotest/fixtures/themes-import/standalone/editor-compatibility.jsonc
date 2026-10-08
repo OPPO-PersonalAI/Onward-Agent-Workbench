@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{
+  "name": "Editor compatibility",
+  "type": "light",
+  "colors": {
+    "editor.background": "#ffffff",
+    "foreground": "#223344",
+    "focusBorder": "#aa0000",
+    "diffEditorGutter.insertedLineBackground": "#12345678",
+    "diffEditorGutter.removedLineBackground": "#ab123456",
+    "diffEditorOverview.insertedForeground": "#125634",
+    "diffEditorOverview.removedForeground": "#ab1234",
+    "diffEditor.unchangedCodeBackground": "#eeeeee",
+    "diffEditor.move.border": "#234567",
+    "editorIndentGuide.activeBackground": "#333333",
+    "editorIndentGuide.background6": "#444444",
+    "editorCursor.background": "#555555",
+    "editor.findMatchBackground": "#aabbcc80",
+    "editor.wordHighlightTextBorder": "#665544",
+    "editorOverviewRuler.wordHighlightStrongForeground": "#334455",
+    "editorSuggestWidget.selectedForeground": "#223355",
+    "editorWidget.resizeBorder": "#446677",
+    "list.focusForeground": "#225566",
+    "peekView.border": "#112255",
+    "activityBar.background": "#654321",
+    "diffEditor.fixtureUnknownColor": "#456789"
+  },
+  "tokenColors": [
+    { "settings": { "foreground": "#ff0000", "fontStyle": "italic bold" } },
+    { "scope": "comment", "settings": { "foreground": "#008000", "fontStyle": "" } }
+  ]
+}

@@ -6,6 +6,11 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { redispatchPdfHostKey } from '../../utils/pdfHostKey'
+import { buildPdfThemeVars, buildPdfViewerStrings } from '../../utils/preview-theme'
+import { useI18n } from '../../i18n/useI18n'
+import { PREVIEW_THEME_APPLIED_EVENT, readPreviewPalette } from '../../utils/preview-theme-dom'
+import { perfTraceDiagnostic } from '../../utils/perf-trace'
+import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { computePaneVisibility, type GitPdfStatus } from './computePaneVisibility'
 import './GitPdfCompare.css'
 
@@ -72,6 +77,8 @@ export function GitPdfCompare({
   viewerUrl,
   labels
 }: GitPdfCompareProps) {
+  const { t } = useI18n()
+  const i18nStrings = useMemo(() => buildPdfViewerStrings(t), [t])
   const originalBlobRef = useRef<string | null>(null)
   const modifiedBlobRef = useRef<string | null>(null)
 
@@ -111,47 +118,124 @@ export function GitPdfCompare({
 
   const originalFrameRef = useRef<HTMLIFrameElement | null>(null)
   const modifiedFrameRef = useRef<HTMLIFrameElement | null>(null)
+  const themeGenerationRef = useRef(0)
+  const previousThemeSourcesRef = useRef<Array<{ source: Window; origin: string; file: boolean }>>([])
 
   // Forward theme CSS vars to both viewer iframes once they're ready, and
   // re-dispatch host-level shortcuts (Cmd/Ctrl+P, Escape) that the iframe
   // forwarded via postMessage so the host's existing keyboard handlers see
   // them as if the user pressed the key outside the iframe.
   useEffect(() => {
-    const vars = (() => {
-      const style = window.getComputedStyle(document.documentElement)
-      const read = (name: string) => style.getPropertyValue(name).trim()
-      const out: Record<string, string> = {}
-      const map: Record<string, string> = {
-        '--background': '--onward-pdf-bg',
-        '--panel': '--onward-pdf-panel',
-        '--panel-elevated': '--onward-pdf-panel-elevated',
-        '--line': '--onward-pdf-line',
-        '--text': '--onward-pdf-text',
-        '--muted': '--onward-pdf-muted',
-        '--accent': '--onward-pdf-accent'
+    const generation = ++themeGenerationRef.current
+    let disposed = false
+    const frames = [originalFrameRef.current, modifiedFrameRef.current].filter((frame): frame is HTMLIFrameElement => Boolean(frame))
+    // Retain at most two previous sources for diagnostics, never for acceptance.
+    // Opaque file origins alone cannot identify an owned viewer.
+    const sources = frames.flatMap(frame => {
+      const source = frame.contentWindow
+      if (!source) return []
+      try {
+        const url = new URL(frame.src, document.baseURI)
+        return [{ source, origin: url.origin, file: url.protocol === 'file:' }]
+      } catch {
+        // Diagnostic source discovery must never interrupt viewer delivery.
+        return []
       }
-      for (const [src, dst] of Object.entries(map)) {
-        const v = read(src)
-        if (v) out[dst] = v
+    })
+    const knownSources = [...sources, ...previousThemeSourcesRef.current]
+    previousThemeSourcesRef.current = sources
+    const rejected = new Set<string>()
+    const rejectOnce = (rejection: 'stale-generation' | 'stale-source', phase: 'theme' | 'ready' | 'receive') => {
+      const key = `${phase}:${rejection}`
+      if (rejected.has(key)) return
+      rejected.add(key)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+        surface: 'pdf-compare', reason: 'bridge-rejected', rejection, phase, generation,
+        revision: document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+      })
+    }
+    const traceRejectedMessage = (event: MessageEvent, rejection: 'stale-generation' | 'stale-source') => {
+      const data = event.data
+      if (!data || typeof data !== 'object') return
+      const themeMessage = data.type === 'onward:pdf:ready' ||
+        (data.type === 'onward:pdf:i18nApplied' && typeof data.revision === 'string') || (
+        (data.type === 'onward:pdf:themeApplied' || data.type === 'onward:pdf:enhancementApplied') &&
+        (data.kind === 'light' || data.kind === 'dark') && typeof data.revision === 'string' && typeof data.enhancement === 'boolean'
+      )
+      if (!themeMessage || !knownSources.some(known => known.source === event.source && (
+        event.origin === known.origin || (known.file && event.origin === 'file://')
+      ))) return
+      rejectOnce(rejection, 'receive')
+    }
+    const current = () => !disposed && generation === themeGenerationRef.current
+    const publish = (targets: HTMLIFrameElement[], reason: string) => {
+      if (!current()) { rejectOnce('stale-generation', 'theme'); return }
+      // Read at delivery time, including a late ready response after a theme edit.
+      const palette = readPreviewPalette()
+      const vars = buildPdfThemeVars(palette)
+      const revision = document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+      let sent = 0
+      let detached = 0
+      let noTarget = 0
+      for (const frame of targets) {
+        if (!frame.isConnected) { detached++; continue }
+        if (!frame.contentWindow) { noTarget++; continue }
+        frame.contentWindow.postMessage({ type: 'onward:pdf:theme', vars, kind: palette.kind, revision }, '*')
+        if (reason === 'viewer-ready') frame.contentWindow.postMessage({ type: 'onward:pdf:i18n', strings: i18nStrings }, '*')
+        sent++
       }
-      if (out['--onward-pdf-panel']) out['--onward-pdf-page-tint'] = out['--onward-pdf-panel']
-      return out
-    })()
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+        surface: 'pdf-compare', phase: 'sent', reason, generation, revision, kind: palette.kind, frames: sent,
+        detached, noTarget, i18n: reason === 'viewer-ready', rejection: targets.length === 0 ? 'no-target' : detached || noTarget ? 'unavailable-targets' : undefined
+      })
+    }
+    const requestReady = () => {
+      if (!current()) { rejectOnce('stale-generation', 'ready'); return }
+      for (const frame of frames) frame.contentWindow?.postMessage({ type: 'onward:pdf:requestReady' }, '*')
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+        surface: 'pdf-compare', reason: 'ready-request', generation, frames: frames.length,
+        noTarget: frames.filter(frame => !frame.contentWindow).length,
+        rejection: frames.length === 0 ? 'no-target' : undefined
+      })
+    }
+    const apply = () => publish(frames, 'theme-event')
     const handler = (event: MessageEvent) => {
+      if (!current()) { traceRejectedMessage(event, 'stale-generation'); return }
       if (!event.data || typeof event.data !== 'object') return
-      const fromOriginal = event.source === originalFrameRef.current?.contentWindow
-      const fromModified = event.source === modifiedFrameRef.current?.contentWindow
-      if (!fromOriginal && !fromModified) return
+      const frame = frames.find(candidate => event.source === candidate.contentWindow)
+      if (!frame) { traceRejectedMessage(event, 'stale-source'); return }
       if (event.data.type === 'onward:pdf:ready') {
-        const target = fromOriginal ? originalFrameRef.current : modifiedFrameRef.current
-        target?.contentWindow?.postMessage({ type: 'onward:pdf:theme', vars }, '*')
+        publish([frame], 'viewer-ready')
+      } else if (event.data.type === 'onward:pdf:themeApplied' || event.data.type === 'onward:pdf:enhancementApplied') {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'pdf-compare', phase: 'received', generation,
+          reason: event.data.type === 'onward:pdf:themeApplied' ? 'viewer-applied' : 'enhancement-toggled',
+          revision: typeof event.data.revision === 'string' ? event.data.revision.slice(0, 128) : '',
+          enhancement: event.data.enhancement === true,
+          kind: event.data.kind === 'light' ? 'light' : 'dark'
+        })
+      } else if (event.data.type === 'onward:pdf:i18nApplied') {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'pdf-compare', phase: 'received', reason: 'i18n-applied', generation,
+          revision: typeof event.data.revision === 'string' ? event.data.revision.slice(0, 128) : ''
+        })
       } else if (event.data.type === 'onward:pdf:hostKey') {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'pdf-compare', reason: 'host-key-forwarded', generation })
         redispatchPdfHostKey(event.data as Record<string, unknown>)
       }
     }
     window.addEventListener('message', handler)
-    return () => window.removeEventListener('message', handler)
-  }, [originalSrc, modifiedSrc])
+    window.addEventListener(PREVIEW_THEME_APPLIED_EVENT, apply)
+    for (const frame of frames) frame.addEventListener('load', requestReady)
+    requestReady()
+    return () => {
+      disposed = true
+      window.removeEventListener('message', handler)
+      window.removeEventListener(PREVIEW_THEME_APPLIED_EVENT, apply)
+      for (const frame of frames) frame.removeEventListener('load', requestReady)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'pdf-compare', reason: 'disposed', generation })
+    }
+  }, [originalSrc, modifiedSrc, status, i18nStrings])
 
   const statusLabel =
     status === 'added' ? labels.statusAdded

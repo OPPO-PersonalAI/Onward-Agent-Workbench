@@ -26,6 +26,7 @@ import { useAppState } from '../../contexts/AppStateContext'
 import { DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_FAMILY } from '../../constants/terminal'
 import {
   terminalSessionManager,
+  resolveTerminalMinimumContrastRatio,
   ensureGpuCrashRecoverySubscription,
   ensureVisibilityRecoverySubscription,
   TerminalSessionOptions,
@@ -173,7 +174,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   layoutMode,
   terminals,
   activeTerminalId,
-  theme = 'vscode-dark',
+  theme: themeOverride,
   fontSize = DEFAULT_TERMINAL_FONT_SIZE,
   fontFamily = DEFAULT_TERMINAL_FONT_FAMILY,
   onTerminalFocus,
@@ -201,6 +202,9 @@ export const TerminalGrid = memo(function TerminalGrid({
   perfMonitor.recordReactRender()
 
   const { t } = useI18n()
+  const { getTerminalStyle, getAutoFollowGitBranchForTaskName, setAutoFollowGitBranchForTaskName, resolvedTheme } = useSettings()
+  const theme = themeOverride ?? resolvedTheme.terminal
+  const minimumContrastRatio = resolveTerminalMinimumContrastRatio(resolvedTheme)
   const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const hiddenRef = useRef(hidden)
@@ -212,12 +216,13 @@ export const TerminalGrid = memo(function TerminalGrid({
   const transitionRef = useRef(0)
   const getTerminalOptionsRef = useRef<(terminalId: string) => TerminalSessionOptions>(() => ({
     theme,
+    themeId: resolvedTheme.id,
+    minimumContrastRatio,
     fontSize,
     fontFamily,
     terminalStyle: null
   }))
 
-  const { getTerminalStyle, getAutoFollowGitBranchForTaskName, setAutoFollowGitBranchForTaskName } = useSettings()
   const { notifyTerminalGitInfo, getTerminalNameState, reorderTerminals, state: appStateForLayout } = useAppState()
   const currentAutoFollowEnabled = getAutoFollowGitBranchForTaskName()
   // Stable refs so auto-follow logic running inside callbacks always reads the
@@ -1108,11 +1113,13 @@ export const TerminalGrid = memo(function TerminalGrid({
   const getTerminalOptions = useCallback((terminalId: string): TerminalSessionOptions => {
     return {
       theme,
+      themeId: resolvedTheme.id,
+      minimumContrastRatio,
       fontSize,
       fontFamily,
       terminalStyle: getTerminalStyle(terminalId)
     }
-  }, [theme, fontSize, fontFamily, getTerminalStyle])
+  }, [theme, resolvedTheme.id, minimumContrastRatio, fontSize, fontFamily, getTerminalStyle])
 
   useEffect(() => {
     if (hidden) return
@@ -1705,14 +1712,9 @@ export const TerminalGrid = memo(function TerminalGrid({
     }
   }, [hidden])
 
-  useEffect(() => {
-    getTerminalOptionsRef.current = (terminalId: string) => ({
-      theme,
-      fontSize,
-      fontFamily,
-      terminalStyle: getTerminalStyle(terminalId)
-    })
-  }, [theme, fontSize, fontFamily, getTerminalStyle])
+  useLayoutEffect(() => {
+    getTerminalOptionsRef.current = getTerminalOptions
+  }, [getTerminalOptions])
 
   const fitTerminal = useCallback((id: string) => {
     terminalSessionManager.fit(id)
@@ -1978,8 +1980,8 @@ export const TerminalGrid = memo(function TerminalGrid({
     requestAnimationFrame(fitAll)
   }, [layoutFingerprint, fitAll])
 
-  // Theme changes and terminal style changes
-  useEffect(() => {
+  // Palette/contrast-only updates never fit, reattach, or resize the PTY, including hidden sessions.
+  useLayoutEffect(() => {
     terminals.forEach(term => {
       terminalSessionManager.updateOptions(term.id, getTerminalOptions(term.id))
     })

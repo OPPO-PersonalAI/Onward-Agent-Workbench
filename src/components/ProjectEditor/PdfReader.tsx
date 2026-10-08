@@ -7,6 +7,10 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { useI18n } from '../../i18n/useI18n'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { redispatchPdfHostKey } from '../../utils/pdfHostKey'
+import { buildPdfThemeVars, buildPdfViewerStrings } from '../../utils/preview-theme'
+import { PREVIEW_THEME_APPLIED_EVENT, readPreviewPalette } from '../../utils/preview-theme-dom'
+import { perfTraceDiagnostic } from '../../utils/perf-trace'
+import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import type { OutlineItem } from './Outline/types'
 import { OutlineSymbolKind } from './Outline/types'
 import {
@@ -52,35 +56,6 @@ export interface PdfReaderHandle {
   isStateReady(): boolean
 }
 
-// CSS custom properties on the host document we forward to the viewer so it can
-// pick up Onward's accent / surface colors. The viewer maps these into its own
-// `--onward-pdf-*` tokens.
-const FORWARDED_CSS_VARS = [
-  'background',
-  'panel',
-  'panel-elevated',
-  'line',
-  'text',
-  'muted',
-  'accent',
-  'shadow-1'
-] as const
-
-function collectThemeVars(): Record<string, string> {
-  const root = document.documentElement
-  const style = window.getComputedStyle(root)
-  const out: Record<string, string> = {}
-  for (const name of FORWARDED_CSS_VARS) {
-    const value = style.getPropertyValue(`--${name}`).trim()
-    if (!value) continue
-    out[`--onward-pdf-${name === 'background' ? 'bg' : name === 'shadow-1' ? 'shadow' : name}`] = value
-  }
-  if (out['--onward-pdf-panel']) {
-    out['--onward-pdf-page-tint'] = out['--onward-pdf-panel']
-  }
-  return out
-}
-
 // Convert the raw viewer-side tree into the shared OutlineItem shape. PDF
 // entries use `target: { kind: 'pdf-page', page }`; items without a resolvable
 // page still appear in the tree for visual context but are non-clickable at
@@ -120,6 +95,21 @@ export const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function Pd
   const stateReadyRef = useRef(false)
   const lastPageRef = useRef<number>(0)
   const { t } = useI18n()
+
+  const sendTheme = useCallback((reason: string) => {
+    const target = iframeRef.current?.contentWindow
+    if (!target || !readyRef.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+        surface: 'pdf', reason: 'deferred-until-ready', rejection: target ? 'not-ready' : 'no-target',
+        revision: document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+      })
+      return
+    }
+    const palette = readPreviewPalette()
+    const revision = document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+    target.postMessage({ type: 'onward:pdf:theme', vars: buildPdfThemeVars(palette), kind: palette.kind, revision }, '*')
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'pdf', reason, phase: 'sent', kind: palette.kind, revision })
+  }, [])
 
   // Product telemetry: count once per PDF reader open (mount), never per re-render.
   useEffect(() => { trackFeatureUse('pdf-reader') }, [])
@@ -187,37 +177,7 @@ export const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function Pd
     }
   }), [])
 
-  const i18nStrings = useMemo(
-    () => ({
-      prevPage: t('projectEditor.pdfReader.prevPage'),
-      nextPage: t('projectEditor.pdfReader.nextPage'),
-      zoomOut: t('projectEditor.pdfReader.zoomOut'),
-      zoomIn: t('projectEditor.pdfReader.zoomIn'),
-      zoom: t('projectEditor.pdfReader.zoom'),
-      fitWidth: t('projectEditor.pdfReader.fitWidth'),
-      fitPage: t('projectEditor.pdfReader.fitPage'),
-      searchPlaceholder: t('projectEditor.pdfReader.searchPlaceholder'),
-      prevMatch: t('projectEditor.pdfReader.prevMatch'),
-      nextMatch: t('projectEditor.pdfReader.nextMatch'),
-      colorToggleOn: t('projectEditor.pdfReader.colorToggleOn'),
-      colorToggleOff: t('projectEditor.pdfReader.colorToggleOff'),
-      colorToggleTitleOn: t('projectEditor.pdfReader.colorToggleTitleOn'),
-      colorToggleTitleOff: t('projectEditor.pdfReader.colorToggleTitleOff'),
-      close: t('projectEditor.pdfReader.close'),
-      cancel: t('projectEditor.pdfReader.cancel'),
-      confirm: t('projectEditor.pdfReader.confirm'),
-      passwordTitle: t('projectEditor.pdfReader.passwordTitle'),
-      passwordPrompt: t('projectEditor.pdfReader.passwordPrompt'),
-      passwordIncorrect: t('projectEditor.pdfReader.passwordIncorrect'),
-      emptyState: t('projectEditor.pdfReader.emptyState'),
-      errorInvalid: t('projectEditor.pdfReader.errorInvalid'),
-      errorMissing: t('projectEditor.pdfReader.errorMissing'),
-      errorPassword: t('projectEditor.pdfReader.errorPassword'),
-      errorUnexpected: t('projectEditor.pdfReader.errorUnexpected'),
-      errorGeneric: t('projectEditor.pdfReader.errorGeneric')
-    }),
-    [t]
-  )
+  const i18nStrings = useMemo(() => buildPdfViewerStrings(t), [t])
 
   useLayoutEffect(() => {
     const publishState = (data: { page: unknown; scrollTop: unknown; scale: unknown }) => {
@@ -256,31 +216,52 @@ export const PdfReader = forwardRef<PdfReaderHandle, PdfReaderProps>(function Pd
         publishState(data)
       } else if (data.type === 'onward:pdf:hostKey') {
         redispatchPdfHostKey(data)
+      } else if (data.type === 'onward:pdf:themeApplied' || data.type === 'onward:pdf:enhancementApplied') {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'pdf', phase: 'received',
+          reason: data.type === 'onward:pdf:themeApplied' ? 'viewer-applied' : 'enhancement-toggled',
+          kind: data.kind === 'light' ? 'light' : 'dark',
+          revision: typeof data.revision === 'string' ? data.revision.slice(0, 128) : '',
+          enhancement: data.enhancement === true
+        })
+      } else if (data.type === 'onward:pdf:i18nApplied') {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'pdf', phase: 'received', reason: 'i18n-applied',
+          revision: typeof data.revision === 'string' ? data.revision.slice(0, 128) : ''
+        })
       }
     }
     const postThemeAndI18n = () => {
       const target = iframeRef.current?.contentWindow
-      if (!target) return
-      target.postMessage({ type: 'onward:pdf:theme', vars: collectThemeVars() }, '*')
+      if (!target) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+          surface: 'pdf', reason: 'send-rejected', rejection: 'no-target', phase: 'theme-and-i18n',
+          revision: document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+        })
+        return
+      }
+      sendTheme('ready-or-language-change')
       target.postMessage({ type: 'onward:pdf:i18n', strings: i18nStrings }, '*')
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+        surface: 'pdf', phase: 'sent', reason: 'i18n-sent',
+        revision: document.documentElement.dataset.themeRevision?.slice(0, 128) ?? ''
+      })
     }
     window.addEventListener('message', handleMessage)
     if (readyRef.current) postThemeAndI18n()
     requestReady()
     return () => window.removeEventListener('message', handleMessage)
-  }, [i18nStrings, requestReady])
+  }, [i18nStrings, requestReady, sendTheme])
 
   useEffect(() => {
-    if (typeof MutationObserver === 'undefined') return
-    const observer = new MutationObserver(() => {
-      if (!readyRef.current) return
-      const target = iframeRef.current?.contentWindow
-      if (!target) return
-      target.postMessage({ type: 'onward:pdf:theme', vars: collectThemeVars() }, '*')
-    })
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] })
-    return () => observer.disconnect()
-  }, [])
+    const apply = () => sendTheme('theme-event')
+    window.addEventListener(PREVIEW_THEME_APPLIED_EVENT, apply)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'pdf', reason: 'listener-attached' })
+    return () => {
+      window.removeEventListener(PREVIEW_THEME_APPLIED_EVENT, apply)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, { surface: 'pdf', reason: 'listener-disposed' })
+    }
+  }, [sendTheme])
 
   return (
     <div className="project-editor-pdf-reader" data-file-path={filePath}>

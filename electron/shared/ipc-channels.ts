@@ -109,6 +109,15 @@ export const IPC = {
   DIALOG_OPEN_TEXT_FILE: 'dialog:openTextFile',
   DIALOG_SAVE_TEXT_FILE: 'dialog:saveTextFile',
 
+  // themes
+  THEMES_IMPORT: 'themes:import',
+  THEMES_EXPORT: 'themes:export',
+  THEMES_CANCEL_EXPORT: 'themes:cancel-export',
+  THEMES_AUTOTEST_EXPORT_FILE: 'themes:autotest-export-file',
+  THEMES_CANCEL_IMPORT: 'themes:cancel-import',
+  THEMES_BOOTSTRAP: 'themes:bootstrap',
+  THEMES_AUTOTEST_SELECT_FILE: 'themes:autotest-select-file',
+
   // feedback
   FEEDBACK_CREATE_SUBMISSION: 'feedback:create-submission',
   FEEDBACK_EXPORT_DIAGNOSTIC_BUNDLE: 'feedback:export-diagnostic-bundle',

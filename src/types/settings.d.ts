@@ -44,8 +44,6 @@ export interface ShortcutConfig {
 // Terminal style configuration
 export interface TerminalStyleConfig {
   terminalId: string
-  foregroundColor: string | null
-  backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
   /** Git Diff / project editor font size (px), if empty, use the default value */
@@ -53,8 +51,6 @@ export interface TerminalStyleConfig {
 }
 
 export interface GlobalTerminalStyle {
-  foregroundColor: string | null
-  backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
   gitDiffFontSize: number | null

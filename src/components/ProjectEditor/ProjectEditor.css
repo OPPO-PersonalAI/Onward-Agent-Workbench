@@ -367,7 +367,7 @@
   color: var(--text-2);
   font-weight: 600;
   border-bottom: 1px solid var(--border);
-  background-color: rgba(31, 36, 48, 0.6);
+  background-color: color-mix(in srgb, var(--panel) 60%, transparent);
 }
 
 .project-editor-tree-root-label {
@@ -854,7 +854,7 @@ body.project-editor-preview-resizing * {
 .project-editor-editor-body {
   flex: 1;
   min-height: 0;
-  background-color: #1e1e1e;
+  background-color: var(--editor-bg, #1e1e1e);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -936,7 +936,7 @@ body.project-editor-preview-resizing * {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #16191f;
+  background: var(--editor-bg, #16191f);
   color: var(--text-1);
 }
 
@@ -1026,7 +1026,7 @@ body.project-editor-preview-resizing * {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(22, 25, 31, 0.78);
+  background: color-mix(in srgb, var(--editor-bg, #16191f) 78%, transparent);
 }
 
 .project-editor-large-error {
@@ -1060,7 +1060,7 @@ body.project-editor-preview-resizing * {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: #14161c;
+  background-color: var(--bg-2);
 }
 
 .project-editor-image-preview img {
@@ -1639,7 +1639,7 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
 }
 
 .project-editor-html-error {
-  color: #f87171;
+  color: var(--danger);
 }
 
 .project-editor-preview-content {
@@ -1808,7 +1808,7 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   margin: 12px 0;
   padding: 12px 14px;
   border-radius: 6px;
-  background-color: #141821;
+  background-color: var(--preview-code-bg, #141821);
   border: 1px solid var(--border);
   overflow: auto;
 }
@@ -1836,58 +1836,59 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   word-break: break-word;
 }
 
-/* highlight.js syntax highlighting (github-dark style) */
+/* Semantic tokens follow the same palette as the code editor. */
 .project-editor-preview-body .hljs {
-  color: #c9d1d9;
+  color: var(--editor-fg, #c9d1d9);
 }
 .project-editor-preview-body .hljs-comment,
 .project-editor-preview-body .hljs-quote {
-  color: #8b949e;
+  color: var(--syntax-comment, #8b949e);
   font-style: italic;
 }
 .project-editor-preview-body .hljs-keyword,
 .project-editor-preview-body .hljs-selector-tag,
 .project-editor-preview-body .hljs-type {
-  color: #ff7b72;
+  color: var(--syntax-keyword, #ff7b72);
 }
 .project-editor-preview-body .hljs-string,
 .project-editor-preview-body .hljs-addition {
-  color: #a5d6ff;
+  color: var(--syntax-string, #a5d6ff);
 }
 .project-editor-preview-body .hljs-number,
 .project-editor-preview-body .hljs-literal {
-  color: #79c0ff;
+  color: var(--syntax-number, #79c0ff);
 }
 .project-editor-preview-body .hljs-built_in,
 .project-editor-preview-body .hljs-builtin-name {
-  color: #ffa657;
+  color: var(--syntax-type, #ffa657);
 }
 .project-editor-preview-body .hljs-function,
 .project-editor-preview-body .hljs-title,
 .project-editor-preview-body .hljs-title\.function_ {
-  color: #d2a8ff;
+  color: var(--syntax-function, #d2a8ff);
 }
 .project-editor-preview-body .hljs-variable,
 .project-editor-preview-body .hljs-attr,
 .project-editor-preview-body .hljs-attribute {
-  color: #79c0ff;
+  color: var(--syntax-variable, #79c0ff);
 }
 .project-editor-preview-body .hljs-symbol,
 .project-editor-preview-body .hljs-bullet {
-  color: #ffa657;
+  color: var(--syntax-operator, #ffa657);
 }
 .project-editor-preview-body .hljs-meta {
-  color: #8b949e;
+  color: var(--syntax-comment, #8b949e);
 }
 .project-editor-preview-body .hljs-deletion {
-  color: #ffa198;
-  background-color: rgba(248, 81, 73, 0.1);
+  color: var(--diff-delete-text, #ffa198);
+  background-color: var(--diff-delete-bg, rgba(248, 81, 73, 0.1));
 }
 .project-editor-preview-body .hljs-addition {
-  background-color: rgba(46, 160, 67, 0.1);
+  color: var(--diff-add-text, #7ee787);
+  background-color: var(--diff-add-bg, rgba(46, 160, 67, 0.1));
 }
 .project-editor-preview-body .hljs-section {
-  color: #79c0ff;
+  color: var(--syntax-function, #79c0ff);
   font-weight: bold;
 }
 .project-editor-preview-body .hljs-emphasis {
@@ -1897,29 +1898,60 @@ body.project-editor-preview-resizing .project-editor-preview-resizer::after {
   font-weight: bold;
 }
 .project-editor-preview-body .hljs-tag {
-  color: #7ee787;
+  color: var(--syntax-keyword, #7ee787);
 }
 .project-editor-preview-body .hljs-name {
-  color: #7ee787;
+  color: var(--syntax-type, #7ee787);
 }
 .project-editor-preview-body .hljs-selector-class,
 .project-editor-preview-body .hljs-selector-id {
-  color: #d2a8ff;
+  color: var(--syntax-type, #d2a8ff);
 }
 .project-editor-preview-body .hljs-regexp {
-  color: #a5d6ff;
+  color: var(--syntax-string, #a5d6ff);
 }
 .project-editor-preview-body .hljs-params {
-  color: #c9d1d9;
+  color: var(--syntax-variable, #c9d1d9);
 }
 .project-editor-preview-body .hljs-property {
-  color: #79c0ff;
+  color: var(--syntax-variable, #79c0ff);
 }
 .project-editor-preview-body .hljs-subst {
-  color: #c9d1d9;
+  color: var(--editor-fg, #c9d1d9);
 }
 .project-editor-preview-body .hljs-template-variable {
+  color: var(--syntax-variable, #ffa657);
+}
+
+/* Classic preserves the original github-dark Markdown categories independently of editor overrides. */
+:root[data-theme='onward-classic'] .project-editor-preview-body :is(.hljs, .hljs-params, .hljs-subst) {
+  color: #c9d1d9;
+}
+
+:root[data-theme='onward-classic'] .project-editor-preview-body :is(.hljs-built_in, .hljs-builtin-name, .hljs-symbol, .hljs-bullet, .hljs-template-variable) {
   color: #ffa657;
+}
+
+:root[data-theme='onward-classic'] .project-editor-preview-body :is(.hljs-tag, .hljs-name) {
+  color: #7ee787;
+}
+
+:root[data-theme='onward-classic'] .project-editor-preview-body :is(.hljs-selector-class, .hljs-selector-id) {
+  color: #d2a8ff;
+}
+
+:root[data-theme='onward-classic'] .project-editor-preview-body .hljs-section {
+  color: #79c0ff;
+}
+
+:root[data-theme='onward-classic'] .project-editor-preview-body .hljs-addition {
+  color: #a5d6ff;
+  background-color: rgba(46, 160, 67, 0.1);
+}
+
+:root[data-theme='onward-classic'] .project-editor-preview-body .hljs-deletion {
+  color: #ffa198;
+  background-color: rgba(248, 81, 73, 0.1);
 }
 
 /* Mermaid diagram rendering */
@@ -2600,6 +2632,7 @@ body.project-editor-modal-resizing * {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+  flex-wrap: wrap;
 }
 
 .project-editor-epub-btn {
@@ -2641,7 +2674,8 @@ body.project-editor-modal-resizing * {
   align-items: center;
   gap: 6px;
   margin-left: auto;
-  min-width: 220px;
+  min-width: min(220px, 100%);
+  flex: 1 1 220px;
 }
 
 .project-editor-epub-search input[type='search'] {
@@ -2665,6 +2699,8 @@ body.project-editor-modal-resizing * {
 /* The epub TOC now lives in the shared OutlinePanel. Search hits appear
    as a popover under the search input (see rules below). */
 .project-editor-epub-search { position: relative; }
+
+.project-editor-epub-search input::placeholder { color: var(--text-3); opacity: 1; }
 
 .project-editor-epub-search-popover {
   position: absolute;

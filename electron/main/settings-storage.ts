@@ -8,6 +8,11 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { isReservedShortcut } from './reserved-shortcuts'
 import { DEFAULT_LOCALE, isAppLocale, type AppLocale } from '../../src/i18n/core'
+import type { ThemeSettings } from '../../src/types/theme'
+import { DEFAULT_THEME_SETTINGS } from '../../src/constants/themes'
+import { normalizeThemeSettings } from '../../src/themes/theme-engine'
+import { performanceTrace } from './performance-trace'
+import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 
 /**
  * Shortcut configuration
@@ -48,8 +53,6 @@ interface ShortcutConfig {
  */
 interface TerminalStyleConfig {
   terminalId: string
-  foregroundColor: string | null
-  backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
   /** Git Diff / project editor font size (px), if empty, use the default value */
@@ -57,8 +60,6 @@ interface TerminalStyleConfig {
 }
 
 interface GlobalTerminalStyle {
-  foregroundColor: string | null
-  backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
   gitDiffFontSize: number | null
@@ -90,31 +91,12 @@ interface SettingsState {
   updatedAt: number
 }
 
-// Theme-related types and constants (inline to avoid cross-process import rendering process types)
-interface ThemeSettings {
-  mode: 'preset' | 'custom'
-  presetId: string
-  custom: { accent: string } | null
-}
-
-const VALID_PRESET_IDS = new Set(['graphite', 'starlight', 'pine', 'umber', 'amethyst', 'glacier'])
-
-const DEFAULT_THEME: ThemeSettings = {
-  mode: 'preset',
-  presetId: 'graphite',
-  custom: null
-}
-
-const MIGRATION_THEME: ThemeSettings = {
-  mode: 'preset',
-  presetId: 'starlight',
-  custom: null
-}
-
 // Current version number
 // v6: introduces autoFollowGitBranchForTaskName (default true).
 // v7: introduces performanceDiagnosticsEnabled (default false; legacy values reset on upgrade).
-const CURRENT_VERSION = 7
+// v8: unified named themes with per-theme customization and Task overrides.
+// v9: retire Task color overrides; preserve Task fonts and theme-level colors.
+const CURRENT_VERSION = 9
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
@@ -124,8 +106,6 @@ const MAX_GIT_DIFF_FONT_SIZE = 28
 
 function createDefaultGlobalTerminalStyle(): GlobalTerminalStyle {
   return {
-    foregroundColor: null,
-    backgroundColor: null,
     fontFamily: null,
     fontSize: null,
     gitDiffFontSize: null
@@ -175,7 +155,7 @@ function createDefaultSettingsState(): SettingsState {
     gitDiffFontSize: null,
     settingsPanelWidth: DEFAULT_SETTINGS_PANEL_WIDTH,
     language: DEFAULT_LOCALE,
-    theme: DEFAULT_THEME,
+    theme: normalizeThemeSettings(DEFAULT_THEME_SETTINGS),
     telemetryConsent: null,
     telemetryInstanceId: null,
     autoFollowGitBranchForTaskName: true,
@@ -206,12 +186,18 @@ class SettingsStorage {
       if (existsSync(this.storagePath)) {
         const data = readFileSync(this.storagePath, 'utf-8')
         const parsed = JSON.parse(data) as Partial<SettingsState>
-        return this.validateState(parsed)
+        const normalized = this.validateState(parsed)
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, {
+          reason: (parsed.version ?? 0) < CURRENT_VERSION ? 'migrated' : 'loaded', mode: normalized.theme.mode
+        })
+        return normalized
       }
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'new-profile' })
       return createDefaultSettingsState()
     } catch (error) {
       console.error('Failed to load settings:', error)
-      return createDefaultSettingsState()
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'load-fallback' })
+      return { ...createDefaultSettingsState(), theme: normalizeThemeSettings(undefined, { existing: true }) }
     }
   }
 
@@ -273,8 +259,12 @@ class SettingsStorage {
     }
 
     // Determine whether it is an existing user (migrated from v1) and determine the default theme
-    const isExistingUser = (state.version ?? 0) < 2 && !state.theme
-    const theme = this.validateTheme(state.theme, isExistingUser)
+    const theme = normalizeThemeSettings(state.theme, {
+      existing: true,
+      legacyPreV2: (state.version ?? 0) < 2 && !state.theme,
+      terminalStyles,
+      globalTerminalStyle: state.globalTerminalStyle
+    })
     const language = isAppLocale(state.language) ? state.language : DEFAULT_LOCALE
 
     // Telemetry fields (added in v5).
@@ -339,8 +329,6 @@ class SettingsStorage {
   private validateTerminalStyle(terminalId: string, style: Partial<TerminalStyleConfig>): TerminalStyleConfig {
     return {
       terminalId,
-      foregroundColor: this.validateColor(style.foregroundColor),
-      backgroundColor: this.validateColor(style.backgroundColor),
       fontFamily: typeof style.fontFamily === 'string' && style.fontFamily.trim()
         ? style.fontFamily.trim()
         : null,
@@ -361,8 +349,6 @@ class SettingsStorage {
     }
     const candidate = style as Partial<GlobalTerminalStyle>
     return {
-      foregroundColor: this.validateColor(candidate.foregroundColor),
-      backgroundColor: this.validateColor(candidate.backgroundColor),
       fontFamily: typeof candidate.fontFamily === 'string' && candidate.fontFamily.trim()
         ? candidate.fontFamily.trim()
         : null,
@@ -378,51 +364,9 @@ class SettingsStorage {
   }
 
   /**
-   * Verify color format
-   */
-  private validateColor(color: unknown): string | null {
-    if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
-      return color.toLowerCase()
-    }
-    return null
-  }
-
-  /**
-   * Verify theme settings
-   * isExisting: Whether it is an existing user (migrated from v1), determines the default theme
-   */
-  private validateTheme(theme: unknown, isExisting: boolean): ThemeSettings {
-    if (!theme || typeof theme !== 'object') {
-      return isExisting ? MIGRATION_THEME : DEFAULT_THEME
-    }
-    const t = theme as Record<string, unknown>
-
-    const mode = t.mode === 'custom' ? 'custom' : 'preset'
-    const presetId = typeof t.presetId === 'string' && VALID_PRESET_IDS.has(t.presetId)
-      ? t.presetId
-      : (isExisting ? 'starlight' : 'graphite')
-
-    let custom: { accent: string } | null = null
-    if (t.custom && typeof t.custom === 'object') {
-      const c = t.custom as Record<string, unknown>
-      const accent = this.validateColor(c.accent)
-      if (accent) {
-        custom = { accent }
-      }
-    }
-
-    // Fall back to preset when custom mode is used but there is no valid custom color.
-    if (mode === 'custom' && !custom) {
-      return { mode: 'preset', presetId, custom: null }
-    }
-
-    return { mode, presetId, custom }
-  }
-
-  /**
    * Save settings data to file
    */
-  private persist(): void {
+  private persist(throwOnError = false): void {
     try {
       const dir = app.getPath('userData')
       if (!existsSync(dir)) {
@@ -431,6 +375,8 @@ class SettingsStorage {
       writeFileSync(this.storagePath, JSON.stringify(this.state, null, 2), 'utf-8')
     } catch (error) {
       console.error('Failed to save settings:', error)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'write-failed', propagated: throwOnError })
+      if (throwOnError) throw error
     }
   }
 
@@ -441,6 +387,16 @@ class SettingsStorage {
     return JSON.parse(JSON.stringify(this.state))
   }
 
+  /** A bounded snapshot for worker structured-cloning, excluding unrelated imported themes. */
+  getThemeExportSnapshot(themeId: string): ThemeSettings {
+    const theme = this.state.theme
+    return {
+      ...theme, mode: 'manual', themeId,
+      overrides: { [themeId]: theme.overrides[themeId] ?? {} },
+      imported: theme.imported.filter(item => item.id === themeId)
+    }
+  }
+
   /**
    * Save complete settings.
    * Telemetry fields are preserved from the current in-memory state because
@@ -449,6 +405,8 @@ class SettingsStorage {
    * values here would overwrite a newer consent decision.
    */
   save(settings: SettingsState): boolean {
+    const previous = this.state
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'save-received' })
     try {
       const validated = this.validateState(settings)
       // Preserve telemetry state — only setTelemetryConsent() may modify these
@@ -458,10 +416,13 @@ class SettingsStorage {
         ...validated,
         updatedAt: Date.now()
       }
-      this.persist()
+      this.persist(true)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'saved', mode: this.state.theme.mode, ok: true })
       return true
     } catch (error) {
+      this.state = previous
       console.error('Failed to save settings:', error)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'save-rejected', ok: false })
       return false
     }
   }
@@ -470,7 +431,10 @@ class SettingsStorage {
    * Partial update settings
    */
   update(partial: Partial<SettingsState>): boolean {
+    const previous = this.state
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'update-received', theme: Boolean(partial.theme) })
     try {
+      this.state = { ...this.state, terminalStyles: { ...this.state.terminalStyles } }
       if (partial.shortcuts) {
         this.state.shortcuts = {
           ...this.state.shortcuts,
@@ -499,7 +463,7 @@ class SettingsStorage {
         this.state.globalTerminalStyle = this.validateGlobalTerminalStyle(partial.globalTerminalStyle)
       }
       if (partial.theme) {
-        this.state.theme = this.validateTheme(partial.theme, false)
+        this.state.theme = normalizeThemeSettings(partial.theme)
       }
       if (typeof partial.autoFollowGitBranchForTaskName === 'boolean') {
         this.state.autoFollowGitBranchForTaskName = partial.autoFollowGitBranchForTaskName
@@ -508,10 +472,13 @@ class SettingsStorage {
         this.state.performanceDiagnosticsEnabled = partial.performanceDiagnosticsEnabled
       }
       this.state.updatedAt = Date.now()
-      this.persist()
+      this.persist(true)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'updated', theme: Boolean(partial.theme), mode: this.state.theme.mode, ok: true })
       return true
     } catch (error) {
+      this.state = previous
       console.error('Failed to update settings:', error)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'update-rejected', ok: false })
       return false
     }
   }

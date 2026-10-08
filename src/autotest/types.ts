@@ -1039,6 +1039,7 @@ export interface TerminalDebugApi {
 
 export interface SettingsDebugApi {
   isOpen: () => boolean
+  setPanelWidth: (width: number) => void
   getUpdaterState: () => {
     phase: string
     supported: boolean

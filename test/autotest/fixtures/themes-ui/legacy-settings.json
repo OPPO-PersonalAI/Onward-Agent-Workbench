@@ -1,0 +1,20 @@
+{
+  "_spdx": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "version": 7,
+  "shortcuts": {},
+  "terminalStyles": {},
+  "globalTerminalStyle": {
+    "foregroundColor": null,
+    "backgroundColor": null,
+    "fontFamily": null,
+    "fontSize": null,
+    "gitDiffFontSize": null
+  },
+  "settingsPanelWidth": 400,
+  "language": "en",
+  "theme": { "mode": "preset", "presetId": "graphite", "custom": null },
+  "telemetryConsent": false,
+  "performanceDiagnosticsEnabled": false,
+  "autoFollowGitBranchForTaskName": true,
+  "updatedAt": 1791331200000
+}

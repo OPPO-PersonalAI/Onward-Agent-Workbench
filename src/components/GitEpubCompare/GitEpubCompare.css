@@ -31,8 +31,8 @@
   color: var(--text);
 }
 
-.git-epub-compare-status-added { background: rgba(46, 160, 67, 0.22); color: #8be19b; }
-.git-epub-compare-status-deleted { background: rgba(239, 68, 68, 0.22); color: #ffb4b4; }
+.git-epub-compare-status-added { background: var(--diff-add-bg, rgba(46, 160, 67, 0.22)); color: var(--diff-add-text, #8be19b); }
+.git-epub-compare-status-deleted { background: var(--diff-delete-bg, rgba(239, 68, 68, 0.22)); color: var(--diff-delete-text, #ffb4b4); }
 
 .git-epub-compare-filename {
   color: var(--muted);
@@ -62,7 +62,7 @@
 }
 
 .git-epub-compare-error {
-  color: #ffb4b4;
+  color: var(--danger);
 }
 
 .git-epub-compare-body {
@@ -143,19 +143,19 @@
 
 .git-epub-compare-chapter-added .git-epub-compare-chapter-badge,
 .git-epub-compare-resource-added .git-epub-compare-chapter-badge {
-  background: rgba(46, 160, 67, 0.22);
-  color: #8be19b;
+  background: var(--diff-add-bg, rgba(46, 160, 67, 0.22));
+  color: var(--diff-add-text, #8be19b);
 }
 
 .git-epub-compare-chapter-deleted .git-epub-compare-chapter-badge,
 .git-epub-compare-resource-deleted .git-epub-compare-chapter-badge {
-  background: rgba(239, 68, 68, 0.22);
-  color: #ffb4b4;
+  background: var(--diff-delete-bg, rgba(239, 68, 68, 0.22));
+  color: var(--diff-delete-text, #ffb4b4);
 }
 
 .git-epub-compare-chapter-modified .git-epub-compare-chapter-badge {
-  background: rgba(210, 153, 34, 0.22);
-  color: #ffd29d;
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
 }
 
 .git-epub-compare-chapter-unchanged .git-epub-compare-chapter-badge {
@@ -226,15 +226,15 @@
 }
 
 .git-epub-compare-line-add {
-  background: rgba(46, 160, 67, 0.14);
-  border-left-color: #3fb950;
-  color: #c7f1d0;
+  background: var(--diff-add-bg, rgba(46, 160, 67, 0.14));
+  border-left-color: var(--success);
+  color: var(--diff-add-text, #c7f1d0);
 }
 
 .git-epub-compare-line-del {
-  background: rgba(239, 68, 68, 0.14);
-  border-left-color: #f85149;
-  color: #ffd7d7;
+  background: var(--diff-delete-bg, rgba(239, 68, 68, 0.14));
+  border-left-color: var(--danger);
+  color: var(--diff-delete-text, #ffd7d7);
 }
 
 .git-epub-compare-empty,

@@ -5,6 +5,7 @@
 
 import type { AutotestContext, TestResult } from './types'
 import { parsePdfEpubPreviewGroup } from './pdf-epub-preview-group'
+import { createTranslator, normalizeLocale } from '../i18n/core'
 
 /**
  * Fixtures live on disk under `test/autotest/fixtures/pdf-epub/` (see CLAUDE.md rule
@@ -1094,18 +1095,26 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     })
   }
 
-  // Dark toggle button label/title should reflect the current state using
-  // the new "restore the inverted background" copy, not "Dark".
-  // Wait for viewer.js to apply i18n after the iframe remounts; a fresh
-  // iframe may briefly have an empty button before applyColorEnhancementState
-  // runs.
+  // Fresh viewers preserve original page colors. Labels describe the next
+  // action: enable dark page colors (Off keys), then original colors (On keys).
+  // Wait for host i18n delivery rather than accepting the viewer's English fallback.
+  const pdfTranslate = createTranslator(normalizeLocale((await window.electronAPI.settings.load()).language))
+  const originalAction = {
+    label: pdfTranslate('projectEditor.pdfReader.colorToggleOff'),
+    title: pdfTranslate('projectEditor.pdfReader.colorToggleTitleOff')
+  }
+  const darkAction = {
+    label: pdfTranslate('projectEditor.pdfReader.colorToggleOn'),
+    title: pdfTranslate('projectEditor.pdfReader.colorToggleTitleOn')
+  }
   await waitFor(
     'pdf-dark-toggle-ready',
     () => {
       const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
       const doc = iframe?.contentDocument
       const btn = doc?.getElementById('colorToggleBtn') as HTMLButtonElement | null
-      return Boolean(btn && (btn.textContent?.trim().length ?? 0) > 0)
+      return Boolean(btn && [originalAction, darkAction].some(action =>
+        btn.textContent?.trim() === action.label && btn.title === action.title))
     },
     6000,
     150
@@ -1114,24 +1123,45 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     const iframe = document.querySelector('.project-editor-pdf-reader-iframe') as HTMLIFrameElement | null
     const doc = iframe?.contentDocument
     const btn = doc?.getElementById('colorToggleBtn') as HTMLButtonElement | null
-    const label = btn?.textContent?.trim() ?? ''
-    const title = btn?.title ?? ''
+    const readToggle = () => {
+      const canvas = doc?.querySelector('.canvasWrapper')
+      return {
+        label: btn?.textContent?.trim() ?? '',
+        title: btn?.title ?? '',
+        pressed: btn?.getAttribute('aria-pressed') ?? null,
+        off: doc?.documentElement.classList.contains('color-enhancement-off') === true,
+        inverted: doc?.getElementById('viewer')?.classList.contains('dark-invert') === true,
+        filter: canvas && iframe?.contentWindow ? iframe.contentWindow.getComputedStyle(canvas).filter : null
+      }
+    }
+    const initial = readToggle()
     record('pdf-dark-toggle-uses-descriptive-label',
-      label.length > 0 && label.toLowerCase() !== 'dark' && title.length > 0,
-      { label, title }
+      initial.label === originalAction.label && initial.title === originalAction.title,
+      { ...initial, expected: originalAction }
     )
-    // Click once: should flip to the "restore" variant.
-    btn?.click()
-    await sleep(200)
-    const labelAfter = btn?.textContent?.trim() ?? ''
-    const titleAfter = btn?.title ?? ''
+    record('pdf-dark-toggle-default-original',
+      initial.off && !initial.inverted && initial.pressed === 'true' && initial.filter === 'none', initial)
+    // The viewer's click handler applies classes and copy synchronously. Check
+    // all five round trips, including the actual canvas filter, without sleeps.
+    const trials = []
+    for (let trial = 0; trial < 5; trial++) {
+      btn?.click()
+      const enabled = readToggle()
+      btn?.click()
+      const restored = readToggle()
+      trials.push({ enabled, restored })
+    }
     record('pdf-dark-toggle-flips-label-on-click',
-      labelAfter.length > 0 && labelAfter !== label && titleAfter !== title,
-      { labelAfter, titleAfter }
+      trials.every(({ enabled }) => enabled.label === darkAction.label && enabled.title === darkAction.title &&
+        !enabled.off && enabled.inverted && enabled.pressed === 'false' &&
+        /invert\(1\)/.test(enabled.filter ?? '') && /hue-rotate\(180deg\)/.test(enabled.filter ?? '')),
+      { trials }
     )
-    // Restore for next runs.
-    btn?.click()
-    await sleep(150)
+    record('pdf-dark-toggle-restores-original',
+      trials.every(({ restored }) => restored.label === originalAction.label && restored.title === originalAction.title &&
+        restored.off && !restored.inverted && restored.pressed === 'true' && restored.filter === 'none'),
+      { trials }
+    )
   }
 
   } // ── end group gate: pdf-outline (outlined fixture) ──

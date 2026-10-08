@@ -3,44 +3,59 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ThemeColors, ThemeSettings } from '../types/theme'
-import { getThemePreset } from '../constants/themes'
-import { generateCustomTheme } from './theme-generator'
+import type { ThemeColors, ThemeSettings, ResolvedTheme } from '../types/theme'
+import { resolveTheme } from '../themes/theme-engine'
+import { applyEditorTheme } from '../themes/editor-theme'
+import { PERF_TRACE_EVENT } from './perf-trace-names'
+import { perfTraceDiagnostic } from './perf-trace'
 
 /** All themeable CSS variable names */
-const THEME_VARS: (keyof ThemeColors)[] = [
-  '--bg-0', '--bg-1', '--bg-2', '--panel',
-  '--border', '--border-strong',
-  '--text-1', '--text-2', '--text-3',
-  '--accent', '--accent-strong', '--shadow-1'
-]
+let appliedVariables = new Set<string>()
+let revision = 0
+let paintFrame = 0
 
 /**
  * Apply theme color to document.documentElement.style
  */
 export function applyTheme(colors: ThemeColors): void {
   const style = document.documentElement.style
-  for (const varName of THEME_VARS) {
-    style.setProperty(varName, colors[varName])
+  for (const name of appliedVariables) {
+    if (!(name in colors)) style.removeProperty(name)
   }
+  for (const [name, value] of Object.entries(colors)) style.setProperty(name, value)
+  appliedVariables = new Set(Object.keys(colors))
 }
 
-/**
- * Parse out actual ThemeColors based on theme settings
- * - preset mode: search from preset table
- * - custom mode: automatically generated with generateCustomTheme
- */
+/** Resolve root tokens using the active named theme and current system appearance. */
 export function resolveThemeColors(settings: ThemeSettings): ThemeColors {
-  if (settings.mode === 'custom' && settings.custom) {
-    return generateCustomTheme(settings.custom.accent)
-  }
+  perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_APPLY, { reason: 'legacy-resolve', mode: settings.mode })
+  return resolveTheme(settings, typeof window === 'undefined' || window.matchMedia('(prefers-color-scheme: dark)').matches).colors
+}
 
-  const preset = getThemePreset(settings.presetId)
-  if (preset) {
-    return preset.colors
+/** Apply one resolved snapshot; notification occurs only after every root token is ready. */
+export function applyResolvedTheme(theme: ResolvedTheme): void {
+  const start = performance.now()
+  applyTheme(theme.colors)
+  applyEditorTheme(theme)
+  const root = document.documentElement
+  const currentRevision = ++revision
+  root.dataset.theme = theme.id
+  root.dataset.themeKind = theme.kind
+  root.dataset.themeRevision = String(currentRevision)
+  root.style.colorScheme = theme.kind
+  perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_APPLY, { reason: 'dispatch', revision: currentRevision, kind: theme.kind })
+  window.dispatchEvent(new CustomEvent('onward:theme-applied', {
+    detail: { id: theme.id, kind: theme.kind, revision: currentRevision }
+  }))
+  if (paintFrame) {
+    cancelAnimationFrame(paintFrame)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_APPLY, { reason: 'paint-coalesced', revision: currentRevision - 1 })
   }
-
-  // fallback: starry sky blue
-  const starlight = getThemePreset('starlight')!
-  return starlight.colors
+  paintFrame = requestAnimationFrame(() => {
+    paintFrame = 0
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_APPLY, {
+      reason: 'painted', themeId: theme.id, kind: theme.kind, revision: currentRevision,
+      durationMs: performance.now() - start
+    })
+  })
 }

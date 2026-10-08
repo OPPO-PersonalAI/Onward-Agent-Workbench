@@ -287,7 +287,6 @@ const TabTerminalGrid = memo(function TabTerminalGrid({
       layoutMode={tab.layoutMode}
       terminals={terminals}
       activeTerminalId={tab.activeTerminalId}
-      theme="vscode-dark"
       onTerminalFocus={handleTerminalFocus}
       onTerminalRename={handleTerminalRename}
       onTerminalAutoRename={handleTerminalAutoRename}

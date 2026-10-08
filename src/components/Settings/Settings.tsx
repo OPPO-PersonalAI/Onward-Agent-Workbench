@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useId } from 'react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { ShortcutInput } from './ShortcutInput'
-import { ColorPicker } from './ColorPicker'
 import { FontSelector } from './FontSelector'
 import { NumberInput } from './NumberInput'
 import { ApplyToAllIcon } from './ApplyToAllIcon'
@@ -19,6 +18,10 @@ import type { AppInfo, DownloadErrorCode, UpdatePhase, UpdaterStatus } from '../
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
+import { perfTraceDiagnostic } from '../../utils/perf-trace'
+import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { SETTINGS_PAGES, PAGE_LABELS, searchSettings, nextSettingsTab, type SettingsPage } from './settings-navigation'
+import { resizedSettingsWidth } from './settings-panel-width'
 import './Settings.css'
 
 interface SettingsProps {
@@ -173,6 +176,32 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     updatePerformanceDiagnosticsEnabled
   } = useSettings()
   const { t, locale, locales, updateLanguage } = useI18n()
+  const [page, setPage] = useState<SettingsPage>('general')
+  const [query, setQuery] = useState('')
+  const navigationId = useId()
+  const contentRef = useRef<HTMLDivElement>(null)
+  const navigationRef = useRef<HTMLDivElement>(null)
+  const pendingNavigation = useRef<{ target?: string; started: number } | null>(null)
+  const [navigationRevision, setNavigationRevision] = useState(0)
+  const searchResults = useMemo(() => searchSettings(query, t), [query, t])
+  const navigate = useCallback((next: SettingsPage, target?: string) => {
+    pendingNavigation.current = { target, started: performance.now() }
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'request', page: next, source: target ? 'search' : 'category' })
+    setPage(next)
+    setQuery('')
+    setNavigationRevision(value => value + 1)
+  }, [])
+  useLayoutEffect(() => {
+    const pending = pendingNavigation.current
+    if (!pending) return
+    pendingNavigation.current = null
+    const target = pending.target ? contentRef.current?.querySelector<HTMLElement>(`[data-settings-target="${pending.target}"]`) : null
+    if (target) {
+      target.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+      target.focus({ preventScroll: true })
+    } else if (contentRef.current) contentRef.current.scrollTop = 0
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'applied', page, targeted: Boolean(target), durationMs: performance.now() - pending.started })
+  }, [page, navigationRevision])
   const isAutotest = window.electronAPI.debug.autotest
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null)
@@ -186,6 +215,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const [isDragging, setIsDragging] = useState(false)
   const [telemetryEnabled, setTelemetryEnabled] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const dragStartRef = useRef<{ x: number; width: number; started: number } | null>(null)
   const updateActionButtonRef = useRef<HTMLButtonElement>(null)
   const debugActionCountsRef = useRef({ checkNow: 0, restartToUpdate: 0 })
   const debugNextCheckResultRef = useRef<MockCheckResult | null>(null)
@@ -245,6 +275,13 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     return getTerminalStyle(selectedTerminalId)
   }, [selectedTerminalId, getTerminalStyle])
 
+  useEffect(() => {
+    if (!terminals.some(terminal => terminal.id === selectedTerminalId)) {
+      setSelectedTerminalId(terminals[0]?.id ?? '')
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'selection-fallback', available: terminals.length })
+    }
+  }, [terminals, selectedTerminalId])
+
 
   // Handle shortcut changes
   const handleShortcutChange = useCallback((key: keyof ShortcutConfig, value: string | null) => {
@@ -261,6 +298,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   // Handling terminal selection changes
   const handleTerminalSelect = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedTerminalId(e.target.value)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'select-task' })
   }, [])
 
   // Handling font size changes
@@ -509,8 +547,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   // Handle drag start
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    dragStartRef.current = { x: e.clientX, width: containerRef.current?.getBoundingClientRect().width ?? width, started: performance.now() }
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_RESIZE, { stage: 'start', width: dragStartRef.current.width })
     setIsDragging(true)
-  }, [])
+  }, [width])
 
   // Handle drag move and end
   useEffect(() => {
@@ -550,6 +590,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   // Product telemetry: Settings surface mounted (opened) — count once per open.
   useEffect(() => {
     trackFeatureUse('settings-open')
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'opened', page: 'general' })
+    return () => perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'closed' })
   }, [])
 
   const handleTelemetryToggle = useCallback(() => {
@@ -581,6 +623,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     const debugWindow = window as Window & { __onwardSettingsDebug?: SettingsDebugApi }
     const api: SettingsDebugApi = {
       isOpen: () => true,
+      setPanelWidth: onWidthChange,
       getUpdaterState: () => ({
         phase: effectiveUpdaterStatus?.phase ?? 'idle',
         supported: Boolean(effectiveUpdaterStatus?.supported),
@@ -638,6 +681,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     effectiveUpdaterStatus,
     isAutotest,
     isUpdateActionDisabled,
+    onWidthChange,
     resetMockUpdater,
     updateActionLabel,
     updateDetailText,
@@ -648,16 +692,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     if (!isDragging) return
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!containerRef.current) return
-      // Calculate the distance from the right edge to the mouse (since the Settings panel is on the right)
-      const containerRect = containerRef.current.getBoundingClientRect()
-      const newWidth = containerRect.right - e.clientX
-      // Limit width range to 300-600px
-      const clampedWidth = Math.max(300, Math.min(600, newWidth))
-      onWidthChange(clampedWidth)
+      const start = dragStartRef.current
+      if (start) onWidthChange(resizedSettingsWidth(start.width, e.clientX - start.x))
     }
 
     const handleMouseUp = () => {
+      const start = dragStartRef.current
+      if (start) perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_RESIZE, { stage: 'end', width: containerRef.current?.getBoundingClientRect().width, durationMs: performance.now() - start.started })
+      dragStartRef.current = null
       setIsDragging(false)
     }
 
@@ -667,6 +709,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     return () => {
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
+      if (dragStartRef.current) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_RESIZE, { stage: 'dispose', durationMs: performance.now() - dragStartRef.current.started })
+        dragStartRef.current = null
+      }
     }
   }, [isDragging, onWidthChange])
 
@@ -692,8 +738,46 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         </button>
       </div>
 
-      {/* Content */}
-      <div className="settings-content">
+      <div className="settings-search">
+        <input type="search" value={query} data-testid="settings-search" maxLength={128}
+          placeholder={t('settings.search.placeholder')} aria-label={t('settings.search.placeholder')}
+          onChange={event => setQuery(event.target.value)}
+          onBlur={() => { if (query.trim()) perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'search', count: searchResults.length }) }}
+          onKeyDown={event => {
+            if (event.key === 'Escape' && query) {
+              event.stopPropagation(); setQuery('')
+              perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'search-cleared' })
+            }
+            if (event.key === 'Enter' && searchResults[0]) { event.preventDefault(); navigate(searchResults[0].page, searchResults[0].target) }
+          }} />
+        {query.trim() && <div className="settings-search-results" aria-label={t('settings.search.results')}>
+          {searchResults.length ? searchResults.map(result => <button type="button" key={result.target}
+            data-testid={`settings-search-${result.target}`} onClick={() => navigate(result.page, result.target)}>
+            <strong>{t(result.label)}</strong><span>{t(PAGE_LABELS[result.page])}</span>
+          </button>) : <p role="status">{t('settings.search.empty')}</p>}
+        </div>}
+      </div>
+      <div className="settings-pages">
+        <div className="settings-navigation" ref={navigationRef} role="tablist" aria-orientation="vertical" aria-label={t('settings.navigation')}>
+          {SETTINGS_PAGES.map((id, index) => <button type="button" key={id} role="tab" id={`${navigationId}-${id}`}
+            data-testid={`settings-tab-${id}`} aria-selected={page === id} aria-controls={`${navigationId}-panel`}
+            tabIndex={page === id ? 0 : -1} onClick={() => navigate(id)} onKeyDown={event => {
+              const next = nextSettingsTab(index, event.key)
+              if (next !== null) {
+                event.preventDefault()
+                navigationRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
+                perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'tab-focus', index: next })
+              }
+            }}>{t(PAGE_LABELS[id])}</button>)}
+        </div>
+        <label className="settings-navigation-compact"><span>{t('settings.navigation')}</span>
+          <select data-testid="settings-page-select" value={page} onChange={event => navigate(event.target.value as SettingsPage)}>
+            {SETTINGS_PAGES.map(id => <option key={id} value={id}>{t(PAGE_LABELS[id])}</option>)}
+          </select>
+        </label>
+      <div className="settings-content" ref={contentRef} role="tabpanel" id={`${navigationId}-panel`} aria-label={t(PAGE_LABELS[page])} tabIndex={0} data-settings-page={page}>
+        <h2 className="settings-page-heading">{t(PAGE_LABELS[page])}</h2>
+        {page === 'about' && <>
         {/* Version Info */}
         <div className="settings-version">
           <span className="settings-version-number">{appInfo?.tag || `v${appInfo?.version || '2.0.1'}`}</span>
@@ -701,7 +785,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
           <span className="settings-version-copyright">Copyright 2026 OPPO</span>
         </div>
 
-        <div className="settings-section">
+        <div className="settings-section" data-settings-target="updates" tabIndex={-1}>
           <div className="settings-section-title">{t('settings.section.updates')}</div>
           <div className="settings-section-content">
             <div className="settings-group settings-group-updates">
@@ -784,8 +868,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
           </div>
         </div>
 
+        </>}
+        {page === 'general' && <>
         {/* Diagnostics Section */}
-        <div className="settings-section">
+        <div className="settings-section" data-settings-target="diagnostics" tabIndex={-1}>
           <div className="settings-section-title">{t('settings.section.diagnostics')}</div>
           <div className="settings-section-content">
             <div className="settings-group">
@@ -810,7 +896,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         </div>
 
         {/* Language Section */}
-        <div className="settings-section">
+        <div className="settings-section" data-settings-target="language" tabIndex={-1}>
           <div className="settings-section-title">{t('settings.language.label')}</div>
           <div className="settings-section-content">
             <div className="settings-group">
@@ -838,22 +924,23 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
           </div>
         </div>
 
+        </>}
         {/* Appearance Section */}
-        <div className="settings-section">
+        {page === 'appearance' && <div className="settings-section" data-settings-target="themes" tabIndex={-1}>
           <div className="settings-section-title">{t('settings.section.appearance')}</div>
           <div className="settings-section-content">
             <div className="settings-group">
               <ThemeSelector />
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Shortcuts Section */}
-        <div className="settings-section">
+        {page === 'shortcuts' && <div className="settings-section">
           <div className="settings-section-title">{t('settings.section.shortcuts')}</div>
           <div className="settings-section-content">
             {SHORTCUT_GROUPS.map(group => (
-              <div key={group.titleKey} className="settings-group">
+              <div key={group.titleKey} className="settings-group" data-settings-target={group.titleKey.split('.').at(-1)} tabIndex={-1}>
                 <div className="settings-group-title">{t(group.titleKey)}</div>
                 {group.descriptionKey && (
                   <div className="settings-group-description">{t(group.descriptionKey)}</div>
@@ -872,11 +959,11 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
-        {/* Agent Terminal Section */}
-        <div className="settings-section">
-          <div className="settings-section-title">{t('settings.section.agentTerminal')}</div>
+        {/* Task font settings */}
+        {page === 'fonts' && <div className="settings-section">
+          <p className="settings-group-description">{t('settings.fonts.description')}</p>
           <div className="settings-section-content">
             <div className="settings-group">
               {/* Terminal Selector */}
@@ -904,76 +991,13 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
 
               {terminals.length > 0 && selectedTerminalId && (
                 <>
-                  {/* Apply globally hint */}
                   <div className="apply-globally-hint">
                     <ApplyToAllIcon size={12} />
                     <span>{t('settings.terminal.applyGloballyHint')}</span>
                   </div>
 
-                  {/* Foreground Color */}
-                  <div className="settings-row">
-                    <span className="settings-row-label">{t('settings.terminal.foregroundColor')}</span>
-                    <div className="settings-row-input">
-                      <ColorPicker
-                        value={currentTerminalStyle?.foregroundColor || null}
-                        onChange={(value) => handleStyleChange('foregroundColor', value)}
-                        defaultValue="#cccccc"
-                      />
-                      <button
-                        className="settings-apply-global-btn"
-                        type="button"
-                        onClick={() => handleApplyGlobally('foregroundColor')}
-                        title={t('settings.terminal.applyGlobally')}
-                      >
-                        <ApplyToAllIcon />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Background Color */}
-                  <div className="settings-row">
-                    <span className="settings-row-label">{t('settings.terminal.backgroundColor')}</span>
-                    <div className="settings-row-input">
-                      <ColorPicker
-                        value={currentTerminalStyle?.backgroundColor || null}
-                        onChange={(value) => handleStyleChange('backgroundColor', value)}
-                        defaultValue="#1e1e1e"
-                      />
-                      <button
-                        className="settings-apply-global-btn"
-                        type="button"
-                        onClick={() => handleApplyGlobally('backgroundColor')}
-                        title={t('settings.terminal.applyGlobally')}
-                      >
-                        <ApplyToAllIcon />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Font Family */}
-                  <div className="settings-row">
-                    <span className="settings-row-label">{t('settings.terminal.fontFamily')}</span>
-                    <div className="settings-row-input">
-                      <div className="onward-select-shell">
-                        <FontSelector
-                          value={currentTerminalStyle?.fontFamily || null}
-                          onChange={(value) => handleStyleChange('fontFamily', value)}
-                          dataTestId="settings-terminal-font-select"
-                        />
-                      </div>
-                      <button
-                        className="settings-apply-global-btn"
-                        type="button"
-                        onClick={() => handleApplyGlobally('fontFamily')}
-                        title={t('settings.terminal.applyGlobally')}
-                      >
-                        <ApplyToAllIcon />
-                      </button>
-                    </div>
-                  </div>
-
                   {/* Font Size */}
-                  <div className="settings-row">
+                  <div className="settings-row" data-settings-target="terminal-font-size" tabIndex={-1}>
                     <span className="settings-row-label">{t('settings.terminal.fontSize')}</span>
                     <div className="settings-row-input">
                       <NumberInput
@@ -996,7 +1020,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   </div>
 
                   {/* Git Diff / Project Editor Font Size */}
-                  <div className="settings-row">
+                  <div className="settings-row" data-settings-target="editor-font-size" tabIndex={-1}>
                     <span className="settings-row-label">{t('settings.terminal.editorFontSize')}</span>
                     <div className="settings-row-input">
                       <NumberInput
@@ -1018,7 +1042,27 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                     </div>
                   </div>
 
-
+                  {/* Font Family */}
+                  <div className="settings-row" data-settings-target="font-family" tabIndex={-1}>
+                    <span className="settings-row-label">{t('settings.terminal.fontFamily')}</span>
+                    <div className="settings-row-input">
+                      <div className="onward-select-shell">
+                        <FontSelector
+                          value={currentTerminalStyle?.fontFamily || null}
+                          onChange={(value) => handleStyleChange('fontFamily', value)}
+                          dataTestId="settings-terminal-font-select"
+                        />
+                      </div>
+                      <button
+                        className="settings-apply-global-btn"
+                        type="button"
+                        onClick={() => handleApplyGlobally('fontFamily')}
+                        title={t('settings.terminal.applyGlobally')}
+                      >
+                        <ApplyToAllIcon />
+                      </button>
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -1029,10 +1073,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               )}
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Privacy & Telemetry Section */}
-        <div className="settings-section">
+        {page === 'general' && <div className="settings-section" data-settings-target="privacy" tabIndex={-1}>
           <div className="settings-section-title">{t('settings.section.telemetry')}</div>
           <div className="settings-section-content">
             <div className="settings-group">
@@ -1053,8 +1097,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
               </div>
             </div>
           </div>
-        </div>
+        </div>}
 
+      </div>
       </div>
     </div>
   )

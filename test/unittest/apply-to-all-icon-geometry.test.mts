@@ -63,7 +63,7 @@ describe('ApplyToAllIcon geometry', () => {
 describe('ApplyToAllIcon single definition site', () => {
   it('is referenced by every apply-globally affordance', () => {
     const uses = settingsSource.match(/<ApplyToAllIcon\b/g) ?? []
-    assert.equal(uses.length, 6, 'expected 6 usages: 1 section hint + 5 per-property apply buttons')
+    assert.equal(uses.length, 4, 'expected 4 usages: 1 font section hint + 3 font apply buttons; colors are theme-scoped')
   })
 
   it('renders the section hint at the smaller 12px size', () => {
@@ -74,7 +74,7 @@ describe('ApplyToAllIcon single definition site', () => {
     // Every remaining inline <svg> in Settings.tsx must belong to some other affordance;
     // none may carry the 16x16 currentColor signature this icon used to be pasted as.
     const applyButtonBlocks = settingsSource.match(/settings-apply-global-btn[\s\S]{0,400}?<\/button>/g) ?? []
-    assert.equal(applyButtonBlocks.length, 5, 'expected 5 apply-globally buttons')
+    assert.equal(applyButtonBlocks.length, 3, 'expected 3 font apply-globally buttons; theme colors keep Task overrides')
     for (const block of applyButtonBlocks) {
       assert.ok(!block.includes('<svg'), 'an apply-globally button went back to an inline <svg>')
     }

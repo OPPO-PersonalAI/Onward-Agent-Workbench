@@ -4,8 +4,12 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import { installThemeBootstrap } from './theme-bootstrap'
 import { IPC } from '../shared/ipc-channels'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
+import type { SettingsState } from '../../src/types/settings'
+import type { ThemeDefinition } from '../../src/types/theme'
+export type { SettingsState } from '../../src/types/settings'
 import type {
   FeedbackActionResult,
   FeedbackCreateSubmissionResult,
@@ -961,32 +965,15 @@ export interface ShortcutConfig {
 // Terminal style configuration
 export interface TerminalStyleConfig {
   terminalId: string
-  foregroundColor: string | null
-  backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
   gitDiffFontSize: number | null
 }
 
 export interface GlobalTerminalStyle {
-  foregroundColor: string | null
-  backgroundColor: string | null
   fontFamily: string | null
   fontSize: number | null
   gitDiffFontSize: number | null
-}
-
-// Complete settings state
-export interface SettingsState {
-  version: number
-  shortcuts: ShortcutConfig
-  terminalStyles: Record<string, TerminalStyleConfig>
-  globalTerminalStyle: GlobalTerminalStyle
-  gitDiffFontSize: number | null
-  settingsPanelWidth: number
-  language: 'en' | 'zh-CN'
-  performanceDiagnosticsEnabled: boolean
-  updatedAt: number
 }
 
 // Shortcut action type
@@ -1014,6 +1001,16 @@ export interface SettingsAPI {
   onShortcutTriggered: (callback: (action: ShortcutAction) => void) => () => void
   onWindowShortcutTriggered: (callback: (action: ShortcutAction) => void) => () => void
   onActivated: (callback: () => void) => () => void
+}
+
+export interface ThemesAPI {
+  export: (requestId: string, themeId: string) => Promise<{ success: boolean; canceled?: boolean }>
+  cancelExport: (requestId: string) => Promise<{ canceled: boolean }>
+  setExportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'before-commit'; waitUntilPaused?: boolean }) => Promise<void>
+  import: (requestId: string) => Promise<{ success: boolean; canceled?: boolean; themes?: ThemeDefinition[]; error?: { code: string } }>
+  cancelImport: (requestId: string, cause: 'escape' | 'unmount') => Promise<{ canceled: boolean }>
+  /** Autotest only: strings persist until replaced/canceled/destroyed; null cancels one import, then restores the native dialog. */
+  setImportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'worker'; waitUntilPaused?: boolean }) => Promise<void>
 }
 
 export interface AppInfo {
@@ -1559,6 +1556,7 @@ export interface ElectronAPI {
   git: GitAPI
   project: ProjectAPI
   settings: SettingsAPI
+  themes: ThemesAPI
   appInfo: AppInfoAPI
   changelog: ChangelogAPI
   updater: UpdaterAPI
@@ -2163,6 +2161,71 @@ const projectAPI: ProjectAPI = {
     return () => {
       ipcRenderer.removeListener(IPC.PROJECT_TREE_WATCH_EVENT, listener)
     }
+  }
+}
+
+const themesAPI: ThemesAPI = {
+  export: (requestId, themeId) => traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_EXPORT, { stage: 'ipc-complete' }, async () => {
+    try { return await ipcRenderer.invoke(IPC.THEMES_EXPORT, requestId, themeId) }
+    catch { throw new Error('theme-export-ipc-failed') }
+  }).catch(() => ({ success: false })),
+  cancelExport: requestId => traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_EXPORT, { stage: 'cancel-ipc-complete' }, async () => {
+    try { return await ipcRenderer.invoke(IPC.THEMES_CANCEL_EXPORT, requestId) }
+    catch { throw new Error('theme-export-cancel-ipc-failed') }
+  }).catch(() => ({ canceled: false })),
+  setExportPathForAutotest: (path, options) => {
+    if (!preloadAutotestEnabled) return Promise.reject(new Error('autotest-disabled'))
+    return ipcRenderer.invoke(IPC.THEMES_AUTOTEST_EXPORT_FILE, path, options)
+  },
+  import: (requestId: string) => {
+    const traceBoundary = (stage: 'ipc-send' | 'ipc-received' | 'ipc-rejected', ok: boolean, canceled = false, count = 0) => {
+      if (!preloadPerfTraceEnabled) return
+      try {
+        ipcRenderer.send(IPC.DEBUG_PERF_TRACE, {
+          event: PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_IPC,
+          data: { stage, ok, canceled, count: Math.min(count, 1_000_000_000) }
+        })
+      } catch { /* Diagnostics must not interrupt the import request. */ }
+    }
+    traceBoundary('ipc-send', true)
+    return traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_IPC, { stage: 'ipc-complete' }, async () => {
+      try {
+        const result = await ipcRenderer.invoke(IPC.THEMES_IMPORT, requestId)
+        traceBoundary('ipc-received', result?.success === true, result?.canceled === true, Array.isArray(result?.themes) ? result.themes.length : 0)
+        return result
+      } catch {
+        traceBoundary('ipc-rejected', false)
+        // The generic tracing wrapper records rejection text; replace transport
+        // errors here so source paths can never enter diagnostic payloads.
+        throw new Error('theme-import-ipc-failed')
+      }
+    }).catch(() => ({ success: false, error: { code: 'worker-failed' } }))
+  },
+  cancelImport: (requestId: string, cause: 'escape' | 'unmount') => {
+    const traceBoundary = (stage: 'cancel-ipc-send' | 'cancel-ipc-received' | 'cancel-ipc-rejected', ok: boolean, canceled = false) => {
+      if (!preloadPerfTraceEnabled) return
+      try {
+        ipcRenderer.send(IPC.DEBUG_PERF_TRACE, {
+          event: PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_IPC,
+          data: { stage, ok, canceled, cause: cause === 'escape' ? 'escape' : 'unmount' }
+        })
+      } catch { /* Diagnostics must not interrupt cancellation. */ }
+    }
+    traceBoundary('cancel-ipc-send', true)
+    return traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_IPC, { stage: 'cancel-ipc-complete' }, async () => {
+      try {
+        const result = await ipcRenderer.invoke(IPC.THEMES_CANCEL_IMPORT, requestId, cause)
+        traceBoundary('cancel-ipc-received', true, result?.canceled === true)
+        return result
+      } catch {
+        traceBoundary('cancel-ipc-rejected', false)
+        throw new Error('theme-import-cancel-ipc-failed')
+      }
+    }).catch(() => ({ canceled: false }))
+  },
+  setImportPathForAutotest: (path, options) => {
+    if (!preloadAutotestEnabled) return Promise.reject(new Error('autotest-disabled'))
+    return ipcRenderer.invoke(IPC.THEMES_AUTOTEST_SELECT_FILE, path, options)
   }
 }
 
@@ -2881,6 +2944,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   git: gitAPI,
   project: projectAPI,
   settings: settingsAPI,
+  themes: themesAPI,
   appInfo: appInfoAPI,
   changelog: changelogAPI,
   updater: updaterAPI,
@@ -2894,3 +2958,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   system: systemAPI,
   platform: process.platform as 'darwin' | 'win32' | 'linux'
 })
+
+installThemeBootstrap()

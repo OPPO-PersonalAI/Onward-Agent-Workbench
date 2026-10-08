@@ -1,0 +1,16 @@
+{
+  "_spdx": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "onward-acceptance-theme-pair",
+  "displayName": "Acceptance Theme Pair",
+  "publisher": "onward-autotest",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.90.0" },
+  "license": "Apache-2.0",
+  "categories": ["Themes"],
+  "contributes": {
+    "themes": [
+      { "id": "acceptance-vsix-night", "label": "Acceptance VSIX Night", "uiTheme": "vs-dark", "path": "./themes/night.json" },
+      { "id": "acceptance-vsix-day", "label": "Acceptance VSIX Day", "uiTheme": "vs", "path": "./themes/day.json" }
+    ]
+  }
+}

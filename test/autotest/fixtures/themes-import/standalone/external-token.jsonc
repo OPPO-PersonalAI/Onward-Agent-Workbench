@@ -1,0 +1,3 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{ "type": "light", "colors": { "editor.background": "#ffffff" }, "tokenColors": "./never-read.tmTheme" }

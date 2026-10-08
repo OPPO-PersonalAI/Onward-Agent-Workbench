@@ -38,13 +38,13 @@
 }
 
 .git-pdf-compare-status-added {
-  background: rgba(46, 160, 67, 0.22);
-  color: #8be19b;
+  background: var(--diff-add-bg, rgba(46, 160, 67, 0.22));
+  color: var(--diff-add-text, #8be19b);
 }
 
 .git-pdf-compare-status-deleted {
-  background: rgba(239, 68, 68, 0.22);
-  color: #ffb4b4;
+  background: var(--diff-delete-bg, rgba(239, 68, 68, 0.22));
+  color: var(--diff-delete-text, #ffb4b4);
 }
 
 .git-pdf-compare-filename {

@@ -1,0 +1,3 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{ "type": "dark", "include": "./base.jsonc", "colors": { "editor.background": "#ffffff", "editor.foreground": "#111111" } }

@@ -1,0 +1,92 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:root {
+  --background: var(--bg-0);
+  --text: var(--text-1);
+  --muted: var(--text-3);
+  --line: var(--border);
+  --panel-elevated: var(--bg-2);
+  --text-4: var(--text-3);
+}
+
+/* These rules cover host chrome only, never authored iframe or image content. */
+:root[data-theme-kind='light'] .browser-panel-placeholder {
+  background: var(--bg-0);
+}
+
+:root[data-theme-kind='light'] .terminal-grid-cell-overlay {
+  background: color-mix(in srgb, var(--bg-1) 92%, transparent);
+}
+
+:root[data-theme-kind='light'] .terminal-grid-cell-overlay.is-error {
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-1));
+  color: var(--danger);
+}
+
+:root[data-theme-kind='light'] :is(
+  .terminal-grid-cell-overlay.is-error .terminal-grid-cell-overlay-title,
+  .terminal-grid-cell-overlay.is-error .terminal-grid-cell-overlay-desc,
+  .terminal-grid-cell-overlay-btn,
+  .git-history-ref-badge.head,
+  .project-editor-sqlite-status.error,
+  .project-editor-epub-error
+) {
+  color: var(--danger);
+}
+
+:root[data-theme-kind='light'] :is(
+  .git-history-ref-badge.local-branch,
+  .prompt-send-history-action.execute,
+  .git-diff-submodule-badge,
+  .project-editor-sqlite-status.success
+) {
+  color: var(--success);
+}
+
+:root[data-theme-kind='light'] :is(.git-history-ref-badge.tag, .outline-panel-item-icon.kind-class, .outline-panel-item-icon.kind-interface) {
+  color: var(--warning);
+}
+
+:root[data-theme-kind='light'] :is(.git-history-ref-badge.remote-branch, .prompt-send-history-action.send) {
+  color: var(--accent);
+}
+
+:root[data-theme-kind='light'] .prompt-send-history-action.sendAndExecute {
+  color: var(--syntax-function);
+}
+
+:root[data-theme-kind='light'] .project-editor-sqlite-status.pending {
+  color: var(--text-2);
+}
+
+:root[data-theme-kind='light'] .outline-panel-item-icon:is(.kind-function, .kind-method, .kind-constructor) {
+  color: var(--syntax-function);
+}
+
+:root[data-theme-kind='light'] .outline-panel-item-icon:is(.kind-variable, .kind-property, .kind-field) {
+  color: var(--syntax-variable);
+}
+
+:root[data-theme-kind='light'] .outline-panel-item-icon:is(.kind-enum, .kind-enum-member, .kind-heading) {
+  color: var(--syntax-keyword);
+}
+
+:root[data-theme-kind='light'] .outline-panel-item-icon:is(.kind-constant, .kind-struct, .kind-namespace, .kind-module, .kind-package) {
+  color: var(--syntax-type);
+}
+
+:root[data-theme-kind='light'] .outline-panel-item-icon:is(.kind-key, .kind-object, .kind-other) {
+  color: var(--text-2);
+}
+
+:root[data-theme-kind='light'] .project-editor-preview-body .mermaid-error-message {
+  color: var(--danger);
+}
+
+/* Button foregrounds must not assume that every theme has a bright accent. */
+:root[data-theme-kind='light'] :is(.project-editor-missing-btn.primary, .git-diff-missing-btn.primary) {
+  color: var(--on-accent, #ffffff);
+}

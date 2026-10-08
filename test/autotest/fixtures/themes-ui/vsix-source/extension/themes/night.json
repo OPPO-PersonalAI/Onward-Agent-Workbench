@@ -1,0 +1,13 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "Acceptance VSIX Night",
+  "type": "dark",
+  "colors": {
+    "onward.background": "#182838",
+    "onward.foreground": "#e8e9ea",
+    "terminal.background": "#192a3b",
+    "terminal.foreground": "#d9eafb",
+    "editor.background": "#1a2b3c",
+    "editor.foreground": "#c9daeb"
+  }
+}

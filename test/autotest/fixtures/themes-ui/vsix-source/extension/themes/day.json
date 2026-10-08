@@ -1,0 +1,13 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "name": "Acceptance VSIX Day",
+  "type": "light",
+  "colors": {
+    "onward.background": "#f8eadc",
+    "onward.foreground": "#28394a",
+    "terminal.background": "#f9ebdd",
+    "terminal.foreground": "#293a4b",
+    "editor.background": "#faecde",
+    "editor.foreground": "#2a3b4c"
+  }
+}

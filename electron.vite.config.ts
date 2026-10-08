@@ -20,6 +20,8 @@ export default defineConfig({
           'sqlite-worker-entry': resolve(__dirname, 'electron/main/sqlite-worker-entry.ts'),
           'app-state-worker-entry': resolve(__dirname, 'electron/main/app-state-worker-entry.ts'),
           'project-fs-worker-entry': resolve(__dirname, 'electron/main/project-fs-worker-entry.ts'),
+          'theme-import-worker-entry': resolve(__dirname, 'electron/main/theme-import-worker-entry.ts'),
+          'theme-export-worker-entry': resolve(__dirname, 'electron/main/theme-export-worker-entry.ts'),
           'ripgrep-search-worker-entry': resolve(__dirname, 'electron/main/ripgrep-search-worker-entry.ts')
         },
         formats: ['cjs']

@@ -1,0 +1,19 @@
+// SPDX-FileCopyrightText: 2026 OPPO
+// SPDX-License-Identifier: Apache-2.0
+{
+  "include": "./base.jsonc",
+  "colors": {
+    "editor.foreground": "not-a-color",
+    "terminal.foreground": null,
+    "terminal.ansiBlue": "#12345",
+    "terminal.ansiGreen": "#01FE98",
+    "unknown.fixtureColor": "#654321"
+  },
+  "tokenColors": [
+    { "scope": "keyword, storage.type", "settings": { "foreground": "#fff", "background": "bad", "fontStyle": "bold italic", "fixtureUnsupported": true } },
+    { "scope": "source.fixture meta.complex", "settings": { "foreground": "#f00", "fontStyle": "wave" } },
+    { "scope": "string", "settings": { "foreground": "var(--injection)" } }
+  ],
+  "semanticTokenColors": { "variable.readonly:fixture": "#ff0000" },
+  "fixtureUnknownProperty": true
+}

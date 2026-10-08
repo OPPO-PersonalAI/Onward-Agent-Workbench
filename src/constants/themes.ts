@@ -126,18 +126,26 @@ export const THEME_PRESETS: ThemePreset[] = [
   }
 ]
 
-/** Default theme settings (graphite gray for new users) */
+/** New installations follow the operating system appearance. */
 export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
-  mode: 'preset',
-  presetId: 'graphite',
-  custom: null
+  version: 3,
+  mode: 'system',
+  themeId: 'dark-modern',
+  lightThemeId: 'light-modern',
+  darkThemeId: 'dark-modern',
+  classic: { mode: 'preset', presetId: 'graphite', custom: null },
+  overrides: {},
+  imported: []
 }
 
-/** Migrate user default theme (maintain existing blue experience) */
+/** Pre-v2 installations without a theme retain the original blue appearance. */
 export const MIGRATION_THEME_SETTINGS: ThemeSettings = {
-  mode: 'preset',
-  presetId: 'starlight',
-  custom: null
+  ...DEFAULT_THEME_SETTINGS,
+  mode: 'manual',
+  themeId: 'onward-classic',
+  classic: { mode: 'preset', presetId: 'starlight', custom: null },
+  overrides: {},
+  imported: []
 }
 
 /** Find a preset theme by ID */

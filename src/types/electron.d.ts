@@ -3,6 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ThemeDefinition } from './theme'
+
+export interface ThemesAPI {
+  export: (requestId: string, themeId: string) => Promise<{ success: boolean; canceled?: boolean }>
+  cancelExport: (requestId: string) => Promise<{ canceled: boolean }>
+  setExportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'before-commit'; waitUntilPaused?: boolean }) => Promise<void>
+  import: (requestId: string) => Promise<{ success: boolean; canceled?: boolean; themes?: ThemeDefinition[]; error?: { code: string } }>
+  cancelImport: (requestId: string, cause: 'escape' | 'unmount') => Promise<{ canceled: boolean }>
+  /** Autotest only: strings persist until replaced/canceled/destroyed; null cancels one import, then restores the native dialog. */
+  setImportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'worker'; waitUntilPaused?: boolean }) => Promise<void>
+}
+
 export interface TerminalOptions {
   cols?: number
   rows?: number
@@ -1464,6 +1476,7 @@ export interface ElectronAPI {
   git: GitAPI
   project: ProjectAPI
   settings: SettingsAPI
+  themes: ThemesAPI
   appInfo: AppInfoAPI
   changelog: ChangelogAPI
   updater: UpdaterAPI

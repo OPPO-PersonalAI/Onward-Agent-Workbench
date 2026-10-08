@@ -27,6 +27,14 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
 
   const getApi = () => window.__onwardSettingsDebug as SettingsDebugApi | undefined
   const getState = () => getApi()?.getUpdaterState()
+  const selectPage = async (page: string) => {
+    const compact = querySettingsSelect('settings-page-select')
+    if (compact?.getClientRects().length) {
+      compact.value = page
+      compact.dispatchEvent(new Event('change', { bubbles: true }))
+    } else document.querySelector<HTMLButtonElement>(`[data-testid="settings-tab-${page}"]`)?.click()
+    return await waitFor('settings-update-category', () => document.querySelector('.settings-content')?.getAttribute('data-settings-page') === page, 1200, 40)
+  }
 
   const openSettings = async () => {
     if (getApi()?.isOpen()) {
@@ -99,31 +107,33 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
     const trackedSelects = [
       {
         testId: 'settings-language-select',
-        label: 'language'
+        label: 'language', page: 'general'
       },
       {
         testId: 'settings-terminal-font-select',
-        label: 'terminal-font'
+        label: 'terminal-font', page: 'fonts'
       },
       {
         testId: 'settings-terminal-select',
-        label: 'terminal'
+        label: 'terminal', page: 'fonts'
       }
     ]
 
-    const selectStyleSummary = trackedSelects.map(({ testId, label }) => {
+    const selectStyleSummary = []
+    for (const { testId, label, page } of trackedSelects) {
+      await selectPage(page)
       const select = querySettingsSelect(testId)
       const shell = select?.closest('.onward-select-shell') as HTMLElement | null
       const style = select ? window.getComputedStyle(select) : null
-      return {
+      selectStyleSummary.push({
         label,
         exists: Boolean(select),
         shellWrapped: Boolean(shell),
         sharedSelectClass: select?.classList.contains('onward-select') ?? false,
         appearance: style?.appearance ?? null,
         paddingRight: style?.paddingRight ?? null
-      }
-    })
+      })
+    }
     const selectsUseInsetArrow = selectStyleSummary.every(item => {
       if (!item.exists || !item.shellWrapped || !item.paddingRight) return false
       return item.sharedSelectClass && item.appearance === 'none' && Number.parseFloat(item.paddingRight) >= 30
@@ -133,6 +143,7 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
     })
     if (cancelled()) return results
 
+    await selectPage('about')
     api.resetMockUpdater()
     await sleep(60)
 

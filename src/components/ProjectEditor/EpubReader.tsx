@@ -6,10 +6,13 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import ePub from 'epubjs'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
-import type { Book, NavItem, Rendition } from 'epubjs'
+import type { Book, Contents, NavItem, Rendition } from 'epubjs'
 import { useI18n } from '../../i18n/useI18n'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { performanceTrace } from '../../utils/performance-trace'
+import { PREVIEW_THEME_APPLIED_EVENT, readPreviewPalette } from '../../utils/preview-theme-dom'
+import { buildEpubThemeCss } from '../../utils/preview-theme'
 import { redispatchReaderHostKey, shouldForwardReaderHostKey } from '../../utils/readerHostKey'
 import type { OutlineItem } from './Outline/types'
 import { OutlineSymbolKind } from './Outline/types'
@@ -123,21 +126,6 @@ function readEpubFrameSnapshot(container: HTMLElement | null): {
   }
 }
 
-function collectHostTheme(): { background: string; foreground: string; accent: string; muted: string; panel: string } {
-  const style = window.getComputedStyle(document.documentElement)
-  const read = (name: string, fallback: string) => {
-    const v = style.getPropertyValue(name).trim()
-    return v || fallback
-  }
-  return {
-    background: read('--background', '#0a0a0a'),
-    foreground: read('--text', '#f0f0f0'),
-    accent: read('--accent', '#7d8796'),
-    muted: read('--muted', '#a9a9a9'),
-    panel: read('--panel', '#121212')
-  }
-}
-
 function clampFontPct(v: number | undefined | null): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : 100
   return Math.max(MIN_FONT_PCT, Math.min(MAX_FONT_PCT, n))
@@ -187,6 +175,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function
   const bookRef = useRef<Book | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const sessionStateRef = useRef<EpubReaderSessionState | null>(null)
+  const themeSessionHashRef = useRef('')
   const requestNavigationRef = useRef<EpubNavigationRequester | null>(null)
   const recoveryAttemptsRef = useRef(new WeakMap<ArrayBuffer, number>())
   const [renditionRecoveryNonce, setRenditionRecoveryNonce] = useState(0)
@@ -232,42 +221,42 @@ export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function
     }
   }), [])
 
-  const applyTheme = useCallback(() => {
-    const rendition = renditionRef.current
-    if (!rendition) return
-    const colors = collectHostTheme()
-    rendition.themes.register(themeName, {
-      'html, body': {
-        background: colors.background,
-        color: colors.foreground,
-        'font-family': '"IBM Plex Sans", "Noto Sans SC", "Segoe UI", -apple-system, sans-serif'
-      },
-      a: { color: colors.accent },
-      'a:hover': { color: colors.accent, 'text-decoration': 'underline' },
-      img: { 'max-width': '100%', height: 'auto' },
-      code: {
-        background: colors.panel,
-        color: colors.foreground,
-        'border-radius': '4px',
-        padding: '0 4px'
-      },
-      blockquote: {
-        'border-left': `3px solid ${colors.accent}`,
-        color: colors.muted,
-        'padding-left': '10px',
-        margin: '8px 0'
-      }
+  const traceTheme = useCallback((reason: string, source: 'initial' | 'theme-event' | 'chapter' | 'lifecycle', sessionHash = themeSessionHashRef.current) => {
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_PREVIEW_APPLY, {
+      surface: 'epub', reason, source, sessionHash,
+      revision: document.documentElement.dataset.themeRevision?.slice(0, 128) ?? '',
+      kind: document.documentElement.dataset.themeKind === 'light' ? 'light' : 'dark'
     })
-    rendition.themes.select(themeName)
+  }, [])
+
+  const applyTheme = useCallback((source: 'initial' | 'theme-event' = 'initial') => {
+    const rendition = renditionRef.current
+    if (!rendition) {
+      traceTheme('deferred-until-ready', source)
+      return
+    }
+    const colors = readPreviewPalette()
+    try {
+      // registerCss replaces the named stylesheet; registerRules appends rules
+      // on every update in epub.js 0.3, accumulating stale palettes indefinitely.
+      rendition.themes.registerCss(themeName, buildEpubThemeCss(colors))
+      rendition.themes.select(themeName)
+      traceTheme('rendition-applied', source)
+    } catch {
+      traceTheme('rendition-unavailable', source)
+    }
     // Initial font size is applied before the first display; later changes are
     // serialized with navigation by the fontPct effect below. Keeping fontPct
     // out of this callback prevents a font change from recreating the book.
-  }, [themeName])
+  }, [themeName, traceTheme])
 
   useEffect(() => {
     if (!containerRef.current) return
     const container = containerRef.current
     const sessionId = ++nextEpubReaderSessionId
+    // Hash once per session; never put file paths or chapter content in theme events.
+    const sessionHash = String(performanceTrace.summarizeText('session', `${sessionId}:${filePath.slice(0, 256)}`).sessionHash)
+    themeSessionHashRef.current = sessionHash
     const initialTarget = initialLocationRef.current
     const savedScrollTop = initialScrollTopRef.current
     programmaticScrollUntilRef.current = typeof savedScrollTop === 'number' && savedScrollTop > 0
@@ -289,6 +278,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function
     let handleScroll: (() => void) | null = null
     let handleRelocated: ((loc: { start?: { cfi?: string; href?: string } }) => void) | null = null
     let handleContentKeydown: ((event: KeyboardEvent) => void) | null = null
+    let applyChapterTheme: ((contents: Contents) => void) | null = null
     let activeNavigationRequester: EpubNavigationRequester | null = null
     let pendingRelocation: { start?: { cfi?: string; href?: string } } | null = null
     let recoveryTimer: number | null = null
@@ -347,6 +337,22 @@ export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function
         allowScriptedContent: false
       })
       renditionRef.current = rendition
+      // epub.js 0.3's built-in inject hook skips serialized-only themes. Apply
+      // the registered stylesheet to each newly loaded chapter explicitly.
+      applyChapterTheme = (contents: Contents) => {
+        if (!isCurrentSession() || !rendition) {
+          traceTheme('stale-chapter', 'chapter', sessionHash)
+          return
+        }
+        try {
+          rendition.themes.add(themeName, contents)
+          traceTheme('chapter-applied', 'chapter', sessionHash)
+        } catch {
+          traceTheme('chapter-fallback', 'chapter', sessionHash)
+        }
+      }
+      rendition.hooks.content.register(applyChapterTheme)
+      traceTheme('chapter-hook-attached', 'lifecycle', sessionHash)
 
       const renditionAny = rendition as unknown as {
         q: { tick: (cb: () => void) => void; run: () => void; enqueue: (task: unknown) => unknown }
@@ -621,6 +627,10 @@ export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function
       if (rendition && handleContentKeydown) {
         try { rendition.off('keydown', handleContentKeydown) } catch { /* ignore */ }
       }
+      if (rendition && applyChapterTheme) {
+        rendition.hooks.content.deregister(applyChapterTheme)
+        traceTheme('chapter-hook-disposed', 'lifecycle', sessionHash)
+      }
       try { rendition?.destroy() } catch { /* ignore */ }
       if (renditionRef.current === rendition) renditionRef.current = null
       try { book?.destroy() } catch { /* ignore */ }
@@ -629,15 +639,18 @@ export const EpubReader = forwardRef<EpubReaderHandle, EpubReaderProps>(function
         delete progressHost.__onwardEpubReaderProgress
       }
     }
-  }, [previewBuffer, filePath, applyTheme, renditionRecoveryNonce])
+  }, [previewBuffer, filePath, applyTheme, renditionRecoveryNonce, themeName, traceTheme])
 
-  // Re-apply theme when host theme changes (class / data-theme mutations).
+  // Includes same-preset draft edits; keeps the existing book and navigation session.
   useEffect(() => {
-    if (typeof MutationObserver === 'undefined') return
-    const observer = new MutationObserver(() => applyTheme())
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] })
-    return () => observer.disconnect()
-  }, [applyTheme])
+    const apply = () => applyTheme('theme-event')
+    window.addEventListener(PREVIEW_THEME_APPLIED_EVENT, apply)
+    traceTheme('listener-attached', 'lifecycle')
+    return () => {
+      window.removeEventListener(PREVIEW_THEME_APPLIED_EVENT, apply)
+      traceTheme('listener-disposed', 'lifecycle')
+    }
+  }, [applyTheme, traceTheme])
 
   // Persist the font-size preference per-file. Same rationale as above.
   const fontPctInitializedRef = useRef(false)

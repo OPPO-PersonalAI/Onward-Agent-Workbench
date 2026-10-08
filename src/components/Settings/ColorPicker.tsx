@@ -10,6 +10,7 @@ interface ColorPickerProps {
   value: string | null
   onChange: (value: string | null) => void
   defaultValue?: string
+  testId?: string
 }
 
 // Verify color format
@@ -28,7 +29,8 @@ function normalizeColor(color: string): string {
 export function ColorPicker({
   value,
   onChange,
-  defaultValue = '#ffffff'
+  defaultValue = '#ffffff',
+  testId
 }: ColorPickerProps) {
   const { t } = useI18n()
   const [inputValue, setInputValue] = useState(value || '')
@@ -107,6 +109,8 @@ export function ColorPicker({
       />
       <input
         type="text"
+        data-testid={testId}
+        aria-label={testId === 'task-foreground' ? t('settings.terminal.foregroundColor') : t('settings.terminal.backgroundColor')}
         className={`color-input ${isInvalid ? 'invalid' : ''}`}
         value={inputValue}
         onChange={handleInputChange}

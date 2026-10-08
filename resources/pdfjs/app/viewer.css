@@ -43,10 +43,11 @@ body {
   border-bottom: 1px solid var(--onward-pdf-line);
   background: var(--onward-pdf-panel);
   z-index: 10;
+  flex-wrap: wrap;
 }
 
 .toolbar-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.toolbar-group.grow { flex: 1; }
+.toolbar-group.grow { flex: 1 1 240px; }
 
 button,
 select,
@@ -69,6 +70,8 @@ select,
 input[type="search"],
 input[type="number"] { padding: 0 8px; }
 
+input::placeholder { color: var(--onward-pdf-muted); opacity: 1; }
+
 #pageNumberInput { width: 54px; }
 #zoomSelect { min-width: 104px; }
 #searchInput { flex: 1; min-width: 140px; }
@@ -87,7 +90,7 @@ input[type="number"] { padding: 0 8px; }
 
 #errorMessage { font-size: 13px; line-height: 1.4; }
 #errorMessage strong { display: block; margin-bottom: 2px; }
-#errorMessage span { display: block; color: #ffcfcf; }
+#errorMessage span { display: block; color: var(--onward-pdf-text); }
 
 #workspace { display: flex; flex: 1; min-height: 0; }
 
@@ -107,7 +110,7 @@ input[type="number"] { padding: 0 8px; }
   isolation: isolate;
 }
 
-:root.color-enhancement-off #viewerContainer { background: #f1f1f1; }
+:root.color-enhancement-off #viewerContainer { background: var(--onward-pdf-bg); }
 
 #viewer { margin: 0 auto; }
 
@@ -154,5 +157,5 @@ input[type="number"] { padding: 0 8px; }
 
 #passwordDialog h2 { margin: 0 0 10px; font-size: 16px; }
 #passwordPrompt { margin: 0 0 12px; color: var(--onward-pdf-muted); font-size: 13px; }
-#passwordInput { width: 100%; height: 34px; }
+#passwordInput { width: 100%; height: 34px; color: var(--onward-pdf-text); background: var(--onward-pdf-panel); border: 1px solid var(--onward-pdf-line); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
