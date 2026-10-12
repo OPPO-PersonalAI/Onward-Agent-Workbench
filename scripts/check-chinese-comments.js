@@ -20,6 +20,9 @@ const ALLOWLIST = new Set([
   // round-trips, so the Han characters are required test data, not comments.
   'test/autotest/prompt-ime-latency-driver.mjs',
   'test/autotest/prompt-contenteditable-editing-driver.mjs',
+  // Theme UI tests assert bilingual search labels and Unicode file paths.
+  'test/autotest/test-themes-ui.mjs',
+  'test/autotest/themes-ui-driver-support.mjs',
   // Project instruction files may quote Chinese phrases from user usage.
   'CLAUDE.md',
   'AGENTS.md'
