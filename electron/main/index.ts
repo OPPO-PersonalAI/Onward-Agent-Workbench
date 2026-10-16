@@ -56,11 +56,12 @@ import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { IPC } from '../shared/ipc-channels'
 import { broadcastGpuProcessGone } from './gpu-crash-recovery'
 import { startThreadpoolWatchdog, stopThreadpoolWatchdog } from './threadpool-watchdog'
-import { raceQuitSequenceAgainstFloor } from './quit-hard-floor'
+import { QuitCoordinator } from './quit-coordinator'
+import { watcherService } from './watcher-service-client'
+import { gitStateMirrorRouter } from './git-state-mirror-router'
 import { startVisibilityWatchdog, stopVisibilityWatchdog } from './visibility-watchdog'
 import { performanceTrace } from './performance-trace'
 import { traceStore, runRotationStressForAutotest } from './trace-store'
-import { runBoundedDebugQuit } from './debug-quit-lifecycle'
 import { htmlPreviewProtocolManager } from './html-preview-protocol'
 import { browserViewManager } from './browser-view-manager'
 import { isAllowedOpenBrowserGuestUrl } from '../../src/utils/browser-url'
@@ -71,6 +72,8 @@ import { isAllowedOpenBrowserGuestUrl } from '../../src/utils/browser-url'
 // without a human observer. See docs/debug-env-variables.md.
 const SMOKE_LAUNCH_MODE = process.env.ONWARD_SMOKE_LAUNCH === '1'
 const SMOKE_READY_FILE = process.env.ONWARD_SMOKE_READY_FILE || null
+const QUIT_STRESS_MODE = process.env.ONWARD_AUTOTEST === '1' && process.env.ONWARD_AUTOTEST_QUIT_STRESS === '1'
+const QUIT_STRESS_HOLD_STAGE = QUIT_STRESS_MODE ? process.env.ONWARD_AUTOTEST_QUIT_HOLD_STAGE : undefined
 if (SMOKE_LAUNCH_MODE) {
   console.log('[SmokeLaunch] Mode active (ONWARD_SMOKE_LAUNCH=1)')
 }
@@ -182,17 +185,30 @@ app.on('child-process-gone', (_event, details) => {
 // the last 300-500ms debounce window would be lost on quit/update-restart.
 async function flushRendererState(): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return
+  const sender = mainWindow.webContents
   try {
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, 2000)
-      ipcMain.once(IPC.APP_STATE_FLUSH_DONE, () => {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        ipcMain.removeListener(IPC.APP_STATE_FLUSH_DONE, onDone)
+        reject(new Error('Renderer state flush timed out'))
+      }, 2000)
+      const onDone = (event: Electron.IpcMainEvent, result?: { success: boolean }) => {
+        if (event.sender !== sender) {
+          performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'renderer-ack-ignored' })
+          return
+        }
         clearTimeout(timeout)
-        resolve()
-      })
-      mainWindow!.webContents.send(IPC.APP_STATE_FLUSH_PENDING)
+        ipcMain.removeListener(IPC.APP_STATE_FLUSH_DONE, onDone)
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'renderer-ack', success: result?.success === true })
+        if (result?.success !== true) reject(new Error('Renderer state flush failed'))
+        else resolve()
+      }
+      ipcMain.on(IPC.APP_STATE_FLUSH_DONE, onDone)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'renderer-flush-sent' })
+      sender.send(IPC.APP_STATE_FLUSH_PENDING)
     })
-  } catch {
-    // Renderer may already be gone; proceed with quit
+  } catch (error) {
+    throw error
   }
 }
 
@@ -225,9 +241,10 @@ async function persistTerminalCwdSnapshot(): Promise<void> {
 
 async function flushAppStateStorage(): Promise<void> {
   try {
-    await getAppStateStorage().flush()
+    if (!await getAppStateStorage().flush()) throw new Error('AppState flush rejected')
   } catch (error) {
     console.warn('[AppState] flush failed during shutdown:', error)
+    throw error
   }
 }
 
@@ -312,35 +329,6 @@ function flushPerformanceTrace(reason: string): void {
   }
 }
 
-// Hard ceiling for the production quit/restart teardown sequences. During the
-// 2026-07-20 threadpool-stall incident the quit chain wedged forever inside
-// `await telemetryService.shutdown()` (its writeQueue head was a stuck async
-// appendFile) — the app could not even exit. Every production quit path now
-// races its teardown against this floor and force-exits when it trips,
-// mirroring the 8 s floor the DEBUG quit path always had.
-const QUIT_HARD_FLOOR_MS = 10_000
-
-async function runQuitSequenceWithHardFloor(reason: string, sequence: () => Promise<void>): Promise<void> {
-  const outcome = await raceQuitSequenceAgainstFloor(sequence, QUIT_HARD_FLOOR_MS)
-  if (outcome === 'timeout') {
-    try {
-      performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_HARD_FLOOR_TRIGGERED, {
-        reason,
-        floorMs: QUIT_HARD_FLOOR_MS
-      })
-    } catch {
-      /* trace store may be torn down; exit anyway */
-    }
-    try {
-      flushPerformanceTrace(`${reason}:hard-floor`)
-    } catch {
-      /* best-effort */
-    }
-    console.warn(`[Quit] teardown exceeded ${QUIT_HARD_FLOOR_MS}ms (${reason}); forcing app.exit(0)`)
-    app.exit(0)
-  }
-}
-
 // Synchronous, crash-survivable quit-phase breadcrumb. Unlike perfTrace (buffered
 // and FLUSHED only at the end of teardown — so it is lost when an earlier teardown
 // step crashes), a console.log is captured line-by-line in the autotest runner log
@@ -400,196 +388,107 @@ function destroyAllWindowsForQuit(reason: string): void {
   mainWindow = null
 }
 
-// Exit the request entry in a unified manner to ensure that the confirmation box only pops up once
-export async function requestQuit(): Promise<void> {
-  if (isQuitting) return
-  if (await confirmQuit()) {
+const quitCoordinator = new QuitCoordinator({
+  now: Date.now,
+  schedule: (callback, ms) => setTimeout(callback, ms),
+  cancel: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  trace: (phase, data) => {
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase, ...data })
+    logQuitPhase(`${phase} ${JSON.stringify(data)}`)
+  },
+  begin: reason => {
     isQuitting = true
-    installUpdateOnQuit = false
-    await runQuitSequenceWithHardFloor('quit', async () => {
-      stopThreadpoolWatchdog()
-      stopVisibilityWatchdog()
-      await flushRendererState()
-      persistWindowState()
-      await shutdownTelemetry()
-      await persistTerminalCwdSnapshot()
-      await flushAppStateStorage()
-      const shutdownResult = await ptyManager.shutdownAll()
-      if (shutdownResult.timedOut > 0) {
-        console.warn(
-          `[PTY] shutdown timed out: ${shutdownResult.timedOut}/${shutdownResult.total}`
-        )
+    installUpdateOnQuit = reason === 'restart-to-update'
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setEnabled(false)
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'input-disabled', reason })
+    if (reason === 'relaunch-for-recovery') app.relaunch()
+    stopThreadpoolWatchdog()
+    stopVisibilityWatchdog()
+    gitAutofetchManager.dispose()
+    gitStateMirrorRouter.beginShutdown()
+    watcherService.freeze()
+    // Upload is best-effort; it cannot hold user state or terminal shutdown hostage.
+    void shutdownTelemetry().catch(error => console.warn('[Quit] telemetry shutdown failed:', error))
+  },
+  stages: () => [
+    { name: 'renderer-state', required: true, run: flushRendererState },
+    { name: 'window-state', required: true, run: persistWindowState },
+    { name: 'terminal-cwd', required: true, run: persistTerminalCwdSnapshot },
+    { name: 'app-state', required: true, run: () => QUIT_STRESS_HOLD_STAGE === 'app-state'
+      ? new Promise<void>(() => {}) : flushAppStateStorage() },
+    { name: 'terminals', required: true, run: async () => {
+      const result = await ptyManager.shutdownAll()
+      if (result.timedOut) throw new Error('Terminal shutdown incomplete')
+    } },
+    { name: 'services', run: async () => {
+      await Promise.all([cleanupIpcHandlers(), watcherService.shutdown()])
+    } }
+  ],
+  finish: (reason, clean) => {
+    willQuitCleanupDone = true
+    destroyAllWindowsForQuit(reason)
+    if (clean) markSessionLedgerClean(reason, getConfirmedQuitTerminatedActiveJobs())
+    flushPerformanceTrace(reason)
+    app.quit()
+  },
+  force: (reason, clean) => {
+    try {
+      watcherService.forceStop()
+      ptyManager.disposeAll()
+      if (clean) markSessionLedgerClean(reason, getConfirmedQuitTerminatedActiveJobs())
+      if (installUpdateOnQuit) getUpdateService().installDownloadedUpdateOnQuit()
+    } catch {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'forced-cleanup-failed', reason })
+    } finally {
+      try {
+        flushPerformanceTrace(`${reason}:deadline`)
+        traceStore.close()
+      } finally {
+        app.exit(clean ? 0 : 1)
       }
-      // Dispose native subsystems FIRST (window still alive), THEN destroy windows,
-      // THEN quit — see destroyAllWindowsForQuit's header for why this order matters.
-      logQuitPhase('quit:cleanup-start')
-      gitAutofetchManager.dispose()
-      await cleanupIpcHandlers()
-      willQuitCleanupDone = true
-      logQuitPhase('quit:cleanup-done')
-      destroyAllWindowsForQuit('quit')
-      logQuitPhase('quit:windows-destroyed')
-      flushPerformanceTrace('quit')
-      markSessionLedgerClean('quit', getConfirmedQuitTerminatedActiveJobs())
-      logQuitPhase('quit:before-app-quit')
-      app.quit()
-    })
+    }
   }
+})
+app.once('quit', () => quitCoordinator.exited())
+
+export async function requestQuit(): Promise<void> {
+  await quitCoordinator.request('quit', confirmQuit)
 }
 
 export async function requestRestartToApplyUpdate(): Promise<{ success: boolean; error?: string }> {
-  if (isQuitting) {
-    return { success: false, error: 'Application is already quitting.' }
-  }
-
+  if (quitCoordinator.stopping) return { success: false, error: 'Application is already quitting.' }
   const result = getUpdateService().requestRestartToUpdate()
-  if (!result.success) {
-    return result
-  }
-
-  isQuitting = true
-  installUpdateOnQuit = true
-
-  await runQuitSequenceWithHardFloor('restart-to-update', async () => {
-    stopThreadpoolWatchdog()
-    stopVisibilityWatchdog()
-    await flushRendererState()
-    persistWindowState()
-    await shutdownTelemetry()
-    await persistTerminalCwdSnapshot()
-    await flushAppStateStorage()
-    const shutdownResult = await ptyManager.shutdownAll()
-    if (shutdownResult.timedOut > 0) {
-      console.warn(
-        `[PTY] shutdown timed out: ${shutdownResult.timedOut}/${shutdownResult.total}`
-      )
-    }
-
-    logQuitPhase('restart-to-update:cleanup-start')
-    await cleanupIpcHandlers()
-    willQuitCleanupDone = true
-    logQuitPhase('restart-to-update:cleanup-done')
-    destroyAllWindowsForQuit('restart-to-update')
-    logQuitPhase('restart-to-update:windows-destroyed')
-    flushPerformanceTrace('restart-to-update')
-    markSessionLedgerClean('restart-to-update')
-    logQuitPhase('restart-to-update:before-app-quit')
-    app.quit()
-  })
+  if (!result.success) return result
+  await quitCoordinator.request('restart-to-update')
   return { success: true }
 }
 
-/**
- * Graceful quit + relaunch for infrastructure-failure recovery (threadpool
- * watchdog banner). No confirmation dialog: the user explicitly clicked
- * "Restart app" on the degradation banner. The whole teardown runs under
- * the same hard floor as the other quit paths — with a stalled threadpool
- * the flush steps are expected to hit their individual timeouts, and the
- * floor guarantees the relaunch still happens.
- */
 export async function requestRelaunchForRecovery(): Promise<{ success: boolean; error?: string }> {
-  if (isQuitting) {
-    return { success: false, error: 'Application is already quitting.' }
-  }
-  isQuitting = true
-  installUpdateOnQuit = false
-
-  // Arm the relaunch BEFORE teardown starts: app.relaunch() only schedules
-  // a respawn for whenever the process exits, so arming it first covers
-  // both exit routes — the normal app.quit() at the end of the sequence
-  // AND the hard-floor's app.exit(0) (which fires inside the race, before
-  // any code after the await would run).
-  app.relaunch()
-
-  await runQuitSequenceWithHardFloor('relaunch-for-recovery', async () => {
-    stopThreadpoolWatchdog()
-    stopVisibilityWatchdog()
-    await flushRendererState()
-    persistWindowState()
-    await shutdownTelemetry()
-    await persistTerminalCwdSnapshot()
-    await flushAppStateStorage()
-    const shutdownResult = await ptyManager.shutdownAll()
-    if (shutdownResult.timedOut > 0) {
-      console.warn(
-        `[PTY] shutdown timed out: ${shutdownResult.timedOut}/${shutdownResult.total}`
-      )
-    }
-    logQuitPhase('relaunch-for-recovery:cleanup-start')
-    gitAutofetchManager.dispose()
-    await cleanupIpcHandlers()
-    willQuitCleanupDone = true
-    logQuitPhase('relaunch-for-recovery:cleanup-done')
-    destroyAllWindowsForQuit('relaunch-for-recovery')
-    logQuitPhase('relaunch-for-recovery:windows-destroyed')
-    flushPerformanceTrace('relaunch-for-recovery')
-    app.quit()
-  })
+  if (quitCoordinator.stopping) return { success: false, error: 'Application is already quitting.' }
+  await quitCoordinator.request('relaunch-for-recovery')
   return { success: true }
 }
 
-// Bounded graceful quit WITHOUT the confirm dialog. Shared by every caller
-// whose quit decision is already made: the DEBUG_QUIT IPC (autotest suites),
-// the smoke-launch probe, and the SIGTERM/SIGINT handlers below.
 export async function requestQuitForDebug(): Promise<{ success: boolean; error?: string }> {
-  if (isQuitting) {
-    return { success: false, error: 'Application is already quitting.' }
-  }
-
-  isQuitting = true
-  installUpdateOnQuit = false
-
-  // Bounded exit. Under autotest / heavy load a single awaited step
-  // (telemetry flush, per-terminal cwd snapshot via PTY round-trips, app-state
-  // worker flush, PTY shutdown) can be slow enough that this serial chain never
-  // reaches app.quit() before the test watchdog (or an impatient user) gives up
-  // — the observed "20/20 passed then never quits -> 280s watchdog kill".
-  // Keep a hard-exit floor armed across teardown AND app.quit() so exit is
-  // always bounded. Electron can return from app.quit() while native handles
-  // are still preventing the main process from terminating.
-  // This mirrors the DEBUG_QUIT fallback (ipc-handlers.ts: race(shutdown, timeout)
-  // -> app.exit(0)). Step order is preserved: persistTerminalCwdSnapshot writes
-  // cwds into app-state via setTerminalLastCwds(), so flushAppStateStorage MUST
-  // stay AFTER it; persistWindowState is synchronous and runs first, so window
-  // bounds are never lost even if the floor fires mid-teardown.
-  const HARD_EXIT_MS = process.env.ONWARD_AUTOTEST === '1' ? 20000 : 12000
-
-  const gracefulTeardown = async (): Promise<void> => {
-    persistWindowState()
-    await shutdownTelemetry()
-    await persistTerminalCwdSnapshot()
-    await flushAppStateStorage()
-    const shutdownResult = await ptyManager.shutdownAll()
-    if (shutdownResult.timedOut > 0) {
-      console.warn(
-        `[PTY] shutdown timed out: ${shutdownResult.timedOut}/${shutdownResult.total}`
-      )
-    }
-
-    logQuitPhase('debug-quit:cleanup-start')
-    await cleanupIpcHandlers()
-    willQuitCleanupDone = true
-    logQuitPhase('debug-quit:cleanup-done')
-    destroyAllWindowsForQuit('debug-quit')
-    logQuitPhase('debug-quit:windows-destroyed')
-    flushPerformanceTrace('debug-quit')
-    markSessionLedgerClean('debug-quit')
-    logQuitPhase('debug-quit:before-app-quit')
-  }
-
-  await runBoundedDebugQuit({
-    hardExitMs: HARD_EXIT_MS,
-    gracefulTeardown,
-    scheduleHardExit: (callback, delayMs) => setTimeout(callback, delayMs),
-    requestQuit: () => {
-      app.quit()
-      logQuitPhase('debug-quit:app-quit-returned')
-    },
-    forceExit: (code) => app.exit(code),
-    onHardExit: () => logQuitPhase('debug-quit:hard-exit-floor'),
-    onTeardownError: (error) => console.warn('[debug-quit] graceful teardown error:', error)
-  })
+  await quitCoordinator.request('debug-quit')
   return { success: true }
+}
+
+if (QUIT_STRESS_MODE) {
+  console.log('[QuitStress] isolated lifecycle hooks enabled')
+  Object.assign(globalThis, { __onwardQuitAutotest: {
+    inspect: () => watcherService.inspect(),
+    faultWatcher: () => watcherService.testExit(),
+    blockWatcher: () => watcherService.testBlock(),
+    hangTelemetry: () => { getTelemetryService().shutdown = () => new Promise<void>(() => {}) },
+    recovery: requestRelaunchForRecovery,
+    update: () => {
+      const service = getUpdateService()
+      service.requestRestartToUpdate = () => ({ success: true })
+      service.installDownloadedUpdateOnQuit = () => { console.log('[QuitStress] update-install-requested') }
+      return requestRestartToApplyUpdate()
+    }
+  } })
 }
 
 // Build menu template
@@ -924,7 +823,13 @@ function createWindow(displayName: string): void {
 
   // macOS: Intercept close event, hide window instead of closing
   mainWindow.on('close', (e) => {
-    if (isQuitting) return
+    if (isQuitting) {
+      if (!willQuitCleanupDone) {
+        e.preventDefault()
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'window-close-deferred' })
+      }
+      return
+    }
 
     if (process.platform === 'darwin') {
       e.preventDefault()
@@ -960,6 +865,7 @@ function createWindow(displayName: string): void {
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'bootstrap', mode: settings.theme.mode })
   })
   registerIpcHandlers(mainWindow, {
+    isQuitting: () => isQuitting,
     onSettingsChanged: () => {
       Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(displayName)))
       applyNativeWindowTheme()
@@ -1201,12 +1107,9 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('window-all-closed', async () => {
-  await cleanupIpcHandlers().catch((error) => {
-    console.warn('[Lifecycle] window-all-closed cleanup failed:', error)
-  })
+app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    app.quit()
+    void quitCoordinator.request('window-all-closed')
   }
 })
 
@@ -1253,8 +1156,13 @@ app.on('before-quit', async (e) => {
     isQuitting,
     installUpdateOnQuit
   })
-  // If you have confirmed to exit, continue directly.
-  if (isQuitting) return
+  // Repeated native quit requests must not close the renderer during its save.
+  if (willQuitCleanupDone) return
+  if (isQuitting) {
+    e.preventDefault()
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'native-quit-joined' })
+    return
+  }
   if (!app.isReady()) {
     isQuitting = true
     return
@@ -1280,40 +1188,15 @@ app.on('before-quit', async (e) => {
   }
 })
 
-// Move the cleanup logic to will-quit (it will be triggered after confirming the exit)
-// will-quit must not let Electron free the process while the git-state-mirror
-// worker still holds live @parcel/watcher native ops — the un-awaited cleanup
-// was one of the barrier-bypass paths behind the 2026-07-23 teardown SIGABRT
-// class. First pass: prevent default, await cleanup (hard-capped so a wedged
-// worker can never hold the quit hostage), then re-enter quit; the latch lets
-// the second pass fall through to the synchronous tail.
+// Every external quit joins the same coordinator; this hook owns no second timer.
 let willQuitCleanupDone = false
-const WILL_QUIT_CLEANUP_CAP_MS = 17_000
 app.on('will-quit', (event) => {
   performanceTrace.record(PERF_TRACE_EVENT.MAIN_APP_WILL_QUIT, {
     installUpdateOnQuit
   })
   if (!willQuitCleanupDone) {
     event.preventDefault()
-    const startedAt = Date.now()
-    const cap = new Promise<'timeout'>((resolve) => {
-      const t = setTimeout(() => resolve('timeout'), WILL_QUIT_CLEANUP_CAP_MS)
-      t.unref()
-    })
-    void Promise.race([
-      cleanupIpcHandlers().then(() => 'done' as const).catch((error) => {
-        console.warn('[Lifecycle] will-quit cleanup failed:', error)
-        return 'done' as const
-      }),
-      cap
-    ]).then((outcome) => {
-      willQuitCleanupDone = true
-      performanceTrace.record(PERF_TRACE_EVENT.MAIN_APP_WILL_QUIT_CLEANUP_AWAITED, {
-        waitedMs: Date.now() - startedAt,
-        timedOut: outcome === 'timeout'
-      })
-      app.quit()
-    })
+    void quitCoordinator.request('will-quit')
     return
   }
   if (installUpdateOnQuit) {

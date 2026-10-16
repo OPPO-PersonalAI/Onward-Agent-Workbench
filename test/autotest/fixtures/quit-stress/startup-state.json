@@ -1,0 +1,12 @@
+{
+  "globalPrompts": [
+    {
+      "id": "quit-startup-sentinel",
+      "title": "Existing saved prompt",
+      "content": "Startup exit must preserve this previously saved content.",
+      "pinned": true,
+      "createdAt": 1792000000000,
+      "updatedAt": 1792000000000
+    }
+  ]
+}

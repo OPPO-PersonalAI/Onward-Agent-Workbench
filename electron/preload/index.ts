@@ -398,7 +398,7 @@ export interface AppStateAPI {
   save: (state: AppState) => Promise<boolean>
   savePatch: (patch: Partial<AppState>) => Promise<boolean>
   flush: () => Promise<boolean>
-  onFlushPendingState: (callback: () => void | Promise<void>) => void
+  onFlushPendingState: (callback: () => void | Promise<void>) => () => void
 }
 
 export type GitChangeType = 'unstaged' | 'staged' | 'untracked' | 'conflict'
@@ -1777,14 +1777,23 @@ const appStateAPI: AppStateAPI = {
   },
 
   onFlushPendingState: (callback: () => void | Promise<void>) => {
-    ipcRenderer.on(IPC.APP_STATE_FLUSH_PENDING, async () => {
+    const listener = async () => {
+      let success = false
       try {
         await callback()
+        success = true
       } catch (error) {
         console.error('[AppState] flush callback failed:', error)
       }
-      ipcRenderer.send(IPC.APP_STATE_FLUSH_DONE)
-    })
+      try {
+        ipcRenderer.send(IPC.DEBUG_PERF_TRACE, {
+          event: PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, data: { phase: 'ack-sent', success }
+        })
+      } catch { /* Diagnostics cannot suppress the state-flush acknowledgment. */ }
+      ipcRenderer.send(IPC.APP_STATE_FLUSH_DONE, { success })
+    }
+    ipcRenderer.on(IPC.APP_STATE_FLUSH_PENDING, listener)
+    return () => ipcRenderer.removeListener(IPC.APP_STATE_FLUSH_PENDING, listener)
   }
 }
 

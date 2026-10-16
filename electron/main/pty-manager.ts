@@ -12,7 +12,7 @@ import { app } from 'electron'
 import { getApiPort } from './api-server'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { performanceTrace } from './performance-trace'
-import { buildColorCapableTerminalEnv, resolveUserZdotdirForShellIntegration } from './terminal-env'
+import { buildColorCapableTerminalEnv, resolveUserZdotdirForShellIntegration, isolateWindowsShellArgsForAutotest } from './terminal-env'
 import { resolveExistingTerminalCwd } from './terminal-cwd-validation'
 import { buildPowerShellInlineIntegrationCommand } from './powershell-inline-integration'
 import { parseOsc633Cwd, parseOsc7Cwd, parseOsc9Cwd } from '../../src/utils/terminal-cwd-osc'
@@ -25,6 +25,10 @@ export interface PtyOptions {
   command?: string
   args?: string[]
 }
+
+const AUTOTEST_WINDOWS_CLEAN_SHELL = platform() === 'win32' && process.env.ONWARD_AUTOTEST === '1' &&
+  process.env.ONWARD_AUTOTEST_WINDOWS_CLEAN_SHELL === '1'
+if (AUTOTEST_WINDOWS_CLEAN_SHELL) console.log('[Autotest] Isolated Windows shell startup enabled')
 
 type PtyExitEvent = { exitCode: number; signal?: number }
 type PtySequencePhase = 'content' | 'enter'
@@ -176,6 +180,7 @@ export class PtyManager {
       }
     }
 
+    if (AUTOTEST_WINDOWS_CLEAN_SHELL) execArgs = isolateWindowsShellArgsForAutotest(shellKind, execArgs)
     const initialCwd = cwd || process.env.HOME || process.env.USERPROFILE || process.cwd()
 
     const spawnStartMs = Date.now()

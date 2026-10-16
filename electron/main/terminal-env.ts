@@ -8,6 +8,13 @@ export interface TerminalEnvVarEntry {
   value?: string
 }
 
+/** Autotest-only Windows startup: flags must precede PowerShell's -Command. */
+export function isolateWindowsShellArgsForAutotest(kind: string, args: string[]): string[] {
+  if (kind === 'powershell') return ['-NoProfile', '-NonInteractive', ...args]
+  if (kind === 'cmd') return ['/d', ...args]
+  return args.slice()
+}
+
 function findEnvKey(env: NodeJS.ProcessEnv, targetKey: string): string | undefined {
   const normalizedTarget = targetKey.toLowerCase()
   return Object.keys(env).find(key => key.toLowerCase() === normalizedTarget)

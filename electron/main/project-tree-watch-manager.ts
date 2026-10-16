@@ -4,8 +4,10 @@
  */
 
 import { existsSync } from 'fs'
-import { readdir, stat } from 'fs/promises'
-import * as parcelWatcher from '@parcel/watcher'
+import { readdir, stat, realpath } from 'fs/promises'
+import { watcherService } from './watcher-service-client'
+import type { WatchSubscription, WatchEvent } from './watcher-rpc'
+import { isCurrentWatchSubscription, WatcherConnectionError } from './watcher-rpc'
 import type { BrowserWindow } from 'electron'
 import { join, normalize } from 'path'
 import { IPC } from '../shared/ipc-channels'
@@ -16,7 +18,8 @@ import type { ProjectTreeWatchIgnoreReason } from './project-tree-watch-ignore'
 import { parcelEventAction } from './project-tree-watch-classify'
 
 interface TreeEntry {
-  subscription: parcelWatcher.AsyncSubscription | null
+  subscribeGeneration: number
+  subscription: WatchSubscription | null
   pendingAdded: Set<string>
   pendingRemoved: Set<string>
   pendingResync: boolean
@@ -79,6 +82,7 @@ export class ProjectTreeWatchManager {
     if (!existsSync(fullPath)) return
 
     const entry: TreeEntry = {
+      subscribeGeneration: 0,
       subscription: null,
       pendingAdded: new Set(),
       pendingRemoved: new Set(),
@@ -105,9 +109,18 @@ export class ProjectTreeWatchManager {
   }
 
   private async subscribe(fullPath: string, entry: TreeEntry): Promise<void> {
+    const generation = ++entry.subscribeGeneration
+    const started = performance.now()
     try {
-      const subscription = await parcelWatcher.subscribe(fullPath, (err, events) => {
-        if (entry.disposed) return
+      // FSEvents reports physical paths. Keep the renderer's logical cwd, but
+      // subscribe/classify against the same physical root (including /var aliases).
+      const nativeRoot = await realpath(fullPath)
+      if (!isCurrentWatchSubscription(entry.disposed, generation, entry.subscribeGeneration)) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROJECT_TREE_WATCH_SUBSCRIBE, { outcome: 'disposed-before-subscribe' })
+        return
+      }
+      const subscription = await watcherService.subscribe(nativeRoot, (err, events) => {
+        if (!isCurrentWatchSubscription(entry.disposed, generation, entry.subscribeGeneration)) return
         if (err) {
           // The watcher faulted (overflow / backend error). We cannot trust the
           // incremental state any more, so ask the renderer to discard its
@@ -115,13 +128,20 @@ export class ProjectTreeWatchManager {
           // "filename === null" path.
           entry.pendingResync = true
           this.scheduleFlush(entry)
+          if (err instanceof WatcherConnectionError) {
+            performanceTrace.record(PERF_TRACE_EVENT.MAIN_WATCHER_SERVICE_LIFECYCLE, { phase: 'tree-resubscribe', generation })
+            const previous = entry.subscription
+            entry.subscription = null
+            void previous?.unsubscribe().catch(() => {})
+            void this.subscribe(fullPath, entry)
+          }
           return
         }
         for (const event of events) {
-          this.handleEvent(fullPath, entry, event)
+          this.handleEvent(nativeRoot, entry, event)
         }
       })
-      if (entry.disposed) {
+      if (!isCurrentWatchSubscription(entry.disposed, generation, entry.subscribeGeneration)) {
         // stop() raced ahead of subscribe() resolving — tear the subscription
         // down immediately so we don't leak a live watcher.
         try {
@@ -138,9 +158,12 @@ export class ProjectTreeWatchManager {
       entry.subscription = subscription
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROJECT_TREE_WATCH_SUBSCRIBE, {
         cwd: entry.cwdForRenderer,
-        outcome: 'ok'
+        outcome: 'ok',
+        canonicalized: nativeRoot !== fullPath,
+        durationMs: performance.now() - started
       })
     } catch (error) {
+      if (!isCurrentWatchSubscription(entry.disposed, generation, entry.subscribeGeneration)) return
       // Subscribe failed (path vanished, permission, backend unavailable). Fall
       // back to in-app invalidation from UI-driven mutations, as before.
       entry.subscription = null
@@ -186,7 +209,7 @@ export class ProjectTreeWatchManager {
     }
   }
 
-  private handleEvent(fullPath: string, entry: TreeEntry, event: parcelWatcher.Event): void {
+  private handleEvent(fullPath: string, entry: TreeEntry, event: WatchEvent): void {
     if (entry.disposed) return
     const rel = toRelativeRendererPath(fullPath, event.path)
     if (!rel) return

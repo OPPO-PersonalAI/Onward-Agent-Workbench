@@ -139,13 +139,13 @@ SCRIPTS: List[str] = [
     "test/autotest/run-git-diff-chaos-convergence-autotest.sh",
     "test/autotest/run-git-diff-nested-gitlink-autotest.sh",
     "test/autotest/run-git-large-file-confirmation-autotest.sh",
-    # Split into -a (3 trials) + -b (2 trials): the whole 5-trial quit suite
-    # overran its 180s budget under full-regression load (class-2). Shared body
-    # stays in run-git-state-mirror-quit-autotest.sh (runnable whole, default 5).
+    # Quit matrix split by setup/failure scope. Each scenario repeats five
+    # times internally; injected deadline cases have their own <300s runner.
     "test/autotest/run-git-state-mirror-quit-a-autotest.sh",
     "test/autotest/run-git-state-mirror-quit-b-autotest.sh",
-    # POSIX-only: SIGTERM/SIGINT must drive the bounded no-confirm graceful
-    # quit (2026-07-31 fix) instead of parking on the confirm dialog.
+    "test/autotest/run-watcher-service-faults-autotest.sh",
+    "test/autotest/run-watcher-service-shutdown-autotest.sh",
+    # POSIX signals plus cross-platform abrupt parent death / orphan cleanup.
     "test/autotest/run-signal-quit-autotest.sh",
     # Split into 4 sub-5-min runners: the whole suite overran 1500s (class-2).
     # static (fast, EDR-independent) + gsm17 + gsm18 baseline groups + the 3
@@ -558,7 +558,7 @@ CRASH_ALLOWED_HELPER_SUFFIXES = {
 # The quit hard floor does NOT abort (app.exit(0), no .ips) — it is detected
 # via these unconditional log tokens instead. Policy: a tripped floor means
 # quit teardown HUNG past its ceiling; that is a real defect, so it FAILs.
-HARD_FLOOR_LOG_TOKENS = ("[Quit] teardown exceeded", "debug-quit:hard-exit-floor")
+HARD_FLOOR_LOG_TOKENS = ("[Quit] teardown exceeded", "debug-quit:hard-exit-floor", "[QuitPhase] deadline ")
 
 
 def match_crash_report_filename(filename: str, app_name: str) -> Optional[str]:

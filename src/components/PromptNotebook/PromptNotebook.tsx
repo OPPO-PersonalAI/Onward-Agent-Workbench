@@ -14,6 +14,7 @@ import { performanceTrace } from '../../utils/performance-trace'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { decideDraftPreservation } from './prompt-draft-preservation'
+import { pendingStateFlush, snapshotPromptDraft } from '../../utils/pending-state-flush'
 import type { ScheduleNotification } from '../../hooks/useScheduleEngine'
 import { useModalEscape, useModalOpenRegistration } from '../../hooks/useModalEscape'
 import { PromptSearch } from './PromptSearch'
@@ -1708,6 +1709,22 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onContentChangeRef.current = onContentChange
   onTitleChangeRef.current = onTitleChange
   onEditorDraftChangeRef.current = onEditorDraftChange
+
+  useEffect(() => {
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'editor-registered' })
+    const unregister = pendingStateFlush.register(() => {
+      if (!hasMountedRef.current) return
+      if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
+      parentNotifyTimerRef.current = null
+      const content = editorRef.current?.innerText ?? ''
+      onEditorDraftChangeRef.current(snapshotPromptDraft(titleRef.current, content, heightRef.current, Date.now()))
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'editor-collected', characters: content.length })
+    })
+    return () => {
+      unregister()
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'editor-unregistered' })
+    }
+  }, [])
 
   // Re-render (button-disabled only) when the empty<->non-empty flag flips.
   // /\S/.test stops at the first non-whitespace char (O(1) for real content).

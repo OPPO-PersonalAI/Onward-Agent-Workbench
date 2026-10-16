@@ -377,6 +377,7 @@ class PerformanceTrace {
   readonly captureContent = this.enabled && process.env.ONWARD_PERF_TRACE_CAPTURE_CONTENT === '1'
 
   private initialized = false
+  private lifecycleHooksRegistered = false
   // Counter of accepted events. Replaces the legacy in-memory ring's
   // `events.length`; surfaced via `getStatus()` so PT-08 / external
   // diagnostics keep working after the move to NDJSON chunks.
@@ -454,11 +455,16 @@ class PerformanceTrace {
         process.kill(process.pid, signal)
       }
     }
-    process.once('SIGTERM', () => onTerminationSignal('SIGTERM'))
-    process.once('SIGINT', () => onTerminationSignal('SIGINT'))
-    if (electronApp) {
-      try { electronApp.once('will-quit', shutdown) } catch { /* lifecycle missing */ }
-      try { electronApp.once('before-quit', shutdown) } catch { /* lifecycle missing */ }
+    // stop() can be followed by record() while quit is deferred. Reinitializing
+    // the trace stream must not add another set of process-lifetime listeners.
+    if (!this.lifecycleHooksRegistered) {
+      this.lifecycleHooksRegistered = true
+      process.once('SIGTERM', () => onTerminationSignal('SIGTERM'))
+      process.once('SIGINT', () => onTerminationSignal('SIGINT'))
+      if (electronApp) {
+        try { electronApp.once('will-quit', shutdown) } catch { /* lifecycle missing */ }
+        try { electronApp.once('before-quit', shutdown) } catch { /* lifecycle missing */ }
+      }
     }
 
     // Record the first real event after the metadata.
@@ -473,7 +479,8 @@ class PerformanceTrace {
       appVersion,
       buildChannel: appInfo?.buildChannel ?? 'unknown',
       contentCaptured: this.captureContent,
-      transport: 'trace-store-ndjson'
+      transport: 'trace-store-ndjson',
+      lifecycleHooksRegistered: this.lifecycleHooksRegistered
     })
   }
 

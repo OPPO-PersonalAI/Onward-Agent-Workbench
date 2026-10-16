@@ -39,6 +39,8 @@ import {
 import { resolveExistingTerminalCwd } from './terminal-cwd-validation'
 import { getTelemetryService } from './telemetry/telemetry-service'
 import { shouldRespawnGitStateMirrorWorker } from './git-state-mirror-teardown'
+import { bindWatcherWorker } from './watcher-service-client'
+import { isWatchCommand } from './watcher-rpc'
 import type {
   MainToMirrorMessage,
   MirrorToMainMessage,
@@ -97,13 +99,6 @@ interface FileBodyPending {
 }
 
 const WORKER_REQUEST_TIMEOUT_MS = 30_000
-// Generous: the worker now proves native @parcel/watcher quiesce before exiting,
-// which can take up to its settle ceiling under churn. terminate() only fires if
-// this elapses with NO shutdown-complete ack (the unsafe last resort).
-const WORKER_SHUTDOWN_TIMEOUT_MS = 15_000
-// Once the worker HAS acked native quiesce, a slow exit can be terminated safely
-// after this short grace (no live native async-work remains to corrupt teardown).
-const ACK_TERMINATE_GRACE_MS = 1_000
 
 type MirrorUpdateListener = (cwd: string, state: MirrorState, delta: MirrorDelta) => void
 /**
@@ -128,15 +123,10 @@ class GitStateMirrorRouter {
   private workerReady = false
   private respawnAttempt = 0
   private disposingWorkers = new WeakSet<Worker>()
-  private workerShutdownTimers = new WeakMap<Worker, ReturnType<typeof setTimeout>>()
   private workerShutdownStartedAt = new WeakMap<Worker, number>()
-  private workerShutdownTimedOut = new WeakSet<Worker>()
   private disposePromise: Promise<void> | null = null
-  // Teardown-quiesce gating (the @parcel/watcher worker-teardown SIGABRT fix).
-  // A worker that has emitted 'shutdown-complete' has PROVEN native quiescence,
-  // so terminate() becomes safe; until then terminate is the unsafe last resort.
+  // Tracks computational shutdown only; native drain belongs to WatcherService.
   private shutdownAcked = new WeakSet<Worker>()
-  private ackTerminateTimers = new WeakMap<Worker, ReturnType<typeof setTimeout>>()
   // Respawn cancellation: dispose() must not let a worker that died near quit
   // respawn a fresh watcher-bearing worker into a quitting app (the compounding
   // teardown path). `disposed` latches the router as torn down; `respawnTimer`
@@ -205,15 +195,20 @@ class GitStateMirrorRouter {
     this.registerWebContentsCleanup()
   }
 
-  dispose(): Promise<void> {
+  beginShutdown(): void {
     // Latch torn-down and cancel any pending respawn FIRST so a worker that died
     // near quit cannot spawn a fresh watcher-bearing worker into a quitting app.
     this.disposed = true
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_WATCHER_SERVICE_LIFECYCLE, { phase: 'mirror-admission-closed' })
     if (this.respawnTimer) {
       clearTimeout(this.respawnTimer)
       this.respawnTimer = null
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_STATE_MIRROR_RESPAWN_CANCELLED, { reason: 'dispose' })
     }
+  }
+
+  dispose(): Promise<void> {
+    this.beginShutdown()
     if (this.disposePromise) {
       this.clearLocalState()
       return this.disposePromise
@@ -227,23 +222,8 @@ class GitStateMirrorRouter {
     this.worker = null
     this.workerReady = false
 
-    let timer: ReturnType<typeof setTimeout> | null = null
     const exitPromise = new Promise<void>((resolve) => {
-      worker.once('exit', () => {
-        if (timer) clearTimeout(timer)
-        resolve()
-      })
-      timer = setTimeout(() => {
-        this.workerShutdownTimedOut.add(worker)
-        // Last resort: NO shutdown-complete ack within the timeout. Terminating
-        // now is unsafe (a live @parcel/watcher PromiseRunner async-work may
-        // still be queued in the worker loop) but necessary to avoid a hung
-        // quit. The ack-gated safe-terminate path (handleWorkerMessage) is the
-        // normal route; this fires only when the worker is genuinely wedged.
-        if (!this.shutdownAcked.has(worker)) worker.terminate().catch(() => { /* ignore */ })
-      }, WORKER_SHUTDOWN_TIMEOUT_MS)
-      timer.unref?.()
-      this.workerShutdownTimers.set(worker, timer)
+      worker.once('exit', () => resolve())
     })
 
     try {
@@ -293,11 +273,13 @@ class GitStateMirrorRouter {
       return
     }
     const worker = this.worker
+    bindWatcherWorker(worker)
     // Lifecycle breadcrumb (run-git-state-mirror-quit trial-5 hang): shows a new
     // worker was created; pair with 'worker ready' / 'worker EXITED' to locate a
     // stall between spawn and ready.
     console.log('[GitStateMirrorRouter] worker spawn', { respawnAttempt: this.respawnAttempt })
     worker.on('message', (msg: unknown) => {
+      if (isWatchCommand(msg)) return
       // Worker → main perf-trace forwarding lands on the dedicated tid
       // lane so Perfetto UI shows "git-state-mirror-worker" as its own row
       // (matches the convention used by git-ipc-worker / ripgrep-search).
@@ -317,26 +299,14 @@ class GitStateMirrorRouter {
       console.error('[GitStateMirrorRouter] worker error:', error, error?.stack)
     })
     worker.on('exit', (code) => {
-      const shutdownTimer = this.workerShutdownTimers.get(worker)
-      if (shutdownTimer) clearTimeout(shutdownTimer)
-      this.workerShutdownTimers.delete(worker)
-      const ackTimer = this.ackTerminateTimers.get(worker)
-      if (ackTimer) clearTimeout(ackTimer)
-      this.ackTerminateTimers.delete(worker)
-      // Capture the cooperative-quiesce ack BEFORE deleting it so the exit log
-      // below can classify a code-1 exit: acked=true => SAFE (worker proved
-      // quiescence via shutdown-complete, then the post-ack grace terminated it);
-      // acked=false + terminated-after-timeout => UNSAFE 15s-no-ack wedge.
+      // Distinguish a computational shutdown acknowledgment from unexpected exit.
       const wasAcked = this.shutdownAcked.has(worker)
       this.shutdownAcked.delete(worker)
 
       const wasDisposing = this.disposingWorkers.delete(worker)
       const shutdownStartedAt = this.workerShutdownStartedAt.get(worker)
       this.workerShutdownStartedAt.delete(worker)
-      const shutdownTimedOut = this.workerShutdownTimedOut.delete(worker)
-      const shutdownResult = shutdownTimedOut
-        ? 'terminated-after-timeout'
-        : code === 0 ? 'clean-exit' : 'nonzero-exit'
+      const shutdownResult = code === 0 ? 'clean-exit' : 'nonzero-exit'
       const shutdownDurationMs = shutdownStartedAt !== undefined ? Date.now() - shutdownStartedAt : null
       if (wasDisposing && shutdownStartedAt !== undefined) {
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_STATE_MIRROR_WORKER_SHUTDOWN, {
@@ -358,10 +328,6 @@ class GitStateMirrorRouter {
         code,
         respawnAttempt: this.respawnAttempt,
         exitedAt: new Date().toISOString(),
-        // Diagnostic breadcrumbs (run-git-state-mirror-quit GSMQ-04): classify a
-        // code-1 exit. disposing=true + acked=true + nonzero-exit = SAFE post-ack
-        // terminate (by design under extreme churn); terminated-after-timeout +
-        // acked=false = UNSAFE 15s wedge (real bug). durationMs = quit->exit.
         disposing: wasDisposing,
         result: shutdownResult,
         acked: wasAcked,
@@ -428,32 +394,16 @@ class GitStateMirrorRouter {
         console.log('[GitStateMirrorRouter] worker ready')
         return
       case 'shutdown-complete': {
-        // The worker PROVED native @parcel/watcher quiescence before closing its
-        // port. Record it, mark the ack (so the unsafe terminate timer is now
-        // gated off), and schedule a SHORT safe-terminate grace as a backstop in
-        // case the exit is slow — terminating after the ack cannot corrupt
-        // teardown because no live native async-work remains.
+        // This acknowledgment covers worker computations and proxy requests.
+        // The separate utility-process drain is awaited by the quit coordinator.
         this.shutdownAcked.add(worker)
-        // Diagnostic breadcrumb to the app log (rules-of-evidence): the worker
-        // PROVED native @parcel/watcher quiescence (shutdown-complete ack) BEFORE
-        // any teardown — the authoritative "drained cooperatively" signal,
-        // regardless of whether the subsequent exit is a natural code-0 or a SAFE
-        // post-ack-grace terminate (code 1); both are SIGABRT-free. Previously
-        // this proof was only a trace-store perf event, invisible in a quit-bug
-        // report's app log. The token 'shutdown-quiesced' matches the perf-event
-        // name so the signal is greppable in either surface.
         console.log('[GitStateMirrorRouter] worker shutdown-quiesced (ack received)', { quiesce: msg.quiesce ?? null })
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_STATE_MIRROR_WORKER_SHUTDOWN_ACK, {
           quiesce: msg.quiesce ?? null
         })
-        if (!this.ackTerminateTimers.has(worker)) {
-          const ackTimer = setTimeout(() => {
-            this.ackTerminateTimers.delete(worker)
-            if (this.disposingWorkers.has(worker)) worker.terminate().catch(() => { /* ignore */ })
-          }, ACK_TERMINATE_GRACE_MS)
-          ackTimer.unref?.()
-          this.ackTerminateTimers.set(worker, ackTimer)
-        }
+        // Native watchers are isolated in the utility process. This worker now
+        // owns only computation and proxy requests, so no native grace is needed.
+        if (this.disposingWorkers.has(worker)) void worker.terminate().catch(() => {})
         return
       }
       case 'mirror-update':

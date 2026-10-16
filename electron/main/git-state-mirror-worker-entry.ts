@@ -24,7 +24,8 @@ import { delimiter, isAbsolute, join, resolve as resolvePath } from 'path'
 import { platform } from 'os'
 import { parentPort } from 'worker_threads'
 import { promisify } from 'util'
-import * as parcelWatcher from '@parcel/watcher'
+import * as parcelWatcher from './watcher-worker-proxy'
+import { isWatchReply } from './watcher-rpc'
 
 import {
   beginMirrorRecompute,
@@ -76,9 +77,6 @@ import type {
   MirrorWatcherHealth,
   MirrorWatcherStatus
 } from './git-state-mirror-types'
-import {
-  awaitWatcherQuiescenceWithSettle
-} from './git-state-mirror-teardown'
 
 const execFileAsync = promisify(execFile)
 
@@ -113,12 +111,8 @@ function admitKindForReason(
       return 'user'
   }
 }
-// The native-quiesce barrier + its constants (NATIVE_WATCHER_SETTLE_MS, the
-// deadline) live in the pure leaf `git-state-mirror-teardown.ts` so the
-// unsubscribe-settled -> drain -> close ordering is unit-tested without an
-// Electron build. shutdownWorker proves real native quiescence (zero live
-// @parcel/watcher subscriptions, zero pending unsubscribes) before closing the
-// port, instead of the old blind 250 ms sleep — see that module for the why.
+// Native subscriptions live in WatcherServiceRegistry in the utility process.
+// This worker owns only proxy requests; the application coordinator owns quit.
 
 // Always-on reconcile heartbeat (parallel to the watcher; constraint H1 — runs
 // in THIS worker thread, never main). The scheduler gates the real cadence
@@ -162,26 +156,12 @@ interface MirrorWatcherGroup {
 const watcherGroups = new Map<string, MirrorWatcherGroup>()
 const entryToGroupKey = new Map<string, string>()
 
-// Native-quiesce accounting for the @parcel/watcher teardown race. Every
-// successful parcelWatcher.subscribe() bumps the counter; every unsubscribe()
-// promise is tracked until it settles. shutdownWorker() waits on BOTH reaching
-// zero before parentPort.close() so no PromiseRunner async-work outlives the env.
-// INVARIANT: every increment MUST have a paired decrement on EVERY dispose path
-// (success, throw, cancel) — a leaked count would wedge shutdown until the
-// deadline. Enforced by the dispose closure's finally + a unit test.
+// Proxy ownership accounting. No watcher.node code runs in this environment.
 let activeWatcherSubscriptions = 0
 const pendingUnsubscribes = new Set<Promise<unknown>>()
 
-// CALL-TIME tracking of EVERY native @parcel/watcher op (subscribes AND
-// unsubscribes). The 2026-07-23 SIGABRT investigation proved the two counters
-// above are not enough: binding.cc queues the napi_async_work synchronously
-// inside the binding call, but activeWatcherSubscriptions is only bumped after
-// the subscribe promise RESOLVES — an in-flight subscribe was invisible to the
-// quiesce barrier, its completion drained into the dead env during
-// Environment::CleanupHandles, and node-addon-api escalated to
-// napi_fatal_error -> abort() (whole-process SIGABRT; identical stack on
-// Electron 39 prod and Electron 43 dev). Every native call MUST go through one
-// of the two wrappers below so the op is in this set before the binding runs.
+// Track pending subscription RPCs so the cooperative computational shutdown
+// still accounts for a subscribe completion arriving after its shutdown gate.
 const pendingNativeWatcherOps = new Set<Promise<unknown>>()
 
 /** Track a native watcher op from call time. NO shutdown gate — used for
@@ -1631,38 +1611,15 @@ async function shutdownWorker(): Promise<void> {
   entryToGroupKey.clear()
   bodyCache.clear()
   mirrorGenerations.clear()
-  // Real native quiesce barrier with settle re-validation. Waits until: zero
-  // live subscriptions, zero pending unsubscribes, AND zero call-time-tracked
-  // in-flight native ops (the 2026-07-23 hole: an in-flight subscribe was
-  // invisible to the old two-counter barrier, its PromiseRunner completion
-  // drained into the freed env during CleanupHandles -> napi_fatal_error ->
-  // whole-process SIGABRT). After the settle delay the barrier RE-VALIDATES —
-  // a subscribe resolving mid-settle queues a compensating unsubscribe that a
-  // single-pass barrier would have missed. Bounded by an overall deadline so
-  // a leaked counter can never wedge teardown (the router's terminate
-  // backstop is only provably safe AFTER shutdown-complete).
-  const { deadlineHit, spunMs, requiesceCount } = await awaitWatcherQuiescenceWithSettle({
-    getActive: () => activeWatcherSubscriptions,
-    getPending: () => pendingUnsubscribes.size,
-    settlePending: () => Promise.allSettled(Array.from(pendingUnsubscribes)).then(() => undefined),
-    getPendingOps: () => pendingNativeWatcherOps.size,
-    settlePendingOps: () => Promise.allSettled(Array.from(pendingNativeWatcherOps)).then(() => undefined),
-    delay,
-    now: Date.now
-  })
-  if (requiesceCount > 0) {
-    performanceTrace.record(PERF_TRACE_EVENT.WORKER_GIT_STATE_MIRROR_SHUTDOWN_REQUIESCE, {
-      requiesceCount,
-      spunMs
-    })
-  }
+  // Native teardown belongs exclusively to the utility process. Settle proxy
+  // requests here without a second timeout or a guessed native debounce sleep.
+  await Promise.allSettled([...pendingNativeWatcherOps, ...pendingUnsubscribes])
   const quiesce = {
     activeSubscriptions: activeWatcherSubscriptions,
     pendingUnsubscribes: pendingUnsubscribes.size,
     pendingNativeOps: pendingNativeWatcherOps.size,
-    settledMs: spunMs,
-    requiesceCount,
-    deadlineHit
+    settledMs: 0,
+    deadlineHit: false
   }
   performanceTrace.record(PERF_TRACE_EVENT.WORKER_GIT_STATE_MIRROR_SHUTDOWN_QUIESCED, quiesce)
   emit({ kind: 'shutdown-complete', quiesce })
@@ -1740,6 +1697,7 @@ if (!parentPort) {
 }
 
 parentPort.on('message', (msg: MainToMirrorMessage) => {
+  if (isWatchReply(msg)) return
   switch (msg.kind) {
     case 'attach-watch':
       if (!shuttingDown) trackOperation('attach-watch', handleAttachWatch(msg.cwd))

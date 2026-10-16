@@ -17,6 +17,8 @@ export default defineConfig({
           'git-status-worker-entry': resolve(__dirname, 'electron/main/git-status-worker-entry.ts'),
           'git-ipc-worker-entry': resolve(__dirname, 'electron/main/git-ipc-worker-entry.ts'),
           'git-state-mirror-worker-entry': resolve(__dirname, 'electron/main/git-state-mirror-worker-entry.ts'),
+          'watcher-service-entry': resolve(__dirname, 'electron/main/watcher-service-entry.ts'),
+          'watcher-owner-watchdog-entry': resolve(__dirname, 'electron/main/watcher-owner-watchdog-entry.ts'),
           'sqlite-worker-entry': resolve(__dirname, 'electron/main/sqlite-worker-entry.ts'),
           'app-state-worker-entry': resolve(__dirname, 'electron/main/app-state-worker-entry.ts'),
           'project-fs-worker-entry': resolve(__dirname, 'electron/main/project-fs-worker-entry.ts'),

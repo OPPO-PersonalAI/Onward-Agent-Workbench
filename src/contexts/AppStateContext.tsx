@@ -22,6 +22,7 @@ import { isValidCustomLayoutCells } from '../utils/custom-layout-validator'
 import { canonicalizeTerminalCwdForPersist } from '../utils/terminal-cwd-osc'
 import { appStateContentChanged } from '../utils/app-state-diff'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
+import { pendingStateFlush, awaitInitialStateForFlush } from '../utils/pending-state-flush'
 
 export const normalizeProjectCwd = normalizeProjectCwdImpl
 
@@ -520,6 +521,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   stateRef.current = state
   const lastPersistedStateRef = useRef<AppState | null>(null)
   const [isLoaded, setIsLoaded] = useState(false)
+  const initialLoadRef = useRef<Promise<boolean> | null>(null)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const draftSaveTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
@@ -618,13 +620,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           await window.electronAPI.appState.save(normalizedState)
           lastPersistedStateRef.current = normalizedState
         }
+        return true
       } catch (error) {
         console.error('Failed to load app state:', error)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'initial-load-failed' })
+        return false
       } finally {
         setIsLoaded(true)
       }
     }
-    load()
+    initialLoadRef.current = load()
   }, [])
 
   useEffect(() => {
@@ -644,7 +649,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Flush all pending debounced saves immediately (called before app quit/update)
   useEffect(() => {
-    window.electronAPI.appState.onFlushPendingState(async () => {
+    return window.electronAPI.appState.onFlushPendingState(async () => {
+      const started = performance.now()
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'initial-load-wait' })
+      await awaitInitialStateForFlush(initialLoadRef.current)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'collect-start' })
+      // Publish component-local input synchronously before inspecting pending maps.
+      const participants = pendingStateFlush.flush()
       // Cancel all pending timers
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
@@ -705,9 +716,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Await save to ensure data is written to disk before quit proceeds
-      await window.electronAPI.appState.save(finalState)
-      await window.electronAPI.appState.flush()
+      if (!await window.electronAPI.appState.save(finalState)) throw new Error('Final AppState save rejected')
+      if (!await window.electronAPI.appState.flush()) throw new Error('Final AppState flush rejected')
       lastPersistedStateRef.current = finalState
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'saved', participants, durationMs: performance.now() - started })
     })
   }, [])
 

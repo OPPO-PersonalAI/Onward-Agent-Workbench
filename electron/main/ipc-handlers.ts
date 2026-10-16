@@ -4,6 +4,7 @@
  */
 
 import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron'
+import { tMain } from './localization'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { existsSync, lstatSync, readFileSync, writeFileSync, statSync } from 'fs'
 import { ptyManager, PtyOptions } from './pty-manager'
@@ -424,6 +425,7 @@ const promptBridgeCallbacks = new Map<string, {
 let promptBridgeCounter = 0
 
 interface RegisterIpcHandlersOptions {
+  isQuitting?: () => boolean
   onSettingsChanged?: (settings: SettingsState) => void
   onRestartToApplyUpdate?: () => Promise<{ success: boolean; error?: string }>
   onGracefulQuitForDebug?: () => Promise<{ success: boolean; error?: string }>
@@ -534,6 +536,7 @@ export function sendPromptViaBridge(
 }
 
 export function registerIpcHandlers(mainWindow: BrowserWindow, options: RegisterIpcHandlersOptions = {}): void {
+  const isQuitting = options.isQuitting ?? (() => false)
   registerThemeImportHandlers()
   registerThemeExportHandlers()
   const shouldLog = process.env.ONWARD_DEBUG === '1' || process.env.ELECTRON_ENABLE_LOGGING === '1'
@@ -1398,20 +1401,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       return
     }
 
-    // Flush telemetry and stop PTYs before debug/autotest exit.
-    const timeout = new Promise<void>((resolve) => setTimeout(resolve, 8000))
-    const shutdown = Promise.all([
-      getTelemetryService().shutdown().catch(() => {}),
-      ptyManager.shutdownAll().then((result) => {
-        if (result.timedOut > 0) {
-          console.warn(`[PTY] debug quit shutdown timed out: ${result.timedOut}/${result.total}`)
-        }
-      }).catch((error) => {
-        console.warn('[PTY] debug quit shutdown failed:', error)
-      })
-    ]).then(() => cleanupIpcHandlers())
-
-    Promise.race([shutdown, timeout]).finally(() => app.exit(0))
+    // The application lifecycle hook owns the same coordinator for all callers.
+    app.quit()
   })
 
   // Saved cwd for terminals running coding agents, so that
@@ -1420,6 +1411,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   const agentRestartCwdMap = new Map<string, string>()
 
   const createTerminalProcess = (id: string, options?: PtyOptions) => {
+    if (isQuitting()) {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'terminal-create-refused' })
+      return { success: false, error: tMain('common.appQuitting') }
+    }
     try {
       let restoredPersistedCwd: string | null = null
 

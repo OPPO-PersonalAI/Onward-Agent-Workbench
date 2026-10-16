@@ -79,6 +79,13 @@ export const PERF_TRACE_EVENT = {
   MAIN_DIAGNOSTIC_BUNDLE_SYNC_FALLBACK: 'main:diagnostic-bundle.sync-fallback-used',
   MAIN_APP_STATE_SYNC_FALLBACK: 'main:app-state.sync-fallback-used',
   MAIN_QUIT_HARD_FLOOR_TRIGGERED: 'main:quit.hard-floor-triggered',
+  MAIN_QUIT_COORDINATOR: 'main:quit.coordinator-phase',
+  MAIN_WATCHER_SERVICE_LIFECYCLE: 'main:watcher-service.lifecycle',
+  UTILITY_WATCHER_LIFECYCLE: 'utility:watcher-service.lifecycle',
+  UTILITY_WATCHER_BATCH_STATS: 'utility:watcher-service.batch-stats',
+  WORKER_WATCHER_RPC: 'worker:watcher-service.rpc',
+  MAIN_WATCHER_RELAY_STATS: 'main:watcher-service.relay-stats',
+  RENDERER_QUIT_STATE_FLUSH: 'renderer:quit.state-flush',
   // Renderer-visibility watchdog (window frontmost but renderer stuck
   // `hidden`: no rAF, no paint; recovery push mirrors the GPU-crash path).
   MAIN_VISIBILITY_WATCHDOG_MISMATCH: 'main:visibility-watchdog.mismatch-detected',

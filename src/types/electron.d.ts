@@ -256,7 +256,7 @@ export interface AppStateAPI {
   save: (state: AppState) => Promise<boolean>
   savePatch: (patch: Partial<AppState>) => Promise<boolean>
   flush: () => Promise<boolean>
-  onFlushPendingState: (callback: () => void | Promise<void>) => void
+  onFlushPendingState: (callback: () => void | Promise<void>) => () => void
 }
 
 export type GitChangeType = 'unstaged' | 'staged' | 'untracked' | 'conflict'

@@ -3,609 +3,428 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { spawn, execFile } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:net'
-import { join } from 'node:path'
+import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { _electron as electron } from 'playwright-core'
 
-const execFileAsync = promisify(execFile)
+const exec = promisify(execFile)
+const ROOT = process.env.REPO_ROOT || process.cwd()
+const APP_BIN = process.env.APP_BIN
+const GROUP = process.env.GSM_QUIT_GROUP || 'normal'
+const TRIALS = 5
+// User-approved total, shared with production. The observer timeout is only
+// a test-harness kill guard, never the latency acceptance threshold.
+const EXIT_BUDGET_MS = 10_000
+const OBSERVER_TIMEOUT_MS = 15_000
+const LOG = process.env.LOG_FILE || join(ROOT, 'traces/test-logs', `quit-${GROUP}.log`)
+const RESULT = process.env.RESULT_FILE || join(ROOT, 'traces/analysis', `quit-${GROUP}.json`)
+const fixtures = join(ROOT, 'test/autotest/fixtures/quit-stress')
+const draft = JSON.parse(readFileSync(join(fixtures, 'prompt-draft.json'), 'utf8'))
+const groups = {
+  normal: ['startup', 'menu', 'duplicate', 'cancel', 'external', 'window'],
+  pressure: ['churn', 'pending-subscribe', 'pending-unsubscribe', 'recovery', 'update'],
+  faults: ['service-exit', 'exit-race', 'save-hang', 'telemetry-hang'],
+  'service-shutdown': ['shutdown-hang', 'blocked-service'],
+  signals: process.platform === 'win32' ? ['parent-death'] : ['sigterm', 'sigint', 'parent-death']
+}
+const scenarios = process.env.GSM_QUIT_CASE
+  ? groups[GROUP]?.filter(scenario => scenario === process.env.GSM_QUIT_CASE)
+  : groups[GROUP]
+assert.ok(scenarios, `Unknown quit group: ${GROUP}`)
+assert.ok(scenarios.length, 'No matching quit scenarios')
+assert.ok(APP_BIN, 'APP_BIN is required')
+mkdirSync(resolve(LOG, '..'), { recursive: true })
+mkdirSync(resolve(RESULT, '..'), { recursive: true })
+writeFileSync(LOG, '')
+const scratch = mkdtempSync(join(tmpdir(), 'onward-quit-stress-'))
+const owned = new Set()
+const results = []
+const log = text => { appendFileSync(LOG, `${text}\n`); console.log(text) }
+const sleep = ms => new Promise(done => setTimeout(done, ms))
+const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
 
-const WebSocketImpl = globalThis.WebSocket
+function isolatedEnvironment() {
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(fixtures, 'gitconfig'), GIT_TERMINAL_PROMPT: '0' }
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CONFIG', 'GIT_CONFIG_COUNT']) delete env[name]
+  return env
+}
 
-const APP_BIN = process.env.APP_BIN || ''
-const APP_NAME = process.env.APP_NAME || ''
-const REPO_ROOT = process.env.REPO_ROOT || process.cwd()
-const USER_DATA_BASE = process.env.USER_DATA_BASE || ''
-const FIXTURE_BASE = process.env.FIXTURE_BASE || ''
-const LOG_FILE = process.env.LOG_FILE || join(REPO_ROOT, 'traces/test-logs/git-state-mirror-quit-autotest.log')
-const RESULT_FILE = process.env.RESULT_FILE || join(REPO_ROOT, 'traces/analysis/git-state-mirror-quit-autotest.json')
-// Kept for backwards-compat with the runner's CDP_PORT env, but IGNORED for the
-// actual per-trial port: fixed ports (9343 + trial) collide when a previous
-// trial's Electron debug socket is slow to release on Windows or a leftover
-// zombie still holds the port (observed as trial-5 `bind() WSAEADDRINUSE 0x2740`
-// -> "No DevTools WebSocket announcement" -> SIGTERM). Each trial now binds a
-// dynamic free port instead — same fix `check-renderer-idle-churn.mjs` adopted.
-const BASE_CDP_PORT = Number(process.env.CDP_PORT || '9343')
-void BASE_CDP_PORT
-const TRIALS = Number(process.env.GSM_QUIT_TRIALS || '5')
+async function waitUntil(predicate, timeout = 10_000) {
+  const start = performance.now()
+  while (performance.now() - start < timeout) {
+    if (await predicate()) return
+    await sleep(25)
+  }
+  throw new Error('Condition did not settle')
+}
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-// Pick a free ephemeral port per trial. A previous run/trial can leave a socket
-// in TIME_WAIT or a zombie holding a fixed port; choosing a fresh OS-assigned
-// free port each trial makes the CDP launch immune to that collision class.
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const srv = createServer()
-    srv.on('error', reject)
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address()
-      srv.close(() => resolve(port))
-    })
+function childExit(child) {
+  return new Promise(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve({ code: child.exitCode, signal: child.signalCode })
+    child.once('exit', (code, signal) => resolve({ code, signal }))
   })
 }
 
-function fail(message, detail = {}) {
-  const error = new Error(message)
-  error.detail = detail
-  throw error
-}
-
-function appendLog(stream, line) {
-  stream.write(`${line.endsWith('\n') ? line : `${line}\n`}`)
-}
-
-function serializeError(error) {
-  if (!error) return null
-  return {
-    message: error instanceof Error ? error.message : String(error),
-    detail: error.detail ?? null,
-    stack: error instanceof Error ? error.stack : null
-  }
-}
-
-async function waitForBrowserWebSocket(appLaunch) {
-  const deadline = Date.now() + 90000 // EDR-tolerant CDP startup/target ceiling (was 30s); loop returns early on success
-  let lastError = null
-  while (Date.now() < deadline) {
-    const { child, browserWebSocketPromise } = appLaunch
-    if (child.exitCode !== null || child.signalCode !== null) {
-      fail('App exited before DevTools browser WebSocket was available', {
-        exitCode: child.exitCode,
-        signal: child.signalCode
-      })
-    }
-    try {
-      const browserWebSocketUrl = await Promise.race([
-        browserWebSocketPromise,
-        sleep(250).then(() => null)
-      ])
-      if (browserWebSocketUrl) return browserWebSocketUrl
-    } catch (error) {
-      lastError = error
-    }
-  }
-  fail('No DevTools browser WebSocket announcement', { lastError: String(lastError) })
-}
-
-async function createCdpConnection(webSocketUrl) {
-  if (!WebSocketImpl) {
-    fail('Global WebSocket is unavailable. Use Node 22 or newer.')
-  }
-  const ws = new WebSocketImpl(webSocketUrl)
-  await new Promise((resolve, reject) => {
-    ws.addEventListener('open', resolve, { once: true })
-    ws.addEventListener('error', reject, { once: true })
-  })
-
-  let nextId = 0
-  const pending = new Map()
-  ws.addEventListener('message', (event) => {
-    const text = typeof event.data === 'string' ? event.data : event.data.toString()
-    const message = JSON.parse(text)
-    if (message.id === undefined) return
-    const entry = pending.get(message.id)
-    if (!entry) return
-    pending.delete(message.id)
-    entry.resolve(message)
-  })
-  ws.addEventListener('close', () => {
-    const error = new Error('CDP WebSocket closed')
-    for (const [, entry] of pending) {
-      entry.reject(error)
-    }
-    pending.clear()
-  })
-
-  async function send(method, params = {}, sessionId = null) {
-    const id = ++nextId
-    const message = await new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject })
-      ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }))
-    })
-    if (message.error) fail(`${method} failed: ${message.error.message}`)
-    return message.result
-  }
-
-  return {
-    send,
-    close: () => ws.close()
-  }
-}
-
-async function waitForPageTarget(connection, child) {
-  const deadline = Date.now() + 90000 // EDR-tolerant CDP startup/target ceiling (was 30s); loop returns early on success
-  let lastTargets = []
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      fail('App exited before CDP page target was available', {
-        exitCode: child.exitCode,
-        signal: child.signalCode
-      })
-    }
-    // Chromium 150 (Electron 43) tightened the default target filter for
-    // browser-protocol Target.getTargets and page targets stopped appearing;
-    // an explicit match-everything filter restores the pre-150 behaviour and
-    // is accepted by older Chromium too.
-    const result = await connection.send('Target.getTargets', { filter: [{}] })
-    lastTargets = Array.isArray(result.targetInfos) ? result.targetInfos : []
-    const page = lastTargets.find((target) => target.type === 'page' && target.targetId)
-    if (page) return page
-    await sleep(250)
-  }
-  fail('No CDP page target from browser protocol', {
-    targets: lastTargets.map((target) => ({
-      type: target.type,
-      title: target.title,
-      url: target.url
-    }))
-  })
-}
-
-async function createCdpClient(appLaunch) {
-  const browserWebSocketUrl = await waitForBrowserWebSocket(appLaunch)
-  const connection = await createCdpConnection(browserWebSocketUrl)
-  const page = await waitForPageTarget(connection, appLaunch.child)
-  const attach = await connection.send('Target.attachToTarget', {
-    targetId: page.targetId,
-    flatten: true
-  })
-  const sessionId = attach.sessionId
-  await connection.send('Runtime.enable', {}, sessionId).catch(() => {})
-
-  async function evaluate(expression) {
-    const result = await connection.send('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true
-    }, sessionId)
-    if (result.exceptionDetails) {
-      const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Evaluation failed'
-      fail(detail)
-    }
-    return result.result?.value
-  }
-
-  return {
-    evaluate,
-    close: () => connection.close()
-  }
-}
-
-async function createGitFixture(repoDir) {
-  mkdirSync(repoDir, { recursive: true })
-  writeFileSync(join(repoDir, 'tracked.txt'), 'initial\n')
-  await execFileAsync('git', ['init'], { cwd: repoDir })
-  await execFileAsync('git', ['config', 'user.email', 'autotest@example.invalid'], { cwd: repoDir })
-  await execFileAsync('git', ['config', 'user.name', 'Onward Autotest'], { cwd: repoDir })
-  await execFileAsync('git', ['add', 'tracked.txt'], { cwd: repoDir })
-  await execFileAsync('git', ['commit', '-m', 'Initial fixture'], { cwd: repoDir })
-}
-
-function summarizeMirror(snapshot) {
-  if (!snapshot || typeof snapshot !== 'object') return null
-  return {
-    cwd: snapshot.cwd ?? null,
-    repoRoot: snapshot.repoRoot ?? null,
-    repoName: snapshot.repoName ?? null,
-    branch: snapshot.branch ?? null,
-    status: snapshot.status ?? null,
-    fileCount: Array.isArray(snapshot.files) ? snapshot.files.length : null,
-    generation: snapshot.generation ?? null
-  }
-}
-
-function mirrorSetupExpression(repoDir) {
-  return `
-    (async () => {
-      const cwd = ${JSON.stringify(repoDir)};
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const api = window.electronAPI?.git;
-      if (!api?.subscribeMirror || !api?.getMirror || !api?.onMirrorUpdate) {
-        throw new Error('GitStateMirror preload API is unavailable');
-      }
-      const state = { updates: [] };
-      globalThis.__gsmQuitTest = state;
-      state.unsubscribeUpdates = api.onMirrorUpdate((nextCwd, delta) => {
-        if (nextCwd === cwd) state.updates.push({ delta, at: Date.now() });
-      });
-      state.unsubscribeMirror = () => api.unsubscribeMirror?.(cwd);
-      const initial = await api.subscribeMirror(cwd);
-      const startedAt = performance.now();
-      let latest = initial;
-      while (performance.now() - startedAt < 15000) {
-        latest = await api.getMirror(cwd);
-        if (latest?.repoRoot && Array.isArray(latest.files)) {
-          return {
-            ok: true,
-            initial: ${'summarizeMirror'}(initial),
-            latest: ${'summarizeMirror'}(latest),
-            updateCount: state.updates.length
-          };
-        }
-        await sleep(100);
-      }
-      return {
-        ok: false,
-        initial: ${'summarizeMirror'}(initial),
-        latest: ${'summarizeMirror'}(latest),
-        updateCount: state.updates.length
-      };
-
-      function summarizeMirror(snapshot) {
-        if (!snapshot || typeof snapshot !== 'object') return null;
-        return {
-          cwd: snapshot.cwd ?? null,
-          repoRoot: snapshot.repoRoot ?? null,
-          repoName: snapshot.repoName ?? null,
-          branch: snapshot.branch ?? null,
-          status: snapshot.status ?? null,
-          fileCount: Array.isArray(snapshot.files) ? snapshot.files.length : null,
-          generation: snapshot.generation ?? null
-        };
-      }
-    })()
-  `
-}
-
-function waitForModifiedExpression(repoDir) {
-  return `
-    (async () => {
-      const cwd = ${JSON.stringify(repoDir)};
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const api = window.electronAPI?.git;
-      if (!api?.getMirror) throw new Error('GitStateMirror getMirror API is unavailable');
-      const startedAt = performance.now();
-      let latest = null;
-      while (performance.now() - startedAt < 15000) {
-        latest = await api.getMirror(cwd);
-        const files = Array.isArray(latest?.files) ? latest.files : [];
-        const sawTrackedChange = files.some((file) => file?.filename === 'tracked.txt');
-        if (latest?.status === 'modified' && sawTrackedChange) {
-          return {
-            ok: true,
-            elapsedMs: Math.round(performance.now() - startedAt),
-            latest: summarizeMirror(latest),
-            updateCount: globalThis.__gsmQuitTest?.updates?.length ?? 0
-          };
-        }
-        await sleep(100);
-      }
-      return {
-        ok: false,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        latest: summarizeMirror(latest),
-        updateCount: globalThis.__gsmQuitTest?.updates?.length ?? 0
-      };
-
-      function summarizeMirror(snapshot) {
-        if (!snapshot || typeof snapshot !== 'object') return null;
-        return {
-          cwd: snapshot.cwd ?? null,
-          repoRoot: snapshot.repoRoot ?? null,
-          repoName: snapshot.repoName ?? null,
-          branch: snapshot.branch ?? null,
-          status: snapshot.status ?? null,
-          fileCount: Array.isArray(snapshot.files) ? snapshot.files.length : null,
-          generation: snapshot.generation ?? null
-        };
-      }
-    })()
-  `
-}
-
-async function waitForApiLock(userDataDir) {
-  const lockPath = join(userDataDir, 'onward-api.lock')
-  const deadline = Date.now() + 90000 // EDR-tolerant CDP startup/target ceiling (was 30s); loop returns early on success
-  let lastError = null
-  while (Date.now() < deadline) {
-    try {
-      if (existsSync(lockPath)) {
-        const parsed = JSON.parse(readFileSync(lockPath, 'utf8'))
-        if (Number.isInteger(parsed.port) && parsed.port > 0) return parsed
-      }
-    } catch (error) {
-      lastError = error
-    }
-    await sleep(250)
-  }
-  fail('API lock file was not written', { lockPath, lastError: String(lastError) })
-}
-
-async function requestGracefulQuit(userDataDir) {
-  const lock = await waitForApiLock(userDataDir)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 5000)
+async function bounded(promise, ms) {
+  let timer
   try {
-    const response = await fetch(`http://127.0.0.1:${lock.port}/api/debug/app/quit`, {
-      method: 'POST',
-      signal: controller.signal
-    })
-    const body = await response.text().catch(() => '')
-    return { ok: response.ok, status: response.status, body }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    clearTimeout(timer)
-  }
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Observer exceeded ${ms}ms`)), ms)
+    })])
+  } finally { clearTimeout(timer) }
 }
 
-function waitForExit(child, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve({ code: child.exitCode, signal: child.signalCode })
+async function createRepo(path) {
+  const options = { cwd: path, env: isolatedEnvironment() }
+  mkdirSync(path, { recursive: true })
+  cpSync(join(fixtures, 'tracked.txt'), join(path, 'tracked.txt'))
+  await exec('git', ['init'], options)
+  for (const [key, value] of [['core.autocrlf', 'false'], ['core.safecrlf', 'false'], ['user.name', 'Onward Autotest'], ['user.email', 'autotest@example.invalid']]) {
+    await exec('git', ['config', key, value], options)
+  }
+  await exec('git', ['add', 'tracked.txt'], options)
+  await exec('git', ['commit', '-m', 'Initial quit stress fixture'], options)
+}
+
+async function launch(profile, cwd, scenario) {
+  const home = join(profile, 'home')
+  const temporary = join(profile, 'tmp')
+  for (const path of [home, temporary, join(home, '.config'), join(home, '.cache'), join(home, '.local/share'), join(home, 'AppData/Roaming'), join(home, 'AppData/Local')]) {
+    mkdirSync(path, { recursive: true })
+  }
+  const app = await electron.launch({
+    executablePath: APP_BIN,
+    env: {
+      ...isolatedEnvironment(), ONWARD_DEBUG: '1', ONWARD_AUTOTEST: '1', ONWARD_AUTOTEST_EXIT: '0',
+      HOME: home, USERPROFILE: home, ZDOTDIR: home, USER_ZDOTDIR: home,
+      HISTFILE: join(home, '.history'), XDG_CONFIG_HOME: join(home, '.config'),
+      XDG_CACHE_HOME: join(home, '.cache'), XDG_DATA_HOME: join(home, '.local/share'),
+      APPDATA: join(home, 'AppData/Roaming'), LOCALAPPDATA: join(home, 'AppData/Local'),
+      TMPDIR: temporary, TMP: temporary, TEMP: temporary,
+      ONWARD_AUTOTEST_SUITE: 'external-quit-stress', ONWARD_AUTOTEST_QUIT_STRESS: '1',
+      ONWARD_AUTOTEST_SKIP_CONSENT: '1', ONWARD_USER_DATA_DIR: profile,
+      ONWARD_AUTOTEST_WINDOWS_CLEAN_SHELL: '1',
+      ONWARD_AUTOTEST_CWD: cwd, ONWARD_REPO_ROOT: ROOT,
+      ONWARD_AUTOTEST_WATCHER_HANG_SHUTDOWN: scenario === 'shutdown-hang' ? '1' : '0',
+      ONWARD_AUTOTEST_WATCHER_HANG_SUBSCRIBE: scenario === 'pending-subscribe' ? '1' : '0',
+      ONWARD_AUTOTEST_WATCHER_HANG_UNSUBSCRIBE: scenario === 'pending-unsubscribe' ? '1' : '0',
+      ONWARD_AUTOTEST_QUIT_HOLD_STAGE: scenario === 'save-hang' ? 'app-state' : ''
+    }, timeout: 30_000
+  })
+  const child = app.process()
+  owned.add(child)
+  const exit = childExit(child)
+  let output = ''
+  const capture = data => { output += data.toString(); appendFileSync(LOG, data) }
+  child.stdout?.on('data', capture)
+  child.stderr?.on('data', capture)
+  if (scenario === 'startup') {
+    const started = performance.now()
+    await app.evaluate(({ app }) => { setImmediate(() => app.quit()) }).catch(() => {})
+    return { app, page: null, child, exit, started, output: () => output }
+  }
+  const page = await app.firstWindow()
+  await page.waitForFunction(() => window.electronAPI?.git && window.electronAPI?.appState)
+  await page.locator('.terminal-grid').waitFor({ timeout: 20_000 })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
+  })
+  return { app, page, child, exit, output: () => output }
+}
+
+async function menuQuit(app, duplicates = 1) {
+  await app.evaluate(({ Menu, BrowserWindow }, count) => {
+    const flatten = menu => menu.items.flatMap(item => [item, ...(item.submenu ? flatten(item.submenu) : [])])
+    const item = flatten(Menu.getApplicationMenu()).find(item => /(?:CommandOrControl|CmdOrCtrl)\+Q/i.test(item.accelerator || ''))
+    if (!item) {
+      // Windows/Linux exit through the real window-close handler.
+      BrowserWindow.getAllWindows()[0].close()
       return
     }
-    const timer = setTimeout(() => {
-      reject(new Error(`App did not exit within ${timeoutMs}ms`))
-    }, timeoutMs)
-    child.once('exit', (code, signal) => {
-      clearTimeout(timer)
-      resolve({ code, signal })
-    })
-    child.once('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
+    for (let i = 0; i < count; i++) void item.click()
+  }, duplicates).catch(error => {
+    if (!/closed|destroyed|Target/i.test(String(error))) throw error
   })
 }
 
-function launchApp({ port, userDataDir, stream, trial }) {
-  let resolveBrowserWebSocket
-  let rejectBrowserWebSocket
-  let browserWebSocketSettled = false
-  let devToolsBuffer = ''
-  let captured = ''
-  const browserWebSocketPromise = new Promise((resolve, reject) => {
-    resolveBrowserWebSocket = resolve
-    rejectBrowserWebSocket = reject
-  })
-  const noteChunk = (label, chunk) => {
-    const text = chunk.toString()
-    captured += text
-    appendLog(stream, `[trial ${trial} ${label}] ${text.replace(/\n$/, '')}`)
-    if (browserWebSocketSettled) return
-    devToolsBuffer += text
-    const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(devToolsBuffer)
-    if (!match) return
-    browserWebSocketSettled = true
-    resolveBrowserWebSocket(match[1])
-  }
-  const env = {
-    ...process.env,
-    ONWARD_DEBUG: '1',
-    ONWARD_REPO_ROOT: REPO_ROOT,
-    ONWARD_USER_DATA_DIR: userDataDir,
-    ONWARD_AUTOTEST_SKIP_CONSENT: '1'
-  }
-  const child = spawn(APP_BIN, [`--remote-debugging-port=${port}`], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe']
-  })
-  child.stdout?.on('data', (chunk) => noteChunk('stdout', chunk))
-  child.stderr?.on('data', (chunk) => noteChunk('stderr', chunk))
-  child.once('exit', (code, signal) => {
-    if (browserWebSocketSettled) return
-    browserWebSocketSettled = true
-    rejectBrowserWebSocket(new Error(`App exited before DevTools WebSocket announcement (code=${code}, signal=${signal})`))
-  })
-  return { child, browserWebSocketPromise, getCapturedLog: () => captured }
+async function subscribe(page, repos) {
+  await page.evaluate(async paths => {
+    globalThis.__quitTreeEvents = []
+    window.electronAPI.project.onTreeWatchEvent(event => globalThis.__quitTreeEvents.push(event))
+    for (const cwd of paths) {
+      await window.electronAPI.git.subscribeMirror(cwd)
+      await window.electronAPI.project.treeWatchStart(cwd)
+    }
+  }, repos)
 }
 
-// Abort-class tokens that prove a native @parcel/watcher worker-teardown crash.
-// CROSS-PLATFORM contract: the PRIMARY gate is the clean exit below
-// (exit.code===0 && exit.signal===null) — that is the platform-neutral "did not
-// crash" proof (Windows reports no POSIX signal; a crash is a non-zero code).
-// This token scan is the ENRICHMENT that also catches an abort that still exits
-// 0: most tokens are V8 / N-API / Node fatal messages emitted on ALL platforms;
-// SIGABRT / abort() are the POSIX (macOS/Linux) signature; the access-violation
-// tokens are the Windows native-crash signature.
-const ABORT_TOKENS = [
-  // V8 / N-API / Node fatal — all platforms.
-  'napi_fatal_error', 'FATAL ERROR', 'Assertion failed', 'node::OnFatalError',
-  // POSIX (macOS / Linux).
-  'SIGABRT', 'abort()',
-  // Windows native crash.
-  'Access violation', '0xC0000005', 'STATUS_ACCESS_VIOLATION'
-]
+async function openPrompt(page) {
+  await page.keyboard.press('Escape')
+  const notebook = page.locator('.prompt-notebook:not(.prompt-notebook-hidden)')
+  const content = notebook.locator('.prompt-editor-content[contenteditable="plaintext-only"]')
+  if (!await content.isVisible()) await page.getByTitle('Prompt notebook', { exact: true }).click()
+  await content.waitFor({ state: 'visible' })
+  return { content, title: notebook.locator('.prompt-editor-title') }
+}
 
-async function runTrial(trial, stream) {
-  const port = await getFreePort()
-  const userDataDir = join(USER_DATA_BASE, `trial-${trial}-userdata`)
-  const repoDir = join(FIXTURE_BASE, `trial-${trial}-repo`)
-  mkdirSync(userDataDir, { recursive: true })
-  await createGitFixture(repoDir)
-
-  appendLog(stream, `=== GSM quit trial ${trial}/${TRIALS} ===`)
-  appendLog(stream, `repo=${repoDir}`)
-  appendLog(stream, `userData=${userDataDir}`)
-  appendLog(stream, `cdpPort=${port}`)
-
-  const appLaunch = launchApp({ port, userDataDir, stream, trial })
-  const { child } = appLaunch
-  let cdp = null
-  // Hoisted so the finally can always stop the churn loop, even when
-  // requestGracefulQuit / waitForExit throw before the success-path stop runs.
-  let churning = false
-  let churnLoop = null
-  const startedAt = Date.now()
-  const detail = {
-    trial,
-    port,
-    repoDir,
-    userDataDir,
-    pid: child.pid,
-    mirrorSetup: null,
-    watcherMutation: null,
-    quitRequest: null,
-    exit: null
+async function trial(scenario, index) {
+  const dir = join(scratch, `${scenario}-${index}`)
+  const profile = join(dir, 'profile')
+  const repos = [0, 1, 2].map(i => join(dir, `repo-${i}`))
+  for (const repo of repos) await createRepo(repo)
+  if (scenario === 'startup') {
+    mkdirSync(profile, { recursive: true })
+    cpSync(join(fixtures, 'startup-state.json'), join(profile, 'app-state.json'))
   }
-
+  let running = null
+  let churnTimer = null
+  let mutations = 0
+  let servicePid = null
+  const pressurePids = []
+  const result = { scenario, trial: index, ok: false }
   try {
-    cdp = await createCdpClient(appLaunch)
-    detail.mirrorSetup = await cdp.evaluate(mirrorSetupExpression(repoDir))
-    if (!detail.mirrorSetup?.ok) {
-      fail('Mirror did not publish an initial repo snapshot', detail.mirrorSetup)
-    }
-    appendLog(stream, `GSMQ-01-active-subscription trial=${trial} ok`)
-
-    writeFileSync(join(repoDir, 'tracked.txt'), `trial ${trial} modified ${Date.now()}\n`)
-    detail.watcherMutation = await cdp.evaluate(waitForModifiedExpression(repoDir))
-    if (!detail.watcherMutation?.ok) {
-      fail('Mirror did not observe the tracked-file mutation before quit', detail.watcherMutation)
-    }
-    appendLog(stream, `GSMQ-02-watcher-mutation-observed trial=${trial} ok`)
-
-    // GSMQ-04: sustained FS churn THROUGH teardown. Unlike the old single
-    // queued-file + sleep(50), this keeps native @parcel/watcher callbacks
-    // continuously in-flight at the exact instant of quit (no pre-quit settle),
-    // reproducing the teardown race that produced the SIGABRT. The churn loop
-    // runs until the app process has fully exited, so the worker's quiesce
-    // barrier is exercised against live event delivery + pending unsubscribes.
-    churning = true
-    churnLoop = (async () => {
-      let writes = 0
-      while (churning) {
-        const file = join(repoDir, `churn-${writes % 8}.txt`)
-        try {
-          writeFileSync(file, `churn ${writes} ${Date.now()}\n`)
-          if (writes % 3 === 0 && existsSync(file)) rmSync(file, { force: true })
-          writes += 1
-        } catch { /* repo dir may be removed during cleanup — ignore */ }
-        await sleep(4)
+    running = await launch(profile, repos[0], scenario)
+    const { app, page, child, exit } = running
+    if (scenario === 'startup') {
+      const outcome = await bounded(exit, OBSERVER_TIMEOUT_MS)
+      assert.equal(outcome.code, 0)
+      assert.equal(outcome.signal, null)
+      const saved = JSON.parse(readFileSync(join(profile, 'app-state.json'), 'utf8'))
+      assert.ok(saved.globalPrompts.some(prompt => prompt.id === 'quit-startup-sentinel' && prompt.content === 'Startup exit must preserve this previously saved content.'))
+      assert.doesNotMatch(running.output(), /napi_fatal_error|FATAL ERROR|SIGABRT/)
+      for (const match of running.output().matchAll(/\[WatcherService\] spawned \{ pid: (\d+) \}/g)) {
+        await waitUntil(() => !alive(Number(match[1])), 5000)
       }
-      return writes
-    })()
+      Object.assign(result, { ok: true, elapsedMs: performance.now() - running.started, exit: outcome })
+      log(`PASS GSMQ-normal ${JSON.stringify(result)}`)
+      return
+    }
+    await subscribe(page, repos)
+    await waitUntil(async () => {
+      const state = await app.evaluate(() => globalThis.__onwardQuitAutotest.inspect())
+      servicePid = state.pid
+      return Boolean(servicePid) && (scenario === 'pending-subscribe' ? state.pending > 0 : state.subscriptions >= 3 && state.pending === 0)
+    })
+    assert.notEqual(servicePid, child.pid, 'Watcher must live outside the main process')
+    const nativeInMain = await app.evaluate(({ app }) => {
+      const require = process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`)
+      const modules = Object.keys(require.cache)
+      const libraries = process.report.getReport().sharedObjects
+      return [...modules, ...libraries].some(path => /[/\\]watcher\.node$/.test(path))
+    })
+    assert.equal(nativeInMain, false, 'Main process loaded watcher.node')
+    log(`GSMQ-01 isolated watcher ready scenario=${scenario} trial=${index} pid=${servicePid}`)
 
-    detail.quitRequest = await requestGracefulQuit(userDataDir)
-    detail.exit = await waitForExit(child, 20000)
-    churning = false
-    detail.churnWrites = await churnLoop.catch(() => 0)
-    detail.elapsedMs = Date.now() - startedAt
+    if (scenario !== 'pending-subscribe') {
+      for (const repo of repos) appendFileSync(join(repo, 'tracked.txt'), `trial-${index}\n`)
+      await page.waitForFunction(async cwd => {
+        const state = await window.electronAPI.git.getMirror(cwd)
+        return state?.files?.some(file => file.filename === 'tracked.txt')
+      }, repos[0], { timeout: 15_000 })
+      log(`GSMQ-02 file changes observed scenario=${scenario} trial=${index}`)
+    }
+    if (scenario === 'service-exit') {
+      const previousPid = servicePid
+      await app.evaluate(() => globalThis.__onwardQuitAutotest.faultWatcher())
+      await waitUntil(async () => {
+        const state = await app.evaluate(() => globalThis.__onwardQuitAutotest.inspect())
+        servicePid = state.pid
+        return servicePid && servicePid !== previousPid && state.pending === 0
+      })
+      assert.equal(alive(previousPid), false)
+      const created = join(repos[0], 'recovered.txt')
+      cpSync(join(fixtures, 'tracked.txt'), created)
+      await page.waitForFunction(() => globalThis.__quitTreeEvents.some(event => event.added?.includes('recovered.txt')))
+      log(`GSMQ-05 utility fault isolated and watcher recovered trial=${index}`)
+    }
 
-    // Fix-verification: clean process exit AND no abort-class token in THIS
-    // trial's app stdout/stderr AND the cooperative drain was taken (the worker
-    // reached clean-exit / emitted its quiesce breadcrumb, not a forced kill).
-    const appLog = appLaunch.getCapturedLog()
-    const abortToken = ABORT_TOKENS.find((token) => appLog.includes(token)) ?? null
-    const cleanExit = detail.exit.code === 0 && detail.exit.signal === null
-    const drainedCooperatively =
-      appLog.includes('shutdown-quiesced') ||
-      appLog.includes('worker EXITED') && appLog.includes('code: 0')
-    detail.abortToken = abortToken
-    detail.cleanExit = cleanExit
-    detail.drainedCooperatively = drainedCooperatively
-    // GSMQ-04 exists to prove the COOPERATIVE quiesce path was taken, so a clean
-    // exit alone is not enough: a forced terminate that still exits 0 must NOT
-    // silently pass. Gate on the cooperative-drain breadcrumb too.
-    detail.ok = cleanExit && abortToken === null && drainedCooperatively
-    appendLog(
-      stream,
-      `GSMQ-04-sustained-churn-clean-exit trial=${trial} ok=${detail.ok} ` +
-      `exit=${JSON.stringify(detail.exit)} churnWrites=${detail.churnWrites} ` +
-      `abortToken=${abortToken ?? 'none'} cooperativeDrain=${drainedCooperatively}`
-    )
-    return detail
+    if (scenario === 'cancel') {
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      await menuQuit(app, 10)
+      await page.waitForTimeout(100)
+      assert.equal(child.exitCode, null)
+      assert.equal((await app.evaluate(() => globalThis.__onwardQuitAutotest.inspect())).stopping, false)
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+    }
+
+    if (['blocked-service', 'parent-death'].includes(scenario)) {
+      await app.evaluate(() => globalThis.__onwardQuitAutotest.blockWatcher())
+    }
+    if (scenario === 'telemetry-hang') await app.evaluate(() => globalThis.__onwardQuitAutotest.hangTelemetry())
+
+    if (scenario === 'churn') {
+      const script = join(dir, 'output-pressure.cjs')
+      cpSync(join(fixtures, 'output-pressure.cjs'), script)
+      const pidFiles = Array.from({ length: 12 }, (_, i) => join(dir, `pressure-${i}.pid`))
+      await page.evaluate(async ({ cwd, node, script, pidFiles }) => {
+        globalThis.__quitOutputBytes = 0
+        window.electronAPI.terminal.onData((id, data) => {
+          if (id.startsWith('quit-pressure-')) globalThis.__quitOutputBytes += data.length
+        })
+        for (let i = 0; i < 12; i++) {
+          const id = `quit-pressure-${i}`
+          await window.electronAPI.terminal.create(id, { cwd })
+          window.electronAPI.terminal.setOutputVisibility(id, true)
+          const caps = await window.electronAPI.terminal.getInputCapabilities(id)
+          const command = `${caps.shellKind === 'powershell' ? '& ' : ''}"${node}" "${script}" "${pidFiles[i]}"\r`
+          await window.electronAPI.terminal.write(id, command)
+        }
+      }, { cwd: repos[0], node: process.execPath, script, pidFiles })
+      await waitUntil(() => Array.from({ length: 12 }, (_, i) => existsSync(join(dir, `pressure-${i}.pid`))).every(Boolean))
+      for (let i = 0; i < 12; i++) pressurePids.push(Number(readFileSync(join(dir, `pressure-${i}.pid`), 'utf8')))
+      await page.waitForFunction(() => globalThis.__quitOutputBytes >= 256 * 1024)
+      result.outputBytes = await page.evaluate(() => globalThis.__quitOutputBytes)
+    }
+
+    churnTimer = setInterval(() => {
+      for (const repo of repos) {
+        const path = join(repo, `churn-${mutations % 32}.txt`)
+        cpSync(join(fixtures, 'tracked.txt'), path)
+        if (mutations % 3 === 0) rmSync(path, { force: true })
+      }
+      mutations++
+    }, 4)
+    if (['churn', 'recovery', 'update', 'save-hang'].includes(scenario)) {
+      const prompt = await openPrompt(page)
+      await prompt.title.fill(draft.title)
+      await prompt.content.fill(draft.content)
+    }
+    if (scenario === 'save-hang') {
+      const saved = await page.evaluate(async language => {
+        const settings = await window.electronAPI.settings.load()
+        return window.electronAPI.settings.save({ ...settings, language })
+      }, index % 2 === 0 ? 'zh-CN' : 'en')
+      assert.equal(saved, true)
+    }
+
+    const started = performance.now()
+    const quitLogOffset = running.output().length
+    if (scenario === 'parent-death') child.kill('SIGKILL')
+    else if (scenario === 'sigterm' || scenario === 'sigint') child.kill(scenario === 'sigterm' ? 'SIGTERM' : 'SIGINT')
+    else if (scenario === 'external') await app.evaluate(({ app }) => {
+      const baseline = app.listenerCount('will-quit')
+      for (let i = 0; i < 20; i++) app.quit()
+      if (app.listenerCount('will-quit') > baseline) throw new Error('Repeated quit accumulated lifecycle listeners')
+    })
+    else if (scenario === 'exit-race') await app.evaluate(({ app }) => {
+      app.quit()
+      globalThis.__onwardQuitAutotest.faultWatcher()
+    }).catch(() => {})
+    else if (scenario === 'window') {
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+      if (process.platform === 'darwin') {
+        assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
+        await menuQuit(app)
+      }
+    } else if (scenario === 'recovery' || scenario === 'update') {
+      await app.evaluate(({ app }, mode) => {
+        app.relaunch = () => { console.log('[QuitStress] relaunch-requested') }
+        void globalThis.__onwardQuitAutotest[mode]()
+      }, scenario)
+    } else await menuQuit(app, scenario === 'duplicate' ? 50 : 1)
+    if (scenario === 'save-hang') {
+      await waitUntil(() => app.evaluate(({ BrowserWindow }) => !BrowserWindow.getAllWindows()[0].isEnabled()))
+      await app.evaluate(({ app, BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        const baseline = app.listenerCount('will-quit')
+        for (let i = 0; i < 20; i++) { app.quit(); window.close() }
+        if (window.isDestroyed()) throw new Error('Repeated exit destroyed the window during a required save')
+        if (app.listenerCount('will-quit') > baseline) throw new Error('Repeated quit accumulated lifecycle listeners')
+      })
+      const lateCreate = await page.evaluate(cwd => window.electronAPI.terminal.create('quit-late-terminal', { cwd }), repos[0])
+      assert.equal(lateCreate.success, false, 'New terminal work was admitted after quit began')
+      assert.equal(lateCreate.error, index % 2 === 0 ? '\u5e94\u7528\u6b63\u5728\u9000\u51fa\u3002' : 'The application is closing.')
+    }
+    const outcome = await bounded(exit, OBSERVER_TIMEOUT_MS)
+    result.mainExitMs = performance.now() - started
+    result.exit = outcome
+    if (scenario === 'parent-death') {
+      assert.ok(outcome.signal !== null || outcome.code !== 0)
+    } else {
+      assert.equal(outcome.signal, null)
+      assert.equal(outcome.code, scenario === 'save-hang' ? 1 : 0)
+    }
+    await waitUntil(() => !alive(servicePid), 5000)
+    for (const pid of pressurePids) await waitUntil(() => !alive(pid), 5000)
+    result.elapsedMs = performance.now() - started
+    const ledger = JSON.parse(readFileSync(join(profile, 'session-ledger.json'), 'utf8'))
+    result.ledger = ledger.clean
+    assert.equal(ledger.clean, !['save-hang', 'parent-death'].includes(scenario))
+    if (['churn', 'recovery', 'update'].includes(scenario)) {
+      const persisted = JSON.parse(readFileSync(join(profile, 'app-state.json'), 'utf8'))
+      assert.ok(persisted.tabs.some(tab => tab.editorDraft?.title === draft.title && tab.editorDraft?.content === draft.content), 'Last input was not persisted before process exit')
+    }
+    assert.doesNotMatch(running.output(), /napi_fatal_error|FATAL ERROR|SIGABRT|Access violation|0xC0000005/)
+    if (scenario === 'recovery') assert.match(running.output(), /relaunch-requested/)
+    if (scenario === 'update') assert.match(running.output(), /update-install-requested/)
+    assert.doesNotMatch(running.output().slice(quitLogOffset), /\[WatcherService\] spawned/, 'Watcher restarted after quit began')
+    if (['shutdown-hang', 'blocked-service', 'pending-subscribe', 'pending-unsubscribe', 'save-hang'].includes(scenario)) {
+      assert.match(running.output(), /deadline.*deadlineMs.*10000/)
+    } else {
+      assert.doesNotMatch(running.output(), /\[QuitPhase\] deadline /, 'Healthy teardown used its emergency deadline')
+    }
+    if (['recovery', 'update'].includes(scenario)) {
+      const reopened = await launch(profile, repos[0], 'reopened')
+      const state = await reopened.page.evaluate(() => window.electronAPI.appState.load())
+      assert.ok(state.tabs.some(tab => tab.editorDraft?.title === draft.title && tab.editorDraft?.content === draft.content), 'Last user input was not restored')
+      const prompt = await openPrompt(reopened.page)
+      assert.equal(await prompt.title.inputValue(), draft.title)
+      assert.equal(await prompt.content.innerText(), draft.content)
+      await menuQuit(reopened.app)
+      assert.equal((await bounded(reopened.exit, OBSERVER_TIMEOUT_MS)).code, 0)
+    }
+    result.ok = true
+    result.mutations = mutations
+    log(`PASS GSMQ-${GROUP} ${JSON.stringify(result)}`)
   } catch (error) {
-    detail.error = serializeError(error)
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM')
-      try {
-        await waitForExit(child, 3000)
-      } catch {
+    result.error = String(error?.stack ?? error)
+    log(`FAIL GSMQ-${GROUP} ${JSON.stringify(result)}`)
+  } finally {
+    clearInterval(churnTimer)
+    for (const child of owned) {
+      if (child.exitCode === null && child.signalCode === null) {
         child.kill('SIGKILL')
+        await bounded(childExit(child), 5000).catch(() => {})
       }
+      owned.delete(child)
     }
-    detail.exit = { code: child.exitCode, signal: child.signalCode }
-    detail.elapsedMs = Date.now() - startedAt
-    detail.ok = false
-    return detail
-  } finally {
-    // Always stop + drain the churn loop, even when the success-path stop was
-    // skipped by a throw — otherwise it spins (writing every 4 ms) forever and
-    // keeps the Node autotest process alive past the failing trial.
-    churning = false
-    if (churnLoop) {
-      try { await churnLoop } catch { /* ignore */ }
+    for (const pid of pressurePids) {
+      if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch {} }
     }
-    try { cdp?.close() } catch { /* ignore */ }
-    // Defence-in-depth: release the child's stdio handles so they cannot keep
-    // Node's event loop referenced after the app has exited (Windows hang class
-    // — a lingering pipe handle blocks process teardown on the success path).
-    try { child.stdout?.destroy(); child.stderr?.destroy(); child.unref() } catch { /* ignore */ }
+    if (servicePid && alive(servicePid)) { try { process.kill(servicePid, 'SIGKILL') } catch {} }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    results.push(result)
   }
 }
 
-async function main() {
-  if (!APP_BIN) fail('APP_BIN is required')
-  if (!APP_NAME) fail('APP_NAME is required')
-  if (!USER_DATA_BASE) fail('USER_DATA_BASE is required')
-  if (!FIXTURE_BASE) fail('FIXTURE_BASE is required')
-
-  mkdirSync(join(REPO_ROOT, 'traces/test-logs'), { recursive: true })
-  mkdirSync(join(REPO_ROOT, 'traces/analysis'), { recursive: true })
-  const stream = createWriteStream(LOG_FILE, { flags: 'a' })
-  const trials = []
-  try {
-    appendLog(stream, `GitStateMirror quit autotest started at ${new Date().toISOString()}`)
-    appendLog(stream, `app=${APP_NAME}`)
-    appendLog(stream, `bin=${APP_BIN}`)
-    for (let trial = 1; trial <= TRIALS; trial += 1) {
-      const result = await runTrial(trial, stream)
-      trials.push(result)
-      appendLog(stream, `trial ${trial} result: ${JSON.stringify({
-        ok: result.ok,
-        exit: result.exit,
-        elapsedMs: result.elapsedMs,
-        error: result.error?.message ?? null
-      })}`)
+async function cleanup() {
+  await Promise.all([...owned].map(async child => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL')
+      await bounded(childExit(child), 5000).catch(() => {})
     }
-  } finally {
-    await new Promise((resolve) => stream.end(resolve))
-  }
-
-  const failures = trials.filter((trial) => !trial.ok)
-  const result = {
-    ok: failures.length === 0,
-    appName: APP_NAME,
-    trials,
-    failures
-  }
-  writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2))
-  if (!result.ok) {
-    process.exit(1)
-  }
-  // Exit deterministically on the success path too. On Windows a lingering
-  // Electron stdio handle can keep Node's event loop referenced, hanging the
-  // driver until the orchestrator's tree-kill. An explicit exit guarantees the
-  // process tears down the instant the verdict is written.
-  process.exit(result.ok ? 0 : 1)
+  }))
+  rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 }
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void cleanup().finally(() => process.exit(1)) })
 
-main().catch((error) => {
-  mkdirSync(join(REPO_ROOT, 'traces/analysis'), { recursive: true })
-  writeFileSync(RESULT_FILE, JSON.stringify({ ok: false, error: serializeError(error) }, null, 2))
-  console.error(error)
-  process.exit(1)
-})
+try {
+  for (const scenario of scenarios) {
+    for (let trialIndex = 1; trialIndex <= TRIALS; trialIndex++) await trial(scenario, trialIndex)
+    const samples = results.filter(result => result.scenario === scenario)
+    // Boolean integrity requires every trial; latency uses >=1 of 3 as specified
+    // by the repository's timing gate, with setup excluded from measurement.
+    assert.ok(samples.every(result => result.ok), `${scenario}: one or more trials failed`)
+    assert.ok(samples.slice(0, 3).some(result => result.elapsedMs <= EXIT_BUDGET_MS), `${scenario}: all latency samples exceed the approved 10s budget`)
+  }
+} catch (error) {
+  log(`Suite failure: ${error.stack}`)
+  process.exitCode = 1
+} finally {
+  writeFileSync(RESULT, JSON.stringify({ ok: !process.exitCode && results.every(result => result.ok), group: GROUP, results }, null, 2))
+  await cleanup()
+}
