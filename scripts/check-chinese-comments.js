@@ -13,6 +13,10 @@ const HAN_RE = /\p{Script=Han}/u
 const BINARY_RE = /\0/
 const ALLOWLIST = new Set([
   'src/i18n/core.ts',
+  'src/i18n/prompt-input.ts',
+  'src/i18n/prompt-input-runtime.ts',
+  // Generated bilingual Emojibase labels/keywords are dictionary data, not code comments.
+  'src/data/prompt-emoji-catalog.json',
   // Test files may contain Chinese strings as test data (not comments)
   'test/autotest/test-full-e2e.ts',
   'test/autotest/test-prompt-integrity.ts',
@@ -23,6 +27,11 @@ const ALLOWLIST = new Set([
   // Theme UI tests assert bilingual search labels and Unicode file paths.
   'test/autotest/test-themes-ui.mjs',
   'test/autotest/themes-ui-driver-support.mjs',
+  // Prompt fixtures preserve literal Unicode for migration, IME and bilingual UI assertions.
+  'test/autotest/fixtures/prompt-input-settings/acceptance.json',
+  'test/autotest/fixtures/prompt-input-settings/legacy-settings-v9.json',
+  'test/autotest/fixtures/prompt-input-shortcuts/guest-input.html',
+  'test/unittest/prompt-input-shortcuts-main.test.mjs',
   // Project instruction files may quote Chinese phrases from user usage.
   'CLAUDE.md',
   'AGENTS.md'

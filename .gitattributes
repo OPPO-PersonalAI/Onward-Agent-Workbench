@@ -12,3 +12,6 @@ ThirdPartyNotices.txt text eol=lf
 resources/changelog/**/*.html  text eol=lf
 resources/changelog/index.json text eol=lf
 resources/changelog/**/*.md    text eol=lf
+
+# Preserve pinned upstream SVG bytes even on core.autocrlf=true checkouts.
+public/prompt-emoji/flat/*.svg text eol=lf

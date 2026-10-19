@@ -45,13 +45,21 @@ export function isModalCancelKey(event: ModalCancelKeyEvent): boolean {
  * useSubpageEscape yields as long as any modal is registered.
  */
 let openModalCount = 0
+const openModalListeners = new Set<() => void>()
+
+export function subscribeOpenModals(listener: () => void): () => void {
+  openModalListeners.add(listener)
+  return () => { openModalListeners.delete(listener) }
+}
 
 export function registerOpenModal(): void {
   openModalCount += 1
+  openModalListeners.forEach(listener => listener())
 }
 
 export function unregisterOpenModal(): void {
   openModalCount = Math.max(0, openModalCount - 1)
+  openModalListeners.forEach(listener => listener())
 }
 
 export function isAnyModalOpen(): boolean {
@@ -61,4 +69,5 @@ export function isAnyModalOpen(): boolean {
 /** Test-only: reset the counter between unit-test cases. */
 export function resetOpenModalRegistryForTest(): void {
   openModalCount = 0
+  openModalListeners.clear()
 }

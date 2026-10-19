@@ -5,6 +5,7 @@
 
 import type { Prompt } from '../types/electron.d.ts'
 import type { AppState, PromptCleanupConfig } from '../types/tab.d.ts'
+import { terminalKeyToSequence } from './prompt-input.ts'
 
 export const PROMPT_EXPORT_SCHEMA_VERSION = 1
 
@@ -194,6 +195,14 @@ function isValidSendHistory(value: unknown): boolean {
   return value.every((record) => {
     if (!isObject(record)) return false
     const action = record.action
+    const inputResult = record.inputResult
+    if (record.inputActionId !== undefined && (typeof record.inputActionId !== 'string' || record.inputActionId.length > 128)) return false
+    if (record.inputTerminalKey !== undefined && (typeof record.inputTerminalKey !== 'string' || terminalKeyToSequence(record.inputTerminalKey) === null)) return false
+    if (inputResult !== undefined && (!isObject(inputResult) ||
+      typeof inputResult.ok !== 'boolean' || typeof inputResult.contentDelivered !== 'boolean' ||
+      typeof inputResult.phase !== 'string' || !['content', 'key', 'complete'].includes(inputResult.phase) ||
+      (inputResult.reason !== undefined && (typeof inputResult.reason !== 'string' ||
+        !['invalid-input', 'unavailable', 'unsafe-multiline-send', 'write-failed'].includes(inputResult.reason))))) return false
     return (
       typeof record.taskId === 'string' &&
       typeof record.taskName === 'string' &&

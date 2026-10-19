@@ -34,6 +34,7 @@ import { app, BrowserWindow, nativeImage, nativeTheme, Menu, dialog, ipcMain, cr
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { registerIpcHandlers, cleanupIpcHandlers, setupWindowShortcuts } from './ipc-handlers'
+import { promptInputShortcuts } from './prompt-input-shortcuts'
 import { getTrayManager } from './tray-manager'
 import { getAppInfo, initializeAppIdentity } from './app-info'
 import { ptyManager } from './pty-manager'
@@ -732,6 +733,7 @@ function createWindow(displayName: string): void {
   })
 
   mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
+    promptInputShortcuts.attach(guestContents)
     browserViewManager.registerDomWebview(guestContents.id)
     guestContents.once('destroyed', () => browserViewManager.unregisterDomWebview(guestContents.id))
     if (process.env.ONWARD_AUTOTEST === '1') console.log('[BrowserWebview] did-attach', guestContents.id, guestContents.getURL())
@@ -763,6 +765,7 @@ function createWindow(displayName: string): void {
       if (!isAllowedOpenBrowserGuestUrl(url)) event.preventDefault()
     })
     guestContents.on('before-input-event', (event, input) => {
+      if (promptInputShortcuts.route(guestContents, event, input)) return
       if (input.type !== 'keyDown') return
       const key = input.key.toLowerCase()
       const modifier = input.meta || input.control

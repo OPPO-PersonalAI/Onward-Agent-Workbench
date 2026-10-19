@@ -7,6 +7,7 @@
 
 import type { ThemeSettings } from './theme'
 import type { AppLocale } from '../i18n/core'
+import type { PromptInputSettings } from '../utils/prompt-input'
 
 // Shortcut configuration
 export interface ShortcutConfig {
@@ -60,6 +61,8 @@ export interface GlobalTerminalStyle {
 export interface SettingsState {
   version: number
   shortcuts: ShortcutConfig
+  /** Ordered Prompt input actions and their optional user-defined leader. */
+  promptInput: PromptInputSettings
   terminalStyles: Record<string, TerminalStyleConfig>
   globalTerminalStyle: GlobalTerminalStyle
   /** Git Diff font size (px), if empty, use the default value */

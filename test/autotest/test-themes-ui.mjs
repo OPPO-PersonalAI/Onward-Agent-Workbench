@@ -570,7 +570,7 @@ async function tasks(h) {
       assert.equal(state.settings.version, 3)
       assert(!Object.hasOwn(state.settings, 'taskOverrides'))
       const live = await h.page.evaluate(() => window.__onwardThemeDebug.getState().settings)
-      assert.equal(live.version, 9)
+      assert.equal(live.version, 10)
       assert([live.globalTerminalStyle, ...Object.values(live.terminalStyles)].every(style => !Object.hasOwn(style, 'foregroundColor') && !Object.hasOwn(style, 'backgroundColor')), 'Retired color fields are removed before renderer consumers see migrated settings')
       await editorFont(h, first, 17)
       await editorFont(h, second, 20)
@@ -579,7 +579,7 @@ async function tasks(h) {
         await setLanguage(h, before.language === 'en' ? 'zh-CN' : 'en')
         await setLanguage(h, before.language)
       }
-      await eventually('Retired fields absent from v9 disk settings', () => h.diskSettings(), data => data?.version === 9 && data.theme?.version === 3 &&
+      await eventually('Retired fields absent from v10 disk settings', () => h.diskSettings(), data => data?.version === 10 && data.theme?.version === 3 &&
         !Object.hasOwn(data.theme, 'taskOverrides') && [data.globalTerminalStyle, ...Object.values(data.terminalStyles)].every(style => !Object.hasOwn(style, 'foregroundColor') && !Object.hasOwn(style, 'backgroundColor')))
       const migrated = await h.diskSettings()
       assert.deepEqual(migrated.terminalStyles, before.terminalStyles)

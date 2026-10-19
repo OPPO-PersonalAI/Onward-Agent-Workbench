@@ -4,6 +4,9 @@
  */
 
 import type { ThemeDefinition } from './theme'
+import type { PromptInputAPI, PromptInputResult } from '../utils/prompt-input'
+import type { AutotestInputFocusResult } from '../../electron/shared/autotest-input-focus'
+export type { PromptInputAPI } from '../utils/prompt-input'
 
 export interface ThemesAPI {
   export: (requestId: string, themeId: string) => Promise<{ success: boolean; canceled?: boolean }>
@@ -164,6 +167,9 @@ export interface PromptSendRecord {
   sentAt: number
   action: 'send' | 'execute' | 'sendAndExecute'
   result?: 'executed' | 'sent-only'
+  inputActionId?: string
+  inputTerminalKey?: string
+  inputResult?: PromptInputResult
 }
 
 export interface Prompt {
@@ -1177,6 +1183,9 @@ export interface DebugAPI {
   virtualCursorDisabled: boolean
   log: (message: string, data?: unknown) => void
   focusWindow: () => Promise<boolean>
+  blurWindow: () => Promise<boolean>
+  sendInputEvent: (input: Electron.KeyboardInputEvent, contentsId?: number) => Promise<boolean>
+  getInputFocus: () => Promise<AutotestInputFocusResult | null>
   simulateGpuProcessGone: () => Promise<{ success: boolean; notified?: number; error?: string }>
   runOcclusionFlipStress: (cycles?: number) => Promise<{
     success: boolean
@@ -1467,6 +1476,7 @@ export interface TelemetryAPI {
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
+  promptInput: PromptInputAPI
   terminalConfig: TerminalConfigAPI
   dialog: DialogAPI
   shell: ShellAPI

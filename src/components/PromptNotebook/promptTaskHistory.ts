@@ -34,6 +34,7 @@ export function buildPromptTaskHistorySummary(
   if (normalizedCount > 0) {
     prompts.forEach((prompt) => {
       ;(prompt.sendHistory ?? []).forEach((record) => {
+        if (record.inputResult && !record.inputResult.contentDelivered) return
         const taskNumber = extractTaskNumber(record.taskName)
         if (taskNumber === null || taskNumber > normalizedCount) return
         let set = promptTaskSet.get(prompt.id)

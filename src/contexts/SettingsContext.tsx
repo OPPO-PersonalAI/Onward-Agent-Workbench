@@ -22,6 +22,8 @@ import { terminalSessionManager } from '../terminal/terminal-session-manager'
 import { getAppliedEditorTheme } from '../themes/editor-theme'
 import { DEFAULT_LOCALE, type AppLocale } from '../i18n/core'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
+import { createDefaultPromptInputSettings, normalizePromptInputSettings, validatePromptInputSettings, type PromptInputSettings } from '../utils/prompt-input'
+import { RESERVED_SHORTCUTS } from '../../electron/main/reserved-shortcuts'
 
 /**
  * Save anti-shake time (milliseconds)
@@ -75,8 +77,9 @@ function createDefaultShortcuts(): ShortcutConfig {
  */
 function createDefaultSettings(): SettingsState {
   return {
-    version: 9,
+    version: 10,
     shortcuts: createDefaultShortcuts(),
+    promptInput: createDefaultPromptInputSettings(),
     terminalStyles: {},
     globalTerminalStyle: createDefaultGlobalTerminalStyle(),
     gitDiffFontSize: null,
@@ -99,6 +102,7 @@ interface SettingsContextValue {
   // Shortcut operations
   updateShortcut: (key: keyof ShortcutConfig, value: string | null) => void
   getShortcut: (key: keyof ShortcutConfig) => string | null
+  updatePromptInput: (promptInput: PromptInputSettings) => Promise<boolean>
 
   // Terminal style operations
   updateTerminalStyle: (terminalId: string, style: Partial<TerminalStyleConfig>) => void
@@ -139,11 +143,16 @@ interface SettingsProviderProps {
 }
 
 export function SettingsProvider({ children, onShortcutAction }: SettingsProviderProps) {
-  const [settings, setSettings] = useState<SettingsState | null>(() =>
-    (window as unknown as { onwardThemeBootstrap?: { settings: SettingsState } }).onwardThemeBootstrap?.settings ?? null)
+  const [settings, setSettings] = useState<SettingsState | null>(() => {
+    const bootstrap = (window as unknown as { onwardThemeBootstrap?: { settings: SettingsState } }).onwardThemeBootstrap?.settings
+    return bootstrap ? { ...bootstrap, version: Math.max(10, bootstrap.version ?? 0), promptInput: normalizePromptInputSettings(bootstrap.promptInput) } : null
+  })
   const [isLoaded, setIsLoaded] = useState(Boolean(settings))
   const settingsRef = useRef<SettingsState | null>(settings)
   const savedThemeRef = useRef<ThemeSettings | null>(settings?.theme ?? null)
+  const savedPromptInputRef = useRef<PromptInputSettings | null>(settings?.promptInput ?? null)
+  const promptInputCommitRevision = useRef(0)
+  const promptInputCommitBarrier = useRef<{ settled: Promise<void>; release: () => void; pending: number } | null>(null)
   const settingsSaveRevision = useRef(0)
   const acknowledgedSaveRevision = useRef(0)
   const pendingSettingsSaves = useRef(new Map<number, Promise<boolean>>())
@@ -177,13 +186,19 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     const load = async () => {
       if (settingsRef.current) {
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'bootstrap-loaded', mode: settingsRef.current.theme.mode })
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, {
+          reason: 'bootstrap-loaded', actions: settingsRef.current.promptInput.actions.length,
+          leader: Boolean(settingsRef.current.promptInput.leader)
+        })
         return
       }
       try {
         if (window.electronAPI?.settings) {
           perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'load-send' })
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'load-send' })
           const loadedSettings = await window.electronAPI.settings.load()
-          const normalized = { ...loadedSettings, theme: normalizeThemeSettings(loadedSettings.theme) }
+          const normalized = { ...loadedSettings, version: Math.max(10, loadedSettings.version ?? 0),
+            theme: normalizeThemeSettings(loadedSettings.theme), promptInput: normalizePromptInputSettings(loadedSettings.promptInput) }
           settingsRef.current = normalized
           setSettings(normalized)
         } else {
@@ -192,11 +207,15 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
         }
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'loaded', mode: settingsRef.current?.theme.mode })
         savedThemeRef.current = settingsRef.current?.theme ?? null
+        savedPromptInputRef.current = settingsRef.current?.promptInput ?? null
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'loaded', actions: settingsRef.current?.promptInput.actions.length })
       } catch (error) {
         console.error('Failed to load settings:', error)
         settingsRef.current = createDefaultSettings()
         setSettings(settingsRef.current)
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'load-fallback' })
+        savedPromptInputRef.current = settingsRef.current.promptInput
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'load-fallback' })
       } finally {
         setIsLoaded(true)
       }
@@ -221,7 +240,13 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   }, [onShortcutAction])
 
   // Both save paths share acknowledgement ordering and retain the snapshot actually sent.
-  const persistSettingsSnapshot = useCallback((snapshot: SettingsState): Promise<boolean> => {
+  const persistSettingsSnapshot = useCallback(function persist(snapshot: SettingsState, promptInputCommit = false): Promise<boolean> {
+    const barrier = promptInputCommitBarrier.current
+    if (barrier && !promptInputCommit) {
+      // A later full snapshot must not accidentally persist an unacknowledged action edit.
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'settings-save-deferred' })
+      return barrier.settled.then(() => persist(settingsRef.current ?? snapshot))
+    }
     const revision = ++settingsSaveRevision.current
     if (pendingFontEdits.current) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'patch-batch', count: pendingFontEdits.current })
@@ -234,6 +259,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       if (ok && revision > acknowledgedSaveRevision.current) {
         acknowledgedSaveRevision.current = revision
         savedThemeRef.current = snapshot.theme
+        savedPromptInputRef.current = snapshot.promptInput
       }
       return ok
     })()
@@ -278,6 +304,18 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
 
   // Update a single shortcut
   const updateShortcut = useCallback((key: keyof ShortcutConfig, value: string | null) => {
+    const previous = settingsRef.current
+    if (key === 'activateAndFocusPrompt' && previous) {
+      const shortcuts = { ...previous.shortcuts, [key]: value }
+      const error = validatePromptInputSettings(previous.promptInput, [
+        ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+      ], window.electronAPI?.platform, [value])
+      if (error) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'global-shortcut-invalid', error })
+        return
+      }
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'global-shortcut-edit', enabled: Boolean(value) })
+    }
     trackFeatureUse('setting-change')
     updateSettings(prev => ({
       ...prev,
@@ -292,6 +330,68 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   const getShortcut = useCallback((key: keyof ShortcutConfig): string | null => {
     return settings?.shortcuts[key] ?? null
   }, [settings])
+
+  const updatePromptInput = useCallback(async (promptInput: PromptInputSettings): Promise<boolean> => {
+    const previous = settingsRef.current
+    if (!previous || !window.electronAPI?.settings) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'commit-unavailable' })
+      return false
+    }
+    const error = validatePromptInputSettings(promptInput, [
+      ...Object.values(previous.shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+    ], window.electronAPI.platform, [previous.shortcuts.activateAndFocusPrompt])
+    if (error) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'commit-invalid', error })
+      return false
+    }
+    const request = ++promptInputCommitRevision.current
+    const started = performance.now()
+    trackFeatureUse('setting-change')
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    const precedingSaves = [...pendingSettingsSaves.current.values()]
+    let barrier = promptInputCommitBarrier.current
+    if (!barrier) {
+      let release!: () => void
+      barrier = { settled: new Promise<void>(resolve => { release = resolve }), release: () => release(), pending: 0 }
+      promptInputCommitBarrier.current = barrier
+    }
+    barrier.pending += 1
+    const next = { ...previous, promptInput: normalizePromptInputSettings(promptInput), updatedAt: Date.now() }
+    settingsRef.current = next
+    setSettings(next)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, {
+      reason: 'commit-send', request, actions: next.promptInput.actions.length, leader: Boolean(next.promptInput.leader)
+    })
+    try {
+      const ok = await persistSettingsSnapshot(next, true)
+      if (!ok) throw new Error('Prompt input settings were not saved')
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'commit-saved', request, durationMs: performance.now() - started })
+      return true
+    } catch {
+      await Promise.allSettled(precedingSaves)
+      if (request === promptInputCommitRevision.current && settingsRef.current) {
+        const restored = { ...settingsRef.current, promptInput: savedPromptInputRef.current ?? previous.promptInput }
+        settingsRef.current = restored
+        setSettings(restored)
+        // Keep unrelated edits eligible for persistence after the rejected full snapshot.
+        saveSettings(restored)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'rollback-applied', request })
+      } else {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'rollback-skipped', request })
+      }
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'commit-rejected', request, durationMs: performance.now() - started })
+      return false
+    } finally {
+      barrier.pending -= 1
+      if (!barrier.pending) {
+        if (promptInputCommitBarrier.current === barrier) promptInputCommitBarrier.current = null
+        barrier.release()
+      }
+    }
+  }, [persistSettingsSnapshot, saveSettings])
 
   useLayoutEffect(() => {
     applyResolvedTheme(resolvedTheme)
@@ -487,6 +587,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     isLoaded,
     updateShortcut,
     getShortcut,
+    updatePromptInput,
     updateTerminalStyle,
     getTerminalStyle,
     deleteTerminalStyle,
@@ -509,6 +610,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     isLoaded,
     updateShortcut,
     getShortcut,
+    updatePromptInput,
     updateTerminalStyle,
     getTerminalStyle,
     deleteTerminalStyle,

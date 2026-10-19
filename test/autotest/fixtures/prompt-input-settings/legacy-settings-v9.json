@@ -1,0 +1,42 @@
+{
+  "_spdx": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "version": 9,
+  "shortcuts": {
+    "focusTerminal1": "Alt+1",
+    "focusPromptEditor": "Control+Shift+P",
+    "terminalProjectEditor": "Control+Shift+J"
+  },
+  "terminalStyles": {
+    "fixture-terminal": {
+      "terminalId": "fixture-terminal",
+      "fontFamily": "Fixture Mono 测试",
+      "fontSize": 17,
+      "gitDiffFontSize": 18
+    }
+  },
+  "globalTerminalStyle": {
+    "fontFamily": "Fixture Global Mono",
+    "fontSize": 16,
+    "gitDiffFontSize": 20
+  },
+  "gitDiffFontSize": 21,
+  "settingsPanelWidth": 400,
+  "language": "en",
+  "theme": {
+    "version": 3,
+    "mode": "manual",
+    "themeId": "dracula",
+    "lightThemeId": "light-modern",
+    "darkThemeId": "dracula",
+    "classic": { "mode": "preset", "presetId": "graphite", "custom": null },
+    "overrides": { "dracula": { "terminal.background": "#152637" } },
+    "imported": [
+      { "id": "fixture-unicode-theme", "name": "Stored 主题", "kind": "dark", "colors": { "editor.background": "#112233" } }
+    ]
+  },
+  "telemetryConsent": false,
+  "telemetryInstanceId": "49dbde3b-42d0-4ea8-934e-5d9a5ec18301",
+  "autoFollowGitBranchForTaskName": false,
+  "performanceDiagnosticsEnabled": false,
+  "updatedAt": 1791936000000
+}

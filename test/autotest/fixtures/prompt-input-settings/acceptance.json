@@ -1,0 +1,86 @@
+{
+  "_spdx": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "legacyCopyLineEndings": "CRLF",
+  "workspaceName": "workspace with spaces 测试",
+  "leader": "F6",
+  "modifiedLeaderProbe": "Control+F6",
+  "recordingKeys": { "F6": "F6", "Control+F6": "Control+F6", "E": "e", "K": "k" },
+  "shortcutLabels": {
+    "darwin": { "F6": "F6", "Control+F6": "Control+F6", "Enter": "Enter", "E": "E", "S": "S", "A": "A", "Q": "Q", "K": "K" },
+    "win32": { "F6": "F6", "Control+F6": "Control+F6", "Enter": "Enter", "E": "E", "S": "S", "A": "A", "Q": "Q", "K": "K" },
+    "linux": { "F6": "F6", "Control+F6": "Control+F6", "Enter": "Enter", "E": "E", "S": "S", "A": "A", "Q": "Q", "K": "K" }
+  },
+  "timeoutMs": 1950,
+  "executeName": "Terminal key only · 仅发送按键",
+  "defaultEmoji": { "sendAndExecute": "🚀", "execute": "⚡", "send": "📤", "sendAllAndExecute": "📣", "queue": "⏳", "custom": "🤖" },
+  "emojiSamples": [
+    { "query": "robot", "key": "1f916", "emoji": "🤖" },
+    { "query": "火箭", "key": "1f680", "emoji": "🚀" },
+    { "query": "👍🏿", "key": "1f44d-1f3ff", "emoji": "👍🏿" },
+    { "query": "👩🏽‍💻", "key": "1f469-1f3fd-200d-1f4bb", "emoji": "👩🏽‍💻" },
+    { "query": "🛠️", "key": "1f6e0", "emoji": "🛠️" }
+  ],
+  "emojiSearchStressQueries": ["robot", "rocket", "thumb", "火", "robot"],
+  "copy": {
+    "en": {
+      "title": "Prompt input actions",
+      "save": "Save",
+      "saved": "Actions saved.",
+      "saveFailed": "Could not save. Your previous actions are still active; your draft is kept for retry.",
+      "leaderNotSet": "Click to record",
+      "shortcutNotSet": "Not set",
+      "clearShortcut": "Clear shortcut",
+      "terminalKeys": { "None": "None", "Enter": "Enter", "Tab": "Tab", "Shift+Tab": "Shift+Tab", "Escape": "Escape", "Control+A": "Ctrl+A" },
+      "targets": { "default": "Selected / active", "all": "All visible" },
+      "queue": "Queue",
+      "emojiAppearance": "Choose appearance", "rocket": "rocket"
+    },
+    "zh-CN": {
+      "title": "Prompt 输入动作",
+      "save": "保存",
+      "saved": "动作已保存。",
+      "saveFailed": "保存失败。之前的动作仍然生效，编辑草稿已保留，可重试。",
+      "leaderNotSet": "点击录制",
+      "shortcutNotSet": "未设置",
+      "clearShortcut": "清除快捷键",
+      "terminalKeys": { "None": "无", "Enter": "Enter（回车）", "Tab": "Tab（制表）", "Shift+Tab": "Shift+Tab", "Escape": "Escape（退出）", "Control+A": "Ctrl+A" },
+      "targets": { "default": "所选 / 当前", "all": "全部可见" },
+      "queue": "排队",
+      "emojiAppearance": "选择外观", "rocket": "火箭"
+    }
+  },
+  "defaults": {
+    "leader": null,
+    "timeoutMs": 1500,
+    "actions": [
+      { "id": "sendAndExecute", "preset": "sendAndExecute", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "default", "shortcut": "Enter" },
+      { "id": "execute", "preset": "execute", "name": "", "visible": true, "includePrompt": false, "terminalKey": "Enter", "target": "default", "shortcut": "E" },
+      { "id": "send", "preset": "send", "name": "", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default", "shortcut": "S" },
+      { "id": "sendAllAndExecute", "preset": "sendAllAndExecute", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "all", "shortcut": "A" },
+      { "id": "queue", "preset": "queue", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Tab", "target": "default", "shortcut": "Q" }
+    ]
+  },
+  "actions": [
+    { "name": "Long English action name with enough words to wrap at the narrow Settings width", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "中文输入动作：在狭窄面板中仍然能够完整配置目标和终端按键", "visible": true, "includePrompt": true, "terminalKey": "Tab", "target": "all" },
+    { "name": "Mixed action 中文 & <literal> 🚀", "visible": false, "includePrompt": false, "terminalKey": "Shift+Tab", "target": "default" },
+    { "name": "Fixture action 04", "visible": true, "includePrompt": false, "terminalKey": "Escape", "target": "all" },
+    { "name": "Fixture action 05", "visible": true, "includePrompt": false, "terminalKey": "Control+A", "target": "default" },
+    { "name": "Fixture action 06", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "default" },
+    { "name": "Fixture action 07", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 08", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 09", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 10", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 11", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 12", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 13", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 14", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 15", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 16", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 17", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 18", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 19", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 20", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" },
+    { "name": "Fixture action 21", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default" }
+  ]
+}

@@ -19,6 +19,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { page: 'fonts', target: 'terminal-font-size', label: 'settings.terminal.fontSize' },
   { page: 'fonts', target: 'editor-font-size', label: 'settings.terminal.editorFontSize' },
   { page: 'fonts', target: 'font-family', label: 'settings.terminal.fontFamily' },
+  { page: 'shortcuts', target: 'prompt-input', label: 'promptInput.settings.title', keywords: ['promptInput.settings.leader', 'promptInput.settings.terminalKey', 'promptInput.settings.timeout', 'promptInput.settings.includePrompt'] },
   { page: 'shortcuts', target: 'globalShortcuts', label: 'settings.group.globalShortcuts', keywords: ['settings.shortcut.togglePrompt'] },
   { page: 'shortcuts', target: 'windowShortcuts', label: 'settings.group.windowShortcuts', keywords: ['settings.shortcut.focusPromptEditor', 'settings.shortcut.addToHistory'] },
   { page: 'shortcuts', target: 'terminalActions', label: 'settings.group.terminalActions', keywords: ['settings.shortcut.viewGitDiff', 'settings.shortcut.viewGitHistory', 'settings.shortcut.changeWorkDir', 'settings.shortcut.openWorkDir', 'settings.shortcut.openProjectEditor'] },

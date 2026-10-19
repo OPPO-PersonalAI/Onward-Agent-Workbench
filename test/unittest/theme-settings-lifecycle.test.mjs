@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import { createDefaultPromptInputSettings } from '../../src/utils/prompt-input.ts'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const compiledModules = new Map()
@@ -400,4 +401,73 @@ test('TSL-10: public Task font edits, apply-all and deletion preserve the theme 
   assert.deepEqual(h.saves[0].snapshot.terminalStyles, { 'task-a': h.value.getTerminalStyle('task-a') })
   h.saves[0].reply(true)
   await saved
+})
+
+test('PIS-L01: Prompt action save acknowledges durable success and preserves unrelated settings', async t => {
+  const h = createHarness(t)
+  h.flush()
+  const theme = structuredClone(h.value.settings.theme)
+  const configured = { ...createDefaultPromptInputSettings(), leader: 'Control+X' }
+  configured.actions[4].name = 'Native queue'
+  configured.actions[4].visible = false
+  const pending = h.value.updatePromptInput(configured)
+  h.flush()
+  let settled = false
+  void pending.then(() => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false, 'The user must not see saved before the persistence ACK')
+  assert.equal(h.saves.length, 1)
+  assert.deepEqual(h.saves[0].snapshot.promptInput, configured)
+  h.saves[0].reply(true)
+  assert.equal(await pending, true)
+  h.flush()
+  assert.deepEqual(h.value.settings.promptInput, configured)
+  assert.deepEqual(h.value.settings.theme, theme)
+  configured.actions[4].name = 'Caller later edited its local draft'
+  assert.equal(h.value.settings.promptInput.actions[4].name, 'Native queue', 'Persisted action configuration must not alias the caller draft')
+})
+
+for (const failure of ['nack', 'exception']) {
+  test(`PIS-L02-${failure}: rejected Prompt save rolls back only its section, retaining newer language and font edits`, async t => {
+    const h = createHarness(t)
+    h.flush()
+    const before = structuredClone(h.value.settings.promptInput)
+    const next = { ...createDefaultPromptInputSettings(), leader: 'Control+X' }
+    const pending = h.value.updatePromptInput(next)
+    h.flush()
+    h.value.updateLanguage('zh-CN')
+    h.value.updateTerminalStyle('task-a', { fontSize: 23 })
+    h.flush()
+    if (failure === 'nack') h.saves[0].reply(false)
+    else h.saves[0].fail()
+    assert.equal(await pending, false)
+    h.flush()
+    assert.deepEqual(h.value.settings.promptInput, before)
+    assert.equal(h.value.settings.language, 'zh-CN')
+    assert.equal(h.value.getTerminalStyle('task-a').fontSize, 23)
+    const later = h.runDebounce()
+    assert.deepEqual(h.saves.at(-1).snapshot.promptInput, before, 'A later unrelated save must not resurrect the rejected actions')
+    assert.equal(h.saves.at(-1).snapshot.language, 'zh-CN')
+    h.saves.at(-1).reply(true)
+    await later
+  })
+}
+
+test('PIS-L03: an older rejected action configuration cannot revert a newer acknowledged one', async t => {
+  const h = createHarness(t)
+  h.flush()
+  const old = { ...createDefaultPromptInputSettings(), leader: 'Control+X' }
+  const newer = { ...createDefaultPromptInputSettings(), leader: 'Control+G' }
+  newer.actions.reverse()
+  const first = h.value.updatePromptInput(old)
+  h.flush()
+  const second = h.value.updatePromptInput(newer)
+  h.flush()
+  assert.equal(h.saves.length, 2, JSON.stringify(h.traces.filter(({ name }) => name.includes('prompt-input'))))
+  h.saves[1].reply(true)
+  assert.equal(await second, true)
+  h.saves[0].reply(false)
+  assert.equal(await first, false)
+  h.flush()
+  assert.deepEqual(h.value.settings.promptInput, newer)
 })

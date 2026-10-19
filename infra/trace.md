@@ -183,6 +183,56 @@ Registered in `src/utils/perf-trace-names.ts` and emitted by the code
 listed under each section. Event names MUST NOT change once in use —
 append new names, never rename existing ones.
 
+### Configurable Prompt input actions (main and renderer)
+
+| Constant | Name | Phase | Emitted at |
+|---|---|---|---|
+| `MAIN_PROMPT_INPUT_SETTINGS` | `main:prompt-input.settings-changed` | `i` | `settings-storage.ts` / `ipc-handlers.ts` / shortcut controller: configuration load, migration, host/global binding repair, commit/rejection, conflict checks and replacement; bounded counts and outcomes, no custom names. |
+| `MAIN_PROMPT_SHORTCUT` | `main:prompt-shortcut.state-changed` | `i` | `prompt-input-shortcuts.ts` / `prompt-input-handlers.ts`: context/suspension IPC receipt, optional text-dialog native-menu preservation, owner lifecycle, Leader arm/select/dispatch/cancel/passthrough and rejection; stale consumed-release retirement is count-only. Ordinary keystrokes are not logged. |
+| `MAIN_PROMPT_INPUT` | `main:prompt-input.send-sequence` | `X` when `durationMs` is present; otherwise `i` | `prompt-input-handlers.ts` / `ipc-handlers.ts` / `pty-manager.ts`: action-input receipt, validation, capability changes, per-terminal text/suffix transaction and result. Transport success is not agent execution acknowledgement. |
+| `RENDERER_PROMPT_INPUT_SETTINGS` | `renderer:prompt-input.settings-changed` | `i` / `X` | `PromptInputSettings.tsx` / `SettingsContext.tsx` / `ShortcutInput.tsx`: disclosure/search reveal, action selection and horizontal preview reveal (durationMs), color/default-color commits, recording and shared preview suspension IPC, local draft, save, acknowledgement/rollback and configuration lifecycle. |
+| `RENDERER_PROMPT_INPUT_PREVIEW` | `renderer:prompt-input.preview-shortcut` | `i` / `X` | `PromptShortcutPreview.tsx`: scoped window-capture lifecycle, focus and suspension acknowledgement/rejection, chord transitions (durationMs), timeout/IME/AltGr/unmatched/draft cancellation and resume failure; no ordinary typing or Task delivery. |
+| `RENDERER_PROMPT_INPUT_REORDER` | `renderer:prompt-input.reorder-actions` | `i` / `X` | `PromptInputSettings.tsx`: horizontal drag/keyboard start, commit (durationMs), boundary rejection, foreign-drop rejection and cancellation; no pointermove logging or persistence. |
+| `RENDERER_PROMPT_EMOJI_PICKER` | `renderer:prompt-emoji.picker-lifecycle` | `i` | `PromptActionAppearance.tsx`: trigger mount, open/close requests, focus restoration/disposal, category selection, emoji selection, color commit, default reset, viewport-reset retry, grid-focus repositioning and containment of editor-save shortcuts. Uses the existing modal registry and acknowledged shortcut suspension (including focus regain); input-ready/suspend-failed/resume-failed nodes supplement existing settings IPC send/receive/ACK events. |
+| `RENDERER_PROMPT_EMOJI_CATALOG` | `renderer:prompt-emoji.load-catalog` | `i` / `X` | `PromptActionAppearance.tsx`: Worker creation, ready (durationMs from open), start/send/decode/search/worker failure and termination. Local catalog is bundled only into the Worker chunk; no network or persistent cache. |
+| `RENDERER_PROMPT_EMOJI_SEARCH` | `renderer:prompt-emoji.search-summary` | `i` | `PromptActionAppearance.tsx`: aggregated request-send, reply-receive, stale-reply rejection, scroll-frame and focused-scroll reconciliation counts, at most once per second plus disposal. One in-flight request and one replaceable pending request; no raw query, per-keystroke or per-frame trace. Picker lifecycle also records post-commit search-focus outcome, native-input blur and stale suspension acknowledgements. |
+| `WORKER_PROMPT_EMOJI_CATALOG` | `worker:prompt-emoji.index-catalog` | `X` | `promptEmojiWorker.ts` measures local catalog indexing and sends one ready envelope; `PromptActionAppearance.tsx` forwards the measured duration and count through the diagnostic bridge. |
+| `WORKER_PROMPT_EMOJI_SEARCH` | `worker:prompt-emoji.search-summary` | `X` | Worker search durations are accumulated by `PromptActionAppearance.tsx` and forwarded at most once per second plus disposal, with query count, total durationMs and maxDurationMs. The span is aggregate measured work, not a continuous wall-clock search or a separate OS thread track. |
+| `RENDERER_PROMPT_EMOJI_ASSET` | `renderer:prompt-emoji.render-asset` | `i` | `PromptActionEmoji.tsx`: first module use, failed local image load → Unicode fallback, and fallback reset on a subsequent source change. No per-image success or render-loop trace. |
+| `RENDERER_PROMPT_SHORTCUT` | `renderer:prompt-shortcut.state-changed` | `i` | `PromptInputShortcuts.tsx`: lifecycle, shortcut/context state, IPC receive, stale Tab rejection, invocation and dismissible error overlay; no raw editor content. |
+| `RENDERER_PROMPT_ACTION` | `renderer:prompt-input.dispatch-action` | `X` when `durationMs` is present; otherwise `i` | `PromptNotebook.tsx` / `PromptSender.tsx` / `PromptActionButton.tsx`: shared color-button mount and keyboard-focus label show/hide/cleanup (hide cause and aggregated positioning work/unrelated-scroll counts; no per-scroll trace), error/success-muted presentation, action invocation, pending/manual target changes, stale-selection rejection, empty/busy/unavailable rejection, snapshot dispatch, nonblocking usage accounting and per-target results. |
+| `RENDERER_PROMPT_DRAFT` | `renderer:prompt-input.settle-draft` | `i` | `PromptNotebook.tsx`: captured history and clear/preserve decision, including key-only, partial failure and newer revision protection. Never emitted per edit/keystroke. |
+| `RENDERER_PROMPT_INPUT_IPC` | `renderer:prompt-input.ipc` | `X` when `durationMs` is present; otherwise `i` | `electron/preload/index.ts`: context/suspend/cancel/send request and reply, shortcut push delivery and failure. |
+
+The unified `PromptNotebook` dispatcher also preserves the existing legacy
+Prompt flow contract: `ui.prompt.action` (`s` and `X`) and
+`ui.prompt.action.done` (`f`). One accepted button or shortcut invocation owns
+one flow ID, bound to each recipient's renderer output before sending. The
+duration spans all recipient acknowledgements, and the closing flow reports
+success/content-only/failure counts. Action metadata uses the legacy
+`send` / `execute` / `sendAndExecute` categories without draft/title text;
+the timed wrapper's `result` retains its existing resolved/rejected-call
+meaning, while the counts describe delivery outcomes. Rejected or busy
+invocations do not start a flow. `prompt-input-frontend-bridge.test.mjs`
+executes the real trace wrappers with a deterministic clock, and
+`run-performance-trace` retains the packaged-app contract checks.
+
+The shared `src/utils/prompt-input.ts` normalizers, key encoder, Leader reducer,
+target resolver and revision predicate are side-effect-free and covered by
+`test/unittest/prompt-input.test.mts`; they are exempt from per-call tracing.
+Their side-effecting callers emit the decision breadcrumbs above.
+Emoji identity/default/path normalization, bilingual ranking/paging and keyboard
+index movement are pure transforms covered by `prompt-emoji.test.mts` PE-U01..04
+and `prompt-input.test.mts` PI-U21. They are exempt from per-call instrumentation.
+The adjacent Settings/Sender runners cover the picker and asset trace paths.
+The pure input validator and streaming bracketed-paste capability scanner in
+`pty-manager.ts` are covered by `prompt-input-handlers.test.mjs`; history
+validation/labels and modal registry subscriptions have paired unit coverage.
+Autotest acknowledgement/draft-sync/dispatch barriers, layout controls and
+focused-owner native input/blur/read-only focus adapters are gated by
+`ONWARD_AUTOTEST=1` and exempt. The native adapter still enters the instrumented
+Electron shortcut controller rather than invoking an action directly.
+
 ### 2.1 Main process (pid=1, tid=1)
 
 #### Lifecycle
@@ -725,7 +775,7 @@ restore-in-place strategy.
 | `RENDERER_PROMPT_EDITOR_CTX_MENU_SCROLL_DISMISS` | `renderer:prompt.editor.ctx-menu-scroll-dismiss` | `i` | `PromptEditorContextMenu.tsx` — the open prompt context menu was dismissed because a container that can move its anchor scrolled (`shouldDismissMenuOnScroll` in `popup-position.ts` returned true). Payload carries `ignoredScrolls`: the count of unrelated-container scrolls (e.g. terminal viewport auto-follow while a Task streams output) the menu survived while open — those are aggregated, never traced per event, because they arrive per rendered frame on the output hot path. A bug report "menu closed by itself" with a trace shows whether the dismiss branch fired and how much background scrolling preceded it. |
 | `RENDERER_PROMPT_INPUT_MODE_CHANGE` | `renderer:prompt.input-mode-change` | `i` | `App.tsx::handlePromptInputModeChange` — fires when the title-row selector changes the global Prompt input mode preference. Payload tags `mode` and `tabCount`; no prompt content. |
 | `RENDERER_PROMPT_EDITOR_VIRTUAL_CARET` | `renderer:prompt.editor.virtual-caret` | `X` (when `durationMs` present, else `i`) | `PromptNotebook.tsx::handleCanvasMouseDown` — fires when a mousedown past EOL/EOF physically pads the textarea value with spaces / newlines so the native caret can land at the virtual (row, col). Args carry input-paint pipeline breakdown: `measureMs` (one-shot cell metrics), `handlerMs` (sync work), `caretMs` (outer rAF + setSelectionRange), `paintMs` (inner rAF, paint commit), `durationMs` (end-to-end, span dur), plus `metricsCached`, `row`, `col`, `padded`. SQL `slice.dur` is the direct latency signal. |
-| `RENDERER_PROMPT_SENDER_DISPATCH` | `renderer:prompt.sender.dispatch` | `i` | `PromptSender.tsx::handleSend*` + `handleExecute` — tagged `action=send|execute|sendAndExecute|sendAllAndExecute` |
+| `RENDERER_PROMPT_SENDER_DISPATCH` | `renderer:prompt.sender.dispatch` | `i` | Superseded by `RENDERER_PROMPT_ACTION` in `PromptNotebook.tsx`'s unified action dispatcher. The name remains registered for historical trace compatibility; new dispatches use the unified event. |
 | `RENDERER_PROMPT_SENDER_LAYOUT_SYNC` | `renderer:prompt.sender.layout-sync` | `i` | `PromptSender.tsx` — Task selector re-derived its grid geometry from the active Task layout. Emitted only when the resulting shape changes (layout switch, custom-preset edit, Task count change), never per render. Payload: `kind` (`preset`\|`custom`), `columns`, `rows`, `slots`, `signature` |
 | `RENDERER_TERMINAL_FOCUS_CHANGE` | `renderer:terminal.focus-change` | `i` | `src/App.tsx::handleTerminalFocus` — Task-scoped tid |
 | `RENDERER_TERMINAL_CTX_MENU_OPEN` | `renderer:terminal.ctx-menu-open` | `i` | `TerminalGrid.tsx` terminal content right-click menu open — Task-scoped tid; payload tags `hasSelection` and `pinnedCount` only. |

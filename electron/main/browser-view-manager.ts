@@ -17,6 +17,7 @@ import {
 import { isAllowedOpenBrowserGuestUrl, resolveBrowserInputToUrl } from '../../src/utils/browser-url'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
+import { promptInputShortcuts } from './prompt-input-shortcuts'
 
 const BROWSER_PARTITION = 'persist:browser'
 
@@ -699,7 +700,9 @@ class BrowserViewManager {
       send(IPC.BROWSER_FULLSCREEN_CHANGED, false)
     })
 
+    promptInputShortcuts.attach(wc)
     wc.on('before-input-event', (event, input) => {
+      if (promptInputShortcuts.route(wc, event, input)) return
       if (
         input.type === 'keyDown' &&
         input.key === 'Escape' &&
@@ -710,11 +713,9 @@ class BrowserViewManager {
         if (!info.isFullscreen) {
           send(IPC.BROWSER_ESCAPE_PRESSED)
           event.preventDefault()
+          return
         }
       }
-    })
-
-    wc.on('before-input-event', (event, input) => {
       const key = input.key.toLowerCase()
       const code = (input as { code?: string }).code?.toLowerCase() ?? ''
       const isZoomShortcut = input.type === 'keyDown' &&

@@ -426,7 +426,7 @@ interface AppStateContextValue {
   ) => void
 
   // Prompt operation
-  addPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => void
+  addPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => void
   /**
    * Create a new pinned (global) prompt in one step. Used by entry points
    * that need to mint a global prompt directly (e.g. the prompt editor's
@@ -1027,7 +1027,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [updateState])
 
   // Prompt operation
-  const addPrompt = useCallback((promptData: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => {
+  const addPrompt = useCallback((promptData: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => {
     if (DEBUG_APP_STATE) {
       perfCountersRef.current.addPrompt += 1
     }
@@ -1041,14 +1041,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       lastUsedAt: now
     }
 
-    updateState(prev => ({
-      ...prev,
-      tabs: prev.tabs.map(tab =>
-        tab.id === prev.activeTabId
+    updateState(prev => {
+      const destination = targetTabId ?? prev.activeTabId
+      const available = prev.tabs.some(tab => tab.id === destination)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+        phase: available ? 'history-appended' : 'history-tab-unavailable', tabId: destination,
+        explicitTab: targetTabId !== undefined, records: promptData.sendHistory?.length ?? 0
+      })
+      if (!available) return prev
+      return {
+        ...prev,
+        tabs: prev.tabs.map(tab => tab.id === destination
           ? { ...tab, localPrompts: [newPrompt, ...tab.localPrompts] }
-          : tab
-      )
-    }))
+          : tab)
+      }
+    })
   }, [updateState])
 
   const addPinnedPrompt = useCallback((promptData: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt' | 'pinned'>) => {

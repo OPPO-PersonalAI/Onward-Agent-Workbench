@@ -111,10 +111,10 @@ test('TSS-10: export snapshot excludes unrelated catalogs and machine settings',
   assert.equal(h.storage.get().theme.themeId, 'dracula')
 })
 
-test('TSS-01: a genuinely new profile follows the OS and persists settings v9/theme v3 on its first save', () => {
+test('TSS-01: a genuinely new profile follows the OS and persists settings v10/theme v3 on its first save', () => {
   const h = createStorageHarness()
   const fresh = h.storage.get()
-  assert.equal(fresh.version, 9)
+  assert.equal(fresh.version, 10)
   assert.equal(fresh.theme.version, 3)
   assert.equal(fresh.theme.mode, 'system')
   assert.equal(fresh.theme.lightThemeId, 'light-modern')
@@ -141,7 +141,7 @@ test('TSS-02: a full save normalizes theme colors, discards retired fields and p
   const inputBefore = structuredClone(next)
   assert.equal(h.storage.save(next), true)
   const saved = h.storage.get()
-  assert.equal(saved.version, 9)
+  assert.equal(saved.version, 10)
   assert.equal(saved.theme.version, 3)
   assert.equal(saved.theme.themeId, 'dracula')
   assert.equal(saved.theme.overrides.dracula['terminal.background'], '#112233')
@@ -228,7 +228,7 @@ for (const globalKind of ['custom-colors', 'raw-null']) {
     }
     const h = createStorageHarness(raw)
     const migrated = h.storage.get()
-    assert.equal(migrated.version, 9)
+    assert.equal(migrated.version, 10)
     assert.equal(migrated.theme.version, 3)
     assert.equal(migrated.theme.themeId, 'onward-classic')
     assert.equal(migrated.theme.mode, 'manual')
@@ -308,7 +308,7 @@ test('TSS-09: settings v8/theme v2 migration preserves imports and theme colors 
   const before = structuredClone(raw)
   const h = createStorageHarness(raw)
   const migrated = h.storage.get()
-  assert.equal(migrated.version, 9)
+  assert.equal(migrated.version, 10)
   assert.equal(migrated.theme.version, 3)
   assert.equal(migrated.theme.themeId, 'custom-light')
   assert.equal(migrated.theme.lightThemeId, 'custom-light')

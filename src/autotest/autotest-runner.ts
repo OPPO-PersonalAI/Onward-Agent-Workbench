@@ -145,9 +145,18 @@ async function resolveTerminalShellKind(terminalId: string): Promise<TerminalShe
   }
 }
 
+function isExternalDriverSuite(suiteFilter: string): boolean {
+  return suiteFilter === 'themes-ui-external' || suiteFilter === 'prompt-input-settings-external'
+}
+
 export async function runAllTests(ctx: AutotestContext): Promise<void> {
-  const { log, sleep } = ctx
   const suiteFilter = (window.electronAPI.debug.autotestSuite || '').trim().toLowerCase()
+  // External drivers own fixture readiness and PTY input. Phase 0 must never
+  // send a shell command into a raw child they have already started.
+  if (isExternalDriverSuite(suiteFilter)) {
+    return
+  }
+  const { log, sleep } = ctx
   const runSingleSuite = suiteFilter.length > 0 && suiteFilter !== 'all'
   // Accept comma-separated suite names (e.g. "pdf-epub-preview,pdf-epub-diff")
   // so a single autotest run can exercise multiple cooperating suites.
