@@ -119,6 +119,9 @@ export const IPC = {
   THEMES_AUTOTEST_EXPORT_FILE: 'themes:autotest-export-file',
   THEMES_CANCEL_IMPORT: 'themes:cancel-import',
   THEMES_BOOTSTRAP: 'themes:bootstrap',
+  THEMES_SCHEDULE_CLOCK: 'themes:schedule-clock',
+  THEMES_SCHEDULE_CHANGED: 'themes:schedule-changed',
+  THEMES_AUTOTEST_CLOCK: 'themes:autotest-clock',
   THEMES_AUTOTEST_SELECT_FILE: 'themes:autotest-select-file',
 
   // feedback

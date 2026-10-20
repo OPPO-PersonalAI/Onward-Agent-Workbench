@@ -30,7 +30,7 @@ if (process.platform === 'win32') {
   })
 }
 
-import { app, BrowserWindow, nativeImage, nativeTheme, Menu, dialog, ipcMain, crashReporter } from 'electron'
+import { app, BrowserWindow, nativeImage, nativeTheme, Menu, dialog, ipcMain, crashReporter, powerMonitor } from 'electron'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { registerIpcHandlers, cleanupIpcHandlers, setupWindowShortcuts } from './ipc-handlers'
@@ -47,6 +47,7 @@ import { collectQuitActivitySummary, warmQuitActivityScanner } from './quit-acti
 import { initializeSessionLedger, markSessionLedgerClean } from './session-ledger'
 import { getSettingsStorage } from './settings-storage'
 import { resolveTheme } from '../../src/themes/theme-engine'
+import { ThemeScheduleController } from './theme-schedule-controller'
 import { getTerminalCwd } from './git-utils'
 import { gitAutofetchManager } from './git-autofetch-manager'
 import { getWindowStateStorage } from './window-state-storage'
@@ -642,6 +643,9 @@ function getIconPath(): string {
 }
 
 function createWindow(displayName: string): void {
+  let testThemeNow = process.env.ONWARD_AUTOTEST === '1' && Boolean(process.env.ONWARD_AUTOTEST_THEME_NOW) && Number.isFinite(Number(process.env.ONWARD_AUTOTEST_THEME_NOW))
+    ? Number(process.env.ONWARD_AUTOTEST_THEME_NOW) : null
+  const themeNow = () => testThemeNow ?? Date.now()
   const iconPath = getIconPath()
   const shouldLog = process.env.ONWARD_DEBUG === '1' || process.env.ELECTRON_ENABLE_LOGGING === '1'
   const log = (...args: unknown[]) => {
@@ -654,7 +658,7 @@ function createWindow(displayName: string): void {
   const savedWindowState = getWindowStateStorage().get()
   const initialThemeSettings = getSettingsStorage().get().theme
   if (initialThemeSettings.mode === 'system') nativeTheme.themeSource = 'system'
-  const initialTheme = resolveTheme(initialThemeSettings, nativeTheme.shouldUseDarkColors)
+  const initialTheme = resolveTheme(initialThemeSettings, nativeTheme.shouldUseDarkColors, themeNow())
   if (initialThemeSettings.mode !== 'system') nativeTheme.themeSource = initialTheme.kind
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: savedWindowState.width,
@@ -690,7 +694,7 @@ function createWindow(displayName: string): void {
     }
     const settings = getSettingsStorage().get().theme
     if (settings.mode === 'system' && nativeTheme.themeSource !== 'system') nativeTheme.themeSource = 'system'
-    const theme = resolveTheme(settings, nativeTheme.shouldUseDarkColors)
+    const theme = resolveTheme(settings, nativeTheme.shouldUseDarkColors, themeNow())
     const source = settings.mode === 'system' ? 'system' : theme.kind
     if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source
     themedWindow.setBackgroundColor(theme.colors['--bg-0'])
@@ -702,6 +706,46 @@ function createWindow(displayName: string): void {
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_NATIVE_APPLY, { reason: 'listener-disposed' })
   })
   applyNativeWindowTheme()
+
+  const themeSchedule = new ThemeScheduleController({
+    settings: () => getSettingsStorage().getThemeScheduleSnapshot(),
+    now: themeNow,
+    trace: data => performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SCHEDULE, data),
+    publish: clock => {
+      if (themedWindow.isDestroyed()) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SCHEDULE, { reason: 'publish-skipped', cause: 'destroyed' })
+        return
+      }
+      applyNativeWindowTheme()
+      themedWindow.webContents.send(IPC.THEMES_SCHEDULE_CHANGED, clock)
+    }
+  })
+  const themeResume = () => themeSchedule.reconcile('resume')
+  const themeFocus = () => themeSchedule.reconcile('focus')
+  powerMonitor.on('resume', themeResume)
+  themedWindow.on('focus', themeFocus)
+  ipcMain.removeHandler(IPC.THEMES_SCHEDULE_CLOCK)
+  ipcMain.handle(IPC.THEMES_SCHEDULE_CLOCK, event => {
+    const allowed = event.sender === themedWindow.webContents
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SCHEDULE, { reason: 'clock-request', allowed })
+    if (!allowed) throw new Error('theme-clock-sender')
+    return themeSchedule.clock()
+  })
+  ipcMain.removeHandler(IPC.THEMES_AUTOTEST_CLOCK)
+  if (process.env.ONWARD_AUTOTEST === '1') ipcMain.handle(IPC.THEMES_AUTOTEST_CLOCK, (event, value: number | null, reason = 'timer') => {
+    if (event.sender !== themedWindow.webContents || (value !== null && (!Number.isFinite(value) || Math.abs(value) > 8e15))) throw new Error('invalid-test-clock')
+    testThemeNow = value
+    themeSchedule.reconcile(reason === 'resume' ? 'resume' : 'timer')
+    return themeSchedule.clock()
+  })
+  themedWindow.once('closed', () => {
+    themeSchedule.dispose()
+    powerMonitor.removeListener('resume', themeResume)
+    themedWindow.removeListener('focus', themeFocus)
+    ipcMain.removeHandler(IPC.THEMES_SCHEDULE_CLOCK)
+    ipcMain.removeHandler(IPC.THEMES_AUTOTEST_CLOCK)
+  })
+  themeSchedule.reconcile('startup')
 
   if (process.env.ONWARD_AUTOTEST === '1') {
     // Keep the window unoccluded for the whole autotest run. Electron 43
@@ -959,13 +1003,14 @@ function createWindow(displayName: string): void {
   ipcMain.removeAllListeners(IPC.THEMES_BOOTSTRAP)
   ipcMain.on(IPC.THEMES_BOOTSTRAP, event => {
     const settings = getSettingsStorage().get()
-    event.returnValue = { settings, resolvedTheme: resolveTheme(settings.theme, nativeTheme.shouldUseDarkColors) }
+    const clock = themeSchedule.clock()
+    event.returnValue = { settings, themeClock: clock, resolvedTheme: resolveTheme(settings.theme, nativeTheme.shouldUseDarkColors, clock.now) }
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'bootstrap', mode: settings.theme.mode })
   })
   registerIpcHandlers(mainWindow, {
     onSettingsChanged: () => {
       Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(displayName)))
-      applyNativeWindowTheme()
+      themeSchedule.reconcile('settings')
     },
     onRestartToApplyUpdate: requestRestartToApplyUpdate,
     onGracefulQuitForDebug: requestQuitForDebug,

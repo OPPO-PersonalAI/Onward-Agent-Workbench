@@ -11,7 +11,7 @@ import type {
   GlobalTerminalStyle,
   ShortcutAction
 } from '../types/settings.d.ts'
-import type { ThemeSettings, ResolvedTheme } from '../types/theme'
+import type { ThemeSettings, ResolvedTheme, ThemeScheduleClock } from '../types/theme'
 import { DEFAULT_THEME_SETTINGS } from '../constants/themes'
 import { applyResolvedTheme } from '../utils/theme-applier'
 import { resolveTheme, normalizeThemeSettings } from '../themes/theme-engine'
@@ -126,6 +126,7 @@ interface SettingsContextValue {
   previewTheme: (theme: ThemeSettings | null) => void
   resolvedTheme: ResolvedTheme
   systemDark: boolean
+  themeClock: ThemeScheduleClock
   updateLanguage: (language: AppLocale) => void
 
   // Auto-follow Git branch for Task name (default true)
@@ -161,11 +162,47 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   const [draftTheme, setDraftTheme] = useState<ThemeSettings | null>(null)
   const previewActiveRef = useRef(false)
   const themeCommitRevision = useRef(0)
+  const themeSelectionRevision = useRef(0)
+  const [themeClock, setThemeClock] = useState<ThemeScheduleClock>(() =>
+    (window as unknown as { onwardThemeBootstrap?: { themeClock?: ThemeScheduleClock } }).onwardThemeBootstrap?.themeClock ?? { now: Date.now(), sequence: 0 })
+  const themeClockRef = useRef(themeClock)
+  const acceptThemeClock = useCallback((clock: ThemeScheduleClock) => {
+    if (!Number.isFinite(clock.now) || Math.abs(clock.now) > 8e15 || !Number.isSafeInteger(clock.sequence)) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'clock-invalid' })
+      return
+    }
+    if (clock.sequence <= themeClockRef.current.sequence) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'clock-ignored', sequence: clock.sequence })
+      return
+    }
+    themeClockRef.current = clock
+    setThemeClock(clock)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'clock-received', sequence: clock.sequence })
+  }, [])
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const shortcutCallbackRef = useRef<((action: ShortcutAction) => void) | null>(null)
 
-  const resolvedTheme = useMemo(() => resolveTheme(draftTheme ?? settings?.theme ?? DEFAULT_THEME_SETTINGS, systemDark),
-    [draftTheme, settings?.theme, systemDark])
+  const scheduleNow = settings?.theme.mode === 'schedule' ? themeClock.now : 0
+  const resolvedTheme = useMemo(() => resolveTheme(draftTheme ?? settings?.theme ?? DEFAULT_THEME_SETTINGS, systemDark, scheduleNow),
+    [draftTheme, settings?.theme, systemDark, scheduleNow])
+
+  useEffect(() => {
+    const api = window.electronAPI?.themes
+    if (!api?.onScheduleChanged) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'clock-unavailable' })
+      return
+    }
+    let disposed = false
+    const accept = (clock: ThemeScheduleClock) => { if (!disposed) acceptThemeClock(clock) }
+    const unsubscribe = api.onScheduleChanged(accept)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'subscribe' })
+    void api.scheduleClock().then(accept).catch(() => perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'clock-request-failed' }))
+    return () => {
+      disposed = true
+      unsubscribe()
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'unsubscribe' })
+    }
+  }, [acceptThemeClock])
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -407,11 +444,24 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
 
   // Commit selection separately from drafts; a failed write rolls back only the theme.
   const updateTheme = useCallback(async (theme: ThemeSettings): Promise<boolean> => {
+    const selection = ++themeSelectionRevision.current
+    if (theme.mode === 'schedule' && window.electronAPI?.themes?.scheduleClock) {
+      try { acceptThemeClock(await window.electronAPI.themes.scheduleClock()) }
+      catch {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'commit-clock-failed' })
+        return false
+      }
+    }
+    if (selection !== themeSelectionRevision.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'commit-superseded', selection })
+      return false
+    }
     const previous = settingsRef.current
     if (!previous) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-unavailable' })
       return false
     }
+    // A failed pre-commit clock request must not invalidate an earlier write's rollback.
     const request = ++themeCommitRevision.current
     trackFeatureUse('setting-change')
     if (saveTimeoutRef.current) {
@@ -442,19 +492,19 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-rejected', request })
       return false
     }
-  }, [persistSettingsSnapshot])
+  }, [persistSettingsSnapshot, acceptThemeClock])
 
   useEffect(() => {
     if (!window.electronAPI?.debug?.autotest) return
     const host = window as unknown as { __onwardThemeDebug?: unknown }
     host.__onwardThemeDebug = {
-      getState: () => ({ settings: settingsRef.current, systemDark, resolvedTheme, draft: Boolean(draftTheme) }),
+      getState: () => ({ settings: settingsRef.current, systemDark, resolvedTheme, themeClock, draft: Boolean(draftTheme) }),
       getTerminalThemes: () => terminalSessionManager.getThemeSnapshotsForAutotest().map(entry => ({ ...entry, id: entry.terminalId,
         status: terminalSessionManager.getSessionDebugState(entry.terminalId)?.status })),
       getMonacoTheme: () => getAppliedEditorTheme()
     }
     return () => { delete host.__onwardThemeDebug }
-  }, [systemDark, resolvedTheme, draftTheme])
+  }, [systemDark, resolvedTheme, draftTheme, themeClock])
 
   useEffect(() => () => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
@@ -601,6 +651,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     previewTheme,
     resolvedTheme,
     systemDark,
+    themeClock,
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
@@ -624,6 +675,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     previewTheme,
     resolvedTheme,
     systemDark,
+    themeClock,
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,

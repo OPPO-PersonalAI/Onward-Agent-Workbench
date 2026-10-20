@@ -10,6 +10,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { createDefaultPromptInputSettings } from '../../src/utils/prompt-input.ts'
+import { normalizeThemeSettings } from '../../src/themes/theme-engine.ts'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const compiledModules = new Map()
@@ -20,7 +21,7 @@ const initialTheme = () => ({
 const equalDependencies = (a, b) => a && b && a.length === b.length && a.every((item, i) => Object.is(item, b[i]))
 
 /** Run the real provider and pure theme modules; only React, browser, IPC and timers are replaced. */
-function createHarness(t, theme = initialTheme()) {
+function createHarness(t, theme = initialTheme(), options = {}) {
   const hooks = []
   const timers = new Map()
   const listeners = new Set()
@@ -79,12 +80,13 @@ function createHarness(t, theme = initialTheme()) {
     useLayoutEffect: (create, dependencies) => effect(create, dependencies, layoutEffects)
   }
   const window = {
-    onwardThemeBootstrap: { settings: {
+    onwardThemeBootstrap: { themeClock: options.clock, settings: {
       version: 9, theme: structuredClone(theme), shortcuts: {}, terminalStyles: {},
       globalTerminalStyle: { fontFamily: null, fontSize: null, gitDiffFontSize: null }, language: 'en'
     } },
     matchMedia: () => media,
     electronAPI: {
+      themes: options.themes,
       debug: { autotest: false },
       settings: {
         onShortcutTriggered: () => () => {},
@@ -220,6 +222,99 @@ async function rejectSelection(h, id = 'nord') {
   h.flush()
 }
 const themeForeground = (h, id = 'dracula') => h.value.settings.theme.overrides[id]?.['terminal.foreground']
+
+test('TSL-SCH01: bootstrap, five ordered clock cycles, pinned previews and rejected schedule writes', async t => {
+  const at = hour => new Date(2026, 9, 19, hour).getTime()
+  let clock = { now: at(10), sequence: 1 }
+  const listeners = new Set()
+  const theme = normalizeThemeSettings({ version: 4, mode: 'schedule', schedule: {
+    fallbackThemeId: 'nord', temporary: null,
+    ranges: [{ id: 'day', themeId: 'light-modern', start: 540, end: 1080, days: [1], enabled: true }]
+  } })
+  const h = createHarness(t, theme, { clock, themes: {
+    scheduleClock: async () => ({ ...clock, sequence: ++clock.sequence }),
+    onScheduleChanged: callback => { listeners.add(callback); return () => listeners.delete(callback) }
+  } })
+  h.flush()
+  await new Promise(resolve => setImmediate(resolve))
+  h.flush()
+  assert.equal(h.value.resolvedTheme.id, 'light-modern')
+  const send = (hour, sequence = ++clock.sequence) => {
+    clock = { now: at(hour), sequence }
+    for (const listener of listeners) listener(clock)
+    h.flush()
+  }
+  for (let trial = 0; trial < 5; trial++) {
+    send(10)
+    h.value.previewTheme({ ...theme, mode: 'manual', themeId: 'dracula' })
+    h.flush()
+    send(18)
+    assert.equal(h.value.resolvedTheme.id, 'dracula')
+    h.value.previewTheme(null)
+    h.flush()
+    assert.equal(h.value.resolvedTheme.id, 'nord')
+    for (const listener of listeners) listener({ now: at(10), sequence: clock.sequence - 1 })
+    h.flush()
+    assert.equal(h.value.resolvedTheme.id, 'nord', 'A late clock response cannot rewind the applied boundary')
+  }
+  const pending = h.value.updateTheme({ ...theme, schedule: { ...theme.schedule, fallbackThemeId: 'dracula' } })
+  await new Promise(resolve => setImmediate(resolve))
+  h.flush()
+  h.saves.at(-1).reply(false)
+  assert.equal(await pending, false)
+  h.flush()
+  assert.deepEqual(h.value.settings.theme, theme)
+  assert.equal(h.value.resolvedTheme.id, 'nord')
+  h.unmount()
+  assert.equal(listeners.size, 0)
+})
+
+test('TSL-SCH02: a delayed clock reply cannot overwrite a later manual selection', async t => {
+  let release
+  let delayed = false
+  const theme = normalizeThemeSettings({ version: 3, mode: 'manual', themeId: 'dracula' })
+  const h = createHarness(t, theme, { themes: {
+    onScheduleChanged: () => () => {},
+    scheduleClock: () => delayed ? new Promise(resolve => { release = resolve }) : Promise.resolve({ now: Date.now(), sequence: 1 })
+  } })
+  h.flush()
+  await new Promise(resolve => setImmediate(resolve))
+  h.flush()
+  delayed = true
+  for (let trial = 0; trial < 5; trial++) {
+    const stale = h.value.updateTheme({ ...theme, mode: 'schedule' })
+    const latest = h.value.updateTheme({ ...theme, mode: 'manual', themeId: 'nord' })
+    h.saves.at(-1).reply(true)
+    assert.equal(await latest, true)
+    release({ now: Date.now(), sequence: trial + 2 })
+    assert.equal(await stale, false)
+    h.flush()
+    assert.equal(h.value.settings.theme.mode, 'manual')
+    assert.equal(h.value.resolvedTheme.id, 'nord')
+  }
+  assert.equal(h.saves.length, 5, 'Superseded selections never persist')
+  assert.equal(h.traces.filter(event => event.data.reason === 'commit-superseded').length, 5)
+})
+
+test('TSL-SCH03: a newer clock failure cannot suppress rollback of an earlier rejected write', async t => {
+  let rejectClock = false
+  const theme = normalizeThemeSettings({ version: 3, mode: 'manual', themeId: 'dracula' })
+  const h = createHarness(t, theme, { themes: {
+    onScheduleChanged: () => () => {},
+    scheduleClock: () => rejectClock ? Promise.reject(new Error('Injected clock failure')) : Promise.resolve({ now: Date.now(), sequence: 1 })
+  } })
+  h.flush()
+  await new Promise(resolve => setImmediate(resolve))
+  h.flush()
+  rejectClock = true
+  const pendingWrite = h.value.updateTheme({ ...theme, themeId: 'nord' })
+  assert.equal(await h.value.updateTheme({ ...theme, mode: 'schedule' }), false)
+  h.saves.at(-1).reply(false)
+  assert.equal(await pendingWrite, false)
+  h.flush()
+  assert.equal(h.value.resolvedTheme.id, 'dracula')
+  assert.deepEqual(h.value.settings.theme, theme)
+})
 
 test('TSL-01: a rejected selection retains a successfully persisted theme override in later saves', async t => {
   const h = createHarness(t)

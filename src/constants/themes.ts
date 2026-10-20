@@ -128,14 +128,15 @@ export const THEME_PRESETS: ThemePreset[] = [
 
 /** New installations follow the operating system appearance. */
 export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
-  version: 3,
+  version: 4,
   mode: 'system',
   themeId: 'dark-modern',
   lightThemeId: 'light-modern',
   darkThemeId: 'dark-modern',
   classic: { mode: 'preset', presetId: 'graphite', custom: null },
   overrides: {},
-  imported: []
+  imported: [],
+  schedule: { fallbackThemeId: 'dark-modern', ranges: [], temporary: null }
 }
 
 /** Pre-v2 installations without a theme retain the original blue appearance. */

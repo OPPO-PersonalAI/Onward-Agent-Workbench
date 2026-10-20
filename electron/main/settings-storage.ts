@@ -10,7 +10,7 @@ import { isReservedShortcut, RESERVED_SHORTCUTS } from './reserved-shortcuts'
 import { DEFAULT_LOCALE, isAppLocale, type AppLocale } from '../../src/i18n/core'
 import type { ThemeSettings } from '../../src/types/theme'
 import { DEFAULT_THEME_SETTINGS } from '../../src/constants/themes'
-import { normalizeThemeSettings } from '../../src/themes/theme-engine'
+import { getAvailableThemeIds, normalizeThemeSettings } from '../../src/themes/theme-engine'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
@@ -424,6 +424,13 @@ class SettingsStorage {
    */
   get(): SettingsState {
     return JSON.parse(JSON.stringify(this.state))
+  }
+
+  /** Bounded clock input: never clone imported color/token catalogs on timer ticks. */
+  getThemeScheduleSnapshot() {
+    const { mode, schedule } = this.state.theme
+    return { mode, schedule: { ...schedule, ranges: schedule.ranges.map(range => ({ ...range, days: [...range.days] })),
+      temporary: schedule.temporary ? { ...schedule.temporary } : null }, availableIds: getAvailableThemeIds(this.state.theme) }
   }
 
   /** A bounded snapshot for worker structured-cloning, excluding unrelated imported themes. */

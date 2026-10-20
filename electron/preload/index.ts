@@ -9,7 +9,7 @@ import { IPC } from '../shared/ipc-channels'
 import type { AutotestInputFocusResult } from '../shared/autotest-input-focus'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import type { SettingsState } from '../../src/types/settings'
-import type { ThemeDefinition } from '../../src/types/theme'
+import type { ThemeDefinition, ThemeScheduleClock } from '../../src/types/theme'
 import type { PromptInputAPI, PromptInputResult, PromptShortcutEvent } from '../../src/utils/prompt-input'
 export type { PromptInputAPI } from '../../src/utils/prompt-input'
 export type { SettingsState } from '../../src/types/settings'
@@ -1007,6 +1007,9 @@ export interface SettingsAPI {
 }
 
 export interface ThemesAPI {
+  scheduleClock: () => Promise<ThemeScheduleClock>
+  onScheduleChanged: (callback: (clock: ThemeScheduleClock) => void) => () => void
+  setClockForAutotest: (now: number | null, reason?: 'timer' | 'resume') => Promise<ThemeScheduleClock>
   export: (requestId: string, themeId: string) => Promise<{ success: boolean; canceled?: boolean }>
   cancelExport: (requestId: string) => Promise<{ canceled: boolean }>
   setExportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'before-commit'; waitUntilPaused?: boolean }) => Promise<void>
@@ -2217,6 +2220,22 @@ const projectAPI: ProjectAPI = {
 }
 
 const themesAPI: ThemesAPI = {
+  scheduleClock: () => traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { stage: 'clock-ipc' }, async () => {
+    if (preloadPerfTraceEnabled) ipcRenderer.send(IPC.DEBUG_PERF_TRACE, {
+      event: PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, data: { reason: 'clock-send' }
+    })
+    try { return await ipcRenderer.invoke(IPC.THEMES_SCHEDULE_CLOCK) }
+    catch { throw new Error('theme-clock-unavailable') }
+  }),
+  onScheduleChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, clock: ThemeScheduleClock) => callback(clock)
+    ipcRenderer.on(IPC.THEMES_SCHEDULE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(IPC.THEMES_SCHEDULE_CHANGED, listener)
+  },
+  setClockForAutotest: (now, reason) => {
+    if (!preloadAutotestEnabled) return Promise.reject(new Error('autotest-disabled'))
+    return ipcRenderer.invoke(IPC.THEMES_AUTOTEST_CLOCK, now, reason)
+  },
   export: (requestId, themeId) => traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_EXPORT, { stage: 'ipc-complete' }, async () => {
     try { return await ipcRenderer.invoke(IPC.THEMES_EXPORT, requestId, themeId) }
     catch { throw new Error('theme-export-ipc-failed') }

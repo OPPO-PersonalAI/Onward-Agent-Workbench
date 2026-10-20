@@ -9,6 +9,9 @@ import type { AutotestInputFocusResult } from '../../electron/shared/autotest-in
 export type { PromptInputAPI } from '../utils/prompt-input'
 
 export interface ThemesAPI {
+  scheduleClock: () => Promise<import('./theme').ThemeScheduleClock>
+  onScheduleChanged: (callback: (clock: import('./theme').ThemeScheduleClock) => void) => () => void
+  setClockForAutotest: (now: number | null, reason?: 'timer' | 'resume') => Promise<import('./theme').ThemeScheduleClock>
   export: (requestId: string, themeId: string) => Promise<{ success: boolean; canceled?: boolean }>
   cancelExport: (requestId: string) => Promise<{ canceled: boolean }>
   setExportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'before-commit'; waitUntilPaused?: boolean }) => Promise<void>

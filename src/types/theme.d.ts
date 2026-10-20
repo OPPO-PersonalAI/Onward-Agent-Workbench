@@ -64,15 +64,37 @@ export interface ThemeDefinition {
   unsupported?: string[]
 }
 
+export interface ThemeTimeRange {
+  id: string
+  themeId: string
+  start: number
+  end: number
+  /** Local start weekdays, Sunday = 0. End is exclusive. */
+  days: number[]
+  enabled: boolean
+}
+
+export interface ThemeSchedule {
+  fallbackThemeId: string
+  ranges: ThemeTimeRange[]
+  temporary: { themeId: string; startsAt: number; until: number } | null
+}
+
+export interface ThemeScheduleClock {
+  now: number
+  sequence: number
+}
+
 export interface ThemeSettings {
-  version: 3
-  mode: 'system' | 'manual'
+  version: 4
+  mode: 'system' | 'manual' | 'schedule'
   themeId: string
   lightThemeId: string
   darkThemeId: string
   classic: LegacyThemeSettings
   overrides: Record<string, Record<string, string>>
   imported: ThemeDefinition[]
+  schedule: ThemeSchedule
 }
 
 export interface ResolvedTheme {

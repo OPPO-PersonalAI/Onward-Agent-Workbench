@@ -1,0 +1,10 @@
+{
+  "_license": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "shortRanges": [
+    { "start": "00:00", "end": "00:01", "days": [1], "theme": "dracula" },
+    { "start": "00:01", "end": "00:02", "days": [1], "theme": "dracula" },
+    { "start": "00:02", "end": "00:03", "days": [1], "theme": "one-dark-pro" },
+    { "start": "00:03", "end": "00:04", "days": [1], "theme": "dark-modern" },
+    { "start": "00:04", "end": "00:05", "days": [1], "theme": "solarized-light" }
+  ]
+}

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { appendFile, cp, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { ThemeUiHarness, GROUPS, SETTINGS_PAGES, FIXTURE_SOURCE, eventually } from './themes-ui-driver-support.mjs'
+import { scheduleCore, scheduleDraft, scheduleVisual, schedulePersistence, setupSchedule, scheduleClock, scheduleTime } from './theme-schedule-checks.mjs'
 
 // Product-approved on 2026-10-07: six visible terminals, three trials,
 // all results correct and at least one complete paint within 200 ms.
@@ -375,6 +376,7 @@ async function core(h) {
     assert.deepEqual((await h.state()).settings, before)
     assert.deepEqual(appearance(await snapshot(h)), beforePaint)
   })
+  await scheduleCore(h, { waitBase, snapshot })
 }
 
 async function draft(h) {
@@ -490,6 +492,7 @@ async function draft(h) {
     }
     return { trials: BOOLEAN_TRIALS }
   })
+  await scheduleDraft(h, { waitBase, beginDraft, endDraft, fill })
 }
 
 async function tasks(h) {
@@ -1351,6 +1354,7 @@ async function visual(h) {
     assert.notEqual(captions[0], captions[1], 'Customize is translated, not hardcoded English')
     return { widths: [300, 600], pages: SETTINGS_PAGES, languages: ['en', 'zh-CN'], screenshots, horizontalLayouts }
   })
+  await scheduleVisual(h, { setLanguage, resizeSettings })
 }
 
 async function latency(h) {
@@ -1438,9 +1442,14 @@ async function latency(h) {
     await promptPressure(h, terminalIds)
     return { trials: BOOLEAN_TRIALS, terminals: terminalIds.length, intervalMs: PRESSURE_INTERVAL_MS }
   })
+  await h.case('TH-SCH-STRESS01-schedule-keeps-prompt-and-six-streams', async () => {
+    await promptPressure(h, terminalIds, true)
+    return { trials: BOOLEAN_TRIALS, terminals: terminalIds.length, intervalMs: PRESSURE_INTERVAL_MS }
+  })
 }
 
-async function promptPressure(h, terminalIds) {
+async function promptPressure(h, terminalIds, scheduled = false) {
+  await h.openSettings()
   const page = h.page
   const prompt = JSON.parse(await readFile(path.join(h.fixture, 'prompt-draft.json'), 'utf8'))
   const output = await terminalOutputFixture(h)
@@ -1456,8 +1465,12 @@ async function promptPressure(h, terminalIds) {
   await settled()
   await page.emulateMedia({ colorScheme: 'dark' })
   await waitBase(h, 'dark-modern', 6)
-  await page.getByTitle('Prompt notebook', { exact: true }).click()
+  if (scheduled) {
+    await setupSchedule(h, 'dark-modern')
+    await waitBase(h, 'dark-modern', 6)
+  }
   const notebook = page.locator('.prompt-notebook:not(.prompt-notebook-hidden)')
+  if (!await notebook.isVisible()) await page.getByTitle('Prompt notebook', { exact: true }).click()
   const content = notebook.locator('.prompt-editor-content[contenteditable="plaintext-only"]')
   const title = notebook.locator('.prompt-editor-title')
   await content.waitFor({ state: 'visible' })
@@ -1513,7 +1526,8 @@ async function promptPressure(h, terminalIds) {
       const states = []
       for (const colorScheme of ['light', 'dark']) {
         const previous = await page.evaluate(() => window.__themesAcceptancePressure.read())
-        await page.emulateMedia({ colorScheme })
+        if (scheduled) await scheduleClock(h, scheduleTime(colorScheme === 'light' ? 10 : 18), 'resume')
+        else await page.emulateMedia({ colorScheme })
         const actual = await waitBase(h, `${colorScheme}-modern`, 6)
         await page.waitForFunction(({ ids, previous }) => {
           const state = window.__themesAcceptancePressure.read()
@@ -1526,7 +1540,7 @@ async function promptPressure(h, terminalIds) {
         const promptFocused = await content.evaluate(node => node === document.activeElement)
         const identitiesPreserved = JSON.stringify(actual.terminals.map(item => item.id)) === JSON.stringify(terminalIds)
         const outputsAdvanced = terminalIds.every(id => stream.rendered[id] > previous.rendered[id] && stream.accepted[id] > previous.accepted[id])
-        const systemModePreserved = (await h.state()).settings.mode === 'system'
+        const systemModePreserved = (await h.state()).settings.mode === (scheduled ? 'schedule' : 'system')
         states.push({ colorScheme, stream, draftPreserved, promptFocused, identitiesPreserved, outputsAdvanced, systemModePreserved })
       }
       const result = {
@@ -1535,7 +1549,7 @@ async function promptPressure(h, terminalIds) {
           state.outputsAdvanced && state.systemModePreserved && !state.stream.stopped && state.stream.errors.length === 0)
       }
       trials.push(result)
-      h.measurements.push({ id: 'TH-STRESS-02', ...result })
+      h.measurements.push({ id: scheduled ? 'TH-SCH-STRESS01' : 'TH-STRESS-02', ...result })
       await h.log('THEME_PRESSURE_TRIAL', result)
     }
     assert.equal(trials.length, BOOLEAN_TRIALS)
@@ -1618,6 +1632,7 @@ async function persistence(h) {
     await assertImported(h, imported, IMPORT_ORACLE, [first, second])
     await h.screenshot('after-real-restart')
   })
+  await schedulePersistence(h, { boot, waitBase, grid })
 }
 
 async function migration(h) {

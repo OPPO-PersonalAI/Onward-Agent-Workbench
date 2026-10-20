@@ -48,6 +48,9 @@ export const PERF_TRACE_EVENT = {
   RENDERER_PROMPT_INPUT_IPC: 'renderer:prompt-input.ipc',
   // Unified themes: selection, persistence, imports and consumer application.
   MAIN_THEME_SETTINGS: 'main:themes.settings-changed',
+  MAIN_THEME_SCHEDULE: 'main:themes.schedule-reconciled',
+  RENDERER_THEME_SCHEDULE: 'renderer:themes.schedule-action',
+  RENDERER_THEME_TIMELINE: 'renderer:themes.schedule-timeline-action',
   MAIN_THEME_NATIVE_APPLY: 'main:themes.native-applied',
   MAIN_THEME_IMPORT: 'main:themes.import-file',
   WORKER_THEME_IMPORT: 'worker:themes.parse-import',

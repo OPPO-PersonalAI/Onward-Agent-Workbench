@@ -8,6 +8,8 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { DEFAULT_THEME_SETTINGS, THEME_PRESETS } from '../../constants/themes'
 import { getActiveThemeId, getAvailableThemes, isThemeColor, resolveTheme, THEME_LIMITS } from '../../themes/theme-engine'
 import { FEATURED_THEME_IDS } from '../../themes/theme-presets'
+import { selectScheduledTheme } from '../../themes/theme-schedule'
+import { ThemeScheduleEditor } from './ThemeScheduleEditor'
 import type { PresetThemeId, ResolvedTheme, ThemeDefinition, ThemeSettings } from '../../types/theme'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
@@ -212,11 +214,13 @@ function ColorField({ token, label, value, effective, overridden, onChange, test
 }
 
 export function ThemeSelector() {
-  const { settings, systemDark, previewTheme, updateTheme } = useSettings()
+  const { settings, systemDark, themeClock, previewTheme, updateTheme } = useSettings()
   const { t } = useI18n()
   const currentTheme = settings?.theme ?? DEFAULT_THEME_SETTINGS
   const available = useMemo(() => getAvailableThemes(currentTheme), [currentTheme])
-  const activeId = getActiveThemeId(currentTheme, systemDark)
+  const now = themeClock?.now ?? Date.now()
+  const activeId = getActiveThemeId(currentTheme, systemDark, now)
+  const [scheduleEditing, setScheduleEditing] = useState(false)
   const [draft, setDraft] = useState<ThemeDraft | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(false)
@@ -251,14 +255,15 @@ export function ThemeSelector() {
     classic: draft.classic,
     overrides: { ...currentTheme.overrides, [draft.id]: draft.previewOverrides }
   } : null, [currentTheme, draft?.id, draft?.classic, draft?.previewOverrides])
-  const displayTheme = useMemo(() => resolveTheme(pinnedTheme ?? currentTheme, systemDark), [pinnedTheme, currentTheme, systemDark])
+  const displayTheme = useMemo(() => resolveTheme(pinnedTheme ?? currentTheme, systemDark, now), [pinnedTheme, currentTheme, systemDark, now])
   const featured = useMemo(() => FEATURED_THEME_IDS.map(id => resolveTheme({ ...currentTheme, mode: 'manual', themeId: id }, systemDark)), [currentTheme, systemDark])
   const moreThemes = available.filter(theme => !(FEATURED_THEME_IDS as readonly string[]).includes(theme.id))
   const invalidDraft = Boolean(draft && (
     Object.values(draft.values).some(value => value !== '' && !isThemeColor(value)) ||
     (draft.classic.mode === 'custom' && draft.id === 'onward-classic' && (!isThemeColor(draft.classicAccent) || ![4, 7].includes(draft.classicAccent.length)))
   ))
-  const locked = Boolean(draft || candidates || importing || saving || exporting || !settings)
+  const externallyLocked = Boolean(draft || candidates || importing || saving || exporting || !settings)
+  const locked = externallyLocked || scheduleEditing
 
   const abortPendingImport = useCallback((cause: 'escape' | 'unmount') => {
     const pending = pendingImportRef.current
@@ -365,10 +370,20 @@ export function ThemeSelector() {
     }
   }
 
-  const selectTheme = (id: string) => {
+  const selectTheme = async (id: string) => {
     if (!locked) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'select', operation: 'theme' })
-      void persist({ ...currentTheme, mode: 'manual', themeId: id })
+      if (currentTheme.mode === 'schedule') {
+        setSaving(true)
+        try {
+          const clock = await window.electronAPI.themes.scheduleClock()
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'temporary-selection' })
+          await persist({ ...currentTheme, schedule: selectScheduledTheme(currentTheme.schedule, id, clock.now, new Set(available.map(theme => theme.id))) })
+        } catch {
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'temporary-clock-failed' })
+          if (mounted.current) setSaveError(true)
+        } finally { if (mounted.current) setSaving(false) }
+      } else void persist({ ...currentTheme, mode: 'manual', themeId: id })
     }
   }
 
@@ -484,7 +499,8 @@ export function ThemeSelector() {
     }
     setImportError(null)
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_UI, { reason: 'confirm', count: selected.length })
-    const success = await persist({ ...currentTheme, imported: [...imported.values()], mode: 'manual', themeId: selected[0].id })
+    const success = await persist({ ...currentTheme, imported: [...imported.values()],
+      ...(currentTheme.mode === 'schedule' ? {} : { mode: 'manual' as const, themeId: selected[0].id }) })
     if (!mounted.current) return
     if (success) {
       setCandidates(null)
@@ -536,15 +552,17 @@ export function ThemeSelector() {
         <span>{t('settings.themes.mode')}</span>
         <select id={`${idPrefix}-mode`} data-testid="theme-mode" value={currentTheme.mode} onChange={event => {
           const mode = event.target.value as ThemeSettings['mode']
-          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'mode', mode: mode === 'system' ? 'system' : 'manual' })
-          void persist({ ...currentTheme, mode, themeId: activeId })
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'mode', mode })
+          void persist({ ...currentTheme, mode, themeId: activeId, schedule: { ...currentTheme.schedule, temporary: null,
+            fallbackThemeId: mode === 'schedule' && !currentTheme.schedule.ranges.length ? activeId : currentTheme.schedule.fallbackThemeId } })
         }}>
           <option value="system">{t('settings.themes.system')}</option>
           <option value="manual">{t('settings.themes.manual')}</option>
+          <option value="schedule">{t('settings.themes.schedule.mode')}</option>
         </select>
       </label>
-      <p className="theme-hint">{t(currentTheme.mode === 'system' ? 'settings.themes.systemHint' : 'settings.themes.manualHint')}</p>
-      <div className={`theme-system-pair${currentTheme.mode === 'manual' ? ' is-inactive' : ''}`}>
+      <p className="theme-hint">{t(currentTheme.mode === 'schedule' ? 'settings.themes.schedule.hint' : currentTheme.mode === 'system' ? 'settings.themes.systemHint' : 'settings.themes.manualHint')}</p>
+      {currentTheme.mode !== 'schedule' && <div className={`theme-system-pair${currentTheme.mode === 'manual' ? ' is-inactive' : ''}`}>
         {(['light', 'dark'] as const).map(kind => <label className="theme-select-field" key={kind} htmlFor={`${idPrefix}-${kind}`}>
           <span>{t(kind === 'light' ? 'settings.themes.lightTheme' : 'settings.themes.darkTheme')}</span>
           <select id={`${idPrefix}-${kind}`} data-testid={`theme-pair-${kind}`} disabled={currentTheme.mode !== 'system'} value={currentTheme[kind === 'light' ? 'lightThemeId' : 'darkThemeId']} onChange={event => {
@@ -554,7 +572,11 @@ export function ThemeSelector() {
             {available.filter(theme => theme.kind === kind).map(theme => <option key={theme.id} value={theme.id}>{themeName(theme)}</option>)}
           </select>
         </label>)}
-      </div>
+      </div>}
+    </fieldset>
+    {currentTheme.mode === 'schedule' && <ThemeScheduleEditor settings={currentTheme} available={available} now={now} disabled={externallyLocked}
+      onEditing={setScheduleEditing} onSave={schedule => persist({ ...currentTheme, schedule })} />}
+    <fieldset className="theme-selection-controls" disabled={locked}>
       <div className="theme-preset-grid" role="group" aria-label={t('settings.themes.featured')}>
         {featured.map(theme => <button
           type="button"
@@ -660,7 +682,7 @@ export function ThemeSelector() {
 
     {candidates && <section className="theme-inline-panel" ref={importPanel} tabIndex={-1} aria-labelledby={`${idPrefix}-import-title`}>
       <h3 id={`${idPrefix}-import-title`}>{t('settings.themes.importTitle')}</h3>
-      <p className="theme-hint">{t('settings.themes.importSelectionHint')}</p>
+      <p className="theme-hint">{t(currentTheme.mode === 'schedule' ? 'settings.themes.schedule.importHint' : 'settings.themes.importSelectionHint')}</p>
       <fieldset className="theme-import-candidates" disabled={saving}>
         {candidates.map(theme => <div key={theme.id} className="theme-import-candidate">
           <label className="theme-checkbox-label">
@@ -683,7 +705,7 @@ export function ThemeSelector() {
       {saveError && <p className="theme-error" data-testid="theme-import-error" role="alert">{t('settings.themes.saveError')}</p>}
       <div className="theme-actions">
         <button type="button" className="theme-button" disabled={saving} onClick={cancelImport}>{t('common.cancel')}</button>
-        <button type="button" className="theme-button theme-button-primary" data-testid="theme-import-confirm" disabled={saving || choices.size === 0} onClick={() => void confirmImport()}>{t(saving ? 'settings.themes.saving' : 'settings.themes.importConfirm')}</button>
+        <button type="button" className="theme-button theme-button-primary" data-testid="theme-import-confirm" disabled={saving || choices.size === 0} onClick={() => void confirmImport()}>{t(saving ? 'settings.themes.saving' : currentTheme.mode === 'schedule' ? 'settings.themes.schedule.importConfirm' : 'settings.themes.importConfirm')}</button>
       </div>
     </section>}
     {saveError && !draft && !candidates && <p className="theme-error" role="alert">{t('settings.themes.saveError')}</p>}

@@ -116,7 +116,7 @@ test('THEME-U-03 migration retains legacy global theme colors and discards every
   assert.deepEqual(migrated.overrides['onward-classic'], {
     'terminal.foreground': '#123456', 'terminal.background': '#abcdef'
   })
-  assert.equal(migrated.version, 3)
+  assert.equal(migrated.version, 4)
   assert.equal(Object.hasOwn(migrated, 'taskOverrides'), false)
   const resolved = resolveTheme(migrated, true)
   assert.equal(resolved.terminal.foreground, '#123456')
@@ -127,7 +127,7 @@ test('THEME-U-04 normalization is idempotent and never reimports stale legacy co
   const options = { existing: true, legacyPreV2: true, globalTerminalStyle: { backgroundColor: '#112233' } }
   for (const raw of [undefined, {}, null, { mode: 'custom', custom: { accent: '#ff0033' } }, { version: 2 }, { version: 3 }, { version: 99 }]) {
     const first = normalizeThemeSettings(raw, options)
-    assert.equal(first.version, 3)
+    assert.equal(first.version, 4)
     assert.deepEqual(normalizeThemeSettings(first, options), first)
     assert.deepEqual(normalizeThemeSettings(JSON.parse(JSON.stringify(first)), options), first)
   }
@@ -215,7 +215,7 @@ test('THEME-U-08 imports and theme overrides are bounded and pollution-free; ret
   assert.deepEqual(normalizeThemeSettings(settings), settings)
 })
 
-test('THEME-U-29 v2 themes upgrade to v3 without losing named palettes, imports or theme-level overrides', () => {
+test('THEME-U-29 v2 themes upgrade to v4 without losing named palettes, imports or theme-level overrides', () => {
   const old = {
     ...manual('dracula'), version: 2,
     lightThemeId: 'my-light', darkThemeId: 'nord',
@@ -228,7 +228,7 @@ test('THEME-U-29 v2 themes upgrade to v3 without losing named palettes, imports 
     existing: true, globalTerminalStyle: { foregroundColor: '#ff0000' },
     terminalStyles: { a: { backgroundColor: '#00ff00' } }
   })
-  assert.equal(migrated.version, 3)
+  assert.equal(migrated.version, 4)
   assert.equal(migrated.themeId, 'dracula')
   assert.equal(migrated.lightThemeId, 'my-light')
   assert.equal(migrated.darkThemeId, 'nord')
