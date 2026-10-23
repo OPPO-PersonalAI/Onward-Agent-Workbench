@@ -66,10 +66,13 @@ port.on('message', ({ data }) => {
     if (hangShutdown) { trace('autotest-shutdown-held'); return }
     void registry.shutdown().then(() => {
       trace('drained', registry.inspect())
+    }, () => {
+      trace('shutdown-failed', registry.inspect())
+    }).finally(() => {
       port.postMessage({ event: 'watcher-drained', ...registry.inspect() })
       // Leave the native completion callback before entering Node teardown.
       setImmediate(() => process.exit(0))
-    }, () => trace('shutdown-failed', registry.inspect()))
+    })
     return
   }
   if (!isWatchCommand(data)) return

@@ -57,6 +57,13 @@ while renderer notifications retain the caller's logical cwd.
   listeners register once per process, independently of trace stop/start cycles.
 - Cancelled confirmation leaves the app active. A signal can supersede a pending
   confirmation without starting a second teardown.
+- **Phase 0 (T = 0 ms, post-confirmation)**: `abortBackgroundWorkForQuit()`
+  immediately halts `terminalDataBuffers` (stopping PTY output floods from
+  saturating renderer IPC), cancels all non-state work in `mainWorkScheduler`
+  (`cancelAllExcept(['app-state'])`) and `gitRuntimeManager`, cancels diff
+  precompute bursts, disposes `gitIpcWorkerClient` / `sqliteWorkerClient` /
+  `projectFsWorkerClient` / `ripgrepSearchManager`, and sends early shutdown to
+  `gitStateMirrorRouter` so background workers quiesce in parallel with saves.
 - Save renderer changes before taking the cwd snapshot and flushing storage;
   capture cwd before ending terminal processes.
 - Renderer components publish their local debounced drafts synchronously through
@@ -67,8 +74,28 @@ while renderer notifications retain the caller's logical cwd.
 - Final renderer saves also await the initial AppState load. Startup exit must
   preserve already-saved prompts instead of writing the provider's default empty
   state over them; a failed initial load cannot produce a successful save ACK.
-- Record a clean ledger only after all required stages succeed. A stalled save
-  leads to an abnormal marker and nonzero forced-exit code.
+- **Stage 3 (`terminal-cwd`, synchronous 0 ms)**: `persistTerminalCwdSnapshot()`
+  reads authoritative in-memory CWD (`terminalCwdAuthorityResolver`,
+  `terminalCwdCache`, `ptyManager.getCwd`) via `getTerminalCwdSync` — spawning
+  zero `lsof` child processes on quit — and stages updates in memory via
+  `setTerminalLastCwds(..., { persist: false })`.
+- **Stage 4 (`app-state`, generation-tracked single atomic flush)**:
+  `AppStateStorage` tracks `mutationSeq` vs `persistedSeq`. `flush()` coalesces
+  renderer and CWD mutations into at most one high-priority (`focused-interactive`,
+  rank 4, bypassing `mainWorkScheduler` inflight limits) atomic disk write.
+- **Stage 5 (`terminals`, non-required, 300 ms SIGHUP + 200 ms SIGKILL)**:
+  `ptyManager.shutdownAll(300, 200)` sends `SIGHUP` in parallel, waits up to
+  300 ms, and escalates surviving process groups/PIDs to `SIGKILL` for up to
+  200 ms. External terminal processes cannot poison `session-ledger.json`
+  cleanliness once required state saves (Stages 1–4) succeed.
+- **Stage 6 (`services`, bounded 200 ms)**: `watcherService.shutdown()` bounds
+  graceful IPC drain to 200 ms before calling `forceStop()` (`SIGKILL` to the
+  isolated utility PID), and `gitStateMirrorRouter.dispose(200)` bounds worker
+  drain to 200 ms before `worker.terminate()` (with inner worker git/watcher
+  waits bounded to 100 ms).
+- Record a clean ledger once all required stages (`renderer-state`, `prompt-flush`,
+  `terminal-cwd`, `app-state`) succeed. A stalled required save leads to an
+  abnormal marker and nonzero forced-exit code.
 - Telemetry upload is best-effort and cannot block state or terminal shutdown.
 - The final deadline stops the owned watcher process and remaining PTYs, then
   exits. It does not wait for another component's independent deadline.
@@ -133,31 +160,38 @@ signal paths. Latency includes main exit and owned watcher/terminal disappearanc
 | Fault injection, restart mocks, isolated Windows test arguments and test programs | Exempt: autotest-only paths; Windows argument transform is unit-locked by TAI-01 | Quit stress hooks; `pty-manager.ts`; `terminal-env.ts`; `test/**` |
 | Static bundle entries, dictionaries and type signatures | Exempt: no executable control-flow node; packaging, bilingual integration and type checks cover wiring | `electron.vite.config.ts`; i18n dictionary; type declarations |
 
-## Validation — 2026-10-15
+## Validation — 2026-10-15 (Four-Pillar Fast-Quit Refinement)
 
 - Development package: Onward 2.0.1, `master`; packaged macOS arm64 launches and
   enters the main UI through Playwright.
-- Unit gate: **163/163 test files passed**; type check and project-text lint passed.
-- Final stability: **3/3 iterations, 15/15 runner executions, 300/300 trials across
-  20 scenarios**, zero failures and zero flaky classifications. Local result
-  directories: `20261015T042111`, `20261015T042738`, `20261015T043409` under
-  `test/full-regression-results/`.
-- Maximum observed exit/owned-process cleanup latency: **9621.35 ms** (10-second
-  approved budget). Menu exit: 348–390 ms; 12-terminal pressure plus immediate
-  input: 405–558 ms. Startup-exit tests retained the seeded saved prompt in all
-  final trials.
-- Five related runners passed: file-index UI, Git mirror static state, watcher
-  failure injection, mirror subscription leakage and infrastructure/session-ledger
-  recovery. Results: `test/full-regression-results/20261015T041700/`.
-- Trace self-check: **PASS**, 196 valid events, one chunk, zero invalid records.
-  It used `traces/analysis/quit-trace-selfcheck/` to preserve existing perf captures.
-- The first combined fault runner reached the existing **180-second** runner
-  timeout despite passing individual quit assertions. Splitting fault recovery
-  from service shutdown removed the aggregate overrun; neither deadline changed.
-- Windows/Linux paths, process branches and runner parity were reviewed
-  structurally; this host did not execute those platforms. Actual OS logout and
-  release installation remain separate integration validation. Update/recovery
-  tests assert the handoff request and reopen the same real profile.
+- Unit gate: **163/163 test files passed** (including `QC-01..10`, `WS-U01..10`,
+  `PSF-01..06`, and `main-work-scheduler-unit.mjs` `cancelAllExcept`); comment
+  lint (`pnpm lint:comments`) passed.
+- Quit & trace regression (`20261015T192809`): **6/6 runners passed, 100/100
+  trials across 20 scenarios**, zero failures.
+- **Latency improvements from bounded service shutdown (`200 ms`) + Phase 0
+  background abort + synchronous CWD + generation-tracked state flush**:
+  - `shutdown-hang` & `blocked-service` (`run-watcher-service-shutdown`):
+    reduced from **~9,621 ms** (hitting the global emergency deadline with
+    `code: 1`, `ledger: false`) to **602–622 ms** (`code: 0`, `ledger: true`),
+    reducing total runner wall time from ~100s+ to **21s**.
+  - `pending-subscribe` & `pending-unsubscribe` (`run-git-state-mirror-quit-b`):
+    reduced from **~9,621 ms** to **605–690 ms** (`code: 0`, `ledger: true`).
+  - `menu` / `duplicate` / `cancel` / `external` / `window`: **357–428 ms**.
+  - `churn` (12 streaming terminals + 3 mutating repos): **469–674 ms**.
+  - `recovery` / `update`: **354–399 ms**.
+  - `sigterm` / `sigint`: **345–372 ms** (`reason: 'signal'`, `code: 0`, `ledger: true`).
+  - `save-hang` (deliberately held `appStateStorage` required stage): properly
+    triggers the 9.5 s global emergency deadline (**9,650–9,737 ms**, `code: 1`,
+    `ledger: false`).
+- Trace self-check (`run-trace-infra-self-check`): **PASS**, 209 valid events,
+  2 chunks, zero invalid records.
+- **Extreme stress suite (`run-quit-extreme-stress`, 5 scenarios × 5 trials = 25 trials)**:
+  - `sighup-trap` (6 terminals × foreground parent+child `SIGHUP`-ignoring process tree = 12 processes + 1 background `nohup` parent+child tree = 2 processes): **729–755 ms**, all 12 foreground processes reaped cleanly via `selectHangupEscalationTargets` (`pgid === tpgid`) + `SIGHUP` (300 ms) → fresh-table `verifyEscalationTargets` (`pid + pgid + startedAt`) `SIGKILL` (200 ms) escalation while both background `nohup` processes survive (`sparedNohupPids: 2`), `terminatedActiveJobs >= 6`, `ledger: true`.
+  - `queue-flood` (150 `mainWorkScheduler` + 50 `gitRuntimeManager` 5,000 ms tasks saturating all `DEFAULT_MAX_INFLIGHT` slots): **462–518 ms**, `schedulerCancelled: 142`, `gitQueuedCancelled: 46`, `ledger: true` (down from **5,094 ms / `ledger: false`** before fixing `MainWorkScheduler.drainPreservedTasks()` so preserved `'app-state'` tasks bypass saturated in-flight background slots).
+  - `compound-fault-storm` (blocked watcher + hung telemetry + 100 scheduler / 30 git flooded tasks + 8 `SIGHUP`-ignoring processes + 4 ms 3-repo churn + unsaved Prompt draft): **986–1,063 ms**, `code: 0`, `ledger: true`, draft persisted.
+  - `cancel-storm-under-load` (5×5 cancelled quit waves under active repo churn, then post-cancel terminal creation + watcher tree event check, then confirmed quit): **470–571 ms**, `code: 0`, `ledger: true`.
+  - `signal-supersedes-dialog` (10 `menuQuit` calls stalled on an unanswered confirmation dialog superseded by `SIGTERM`): **401–434 ms**, `reason: 'signal'`, `code: 0`, `ledger: true`.
 
 ## Sources
 

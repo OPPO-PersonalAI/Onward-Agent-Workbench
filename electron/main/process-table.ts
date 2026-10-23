@@ -14,7 +14,7 @@
  */
 
 import { execFile } from 'child_process'
-import type { ProcessTableRow } from './quit-activity'
+import type { DetailedProcessRow, ProcessTableRow } from './quit-activity'
 
 const QUERY_TIMEOUT_MS = 3000
 
@@ -40,13 +40,48 @@ export function parseCimCsv(stdout: string): ProcessTableRow[] {
   return rows
 }
 
-function run(cmd: string, args: string[]): Promise<string> {
+function run(cmd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: QUERY_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+    execFile(cmd, args, { timeout: QUERY_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env }, (error, stdout) => {
       if (error) reject(error)
       else resolve(stdout)
     })
   })
+}
+
+/**
+ * Parse `ps -axo pid=,ppid=,pgid=,tpgid=,lstart=` (run under LC_ALL=C).
+ * Everything after the four integer columns is the start time, kept as an
+ * opaque identity string. Exported for unit coverage.
+ */
+export function parsePsDetailedTable(stdout: string): DetailedProcessRow[] {
+  const rows: DetailedProcessRow[] = []
+  for (const line of stdout.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\S.*?)\s*$/)
+    if (!m) continue
+    rows.push({
+      pid: Number(m[1]),
+      ppid: Number(m[2]),
+      pgid: Number(m[3]),
+      tpgid: Number(m[4]),
+      startedAt: m[5].replace(/\s+/g, ' '),
+      name: ''
+    })
+  }
+  return rows
+}
+
+/**
+ * POSIX-only snapshot with job-control identity, used by PTY shutdown to
+ * decide (and re-verify) hangup escalation. Windows has no process groups or
+ * SIGHUP; node-pty's ConPTY kill already terminates the console process list.
+ */
+export async function listProcessTableDetailed(): Promise<DetailedProcessRow[]> {
+  if (process.platform === 'win32') {
+    throw new Error('Detailed process table is POSIX-only')
+  }
+  const stdout = await run('ps', ['-axo', 'pid=,ppid=,pgid=,tpgid=,lstart='], { ...process.env, LC_ALL: 'C' })
+  return parsePsDetailedTable(stdout)
 }
 
 /**

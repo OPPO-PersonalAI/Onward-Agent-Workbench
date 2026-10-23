@@ -715,8 +715,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         finalState.updatedAt = Date.now()
       }
 
-      // Await save to ensure data is written to disk before quit proceeds
-      if (!await window.electronAPI.appState.save(finalState)) throw new Error('Final AppState save rejected')
+      const patch = buildAppStatePatch(lastPersistedStateRef.current, finalState)
+      if (dirty || Object.keys(patch).length > 0) {
+        if (!await window.electronAPI.appState.save(finalState)) throw new Error('Final AppState save rejected')
+      }
       if (!await window.electronAPI.appState.flush()) throw new Error('Final AppState flush rejected')
       lastPersistedStateRef.current = finalState
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'saved', participants, durationMs: performance.now() - started })

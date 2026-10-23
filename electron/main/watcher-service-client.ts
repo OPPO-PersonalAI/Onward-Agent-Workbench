@@ -10,6 +10,8 @@ import { WatcherRpcClient, WatcherConnectionError, isWatchReply, isWatchCommand,
 import { performanceTrace, isPerfTraceWorkerEvent, replayPerfTraceWorkerEvent } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 
+export const WATCHER_SHUTDOWN_GRACE_MS = 200
+
 class WatcherServiceClient {
   private child: UtilityProcess | null = null
   private stopping = false
@@ -17,6 +19,7 @@ class WatcherServiceClient {
   private forceRequested = false
   private starts = 0
   private exitPromise: Promise<void> = Promise.resolve()
+  private shutdownPromise: Promise<void> | null = null
   private readonly rpc = new WatcherRpcClient(command => {
     const child = this.ensureProcess()
     this.trace('request-sent', { operation: command.op, requestId: command.id })
@@ -44,18 +47,38 @@ class WatcherServiceClient {
     this.trace('admission-closed', this.inspect())
   }
 
-  shutdown(): Promise<void> {
-    if (this.stopping) return this.exitPromise
+  shutdown(graceMs: number = WATCHER_SHUTDOWN_GRACE_MS): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise
     this.stopping = true
     this.frozen = true
     this.rpc.disconnect(new Error('Watcher service is stopping'), true)
-    this.trace('shutdown-sent', this.inspect())
-    try { this.child?.postMessage({ event: 'watcher-shutdown' }) }
+    if (!this.child) {
+      this.trace('shutdown-idle')
+      this.shutdownPromise = Promise.resolve()
+      return this.shutdownPromise
+    }
+    this.trace('shutdown-sent', { ...this.inspect(), graceMs })
+    try { this.child.postMessage({ event: 'watcher-shutdown' }) }
     catch {
       this.trace('shutdown-send-failed')
       if (this.child) this.killOwnedProcess(this.child)
     }
-    return this.exitPromise
+    let timer: ReturnType<typeof setTimeout> | null = null
+    if (graceMs > 0) {
+      timer = setTimeout(() => {
+        timer = null
+        if (!this.child) return
+        this.trace('shutdown-timeout', { graceMs, pid: this.child.pid ?? null })
+        this.forceStop()
+      }, graceMs)
+      timer.unref?.()
+    } else if (this.child) {
+      this.forceStop()
+    }
+    this.shutdownPromise = this.exitPromise.finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+    return this.shutdownPromise
   }
 
   forceStop(): void {

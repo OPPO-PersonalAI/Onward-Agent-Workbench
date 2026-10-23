@@ -147,6 +147,7 @@ SCRIPTS: List[str] = [
     "test/autotest/run-watcher-service-shutdown-autotest.sh",
     # POSIX signals plus cross-platform abrupt parent death / orphan cleanup.
     "test/autotest/run-signal-quit-autotest.sh",
+    "test/autotest/run-quit-extreme-stress-autotest.sh",
     # Split into 4 sub-5-min runners: the whole suite overran 1500s (class-2).
     # static (fast, EDR-independent) + gsm17 + gsm18 baseline groups + the 3
     # watcher-failure-injection passes. gsm17/gsm18 can still fail on an EDR host

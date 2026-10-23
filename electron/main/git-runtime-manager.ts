@@ -179,6 +179,7 @@ export class GitRuntimeManager {
   private dedupeMap = new Map<string, Promise<unknown>>()
   private inflightByRepo = new Map<string, number>()
   private draining = false
+  private shuttingDown = false
 
   private readonly kindMetrics: Record<GitTaskKind, KindMetrics> = {
     git: { scheduled: 0, completed: 0, failed: 0, latencies: createLatencyBucket() },
@@ -190,7 +191,30 @@ export class GitRuntimeManager {
   private readonly cwdProbeLatency = createLatencyBucket()
   private updatedAt = Date.now()
 
+  beginShutdown(reason = 'Application is shutting down'): number {
+    this.shuttingDown = true
+    const queued = this.queue.splice(0, this.queue.length)
+    for (const task of queued) {
+      this.totalFailed += 1
+      this.kindMetrics[task.options.kind].failed += 1
+      if (task.options.key) {
+        const existing = this.dedupeMap.get(task.options.key)
+        if (existing === task.promise) {
+          this.dedupeMap.delete(task.options.key)
+        }
+      }
+      task.reject(new Error(reason))
+    }
+    if (queued.length > 0) {
+      this.updatedAt = Date.now()
+    }
+    return queued.length
+  }
+
   enqueueTask<T>(options: GitTaskOptions, run: () => Promise<T>): Promise<T> {
+    if (this.shuttingDown) {
+      return Promise.reject(new Error('GitRuntimeManager is shutting down'))
+    }
     const normalizedOptions: QueueTask<T>['options'] = {
       key: options.key,
       repoKey: options.repoKey,

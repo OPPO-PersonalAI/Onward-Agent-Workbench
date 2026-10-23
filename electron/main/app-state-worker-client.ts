@@ -48,10 +48,17 @@ class AppStateWorkerClient {
   private nextRequestId = 1
   private pending = new Map<number, PendingRequest>()
 
-  saveSnapshot(storagePath: string, state: unknown): Promise<{ bytes: number; durationMs: number }> {
+  saveSnapshot(
+    storagePath: string,
+    state: unknown,
+    options: { highPriority?: boolean } = {}
+  ): Promise<{ bytes: number; durationMs: number }> {
+    if (options.highPriority) {
+      return this.request<{ bytes: number; durationMs: number }>('saveSnapshot', { storagePath, state })
+    }
     return mainWorkScheduler.enqueue(
       {
-        lane: 'maintenance',
+        lane: 'focused-interactive',
         ownerId: 'app-state',
         label: 'app-state save snapshot',
         timeoutMs: WORKER_REQUEST_TIMEOUT_MS,

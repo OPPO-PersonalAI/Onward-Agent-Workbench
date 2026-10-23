@@ -164,3 +164,96 @@ export function summarizeQuitActivity(
       .slice(0, Math.max(0, maxNames))
   }
 }
+
+/**
+ * Collect every descendant PID across `rootPids` from a process-table snapshot.
+ * Used during PTY shutdown BEFORE killing the root shells (once a root shell exits,
+ * POSIX reparents surviving job-control process groups to PID 1, severing the ppid link).
+ */
+export function collectAllDescendantPids(
+  table: ProcessTableRow[],
+  rootPids: Iterable<number>
+): number[] {
+  const childrenIndex = buildChildrenIndex(table)
+  const roots = new Set<number>()
+  for (const pid of rootPids) {
+    if (typeof pid === 'number' && pid > 0) roots.add(pid)
+  }
+  const seenPids = new Set<number>(roots)
+  const descendants: number[] = []
+  const queue: number[] = Array.from(roots)
+  while (queue.length > 0) {
+    const pid = queue.shift() as number
+    for (const child of childrenIndex.get(pid) ?? []) {
+      if (seenPids.has(child.pid) || child.pid <= 1) continue
+      seenPids.add(child.pid)
+      descendants.push(child.pid)
+      queue.push(child.pid)
+    }
+  }
+  return descendants
+}
+
+/** Process-table row with the job-control identity needed for safe escalation. */
+export interface DetailedProcessRow extends ProcessTableRow {
+  pgid: number
+  /** Foreground process group of the row's controlling terminal (<= 0 when none). */
+  tpgid: number
+  /** Opaque, locale-pinned start time. Equality only — never parsed. */
+  startedAt: string
+}
+
+export interface HangupEscalationTarget {
+  pid: number
+  pgid: number
+  startedAt: string
+}
+
+/**
+ * Pick which terminal descendants may be force-killed after the hangup grace.
+ *
+ * Only members of their terminal's FOREGROUND process group (pgid === tpgid)
+ * qualify. Those are exactly the processes a terminal hangup is addressed to,
+ * so one still alive after the grace caught SIGHUP and refused to exit.
+ * Background jobs that the user detached with `nohup cmd &`, `disown`, or
+ * `setsid` are deliberately excluded: the shell's own hangup forwarding
+ * already applies the user's intent to them, and overriding it would kill
+ * work the user explicitly asked to keep. (The activity dialog still counts
+ * background jobs; this is a different question — warning vs. force-killing.)
+ */
+export function selectHangupEscalationTargets(
+  table: DetailedProcessRow[],
+  shellPids: Iterable<number>
+): HangupEscalationTarget[] {
+  const byPid = new Map<number, DetailedProcessRow>()
+  for (const row of table) byPid.set(row.pid, row)
+  const targets: HangupEscalationTarget[] = []
+  for (const pid of collectAllDescendantPids(table, shellPids)) {
+    const row = byPid.get(pid)
+    if (!row || row.pgid <= 1 || row.tpgid <= 1 || row.pgid !== row.tpgid) continue
+    targets.push({ pid: row.pid, pgid: row.pgid, startedAt: row.startedAt })
+  }
+  return targets
+}
+
+/**
+ * Re-verify escalation targets against a FRESH process table taken right
+ * before SIGKILL. A pid qualifies only if the same pid still exists with the
+ * same process group and start time, so a pid recycled by an unrelated
+ * process can never be killed. ppid is intentionally not compared: once the
+ * shell exits, survivors are reparented to PID 1.
+ */
+export function verifyEscalationTargets(
+  targets: HangupEscalationTarget[],
+  freshTable: DetailedProcessRow[]
+): number[] {
+  const byPid = new Map<number, DetailedProcessRow>()
+  for (const row of freshTable) byPid.set(row.pid, row)
+  return targets
+    .filter((target) => {
+      const row = byPid.get(target.pid)
+      return Boolean(row && row.pgid === target.pgid && row.startedAt === target.startedAt)
+    })
+    .map((target) => target.pid)
+}
+

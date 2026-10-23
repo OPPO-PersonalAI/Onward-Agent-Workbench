@@ -33,7 +33,7 @@ if (process.platform === 'win32') {
 import { app, BrowserWindow, nativeImage, nativeTheme, Menu, dialog, ipcMain, crashReporter } from 'electron'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
-import { registerIpcHandlers, cleanupIpcHandlers, setupWindowShortcuts } from './ipc-handlers'
+import { registerIpcHandlers, cleanupIpcHandlers, abortBackgroundWorkForQuit, floodBackgroundQueuesForQuitTest, setupWindowShortcuts } from './ipc-handlers'
 import { getTrayManager } from './tray-manager'
 import { getAppInfo, initializeAppIdentity } from './app-info'
 import { ptyManager } from './pty-manager'
@@ -46,7 +46,7 @@ import { collectQuitActivitySummary, warmQuitActivityScanner } from './quit-acti
 import { initializeSessionLedger, markSessionLedgerClean } from './session-ledger'
 import { getSettingsStorage } from './settings-storage'
 import { resolveTheme } from '../../src/themes/theme-engine'
-import { getTerminalCwd } from './git-utils'
+import { getTerminalCwdSync } from './git-utils'
 import { gitAutofetchManager } from './git-autofetch-manager'
 import { getWindowStateStorage } from './window-state-storage'
 import { getTelemetryService } from './telemetry/telemetry-service'
@@ -212,7 +212,7 @@ async function flushRendererState(): Promise<void> {
   }
 }
 
-async function persistTerminalCwdSnapshot(): Promise<void> {
+function persistTerminalCwdSnapshot(): void {
   const appStateStorage = getAppStateStorage()
   const state = appStateStorage.get()
   const terminalIds = state.tabs.flatMap((tab) => tab.terminals.map((terminal) => terminal.id))
@@ -222,20 +222,19 @@ async function persistTerminalCwdSnapshot(): Promise<void> {
     return
   }
 
-  const updates = await Promise.all(uniqueTerminalIds.map(async (terminalId) => {
+  const validUpdates: Array<{ terminalId: string; cwd: string }> = []
+  for (const terminalId of uniqueTerminalIds) {
     if (!ptyManager.get(terminalId)) {
-      return null
+      continue
     }
-    const cwd = await getTerminalCwd(terminalId)
-    if (!cwd) {
-      return null
+    const cwd = getTerminalCwdSync(terminalId, ptyManager.getCwd(terminalId))
+    if (cwd) {
+      validUpdates.push({ terminalId, cwd })
     }
-    return { terminalId, cwd }
-  }))
+  }
 
-  const validUpdates = updates.filter((item): item is { terminalId: string; cwd: string } => Boolean(item))
   if (validUpdates.length > 0) {
-    appStateStorage.setTerminalLastCwds(validUpdates)
+    appStateStorage.setTerminalLastCwds(validUpdates, { persist: false })
   }
 }
 
@@ -407,6 +406,13 @@ const quitCoordinator = new QuitCoordinator({
     gitAutofetchManager.dispose()
     gitStateMirrorRouter.beginShutdown()
     watcherService.freeze()
+    const aborted = abortBackgroundWorkForQuit()
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, {
+      phase: 'background-work-aborted',
+      reason,
+      ...aborted
+    })
+    logQuitPhase(`background-work-aborted ${JSON.stringify({ reason, ...aborted })}`)
     // Upload is best-effort; it cannot hold user state or terminal shutdown hostage.
     void shutdownTelemetry().catch(error => console.warn('[Quit] telemetry shutdown failed:', error))
   },
@@ -481,6 +487,7 @@ if (QUIT_STRESS_MODE) {
     faultWatcher: () => watcherService.testExit(),
     blockWatcher: () => watcherService.testBlock(),
     hangTelemetry: () => { getTelemetryService().shutdown = () => new Promise<void>(() => {}) },
+    floodQueues: (schedulerCount?: number, gitCount?: number) => floodBackgroundQueuesForQuitTest(schedulerCount, gitCount),
     recovery: requestRelaunchForRecovery,
     update: () => {
       const service = getUpdateService()
@@ -1143,7 +1150,7 @@ function registerSignalQuitHandlers(): void {
         app.exit(0)
         return
       }
-      void requestQuitForDebug().catch((error) => {
+      void quitCoordinator.request('signal').catch((error) => {
         console.warn('[Lifecycle] signal quit failed:', error)
         app.exit(1)
       })
@@ -1181,7 +1188,7 @@ app.on('before-quit', async (e) => {
   e.preventDefault()
 
   try {
-    await requestQuitForDebug()
+    await quitCoordinator.request('quit')
   } catch (error) {
     console.warn('[Lifecycle] external quit teardown failed:', error)
     app.exit(1)

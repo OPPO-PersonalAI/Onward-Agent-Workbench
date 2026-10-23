@@ -207,7 +207,7 @@ class GitStateMirrorRouter {
     }
   }
 
-  dispose(): Promise<void> {
+  dispose(graceMs = 200): Promise<void> {
     this.beginShutdown()
     if (this.disposePromise) {
       this.clearLocalState()
@@ -222,21 +222,31 @@ class GitStateMirrorRouter {
     this.worker = null
     this.workerReady = false
 
+    let terminateTimer: ReturnType<typeof setTimeout> | null = null
     const exitPromise = new Promise<void>((resolve) => {
       worker.once('exit', () => resolve())
     })
 
     try {
       worker.postMessage({ kind: 'shutdown' } satisfies MainToMirrorMessage)
-      // Lifecycle breadcrumb: graceful-quit shutdown was requested. Pair with
-      // 'worker EXITED' (result/acked) to see whether the worker quiesced.
       console.log('[GitStateMirrorRouter] shutdown posted to worker')
     } catch {
       worker.terminate().catch(() => { /* ignore */ })
     }
     worker.unref()
 
+    if (graceMs > 0) {
+      terminateTimer = setTimeout(() => {
+        terminateTimer = null
+        worker.terminate().catch(() => { /* ignore */ })
+      }, graceMs)
+      terminateTimer.unref?.()
+    } else {
+      worker.terminate().catch(() => { /* ignore */ })
+    }
+
     const disposePromise = exitPromise.finally(() => {
+      if (terminateTimer) clearTimeout(terminateTimer)
       if (this.disposePromise === disposePromise) {
         this.disposePromise = null
       }

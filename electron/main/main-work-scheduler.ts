@@ -190,6 +190,7 @@ export class MainWorkScheduler {
   private queue: QueueTask<unknown>[] = []
   private dedupeMap = new Map<string, Promise<unknown>>()
   private inflightByConcurrencyKey = new Map<string, number>()
+  private preservedOwners: ReadonlySet<string> | null = null
   private readonly metrics: Record<MainWorkLane, LaneMetrics> = {
     'realtime-input': createLaneMetrics(),
     'focused-interactive': createLaneMetrics(),
@@ -270,6 +271,26 @@ export class MainWorkScheduler {
     return cancelled
   }
 
+  cancelAllExcept(preservedOwners: ReadonlySet<string>, reason = 'application shutting down'): number {
+    this.preservedOwners = new Set(preservedOwners)
+    let cancelled = 0
+    const kept: QueueTask<unknown>[] = []
+    for (const task of this.queue) {
+      if (task.options.ownerId && this.preservedOwners.has(task.options.ownerId)) {
+        kept.push(task)
+        continue
+      }
+      this.finishQueuedCancellation(task, new Error(reason))
+      cancelled += 1
+    }
+    this.queue = kept
+    this.drainPreservedTasks()
+    if (cancelled > 0) {
+      this.updatedAt = Date.now()
+    }
+    return cancelled
+  }
+
   getMetrics(): MainWorkSchedulerMetrics {
     return {
       scheduler: {
@@ -318,7 +339,34 @@ export class MainWorkScheduler {
     })
   }
 
+  /**
+   * After cancelAllExcept, preserved owners (the final app-state save) must
+   * not wait behind in-flight background work that cannot be cancelled. Only
+   * concurrency-keyed tasks may bypass the global cap, so the bypass stays
+   * bounded by their own single-flight limit and can never fan out unbounded.
+   */
+  private drainPreservedTasks(): void {
+    if (!this.preservedOwners || this.preservedOwners.size === 0) return
+    let index = 0
+    while (index < this.queue.length) {
+      const task = this.queue[index]
+      if (
+        task &&
+        task.options.ownerId &&
+        task.options.concurrencyKey &&
+        this.preservedOwners.has(task.options.ownerId) &&
+        this.canRunTask(task)
+      ) {
+        this.queue.splice(index, 1)
+        this.startTask(task)
+        continue
+      }
+      index += 1
+    }
+  }
+
   private drainQueue(): void {
+    this.drainPreservedTasks()
     while (this.inflight < DEFAULT_MAX_INFLIGHT) {
       const nextIndex = this.pickNextRunnableTaskIndex()
       if (nextIndex < 0) break

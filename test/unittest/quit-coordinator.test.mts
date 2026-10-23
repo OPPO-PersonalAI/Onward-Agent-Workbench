@@ -138,3 +138,45 @@ test('QC-09 initialization failure cannot skip required cleanup or manufacture a
   assert.equal(cleanResult, false)
   assert.equal(typeof forced, 'function')
 })
+
+test('QC-10 non-required terminal/service stage error does not poison clean ledger after required state saves succeed', async () => {
+  const h = harness([
+    { name: 'renderer-state', required: true, run: () => {} },
+    { name: 'window-state', required: true, run: () => {} },
+    { name: 'terminal-cwd', required: true, run: () => {} },
+    { name: 'app-state', required: true, run: () => {} },
+    { name: 'terminals', run: () => { throw new Error('stubborn child process') } },
+    { name: 'services', run: () => {} }
+  ])
+  assert.equal(await h.coordinator.request('quit'), 'ready')
+  assert.deepEqual(h.calls, ['begin:quit', 'finish:quit:true'])
+})
+
+test('QC-11 signal supersedes unanswered confirmation under 20-request flood even if dialog later resolves false', async () => {
+  const dialog = deferred<boolean>()
+  const h = harness([{ name: 'save', required: true, run: () => {} }])
+  const interactive = h.coordinator.request('quit', () => dialog.promise)
+  for (let i = 0; i < 20; i++) {
+    assert.equal(h.coordinator.request('quit', () => { throw new Error('must not open second dialog') }), interactive)
+  }
+  const signalPromise = h.coordinator.request('signal')
+  dialog.resolve(false)
+  assert.equal(await signalPromise, 'ready')
+  assert.equal(await interactive, 'ready')
+  assert.deepEqual(h.calls, ['begin:signal', 'finish:signal:true'])
+})
+
+test('QC-12 50 rapid cancelled quit requests leave coordinator clean for final confirmed quit', async () => {
+  let stageRuns = 0
+  const h = harness([{ name: 'save', required: true, run: () => { stageRuns += 1 } }])
+  for (let i = 0; i < 50; i++) {
+    assert.equal(await h.coordinator.request('quit', async () => false), 'cancelled')
+    assert.equal(h.coordinator.stopping, false)
+  }
+  assert.equal(stageRuns, 0)
+  assert.deepEqual(h.calls, [])
+  assert.equal(await h.coordinator.request('quit', async () => true), 'ready')
+  assert.equal(stageRuns, 1)
+  assert.deepEqual(h.calls, ['begin:quit', 'finish:quit:true'])
+})
+

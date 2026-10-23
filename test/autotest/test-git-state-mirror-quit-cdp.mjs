@@ -19,6 +19,11 @@ const TRIALS = 5
 // User-approved total, shared with production. The observer timeout is only
 // a test-harness kill guard, never the latency acceptance threshold.
 const EXIT_BUDGET_MS = 10_000
+// User-approved extreme stress latency budgets (2026-10-15):
+// - Standard extreme stress (queue-flood, cancel-storm-under-load, signal-supersedes-dialog): <= 1500 ms
+// - Compound fault storm / SIGHUP-ignoring process tree (sighup-trap, compound-fault-storm): <= 2000 ms
+const EXTREME_STRESS_BUDGET_MS = 1_500
+const EXTREME_COMPOUND_HOLD_BUDGET_MS = 2_000
 const OBSERVER_TIMEOUT_MS = 15_000
 const LOG = process.env.LOG_FILE || join(ROOT, 'traces/test-logs', `quit-${GROUP}.log`)
 const RESULT = process.env.RESULT_FILE || join(ROOT, 'traces/analysis', `quit-${GROUP}.json`)
@@ -29,7 +34,10 @@ const groups = {
   pressure: ['churn', 'pending-subscribe', 'pending-unsubscribe', 'recovery', 'update'],
   faults: ['service-exit', 'exit-race', 'save-hang', 'telemetry-hang'],
   'service-shutdown': ['shutdown-hang', 'blocked-service'],
-  signals: process.platform === 'win32' ? ['parent-death'] : ['sigterm', 'sigint', 'parent-death']
+  signals: process.platform === 'win32' ? ['parent-death'] : ['sigterm', 'sigint', 'parent-death'],
+  extreme: process.platform === 'win32'
+    ? ['sighup-trap', 'queue-flood', 'compound-fault-storm', 'cancel-storm-under-load']
+    : ['sighup-trap', 'queue-flood', 'compound-fault-storm', 'cancel-storm-under-load', 'signal-supersedes-dialog']
 }
 const scenarios = process.env.GSM_QUIT_CASE
   ? groups[GROUP]?.filter(scenario => scenario === process.env.GSM_QUIT_CASE)
@@ -111,7 +119,7 @@ async function launch(profile, cwd, scenario) {
       ONWARD_AUTOTEST_CWD: cwd, ONWARD_REPO_ROOT: ROOT,
       ONWARD_AUTOTEST_WATCHER_HANG_SHUTDOWN: scenario === 'shutdown-hang' ? '1' : '0',
       ONWARD_AUTOTEST_WATCHER_HANG_SUBSCRIBE: scenario === 'pending-subscribe' ? '1' : '0',
-      ONWARD_AUTOTEST_WATCHER_HANG_UNSUBSCRIBE: scenario === 'pending-unsubscribe' ? '1' : '0',
+      ONWARD_AUTOTEST_WATCHER_HANG_UNSUBSCRIBE: ['pending-unsubscribe', 'compound-fault-storm'].includes(scenario) ? '1' : '0',
       ONWARD_AUTOTEST_QUIT_HOLD_STAGE: scenario === 'save-hang' ? 'app-state' : ''
     }, timeout: 30_000
   })
@@ -185,6 +193,7 @@ async function trial(scenario, index) {
   let mutations = 0
   let servicePid = null
   const pressurePids = []
+  const nohupPids = []
   const result = { scenario, trial: index, ok: false }
   try {
     running = await launch(profile, repos[0], scenario)
@@ -251,10 +260,12 @@ async function trial(scenario, index) {
       await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     }
 
-    if (['blocked-service', 'parent-death'].includes(scenario)) {
+    if (['blocked-service', 'parent-death', 'compound-fault-storm'].includes(scenario)) {
       await app.evaluate(() => globalThis.__onwardQuitAutotest.blockWatcher())
     }
-    if (scenario === 'telemetry-hang') await app.evaluate(() => globalThis.__onwardQuitAutotest.hangTelemetry())
+    if (['telemetry-hang', 'compound-fault-storm'].includes(scenario)) {
+      await app.evaluate(() => globalThis.__onwardQuitAutotest.hangTelemetry())
+    }
 
     if (scenario === 'churn') {
       const script = join(dir, 'output-pressure.cjs')
@@ -280,6 +291,60 @@ async function trial(scenario, index) {
       result.outputBytes = await page.evaluate(() => globalThis.__quitOutputBytes)
     }
 
+    if (['sighup-trap', 'compound-fault-storm'].includes(scenario)) {
+      const count = scenario === 'sighup-trap' ? 6 : 4
+      const script = join(dir, 'sighup-trap-tree.cjs')
+      cpSync(join(fixtures, 'sighup-trap-tree.cjs'), script)
+      const pidFiles = Array.from({ length: count }, (_, i) => join(dir, `sighup-${i}.pid`))
+      const nohupPidFile = scenario === 'sighup-trap' && process.platform !== 'win32'
+        ? join(dir, 'nohup-0.pid')
+        : null
+      await page.evaluate(async ({ cwd, node, script, pidFiles, count, nohupPidFile }) => {
+        globalThis.__quitOutputBytes = 0
+        window.electronAPI.terminal.onData((id, data) => {
+          if (id.startsWith('quit-sighup-')) globalThis.__quitOutputBytes += data.length
+        })
+        for (let i = 0; i < count; i++) {
+          const id = `quit-sighup-${i}`
+          await window.electronAPI.terminal.create(id, { cwd })
+          window.electronAPI.terminal.setOutputVisibility(id, true)
+          const caps = await window.electronAPI.terminal.getInputCapabilities(id)
+          if (i === 0 && nohupPidFile && caps.shellKind !== 'powershell' && caps.shellKind !== 'cmd') {
+            await window.electronAPI.terminal.write(
+              id,
+              `nohup "${node}" "${script}" "${nohupPidFile}" </dev/null >/dev/null 2>&1 &\r`
+            )
+          }
+          const command = `${caps.shellKind === 'powershell' ? '& ' : ''}"${node}" "${script}" "${pidFiles[i]}"\r`
+          await window.electronAPI.terminal.write(id, command)
+        }
+      }, { cwd: repos[0], node: process.execPath, script, pidFiles, count, nohupPidFile })
+      await waitUntil(() => Array.from({ length: count }, (_, i) => existsSync(join(dir, `sighup-${i}.pid`))).every(Boolean))
+      if (nohupPidFile) {
+        await waitUntil(() => existsSync(nohupPidFile))
+        const parsedNohup = readFileSync(nohupPidFile, 'utf8')
+          .trim()
+          .split(/\s+/)
+          .map(Number)
+          .filter(pid => Number.isFinite(pid) && pid > 1)
+        assert.equal(parsedNohup.length, 2, 'Expected both parent and child PIDs from background nohup job')
+        nohupPids.push(...parsedNohup)
+      }
+      for (let i = 0; i < count; i++) {
+        const parsedPids = readFileSync(join(dir, `sighup-${i}.pid`), 'utf8')
+          .trim()
+          .split(/\s+/)
+          .map(Number)
+          .filter(pid => Number.isFinite(pid) && pid > 1)
+        assert.equal(parsedPids.length, 2, 'Expected both parent and child PIDs from sighup-trap-tree.cjs')
+        pressurePids.push(...parsedPids)
+      }
+      await page.waitForFunction(() => globalThis.__quitOutputBytes >= 64 * 1024)
+      result.outputBytes = await page.evaluate(() => globalThis.__quitOutputBytes)
+      result.trackedTrapPids = pressurePids.length
+      if (nohupPids.length > 0) result.sparedNohupPids = nohupPids.length
+    }
+
     churnTimer = setInterval(() => {
       for (const repo of repos) {
         const path = join(repo, `churn-${mutations % 32}.txt`)
@@ -288,10 +353,41 @@ async function trial(scenario, index) {
       }
       mutations++
     }, 4)
-    if (['churn', 'recovery', 'update', 'save-hang'].includes(scenario)) {
+
+    if (scenario === 'cancel-storm-under-load') {
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      for (let round = 0; round < 5; round++) {
+        await menuQuit(app, 5)
+        await page.waitForTimeout(40)
+      }
+      assert.equal(child.exitCode, null)
+      const postCancelWatcher = await app.evaluate(() => globalThis.__onwardQuitAutotest.inspect())
+      assert.equal(postCancelWatcher.stopping, false, 'Watcher entered stopping state on cancelled quit')
+      assert.equal(postCancelWatcher.pid, servicePid, 'Watcher PID changed across cancelled quits')
+      const createdAfterCancel = await page.evaluate(cwd => window.electronAPI.terminal.create('post-cancel-term', { cwd }), repos[1])
+      assert.equal(createdAfterCancel.success, true, 'Terminal creation rejected after cancelled quit')
+      const postCancelFile = join(repos[0], `post-cancel-${index}.txt`)
+      cpSync(join(fixtures, 'tracked.txt'), postCancelFile)
+      await page.waitForFunction(expected => globalThis.__quitTreeEvents.some(event => event.added?.includes(expected)), `post-cancel-${index}.txt`, { timeout: 10_000 })
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+    }
+
+    const savesDraft = [
+      'churn', 'recovery', 'update', 'save-hang',
+      'sighup-trap', 'queue-flood', 'compound-fault-storm', 'cancel-storm-under-load', 'signal-supersedes-dialog'
+    ].includes(scenario)
+    if (savesDraft) {
       const prompt = await openPrompt(page)
       await prompt.title.fill(draft.title)
       await prompt.content.fill(draft.content)
+    }
+    if (['queue-flood', 'compound-fault-storm'].includes(scenario)) {
+      const flooded = await app.evaluate(
+        (_, isCompound) => globalThis.__onwardQuitAutotest.floodQueues(isCompound ? 100 : 150, isCompound ? 30 : 50),
+        scenario === 'compound-fault-storm'
+      )
+      assert.ok(flooded.schedulerQueued >= 80, `Expected flooded scheduler queue, got ${flooded.schedulerQueued}`)
+      result.floodedQueues = flooded
     }
     if (scenario === 'save-hang') {
       const saved = await page.evaluate(async language => {
@@ -301,11 +397,19 @@ async function trial(scenario, index) {
       assert.equal(saved, true)
     }
 
-    const started = performance.now()
+    let started = performance.now()
     const quitLogOffset = running.output().length
     if (scenario === 'parent-death') child.kill('SIGKILL')
     else if (scenario === 'sigterm' || scenario === 'sigint') child.kill(scenario === 'sigterm' ? 'SIGTERM' : 'SIGINT')
-    else if (scenario === 'external') await app.evaluate(({ app }) => {
+    else if (scenario === 'signal-supersedes-dialog') {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = () => new Promise(() => {})
+      })
+      await menuQuit(app, 10)
+      await waitUntil(() => running.output().slice(quitLogOffset).includes('confirmation-start'))
+      started = performance.now()
+      child.kill('SIGTERM')
+    } else if (scenario === 'external') await app.evaluate(({ app }) => {
       const baseline = app.listenerCount('will-quit')
       for (let i = 0; i < 20; i++) app.quit()
       if (app.listenerCount('will-quit') > baseline) throw new Error('Repeated quit accumulated lifecycle listeners')
@@ -350,11 +454,24 @@ async function trial(scenario, index) {
     }
     await waitUntil(() => !alive(servicePid), 5000)
     for (const pid of pressurePids) await waitUntil(() => !alive(pid), 5000)
+    for (const pid of nohupPids) {
+      assert.equal(alive(pid), true, `Background nohup process ${pid} must survive terminal quit`)
+    }
     result.elapsedMs = performance.now() - started
     const ledger = JSON.parse(readFileSync(join(profile, 'session-ledger.json'), 'utf8'))
     result.ledger = ledger.clean
     assert.equal(ledger.clean, !['save-hang', 'parent-death'].includes(scenario))
-    if (['churn', 'recovery', 'update'].includes(scenario)) {
+    if (scenario === 'sighup-trap') {
+      assert.ok((ledger.terminatedActiveJobs ?? 0) >= 6, `Expected terminatedActiveJobs >= 6 in session ledger, got ${ledger.terminatedActiveJobs}`)
+    }
+    if (['queue-flood', 'compound-fault-storm'].includes(scenario)) {
+      assert.match(running.output().slice(quitLogOffset), /background-work-aborted.*"schedulerCancelled":[1-9]\d*/)
+      assert.match(running.output().slice(quitLogOffset), /background-work-aborted.*"gitQueuedCancelled":[1-9]\d*/)
+    }
+    if (scenario === 'signal-supersedes-dialog') {
+      assert.match(running.output().slice(quitLogOffset), /stage-start \{"reason":"signal","stage":"renderer-state"\}/)
+    }
+    if (savesDraft && scenario !== 'save-hang') {
       const persisted = JSON.parse(readFileSync(join(profile, 'app-state.json'), 'utf8'))
       assert.ok(persisted.tabs.some(tab => tab.editorDraft?.title === draft.title && tab.editorDraft?.content === draft.content), 'Last input was not persisted before process exit')
     }
@@ -362,10 +479,10 @@ async function trial(scenario, index) {
     if (scenario === 'recovery') assert.match(running.output(), /relaunch-requested/)
     if (scenario === 'update') assert.match(running.output(), /update-install-requested/)
     assert.doesNotMatch(running.output().slice(quitLogOffset), /\[WatcherService\] spawned/, 'Watcher restarted after quit began')
-    if (['shutdown-hang', 'blocked-service', 'pending-subscribe', 'pending-unsubscribe', 'save-hang'].includes(scenario)) {
+    if (scenario === 'save-hang') {
       assert.match(running.output(), /deadline.*deadlineMs.*10000/)
     } else {
-      assert.doesNotMatch(running.output(), /\[QuitPhase\] deadline /, 'Healthy teardown used its emergency deadline')
+      assert.doesNotMatch(running.output(), /\[QuitPhase\] deadline /, 'Teardown used its 10s emergency deadline instead of bounded service shutdown')
     }
     if (['recovery', 'update'].includes(scenario)) {
       const reopened = await launch(profile, repos[0], 'reopened')
@@ -392,7 +509,7 @@ async function trial(scenario, index) {
       }
       owned.delete(child)
     }
-    for (const pid of pressurePids) {
+    for (const pid of [...pressurePids, ...nohupPids]) {
       if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch {} }
     }
     if (servicePid && alive(servicePid)) { try { process.kill(servicePid, 'SIGKILL') } catch {} }
@@ -419,7 +536,15 @@ try {
     // Boolean integrity requires every trial; latency uses >=1 of 3 as specified
     // by the repository's timing gate, with setup excluded from measurement.
     assert.ok(samples.every(result => result.ok), `${scenario}: one or more trials failed`)
-    assert.ok(samples.slice(0, 3).some(result => result.elapsedMs <= EXIT_BUDGET_MS), `${scenario}: all latency samples exceed the approved 10s budget`)
+    const scenarioBudgetMs = ['sighup-trap', 'compound-fault-storm'].includes(scenario)
+      ? EXTREME_COMPOUND_HOLD_BUDGET_MS
+      : ['queue-flood', 'cancel-storm-under-load', 'signal-supersedes-dialog'].includes(scenario)
+        ? EXTREME_STRESS_BUDGET_MS
+        : EXIT_BUDGET_MS
+    assert.ok(
+      samples.slice(0, 3).some(result => result.elapsedMs <= scenarioBudgetMs),
+      `${scenario}: all latency samples exceed the approved ${scenarioBudgetMs}ms budget`
+    )
   }
 } catch (error) {
   log(`Suite failure: ${error.stack}`)

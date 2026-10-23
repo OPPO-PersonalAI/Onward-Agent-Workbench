@@ -1569,11 +1569,16 @@ async function handleRequestFileBody(
 async function shutdownWorker(): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
+  const startedAt = Date.now()
 
   if (reconcileTimer) {
     clearInterval(reconcileTimer)
     reconcileTimer = null
   }
+  for (const timer of governorRetryTimers.values()) {
+    clearTimeout(timer)
+  }
+  governorRetryTimers.clear()
 
   for (const entry of entries.values()) {
     try {
@@ -1581,8 +1586,27 @@ async function shutdownWorker(): Promise<void> {
     } catch { /* shutdown must continue */ }
   }
 
+  let deadlineHit = false
+  const settleBounded = async (promises: Iterable<Promise<unknown>>, budgetMs: number): Promise<void> => {
+    const list = Array.from(promises)
+    if (list.length === 0) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    await Promise.race([
+      Promise.allSettled(list),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          deadlineHit = true
+          resolve()
+        }, budgetMs)
+        timer.unref?.()
+      })
+    ]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+  }
+
   if (inFlightOperations.size > 0) {
-    await Promise.allSettled(Array.from(inFlightOperations))
+    await settleBounded(inFlightOperations, 100)
   }
 
   for (const entry of entries.values()) {
@@ -1611,15 +1635,15 @@ async function shutdownWorker(): Promise<void> {
   entryToGroupKey.clear()
   bodyCache.clear()
   mirrorGenerations.clear()
-  // Native teardown belongs exclusively to the utility process. Settle proxy
-  // requests here without a second timeout or a guessed native debounce sleep.
-  await Promise.allSettled([...pendingNativeWatcherOps, ...pendingUnsubscribes])
+  // Native teardown belongs exclusively to the utility process. Bound proxy
+  // requests here so a hung utility process cannot block worker exit.
+  await settleBounded([...pendingNativeWatcherOps, ...pendingUnsubscribes], 100)
   const quiesce = {
     activeSubscriptions: activeWatcherSubscriptions,
     pendingUnsubscribes: pendingUnsubscribes.size,
     pendingNativeOps: pendingNativeWatcherOps.size,
-    settledMs: 0,
-    deadlineHit: false
+    settledMs: Date.now() - startedAt,
+    deadlineHit
   }
   performanceTrace.record(PERF_TRACE_EVENT.WORKER_GIT_STATE_MIRROR_SHUTDOWN_QUIESCED, quiesce)
   emit({ kind: 'shutdown-complete', quiesce })

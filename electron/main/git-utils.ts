@@ -809,6 +809,18 @@ export async function checkGitInstalled(): Promise<boolean> {
   }
 }
 
+export function getTerminalCwdSync(terminalId: string, fallbackCwd: string | null = null): string | null {
+  const pushedCwd = resolveExistingTerminalCwd(terminalCwdAuthorityResolver?.(terminalId) ?? null)
+  if (pushedCwd) {
+    return pushedCwd
+  }
+  const cached = resolveExistingTerminalCwd(terminalCwdCache.get(terminalId)?.value ?? null)
+  if (cached) {
+    return cached
+  }
+  return resolveExistingTerminalCwd(fallbackCwd)
+}
+
 /**
  * Get the terminal's working directory (via PID)
  */

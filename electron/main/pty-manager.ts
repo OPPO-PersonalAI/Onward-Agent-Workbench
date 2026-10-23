@@ -16,6 +16,13 @@ import { buildColorCapableTerminalEnv, resolveUserZdotdirForShellIntegration, is
 import { resolveExistingTerminalCwd } from './terminal-cwd-validation'
 import { buildPowerShellInlineIntegrationCommand } from './powershell-inline-integration'
 import { parseOsc633Cwd, parseOsc7Cwd, parseOsc9Cwd } from '../../src/utils/terminal-cwd-osc'
+import { listProcessTableDetailed } from './process-table'
+import {
+  selectHangupEscalationTargets,
+  verifyEscalationTargets,
+  type DetailedProcessRow,
+  type HangupEscalationTarget
+} from './quit-activity'
 
 export interface PtyOptions {
   cols?: number
@@ -831,39 +838,143 @@ export class PtyManager {
     return refs
   }
 
-  async shutdownAll(timeoutMs: number = 1500): Promise<{ total: number; closed: number; timedOut: number }> {
+  /**
+   * Hang up every terminal, then force-kill only what refused the hangup.
+   *
+   * 1. Snapshot the foreground-group descendants BEFORE signalling (a shell
+   *    exiting reparents its jobs to PID 1, severing the ppid link). The
+   *    snapshot is local to this call — pids are never remembered across
+   *    calls, because a pid held past its process's death can be recycled.
+   * 2. SIGHUP the shells and the foreground groups (what a real terminal
+   *    hangup does). Background `nohup` / `disown` / `setsid` jobs are left to
+   *    the shell's own forwarding, which honours the user's intent.
+   * 3. After the grace, SIGKILL surviving shells, and surviving descendants
+   *    only after re-verifying pid + pgid + start time against a fresh table.
+   *    Any snapshot failure skips descendant escalation (fail-safe: never
+   *    kill what cannot be identified).
+   * Windows: node-pty's ConPTY kill terminates the console process list, so
+   * only the shell-level escalation applies there.
+   */
+  async shutdownAll(graceMs: number = 300, escalateMs: number = 200): Promise<{
+    total: number
+    closed: number
+    timedOut: number
+    descendantTargets: number
+    descendantEscalated: number
+    descendantUnverified: number
+  }> {
     const startUs = performanceTrace.nowUs()
     const records = Array.from(this.instances.entries())
     if (records.length === 0) {
-      performanceTrace.recordComplete('pty.shutdown_all', startUs, {
-        total: 0,
-        closed: 0,
-        timedOut: 0
-      }, 'pty')
-      return { total: 0, closed: 0, timedOut: 0 }
+      const empty = { total: 0, closed: 0, timedOut: 0, descendantTargets: 0, descendantEscalated: 0, descendantUnverified: 0 }
+      performanceTrace.recordComplete('pty.shutdown_all', startUs, empty, 'pty')
+      return empty
     }
 
     for (const [, record] of records) {
       this.disposeExternalListeners(record)
     }
 
+    const shellPids = records
+      .map(([, record]) => record.pty.pid)
+      .filter((pid): pid is number => typeof pid === 'number' && pid > 0)
+    let targets: HangupEscalationTarget[] = []
+    if (process.platform !== 'win32' && shellPids.length > 0) {
+      const table = await this.snapshotDetailedTable()
+      if (table) targets = selectHangupEscalationTargets(table, shellPids)
+    }
+
+    const graceDeadline = Date.now() + Math.max(0, graceMs)
     for (const [, record] of records) {
       this.killRecord(record)
     }
+    for (const pgid of new Set(targets.map((target) => target.pgid))) {
+      try { process.kill(-pgid, 'SIGHUP') } catch { /* group already gone */ }
+    }
 
-    const results = await Promise.all(
-      records.map(([, record]) => this.waitForExit(record, timeoutMs))
+    const targetPids = targets.map((target) => target.pid)
+    const firstPass = await Promise.all(
+      records.map(([, record]) => this.waitForExit(record, Math.max(0, graceDeadline - Date.now())))
     )
+    await this.waitForPidsExit(targetPids, Math.max(0, graceDeadline - Date.now()))
 
+    const survivors = records.filter((_, idx) => !firstPass[idx] && !records[idx][1].exited)
+    const survivingTargets = targets.filter((target) => this.isPidAlive(target.pid))
+    let escalatedPids: number[] = []
+    if (survivors.length > 0 || survivingTargets.length > 0) {
+      const escalateDeadline = Date.now() + Math.max(0, escalateMs)
+      for (const [, record] of survivors) {
+        this.killRecord(record, true)
+      }
+      if (survivingTargets.length > 0) {
+        const fresh = await this.snapshotDetailedTable()
+        escalatedPids = fresh ? verifyEscalationTargets(survivingTargets, fresh) : []
+        for (const pid of escalatedPids) {
+          try { process.kill(pid, 'SIGKILL') } catch { /* exited after verification */ }
+        }
+      }
+      await Promise.all(
+        survivors.map(([, record]) => this.waitForExit(record, Math.max(0, escalateDeadline - Date.now())))
+      )
+      await this.waitForPidsExit(escalatedPids, Math.max(0, escalateDeadline - Date.now()))
+    }
+
+    let closed = 0
     for (const [id, record] of records) {
+      if (record.exited) closed += 1
+      record.disposed = true
       record.exitDisposable.dispose()
       this.instances.delete(id)
     }
+    this.cwdMap.clear()
 
-    const closed = results.filter(Boolean).length
-    const summary = { total: records.length, closed, timedOut: records.length - closed }
+    const summary = {
+      total: records.length,
+      closed,
+      timedOut: records.length - closed,
+      descendantTargets: targets.length,
+      descendantEscalated: escalatedPids.length,
+      descendantUnverified: survivingTargets.length - escalatedPids.length
+    }
     performanceTrace.recordComplete('pty.shutdown_all', startUs, summary, 'pty')
     return summary
+  }
+
+  private async snapshotDetailedTable(budgetMs: number = 250): Promise<DetailedProcessRow[] | null> {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      return await Promise.race([
+        listProcessTableDetailed(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), budgetMs)
+          timer.unref?.()
+        })
+      ])
+    } catch {
+      return null
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private isPidAlive(pid: number): boolean {
+    if (typeof pid !== 'number' || pid <= 1) return false
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      // EPERM: the process exists but we may not signal it.
+      return (error as NodeJS.ErrnoException)?.code === 'EPERM'
+    }
+  }
+
+  private async waitForPidsExit(pids: number[], timeoutMs: number): Promise<void> {
+    if (pids.length === 0 || timeoutMs <= 0) return
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (pids.every((pid) => !this.isPidAlive(pid))) return
+      await new Promise((resolve) => setTimeout(resolve, 15))
+    }
   }
 
   private disposeExternalListeners(record: PtyRecord): void {
@@ -873,23 +984,34 @@ export class PtyManager {
     record.externalDisposables = []
   }
 
-  private killRecord(record: PtyRecord): void {
+  private killRecord(record: PtyRecord, escalate = false): void {
     const terminalId = this.findIdForRecord(record)
+    const pid = record.pty.pid
     try {
-      record.pty.kill()
+      if (escalate && process.platform !== 'win32') {
+        if (typeof pid === 'number' && pid > 0) {
+          try { process.kill(-pid, 'SIGKILL') } catch { /* process may not be group leader */ }
+          try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+        }
+        try { record.pty.kill('SIGKILL') } catch { /* ignore */ }
+      } else {
+        record.pty.kill()
+      }
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PTY_KILL, {
         terminalId,
         shellKind: record.shellKind,
-        alreadyExited: record.exited
+        alreadyExited: record.exited,
+        ...(escalate ? { escalated: true } : {})
       })
     } catch (error) {
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PTY_KILL, {
         terminalId,
         shellKind: record.shellKind,
         alreadyExited: record.exited,
+        ...(escalate ? { escalated: true } : {}),
         error: String(error)
       })
-      console.warn('[PTY] kill failed:', error)
+      if (!escalate) console.warn('[PTY] kill failed:', error)
     }
   }
 

@@ -536,6 +536,8 @@ export function sendPromptViaBridge(
 }
 
 export function registerIpcHandlers(mainWindow: BrowserWindow, options: RegisterIpcHandlersOptions = {}): void {
+  ipcHandlersCleanupPromise = null
+  backgroundWorkAborted = false
   const isQuitting = options.isQuitting ?? (() => false)
   registerThemeImportHandlers()
   registerThemeExportHandlers()
@@ -3151,6 +3153,81 @@ export function setupWindowShortcuts(mainWindow: BrowserWindow): void {
 
 let ipcHandlersCleanupPromise: Promise<void> | null = null
 
+let backgroundWorkAborted = false
+
+export function floodBackgroundQueuesForQuitTest(
+  schedulerCount: number = 150,
+  gitCount: number = 50
+): { schedulerQueued: number; gitScheduled: number } {
+  const owners = ['project-fs', 'sqlite', 'ripgrep'] as const
+  const sleep5s = () => new Promise<void>((resolve) => { setTimeout(resolve, 5000).unref?.() })
+  for (let i = 0; i < schedulerCount; i++) {
+    void mainWorkScheduler.enqueue({ lane: 'background-index', ownerId: owners[i % owners.length], label: `quit-flood-${i}` }, sleep5s).catch(() => {})
+  }
+  for (let i = 0; i < gitCount; i++) {
+    void gitRuntimeManager.enqueueTask({ repoKey: `/quit-flood-repo-${i % 4}`, priority: 'low', kind: 'git', label: `quit-git-flood-${i}` }, sleep5s).catch(() => {})
+  }
+  return { schedulerQueued: mainWorkScheduler.getMetrics().scheduler.queueDepthCurrent, gitScheduled: gitCount }
+}
+
+function safeCleanupStep(step: string, run: () => void): void {
+  try {
+    run()
+  } catch (error) {
+    console.warn(`[Quit] cleanup step '${step}' failed:`, error)
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_APP_QUIT_CLEANUP_STEP_FAILED, {
+      step,
+      error: String(error).slice(0, 256)
+    })
+  }
+}
+
+export function abortBackgroundWorkForQuit(): { schedulerCancelled: number; gitQueuedCancelled: number } {
+  if (backgroundWorkAborted) return { schedulerCancelled: 0, gitQueuedCancelled: 0 }
+  backgroundWorkAborted = true
+  let schedulerCancelled = 0
+  let gitQueuedCancelled = 0
+  safeCleanupStep('terminal-data-buffers', () => {
+    for (const [, buf] of terminalDataBuffers) {
+      buf.dispose()
+    }
+    terminalDataBuffers.clear()
+  })
+  terminalFastPathState.clear()
+  terminalOutputVisibilityState.clear()
+  if (terminalIpcDiagTimer) {
+    clearInterval(terminalIpcDiagTimer)
+    terminalIpcDiagTimer = null
+  }
+  safeCleanupStep('main-work-scheduler', () => {
+    schedulerCancelled = mainWorkScheduler.cancelAllExcept(new Set(['app-state']), 'Application is shutting down')
+  })
+  safeCleanupStep('git-runtime-manager', () => {
+    gitQueuedCancelled = gitRuntimeManager.beginShutdown('Application is shutting down')
+  })
+  safeCleanupStep('git-diff-precompute', () => {
+    const stats = gitDiffPrecomputeScheduler.inspectStats()
+    for (const project of [...stats.pendingProjects, ...stats.inFlightProjects]) {
+      gitDiffPrecomputeScheduler.cancelProject(project)
+    }
+  })
+  safeCleanupStep('git-watch-manager', () => gitWatchManager?.dispose())
+  gitWatchManager = null
+  safeCleanupStep('git-ipc-worker', () => gitIpcWorkerClient.dispose())
+  safeCleanupStep('sqlite-worker', () => sqliteWorkerClient.dispose())
+  safeCleanupStep('project-fs-worker', () => projectFsWorkerClient.dispose())
+  safeCleanupStep('ripgrep-search', () => ripgrepSearchManager?.dispose())
+  ripgrepSearchManager = null
+  safeCleanupStep('file-watch-manager', () => fileWatchManager?.dispose())
+  fileWatchManager = null
+  safeCleanupStep('image-watch-manager', () => imageWatchManager?.dispose())
+  imageWatchManager = null
+  safeCleanupStep('project-tree-watch-manager', () => projectTreeWatchManager?.dispose())
+  projectTreeWatchManager = null
+  safeCleanupStep('git-diff-cache-invalidator', () => gitDiffCacheInvalidator.dispose())
+  return { schedulerCancelled, gitQueuedCancelled }
+}
+
 /**
  * Single-flight teardown. Every quit edge — the awaited before-quit→requestQuit
  * path (index.ts), window-all-closed, AND the unawaited will-quit floor — must
@@ -3166,56 +3243,13 @@ export function cleanupIpcHandlers(): Promise<void> {
 }
 
 async function runCleanupIpcHandlers(): Promise<void> {
+  abortBackgroundWorkForQuit()
   await cleanupThemeImportHandlers()
   await cleanupThemeExportHandlers()
-  // One throwing dispose must never skip the rest of the chain: everything
-  // below it — including the awaited GitStateMirror worker drain — would be
-  // silently dropped, leaving the worker alive and hanging the quit until
-  // the debug-quit hard-exit floor. Log + trace the failure and continue.
-  const safeDispose = (step: string, run: () => void): void => {
-    try {
-      run()
-    } catch (error) {
-      console.warn(`[Quit] cleanup step '${step}' failed:`, error)
-      performanceTrace.record(PERF_TRACE_EVENT.MAIN_APP_QUIT_CLEANUP_STEP_FAILED, {
-        step,
-        error: String(error).slice(0, 256)
-      })
-    }
-  }
-
-  // Dispose all terminal data buffers
-  safeDispose('terminal-data-buffers', () => {
-    for (const [, buf] of terminalDataBuffers) {
-      buf.dispose()
-    }
-  })
-  terminalDataBuffers.clear()
-  terminalFastPathState.clear()
-  terminalOutputVisibilityState.clear()
-  if (terminalIpcDiagTimer) {
-    clearInterval(terminalIpcDiagTimer)
-    terminalIpcDiagTimer = null
-  }
-
-  safeDispose('git-watch-manager', () => gitWatchManager?.dispose())
-  gitWatchManager = null
-  safeDispose('git-ipc-worker', () => gitIpcWorkerClient.dispose())
-  safeDispose('sqlite-worker', () => sqliteWorkerClient.dispose())
-  safeDispose('app-state-storage', () => getAppStateStorage().dispose())
-  safeDispose('project-fs-worker', () => projectFsWorkerClient.dispose())
-  safeDispose('ripgrep-search', () => ripgrepSearchManager?.dispose())
-  ripgrepSearchManager = null
-  safeDispose('file-watch-manager', () => fileWatchManager?.dispose())
-  fileWatchManager = null
-  safeDispose('image-watch-manager', () => imageWatchManager?.dispose())
-  imageWatchManager = null
-  safeDispose('project-tree-watch-manager', () => projectTreeWatchManager?.dispose())
-  projectTreeWatchManager = null
-  safeDispose('git-diff-cache-invalidator', () => gitDiffCacheInvalidator.dispose())
-  // Tear down the GitStateMirror worker thread and parcel-watchers before
-  // Electron starts tearing down Node worker isolates. Native watcher cleanup
-  // can still resolve async N-API promises, so shutdown must be awaited.
+  safeCleanupStep('app-state-storage', () => getAppStateStorage().dispose())
+  // Drain the GitStateMirror worker thread (bounded to 200 ms; native
+  // @parcel/watcher subscriptions live in the isolated watcher utility process
+  // and are torn down in parallel by watcherService.shutdown()).
   setTerminalCwdAuthorityResolver(null)
   setTerminalCwdDetectedHandler(null)
   ptyManager.setOscCwdDetectedHandler(null)

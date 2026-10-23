@@ -403,6 +403,9 @@ class AppStateStorage {
   private legacyPromptsPath: string
   private state: AppState
   private persistVersion = 0
+  private mutationSeq = 0
+  private persistedSeq = 0
+  private loadedFromDisk = false
   private pendingPersist: Promise<boolean> | null = null
   private persistQueued = false
 
@@ -424,6 +427,7 @@ class AppStateStorage {
         const data = readFileSync(this.storagePath, 'utf-8')
         const parsed = JSON.parse(data) as AppState
         const validated = this.validateState(parsed)
+        this.loadedFromDisk = true
         this.logUIPreferences('load', validated.uiPreferences)
         return validated
       }
@@ -843,20 +847,23 @@ class AppStateStorage {
   /**
    * Save state data to file
    */
-  private persist(): Promise<boolean> {
+  private persist(highPriority = false): Promise<boolean> {
     if (this.pendingPersist) {
       this.persistQueued = true
       return this.pendingPersist
     }
-    return this.startPersist()
+    return this.startPersist(highPriority)
   }
 
-  private startPersist(): Promise<boolean> {
+  private startPersist(highPriority = false): Promise<boolean> {
     const version = ++this.persistVersion
+    const targetSeq = this.mutationSeq
     const startedAt = Date.now()
     const snapshot = this.state
-    const promise = appStateWorkerClient.saveSnapshot(this.storagePath, snapshot)
+    const promise = appStateWorkerClient.saveSnapshot(this.storagePath, snapshot, { highPriority })
       .then((result) => {
+        this.persistedSeq = Math.max(this.persistedSeq, targetSeq)
+        this.loadedFromDisk = true
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_APP_STATE_SAVE, {
           version,
           bytes: result.bytes,
@@ -879,7 +886,12 @@ class AppStateStorage {
         // silently LOST the state delta. Synchronous write on the main
         // thread bypasses the pool entirely; tmp + rename keeps the file
         // atomic against a crash mid-write.
-        return this.persistSyncFallback(snapshot, version, String(error))
+        const fallbackOk = this.persistSyncFallback(snapshot, version, String(error))
+        if (fallbackOk) {
+          this.persistedSeq = Math.max(this.persistedSeq, targetSeq)
+          this.loadedFromDisk = true
+        }
+        return fallbackOk
       })
       .finally(() => {
         if (this.pendingPersist === promise) {
@@ -951,7 +963,10 @@ class AppStateStorage {
     return this.setTerminalLastCwds([{ terminalId, cwd }])
   }
 
-  setTerminalLastCwds(updates: Array<{ terminalId: string; cwd: string | null }>): boolean {
+  setTerminalLastCwds(
+    updates: Array<{ terminalId: string; cwd: string | null }>,
+    options: { persist?: boolean } = {}
+  ): boolean {
     if (updates.length === 0) return false
 
     const normalizedUpdates = new Map<string, string | null>()
@@ -991,7 +1006,10 @@ class AppStateStorage {
       tabs: nextTabs,
       updatedAt: Date.now()
     }
-    this.persist()
+    this.mutationSeq += 1
+    if (options.persist !== false) {
+      void this.persist()
+    }
     return true
   }
 
@@ -1014,6 +1032,7 @@ class AppStateStorage {
         ...this.validateState(state),
         updatedAt: Date.now()
       }
+      this.mutationSeq += 1
       this.logUIPreferences('save', this.state.uiPreferences)
       return await this.persist()
     } catch (error) {
@@ -1031,6 +1050,7 @@ class AppStateStorage {
         }),
         updatedAt: Date.now()
       }
+      this.mutationSeq += 1
       return await this.persist()
     } catch (error) {
       console.error('Failed to patch app state:', error)
@@ -1039,12 +1059,16 @@ class AppStateStorage {
   }
 
   async flush(): Promise<boolean> {
+    let lastResult = true
     while (this.pendingPersist || this.persistQueued) {
       if (this.pendingPersist) {
-        await this.pendingPersist
+        lastResult = await this.pendingPersist
       }
     }
-    return await this.persist()
+    if (this.mutationSeq > this.persistedSeq || !this.loadedFromDisk) {
+      return await this.persist(true)
+    }
+    return lastResult
   }
 
   dispose(): void {
