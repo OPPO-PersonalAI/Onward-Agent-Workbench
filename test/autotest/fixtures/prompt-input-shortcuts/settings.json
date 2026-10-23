@@ -1,0 +1,20 @@
+{
+  "_spdx": ["SPDX-FileCopyrightText: 2026 OPPO", "SPDX-License-Identifier: Apache-2.0"],
+  "version": 10,
+  "language": "en",
+  "telemetryConsent": false,
+  "autoFollowGitBranchForTaskName": false,
+  "promptInput": {
+    "leader": "Control+X",
+    "timeoutMs": 1500,
+    "actions": [
+      { "id": "sendAndExecute", "preset": "sendAndExecute", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "default", "shortcut": "Enter" },
+      { "id": "execute", "preset": "execute", "name": "", "visible": true, "includePrompt": false, "terminalKey": "Enter", "target": "default", "shortcut": "E" },
+      { "id": "send", "preset": "send", "name": "", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default", "shortcut": "S" },
+      { "id": "sendAllAndExecute", "preset": "sendAllAndExecute", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "all", "shortcut": "A" },
+      { "id": "queue", "preset": "queue", "name": "", "visible": false, "includePrompt": true, "terminalKey": "Tab", "target": "default", "shortcut": "Q" },
+      { "id": "rawControlC", "name": "Raw control C", "visible": false, "includePrompt": false, "terminalKey": "Control+C", "target": "default", "shortcut": "C" },
+      { "id": "heldAltQueue", "name": "Held Alt queue", "visible": false, "includePrompt": true, "terminalKey": "Tab", "target": "default", "shortcut": "Alt+Q" }
+    ]
+  }
+}

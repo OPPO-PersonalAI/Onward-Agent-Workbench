@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 OPPO -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<meta charset="utf-8">
+<title>Prompt shortcut guest receiver</title>
+<style>
+  body { margin: 24px; color: #edf2ff; background: #172031; font: 16px sans-serif; }
+  input { display: block; width: min(320px, 80vw); margin: 12px 0; padding: 12px; }
+</style>
+<h1>Guest keyboard receiver</h1>
+<label for="guest-input">Focused input / 焦点输入框</label>
+<input id="guest-input" autocomplete="off" spellcheck="false">
+<output id="guest-status">Ready / 就绪</output>
+<script>
+  window.pisGuest = { events: [], inputs: 0, compositions: 0 };
+  for (const type of ['keydown', 'keyup']) {
+    document.addEventListener(type, event => {
+      window.pisGuest.events.push({ type, key: event.key, code: event.code,
+        control: event.ctrlKey, repeat: event.repeat, trusted: event.isTrusted });
+    }, true);
+  }
+  document.querySelector('#guest-input').addEventListener('input', () => { window.pisGuest.inputs += 1; });
+  document.querySelector('#guest-input').addEventListener('compositionstart', () => { window.pisGuest.compositions += 1; });
+</script>
+</html>

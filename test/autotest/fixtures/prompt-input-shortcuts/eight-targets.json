@@ -1,0 +1,9 @@
+{
+  "_spdx": ["SPDX-FileCopyrightText: 2026 OPPO", "SPDX-License-Identifier: Apache-2.0"],
+  "terminals": [
+    { "id": "pis-task-5", "customName": "Receiver 5", "manualNameRepoRoot": null },
+    { "id": "pis-task-6", "customName": "Receiver 6", "manualNameRepoRoot": null },
+    { "id": "pis-task-7", "customName": "Receiver 7", "manualNameRepoRoot": null },
+    { "id": "pis-task-8", "customName": "Receiver 8", "manualNameRepoRoot": null }
+  ]
+}

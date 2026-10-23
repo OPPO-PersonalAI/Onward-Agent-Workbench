@@ -1157,6 +1157,8 @@ body.resizing-editor-height * {
   display: flex;
   align-items: stretch;
   gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /*
@@ -1192,91 +1194,6 @@ body.resizing-editor-height * {
 .prompt-sender-action-buttons {
   flex: 1 1 auto;
   min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.prompt-sender-btn {
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  background-color: var(--bg-1);
-  color: var(--text-2);
-  font-size: var(--font-xs);
-  font-weight: 400;
-  line-height: 1.2;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.prompt-sender-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text-1);
-}
-
-.prompt-sender-btn:disabled {
-  background-color: var(--border);
-  border-color: var(--border);
-  color: var(--text-3);
-  cursor: not-allowed;
-}
-
-.prompt-sender-btn-execute {
-  background-color: var(--rainbow-6);
-  border-color: var(--rainbow-6);
-  color: #0b1f13;
-}
-
-.prompt-sender-btn-execute:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--rainbow-6) 85%, black);
-  border-color: color-mix(in srgb, var(--rainbow-6) 85%, black);
-  color: #0b1f13;
-}
-
-.prompt-sender-btn-send-execute {
-  background-color: var(--rainbow-2);
-  border-color: var(--rainbow-2);
-  color: #f8fbff;
-}
-
-.prompt-sender-btn-send-execute:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--rainbow-2) 85%, black);
-  border-color: color-mix(in srgb, var(--rainbow-2) 85%, black);
-  color: #f8fbff;
-}
-
-.prompt-sender-btn-send {
-  background-color: var(--rainbow-1);
-  border-color: var(--rainbow-1);
-  color: #042027;
-}
-
-.prompt-sender-btn-send:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--rainbow-1) 85%, black);
-  border-color: color-mix(in srgb, var(--rainbow-1) 85%, black);
-  color: #042027;
-}
-
-.prompt-sender-btn-send-all-execute {
-  background-color: var(--rainbow-3);
-  border-color: var(--rainbow-3);
-  color: #fff;
-}
-
-.prompt-sender-btn-send-all-execute:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--rainbow-3) 85%, black);
-  border-color: color-mix(in srgb, var(--rainbow-3) 85%, black);
-  color: #fff;
 }
 
 
@@ -1284,7 +1201,44 @@ body.resizing-editor-height * {
   margin-top: 6px;
   font-size: var(--font-sm);
   color: var(--warning);
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
+
+.prompt-sender-clear-targets {
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  white-space: normal;
+  cursor: pointer;
+}
+
+.prompt-input-global-notice {
+  position: fixed;
+  top: 48px;
+  right: 12px;
+  z-index: 90;
+  display: flex;
+  align-items: start;
+  gap: 8px;
+  max-width: min(560px, calc(100vw - 80px));
+  max-height: min(240px, 30vh);
+  overflow-y: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--warning);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  pointer-events: auto;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  font-size: var(--font-xs);
+}
+.prompt-input-global-notice button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 
 /* Scroll bar style */
 .prompt-list-items::-webkit-scrollbar,

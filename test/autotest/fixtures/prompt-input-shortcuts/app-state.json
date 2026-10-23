@@ -1,0 +1,49 @@
+{
+  "_spdx": ["SPDX-FileCopyrightText: 2026 OPPO", "SPDX-License-Identifier: Apache-2.0"],
+  "activeTabId": "pis-main-tab",
+  "lastFocusedTerminalId": "pis-task-1",
+  "tabs": [
+    {
+      "id": "pis-main-tab",
+      "customName": "Shortcut receivers",
+      "createdAt": 1780000000000,
+      "layoutMode": { "kind": "preset", "count": 4 },
+      "activePanel": "prompt",
+      "promptPanelWidth": 440,
+      "promptEditorHeight": 180,
+      "activeTerminalId": "pis-task-1",
+      "terminals": [
+        { "id": "pis-task-1", "customName": "Receiver 1", "manualNameRepoRoot": null, "lastCwd": "$WORKSPACE" },
+        { "id": "pis-task-2", "customName": "Receiver 2", "manualNameRepoRoot": null, "lastCwd": "$WORKSPACE" },
+        { "id": "pis-task-3", "customName": "Receiver 3", "manualNameRepoRoot": null, "lastCwd": "$WORKSPACE" },
+        { "id": "pis-task-4", "customName": "Receiver 4", "manualNameRepoRoot": null, "lastCwd": "$WORKSPACE" },
+        { "id": "pis-parked-task", "customName": "Parked sentinel", "manualNameRepoRoot": null, "lastCwd": "$WORKSPACE" }
+      ],
+      "localPrompts": [
+        { "id": "pis-history-sentinel", "tabId": "pis-main-tab", "title": "History must never be sent", "content": "PIS_HISTORY_NOT_THE_EDITOR_DRAFT", "pinned": false, "createdAt": 1780000000000, "updatedAt": 1780000000000, "lastUsedAt": 1780000000000 }
+      ]
+    },
+    {
+      "id": "pis-other-tab",
+      "customName": "Excluded tab",
+      "createdAt": 1780000000001,
+      "layoutMode": { "kind": "preset", "count": 1 },
+      "activePanel": "prompt",
+      "promptPanelWidth": 440,
+      "promptEditorHeight": 180,
+      "activeTerminalId": "pis-other-task",
+      "terminals": [
+        { "id": "pis-other-task", "customName": "Other tab sentinel", "manualNameRepoRoot": null, "lastCwd": "$WORKSPACE" }
+      ],
+      "localPrompts": [],
+      "editorDraft": { "title": "Other tab draft", "content": "PIS_OTHER_TAB_DRAFT_MUST_SURVIVE", "height": 180, "savedAt": 1780000000000 }
+    }
+  ],
+  "globalPrompts": [],
+  "promptCleanup": { "autoEnabled": false, "autoKeepDays": 30, "autoDeleteColored": false, "lastAutoCleanupAt": null },
+  "projectEditorStates": {},
+  "promptSchedules": [],
+  "uiPreferences": { "promptInputMode": "line" },
+  "customLayoutPresets": [],
+  "updatedAt": 1780000000000
+}

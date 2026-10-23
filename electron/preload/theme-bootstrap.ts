@@ -6,7 +6,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import type { SettingsState } from '../../src/types/settings'
-import type { ResolvedTheme } from '../../src/types/theme'
+import type { ResolvedTheme, ThemeScheduleClock } from '../../src/types/theme'
 
 /** User-approved one-shot bootstrap: the handler reads only an already-loaded memory snapshot. */
 export function installThemeBootstrap(): void {
@@ -15,7 +15,7 @@ export function installThemeBootstrap(): void {
     event: PERF_TRACE_EVENT.RENDERER_THEME_BOOTSTRAP, data: { reason, ...extra }
   })
   trace('snapshot-request')
-  const bootstrap = ipcRenderer.sendSync(IPC.THEMES_BOOTSTRAP) as { settings: SettingsState; resolvedTheme: ResolvedTheme } | null
+  const bootstrap = ipcRenderer.sendSync(IPC.THEMES_BOOTSTRAP) as { settings: SettingsState; resolvedTheme: ResolvedTheme; themeClock: ThemeScheduleClock } | null
   ipcRenderer.send(IPC.DEBUG_PERF_TRACE, {
     event: PERF_TRACE_EVENT.RENDERER_THEME_BOOTSTRAP,
     data: { reason: 'snapshot-received', ok: Boolean(bootstrap?.resolvedTheme), durationMs: performance.now() - start }

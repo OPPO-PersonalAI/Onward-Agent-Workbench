@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { en as promptInputEn, zhCN as promptInputZhCN } from './prompt-input.ts'
+import { promptInputRuntimeEn, promptInputRuntimeZhCN } from './prompt-input-runtime.ts'
+import { en as themeScheduleEn, zhCN as themeScheduleZhCN } from './theme-schedule.ts'
+
 export type AppLocale = 'en' | 'zh-CN'
 
 export interface TranslationParams {
@@ -19,6 +23,9 @@ export const SUPPORTED_LOCALES: ReadonlyArray<{ value: AppLocale; label: string 
 type TranslationDictionary = Record<string, string>
 
 const en = {
+  ...themeScheduleEn,
+  ...promptInputEn,
+  ...promptInputRuntimeEn,
   'common.add': 'Add',
   'common.absolutePath': 'Absolute path',
   'common.branch': 'Branch',
@@ -1602,6 +1609,9 @@ export type TranslationKey = keyof typeof en
 type LocaleTranslations = Partial<Record<TranslationKey, string>>
 
 const zhCN: LocaleTranslations = {
+  ...themeScheduleZhCN,
+  ...promptInputZhCN,
+  ...promptInputRuntimeZhCN,
   'common.add': '添加',
   'common.absolutePath': '绝对路径',
   'common.branch': '分支',

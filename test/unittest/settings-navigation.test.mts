@@ -68,9 +68,9 @@ test('SN-04: empty queries return no results and repeated bilingual searches do 
       const translate = createTranslator(locale)
       for (const query of ['', ' ', '\t\r\n', '\u3000']) assert.deepEqual(searchSettings(query, translate), [])
       const result = searchSettings(translate(PAGE_LABELS.shortcuts), translate)
-      assert.deepEqual(result.map(entry => entry.target), ['globalShortcuts', 'windowShortcuts', 'terminalActions', 'terminalFocus', 'tabSwitch'])
+      assert.deepEqual(result.map(entry => entry.target), ['prompt-input', 'globalShortcuts', 'windowShortcuts', 'terminalActions', 'terminalFocus', 'tabSwitch'])
       result.pop()
-      assert.equal(searchSettings(translate(PAGE_LABELS.shortcuts), translate).length, 5)
+      assert.equal(searchSettings(translate(PAGE_LABELS.shortcuts), translate).length, 6)
     }
   }
   assert.deepEqual(SETTINGS_SEARCH_ENTRIES, before)

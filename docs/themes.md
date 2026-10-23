@@ -5,7 +5,7 @@
 
 ## User contract
 
-- New profiles follow the system with Dark Modern and Light Modern. A user can choose either member of the pair independently. Clicking a theme card selects manual mode.
+- New profiles follow the system with Dark Modern and Light Modern. A user can choose either member of the pair independently. Clicking a theme card selects manual mode unless Scheduled mode is active.
 - Six featured palettes: Dark Modern, Light Modern, Dracula, One Dark Pro, Nord, Solarized Light. Additional palettes, Onward Classic and imported themes appear in More themes.
 - Existing profiles migrate to Onward Classic. The old six app palettes/custom accent and global terminal colors are preserved. On 2026-10-07 the user explicitly retired per-Task colors; their legacy fields and v2 theme buckets are discarded, rather than left as hidden overrides.
 - Color precedence is theme defaults → that theme's saved overrides. All Tasks share that palette. Fonts retain their per-Task and apply-to-all scope independently of theme selection.
@@ -14,13 +14,32 @@
 
 ## Data flow and persistence
 
-`ThemeSettings` version 3 is shared by main and renderer; enclosing settings version 9 retires Task colors. `theme-engine.ts` owns validation, named-theme selection, Classic migration and color resolution. `task-fonts.ts` owns font-only Task patches. Storage validation removes retired color fields on load/save/update; old global colors migrate only once into Classic's theme-level colors.
+`ThemeSettings` version 4 is shared by main and renderer; it adds the schedule without changing an existing manual/system mode. Enclosing settings version 9 retired Task colors and version 10 added Prompt input settings. `theme-engine.ts` owns validation, named-theme selection, Classic migration and color resolution. `task-fonts.ts` owns font-only Task patches. Storage validation removes retired color fields on load/save/update; old global colors migrate only once into Classic's theme-level colors.
 
 One resolved snapshot feeds root semantic CSS variables, xterm options, Monaco's stable `onward-active` definition, Pierre's CSS-variable syntax theme and preview adapters. Existing terminal sessions and editor models stay mounted. `onward:theme-applied` fires after the root tokens are ready, including same-ID customization changes.
 
 The user approved a one-shot synchronous preload bootstrap on 2026-10-07: it reads the already-loaded main-process memory snapshot, performs no filesystem access in the handler, and installs CSS before first paint. Subsequent settings operations remain asynchronous. Native window backgrounds use the same resolver.
 
 Preview drafts live outside persisted settings. Saves acknowledge success before dismissing customization; rejected theme saves restore the last acknowledged theme without rolling back unrelated preferences.
+
+## Scheduled themes
+
+- Choose **Scheduled** in Appearance → Theme mode. Up to 32 ranges use local start/end minutes and repeat weekdays (Sunday = 0). Each range can use any saved theme, including imported themes or two dark themes. The daily timeline is a named vertical agenda: every region displays its exact theme and start/end times, with a decorative palette sample. One-minute ranges receive readable rows rather than sub-pixel proportional widths.
+- Click a daily region to open its contextual theme picker. Choosing a theme saves immediately; Escape/Close cancels and returns focus to the region. Arrow Up/Down and Home/End navigate choices, Enter/Space selects. A normal region updates its original recurring rule (including an overnight tail); all fallback regions share the explicit **At other times** theme. The picker explains that scope before selection. Equal-themed adjacent regions keep independent rule identity. A failed save leaves the picker open with an error; a day/rule change that removes the region dismisses the picker and releases the editing lock.
+- Endpoints are half-open: start included, end excluded. Equal endpoints and no weekdays are invalid. Enabled overlaps are rejected; adjacency is allowed. An overnight range belongs to its start weekday, including Saturday → Sunday. A missing theme leaves a visible repairable rule and is skipped; invalid stored overlaps are retained disabled.
+- Gaps use the explicit **At other times** theme. Entering Scheduled with an empty schedule starts with the current appearance. Selecting a card in Scheduled mode sets a temporary theme through the next enabled range boundary. With no future boundary, it changes the fallback. Importing themes retains Scheduled mode.
+- Temporary choices have absolute start/expiry timestamps and survive restart. Clock rollback before the start suspends the override; reaching its stored interval makes it eligible again. Travel/time-zone changes re-evaluate ranges using local time; the displayed override expiry keeps its absolute instant. **Resume schedule**, mode changes and saved schedule edits clear the override. Customization saves preserve it; pinned previews take precedence until Save/Cancel.
+- DST skipped times have no synthetic trigger; a forward clock jump applies the currently matching range. Repeated local times are evaluated on both occurrences. Next-boundary calculation includes actual offset transitions that change the active range. Wake/startup reconcile once, without replaying missed transitions.
+- One window-owned main-process controller schedules the next boundary, with a maximum 60-second timeout for clock/time-zone correction and a local-midnight overview refresh. Focus and Electron `powerMonitor.resume` reconcile immediately. Unchanged backstop decisions emit no IPC. Disposal removes the timeout and subscriptions. Renderer receives sequenced clock snapshots, rejects old snapshots, and uses the same pure resolver as native/preload. Palette selection does not enumerate future boundaries.
+- `ONWARD_AUTOTEST_THEME_NOW` and `themes.setClockForAutotest` are available only behind `ONWARD_AUTOTEST=1`. They drive the real reconciliation path without altering the OS clock. Browser/native APIs and Node calendar arithmetic are shared across macOS, Windows and Linux.
+
+Research and alternatives: [interaction study](html/theme-schedule-interaction-research.html). Apple Focus uses start/end/repeat-day schedules ([macOS 26 guide](https://support.apple.com/guide/mac-help/set-up-a-focus-to-stay-on-task-mchl613dc43f/26/mac/26)); Onward adopts that familiar editing model. Overlap, theme fallback and temporary-theme restoration are Onward contracts rather than undocumented Apple behavior.
+
+The 2026-10-20 UX revision follows Apple's [named Calendar events and object-centered editing](https://support.apple.com/guide/calendar/add-modify-or-delete-events-icalwr13-events/mac), [contextual property editing](https://developer.apple.com/design/human-interface-guidelines/popovers), and [non-color-only communication](https://developer.apple.com/design/human-interface-guidelines/accessibility). The vertical agenda is an Onward adaptation for a 300–600px settings panel, not a claim that Focus uses this exact layout. It trades proportional-duration geometry for complete names and usable targets; exact times remain visible on every row. Rendering is bounded DOM work; palette samples read a few saved color fields without token processing or additional workers/timers.
+
+The UX revision passed 224 targeted theme unit tests and three consecutive core/visual iterations (63 scenario executions), plus draft regression and trace self-check. Real screenshots cover English/Chinese, 300/600px and one-minute adjacent regions. Focus returns after the save transaction re-enables the originating row. macOS arm64 was run natively; Windows/Linux were reviewed structurally. Exact reports, screenshots and retained trace are indexed in `traces/theme-timeline-final-acceptance.json`.
+
+Control-flow evidence and pure-data/test-only exemptions: [schedule trace audit](theme-schedule-trace-audit.md).
 
 ## Import compatibility
 
@@ -74,6 +93,16 @@ python3 test/autotest/run-full-regression.py --only run-themes --repeat 3 --no-f
 ```
 
 Each theme runner stays below the independent five-minute ceiling. Artifacts include `results.json`, per-case logs and screenshots under `traces/test-logs/themes-ui/<group>-<timestamp>/`; the orchestrator also retains its standard summary under `test/full-regression-results/`.
+
+### Scheduled-theme acceptance, 2026-10-19
+
+- Clean development build: `traces/test-logs/theme-schedule-build-verified.log`. Isolated packaged-app launches reached the working main UI. Typecheck, comment lint and diff whitespace checks passed.
+- Final stability: **3/3 iterations × 5/5 runners**, **99/99 scenario executions**, with external failure retries disabled. Runs: `20261019T040550`, `20261019T040735`, `20261019T040916`. Each iteration covers core schedule behavior (12 cases), drafts (7), bilingual layout (7), six-Task switching/pressure (4) and persistence (3); every timing-sensitive correctness case aggregates five trials internally.
+- **222/222 theme-related assertions** and the final **178/178 unit files** passed. Trace infrastructure self-check passed in `20261019T041056`. No selected runner failed, timed out, retried or exceeded the five-minute ceiling. The orchestrator also lists its unrelated opt-in Windows updater suite as skipped.
+- Inspected the actual complete schedule and English 600px / Chinese 300px editor screenshots. The editor retains keyboard focus, displays overnight ownership and interpolates current theme, next boundary and conflict text in both languages. Five pairs of real app restarts per iteration verify imported-theme ranges, temporary choices before expiry and scheduled bootstrap after expiry.
+- Latest six-Task loaded-theme switching samples were **16.9 / 27.0 / 16.5 ms**, all below the existing 200 ms budget. The schedule-specific pressure case separately checks Prompt draft/focus and all six advancing PTY buffers across five boundary/resume cycles; it does not claim a new latency budget.
+- Consolidated local evidence: `traces/theme-schedule-final-acceptance.json`. Retained theme trace: `traces/perf/theme-schedule-20261019.json` (1,669 events; 114 schedule-reconciliation spans, maximum 0.205 ms in this run). Coverage audit: `docs/theme-schedule-trace-audit.md`.
+- macOS arm64 executed. Windows/Linux validation is structural, including the shared Node/Playwright driver and POSIX/PowerShell runner parity; native runs remain a follow-up.
 
 ### Settings/font/export acceptance, 2026-10-07
 

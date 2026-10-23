@@ -148,7 +148,8 @@ export class ThemeUiHarness {
           ONWARD_AUTOTEST_SKIP_CONSENT: '1',
           ONWARD_USER_DATA_DIR: this.userData,
           ONWARD_REPO_ROOT: REPO_ROOT,
-          ONWARD_PERF_TRACE: ['latency', 'surfaces', 'imports', 'draft', 'tasks', 'visual'].includes(this.group) ? '1' : '0',
+          ONWARD_PERF_TRACE: ['core', 'persistence', 'latency', 'surfaces', 'imports', 'draft', 'tasks', 'visual'].includes(this.group) ? '1' : '0',
+          ONWARD_AUTOTEST_THEME_NOW: this.themeNow === undefined ? '' : String(this.themeNow),
           ONWARD_DIST_DEV_OPEN: '0'
         },
         stdio: ['ignore', fd, fd],
@@ -211,7 +212,7 @@ export class ThemeUiHarness {
     await this.openSettings()
     await this.page.waitForFunction(() => Boolean(window.__onwardThemeDebug?.getState && window.__onwardThemeDebug?.getTerminalThemes))
     const state = await this.state()
-    assert.equal(state.settings.version, 3, 'getState().settings must be ThemeSettings v3')
+    assert.equal(state.settings.version, 4, 'getState().settings must be ThemeSettings v4')
     assert(!Object.hasOwn(state.settings, 'taskOverrides'), 'Task color overrides are retired')
     await this.log('APP_READY', { launch: this.sequence, pid: this.child.pid, port })
     return this.page

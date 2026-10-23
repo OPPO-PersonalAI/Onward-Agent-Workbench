@@ -6,6 +6,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useId } from 'react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { ShortcutInput } from './ShortcutInput'
+import { PromptInputSettings } from './PromptInputSettings'
 import { FontSelector } from './FontSelector'
 import { NumberInput } from './NumberInput'
 import { ApplyToAllIcon } from './ApplyToAllIcon'
@@ -183,12 +184,14 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const navigationRef = useRef<HTMLDivElement>(null)
   const pendingNavigation = useRef<{ target?: string; started: number } | null>(null)
   const [navigationRevision, setNavigationRevision] = useState(0)
+  const [promptRevealRequest, setPromptRevealRequest] = useState(0)
   const searchResults = useMemo(() => searchSettings(query, t), [query, t])
   const navigate = useCallback((next: SettingsPage, target?: string) => {
     pendingNavigation.current = { target, started: performance.now() }
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'request', page: next, source: target ? 'search' : 'category' })
     setPage(next)
     setQuery('')
+    setPromptRevealRequest(value => target === 'prompt-input' ? value + 1 : 0)
     setNavigationRevision(value => value + 1)
   }, [])
   useLayoutEffect(() => {
@@ -952,12 +955,16 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                       <ShortcutInput
                         value={settings?.shortcuts[item.key] || null}
                         onChange={(value) => handleShortcutChange(item.key, value)}
+                        excludeKey={item.key}
+                        promptLeader={settings?.promptInput?.leader}
+                        label={t(item.labelKey, item.labelParams)}
                       />
                     </div>
                   </div>
                 ))}
               </div>
             ))}
+            <PromptInputSettings revealRequest={promptRevealRequest} />
           </div>
         </div>}
 

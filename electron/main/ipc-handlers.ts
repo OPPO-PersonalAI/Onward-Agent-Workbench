@@ -7,7 +7,7 @@ import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'ele
 import { tMain } from './localization'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { existsSync, lstatSync, readFileSync, writeFileSync, statSync } from 'fs'
-import { ptyManager, PtyOptions } from './pty-manager'
+import { ptyManager, scanPromptBracketedPasteMode, PtyOptions } from './pty-manager'
 import { collectQuitActivitySummary } from './quit-activity-scan'
 import { TerminalGitInfoBridge } from './terminal-git-info-bridge'
 import { getPromptStorage, Prompt } from './prompt-storage'
@@ -55,6 +55,9 @@ import { getSettingsStorage, SettingsState, ShortcutConfig } from './settings-st
 import { registerThemeImportHandlers, cleanupThemeImportHandlers } from './theme-import-handlers'
 import { registerThemeExportHandlers, cleanupThemeExportHandlers } from './theme-export-handlers'
 import { getShortcutManager } from './shortcut-manager'
+import { promptInputShortcuts } from './prompt-input-shortcuts'
+import { registerPromptInputHandlers, cleanupPromptInputHandlers } from './prompt-input-handlers'
+import { normalizePromptShortcut, promptTargetSlot } from '../../src/utils/prompt-input'
 import { getAppInfo } from './app-info'
 import { createDiagnosticBundle } from './diagnostic-bundle'
 import { isUsableTerminalCwd } from './terminal-cwd-validation'
@@ -101,6 +104,8 @@ let shellDebugLastOpenedPath: string | null = null
 let shellDebugLastExternalUrl: string | null = null
 let shellDebugLastRevealedPath: string | null = null
 let terminalIpcDiagTimer: ReturnType<typeof setInterval> | null = null
+let windowShortcutSnapshot: ShortcutConfig | null = null
+const terminalOwners = new Map<string, number>()
 
 type TerminalInputSequencePayload = {
   kind: 'raw' | 'paste'
@@ -161,8 +166,7 @@ async function invalidateGitDiffAfterProjectFileSave(root: string, fullPath: str
   }
 }
 
-const BRACKETED_PASTE_ENABLE_RE = /\x1b\[\?2004h/g
-const BRACKETED_PASTE_DISABLE_RE = /\x1b\[\?2004l/g
+const terminalBracketedPasteCarry = new Map<string, string>()
 const BRACKETED_PASTE_START = '\x1b[200~'
 const BRACKETED_PASTE_END = '\x1b[201~'
 const INTERACTIVE_BOOST_WINDOW_MS = 250
@@ -175,18 +179,11 @@ function wrapBracketedPaste(text: string, enabled: boolean): string {
   return enabled ? `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}` : text
 }
 
-function updateBracketedPasteMode(current: boolean, data: string): boolean {
-  let next = current
-  BRACKETED_PASTE_ENABLE_RE.lastIndex = 0
-  BRACKETED_PASTE_DISABLE_RE.lastIndex = 0
-
-  for (const _ of data.matchAll(BRACKETED_PASTE_ENABLE_RE)) {
-    next = true
-  }
-  for (const _ of data.matchAll(BRACKETED_PASTE_DISABLE_RE)) {
-    next = false
-  }
-  return next
+function updateBracketedPasteMode(id: string, current: boolean, data: string): boolean {
+  const next = scanPromptBracketedPasteMode(current, terminalBracketedPasteCarry.get(id) ?? '', data)
+  terminalBracketedPasteCarry.set(id, next.carry)
+  if (next.enabled !== current) performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, { stage: 'paste-capability-changed', enabled: next.enabled }, { terminalId: id })
+  return next.enabled
 }
 
 /**
@@ -1143,6 +1140,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
     return mainWindow.isFocused()
   })
+  // Autotest-only: trigger native blur on the focused main window that owns this IPC.
+  ipcMain.handle(IPC.DEBUG_BLUR_WINDOW, (event) => {
+    if (process.env.ONWARD_AUTOTEST !== '1' || mainWindow.isDestroyed() ||
+      mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame || !mainWindow.isFocused()) return false
+
+    mainWindow.blur()
+    return !mainWindow.isFocused()
+  })
   ipcMain.handle(IPC.DEBUG_GET_GIT_RUNTIME_METRICS, () => {
     return gitRuntimeManager.getMetrics()
   })
@@ -1464,6 +1470,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
         ptyProcess = ptyManager.create(id, fallbackOptions)
       }
 
+      terminalOwners.set(id, mainWindow.webContents.id)
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, { stage: 'terminal-owned', terminalId: id.slice(0, 128) })
+
       // IPC data buffer: merge high-frequency PTY output into batched sends
       const dataBuffer = new TerminalDataBuffer(id, (tid, mergedData, meta) => {
         if (!mainWindow.isDestroyed()) {
@@ -1489,6 +1498,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       })
       terminalDataBuffers.set(id, dataBuffer)
       terminalBracketedPasteState.set(id, false)
+      terminalBracketedPasteCarry.delete(id)
       terminalScreenModeStates.set(id, createScreenModeState())
 
       // Apply any fast-path state that arrived before the buffer was created
@@ -1506,7 +1516,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
         // Parse OSC 9;9 CWD reports from shell integration (Windows)
         ptyManager.detectCwd(id, data)
         const bracketedPasteMode = terminalBracketedPasteState.get(id) ?? false
-        terminalBracketedPasteState.set(id, updateBracketedPasteMode(bracketedPasteMode, data))
+        terminalBracketedPasteState.set(id, updateBracketedPasteMode(id, bracketedPasteMode, data))
         // Screen-buffer-mode transitions (alt-screen / ED3 / RIS): one scan
         // per chunk, trace events only on transitions — see BUG-0001.
         const screenModeState = terminalScreenModeStates.get(id) ?? createScreenModeState()
@@ -1864,6 +1874,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     terminalFastPathState.delete(id)
     terminalOutputVisibilityState.delete(id)
     terminalBracketedPasteState.delete(id)
+    terminalBracketedPasteCarry.delete(id)
+    terminalOwners.delete(id)
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, { stage: 'terminal-released', terminalId: id.slice(0, 128) })
     terminalScreenModeStates.delete(id)
     ipcDataCounters.delete(id)
     shellIntegrationLiveness.dispose(id)
@@ -2997,6 +3010,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   // Settings storage handlers
   const settingsStorage = getSettingsStorage()
   const shortcutManager = getShortcutManager()
+  const initialSettings = settingsStorage.get()
+  windowShortcutSnapshot = initialSettings.shortcuts
+  const ownsTerminal = (id: string) => !mainWindow.isDestroyed() && terminalOwners.get(id) === mainWindow.webContents.id && ptyManager.hasLiveTerminal(id)
+  promptInputShortcuts.init(mainWindow, initialSettings.promptInput, ownsTerminal)
+  registerPromptInputHandlers(mainWindow, ownsTerminal, id => terminalBracketedPasteState.get(id) ?? false)
+  const settingsChanged = () => {
+    const next = settingsStorage.get()
+    windowShortcutSnapshot = next.shortcuts
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_SHORTCUT, { stage: 'shortcut-snapshot-refreshed' })
+    promptInputShortcuts.updateSettings(next.promptInput)
+    shortcutManager.registerFromSettings()
+    options.onSettingsChanged?.(next)
+  }
 
   // Set main window for shortcut manager
   shortcutManager.setMainWindow(mainWindow)
@@ -3012,8 +3038,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     const success = settingsStorage.save(settings)
     if (success) {
       // Re-register shortcuts when settings change
-      shortcutManager.registerFromSettings()
-      options.onSettingsChanged?.(settingsStorage.get())
+      settingsChanged()
     }
     return success
   })
@@ -3023,8 +3048,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     const success = settingsStorage.update(partial)
     if (success) {
       // Re-register shortcuts when settings change
-      shortcutManager.registerFromSettings()
-      options.onSettingsChanged?.(settingsStorage.get())
+      settingsChanged()
     }
     return success
   })
@@ -3041,7 +3065,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
 
   // Check if a shortcut conflicts with existing settings
   ipcMain.handle(IPC.SETTINGS_CHECK_SHORTCUT_CONFLICT, (_, accelerator: string, excludeKey?: string) => {
-    return shortcutManager.checkConflict(accelerator, excludeKey as keyof ShortcutConfig)
+    const existing = shortcutManager.checkConflict(accelerator, excludeKey as keyof ShortcutConfig)
+    const globalEdit = excludeKey === 'activateAndFocusPrompt'
+    const key = globalEdit ? normalizePromptShortcut(accelerator, process.platform) : null
+    const promptInput = key ? settingsStorage.get().promptInput : null
+    const selectorConflict = Boolean(key && promptInput?.targetModifier && promptTargetSlot(key, promptInput.targetModifier) !== null)
+    const actionConflict = Boolean(key && promptInput?.actions.some(action =>
+      normalizePromptShortcut(action.shortcut, process.platform) === key))
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, {
+      reason: 'shortcut-conflict-checked', globalEdit, actionConflict, selectorConflict, conflict: Boolean(existing) || actionConflict || selectorConflict
+    })
+    return existing ?? (actionConflict ? 'promptInputAction' : selectorConflict ? 'promptInputTarget' : null)
   })
 
   // Initialize shortcuts on app start
@@ -3053,13 +3087,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
  * Use before-input-event to intercept keyboard events before Chromium handles them
  */
 export function setupWindowShortcuts(mainWindow: BrowserWindow): void {
-  const settingsStorage = getSettingsStorage()
-
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (promptInputShortcuts.route(mainWindow.webContents, event, input)) return
     if (input.type !== 'keyDown') return
 
-    const settings = settingsStorage.get()
-    const shortcuts = settings.shortcuts
+    const shortcuts = windowShortcutSnapshot
+    if (!shortcuts) return
 
     // Build accelerator format
     const parts: string[] = []
@@ -3244,6 +3277,11 @@ export function cleanupIpcHandlers(): Promise<void> {
 
 async function runCleanupIpcHandlers(): Promise<void> {
   abortBackgroundWorkForQuit()
+  cleanupPromptInputHandlers()
+  windowShortcutSnapshot = null
+  terminalOwners.clear()
+  terminalBracketedPasteState.clear()
+  terminalBracketedPasteCarry.clear()
   await cleanupThemeImportHandlers()
   await cleanupThemeExportHandlers()
   safeCleanupStep('app-state-storage', () => getAppStateStorage().dispose())
@@ -3436,6 +3474,7 @@ async function runCleanupIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(IPC.DEBUG_GET_INFRA_HEALTH)
   ipcMain.removeHandler(IPC.DEBUG_GET_QUIT_ACTIVITY)
   ipcMain.removeHandler(IPC.DEBUG_FOCUS_WINDOW)
+  ipcMain.removeHandler(IPC.DEBUG_BLUR_WINDOW)
   ipcMain.removeHandler(IPC.DEBUG_GET_GIT_RUNTIME_METRICS)
   ipcMain.removeHandler(IPC.DEBUG_GET_MAIN_WORK_METRICS)
   ipcMain.removeHandler(IPC.DEBUG_GET_PERF_TRACE_INFO)

@@ -1,0 +1,381 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 OPPO -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Onward · 主题定时切换交互研究</title>
+  <style>
+    :root { color-scheme: dark; scroll-behavior: auto; --bg: #101216; --panel: #191c22; --line: #343944; --text: #edf0f5; --muted: #b0b7c4; --accent: #a8c9ff; --green: #a3d7bd; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    a { color: var(--accent); text-underline-offset: 4px; }
+    button { font: inherit; cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+    [hidden] { display: none !important; }
+    .toc { position: fixed; inset: 0 auto 0 0; width: 232px; padding: 36px 22px; background: #14171c; border-right: 1px solid var(--line); overflow-y: auto; }
+    .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 35px; font-size: 17px; letter-spacing: -.3px; }
+    .brand svg { flex-shrink: 0; color: var(--accent); }
+    .eyebrow { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: 1.8px; text-transform: uppercase; }
+    .toc a { display: block; margin: 7px 0; padding: 9px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: 13px; }
+    .toc a[aria-current="location"] { color: #e2ecff; background: #29384e; }
+    .toc small { display: block; margin-top: 34px; color: var(--muted); line-height: 1.8; }
+    main { margin-left: 232px; padding: 32px clamp(24px, 4vw, 64px) 56px; max-width: 1480px; }
+    .topline, .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    #language { background: #222731; color: var(--text); border: 1px solid #4d5769; border-radius: 20px; padding: 6px 15px; }
+    header { padding: 55px 0 24px; }
+    h1 { max-width: 900px; font-size: clamp(34px, 4.2vw, 58px); line-height: 1.18; font-weight: 650; letter-spacing: -1.5px; margin: 18px 0 22px; }
+    .lead { max-width: 790px; font-size: 18px; color: #c2c9d5; }
+    h2 { margin: 0 0 20px; font-size: 27px; font-weight: 620; letter-spacing: -.6px; line-height: 1.35; }
+    h3 { font-size: 18px; line-height: 1.45; margin: 0 0 12px; }
+    h4 { font-size: 14px; margin: 18px 0 8px; }
+    p { margin: 9px 0 14px; }
+    section { padding-top: 48px; margin-top: 18px; border-top: 1px solid var(--line); scroll-margin-top: 24px; }
+    .section-no { color: var(--accent); font: 12px/1.5 ui-monospace, monospace; display: block; margin-bottom: 10px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0; }
+    .pill { display: inline-block; padding: 3px 11px; border: 1px solid #454c5b; border-radius: 20px; color: #d1d8e4; font-size: 12px; }
+    .pill.recommended { background: #203a30; border-color: #3f6b58; color: #c6ead7; }
+    .pill.pending { color: #f0d39e; background: #342d21; border-color: #625238; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { min-width: 0; padding: 23px; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); }
+    .card.featured { border-color: #7794bc; background: #1c2531; }
+    .card p, .muted { color: var(--muted); }
+    .callout { margin: 24px 0; padding: 20px 24px; border: 1px solid #40516a; border-radius: 12px; background: #1b2532; }
+    .callout p:last-child { margin-bottom: 0; }
+    .small { font-size: 13px; }
+    .facts { margin: 0; padding-left: 20px; }
+    .facts li { margin: 8px 0; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 20px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; vertical-align: top; padding: 15px 17px; border-bottom: 1px solid var(--line); min-width: 135px; }
+    th { background: #20242c; color: #dce4f0; font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    code { color: #b4dbcd; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .flow { display: grid; gap: 10px; margin-top: 18px; }
+    .flow-box { padding: 12px 16px; border: 1px solid #424b5b; border-radius: 9px; background: #212730; font-size: 13px; }
+    .flow-arrow { text-align: center; color: #a9bfdc; line-height: 1; }
+    .option-visual { min-height: 116px; display: flex; flex-direction: column; justify-content: center; gap: 9px; padding: 16px; margin: 16px 0; border-radius: 10px; background: #10151d; }
+    .option-visual .mini-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+    .duo { height: 34px; display: flex; overflow: hidden; border-radius: 7px; }
+    .duo span { flex: 1; text-align: center; font-size: 12px; line-height: 34px; }
+    .sun { color: #493e20; background: #e8ddbc; }
+    .moon { color: #e3eaff; background: #35435e; }
+    .clock { width: 86px; height: 86px; margin: auto; border: 13px solid #d8cba4; border-right-color: #465c84; border-bottom-color: #465c84; border-radius: 50%; display: grid; place-items: center; font-size: 12px; }
+    .mock-grid { align-items: start; gap: 24px; }
+    figure { margin: 0; min-width: 0; }
+    figcaption { color: var(--muted); font-size: 12px; margin-top: 14px; }
+    .mock { background: #1c1e23; border: 1px solid #454a55; border-radius: 16px; overflow: hidden; box-shadow: 0 14px 40px #0003; min-width: 0; }
+    .mock-title { padding: 14px 18px; border-bottom: 1px solid #373c46; background: #26292f; font-size: 13px; font-weight: 600; }
+    .mock-body { padding: 20px; }
+    .mock-body h3 { font-size: 22px; margin-bottom: 6px; }
+    .mock-label { color: #bdc4d0; font-size: 12px; margin: 20px 0 8px; }
+    .mode-control { display: flex; background: #121419; padding: 4px; border: 1px solid #3c424e; border-radius: 9px; gap: 3px; margin: 18px 0; }
+    .mode-control span { flex: 1; padding: 6px 3px; border-radius: 5px; text-align: center; font-size: 12px; }
+    .mode-control .selected { background: #3c4658; color: #f7f9ff; }
+    .mode-compact { display: none; margin: 18px 0; }
+    .status { padding: 16px; border: 1px solid #4b5e78; border-radius: 11px; background: #263142; }
+    .status strong { display: block; font-size: 16px; }
+    .status p { margin: 4px 0 0; font-size: 12px; color: #ccd7e7; }
+    .timeline { display: flex; height: 23px; border-radius: 5px; overflow: hidden; margin-top: 11px; border: 1px solid #7c8595; }
+    .timeline span:nth-child(1) { width: 29.1667%; background: #566b85; }
+    .timeline span:nth-child(2) { width: 25%; background: #e4e8f0; }
+    .timeline span:nth-child(3) { width: 8.3333%; background: #d9bd78; }
+    .timeline span:nth-child(4) { width: 16.6667%; background: #e4e8f0; }
+    .timeline span:nth-child(5) { width: 20.8333%; background: #566b85; }
+    .ticks { display: flex; justify-content: space-between; font: 10px/1.6 ui-monospace, monospace; color: #bdc5d3; margin: 5px 0 11px; }
+    .legend { display: flex; gap: 6px 14px; flex-wrap: wrap; color: #c7d0df; font-size: 10px; }
+    .legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--swatch); margin-right: 5px; }
+    .settings-group { border: 1px solid #3b414e; border-radius: 10px; overflow: hidden; }
+    .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-bottom: 1px solid #3b414e; font-size: 13px; }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-row small { display: block; color: #b6bfcd; margin-top: 3px; font-size: 11px; }
+    .settings-row strong { font-weight: 550; }
+    .switch { width: 30px; height: 18px; border-radius: 12px; background: #6dac8b; flex-shrink: 0; position: relative; }
+    .switch::after { content: ""; position: absolute; width: 14px; height: 14px; right: 2px; top: 2px; background: #f8fff9; border-radius: 50%; }
+    .fake-action { display: inline-block; color: #a6caff; font-size: 12px; margin-top: 12px; }
+    .fake-select { padding: 10px 12px; border: 1px solid #4d5564; background: #2a303b; border-radius: 8px; font-size: 13px; }
+    .fake-select .row { flex-wrap: nowrap; }
+    .mini-preview { padding: 18px; border: 1px solid #586477; background: #2e3440; border-radius: 9px; margin: 14px 0; font: 12px/1.9 ui-monospace, monospace; }
+    .mini-preview .keyword { color: #b48ead; }
+    .mini-preview .string { color: #a3be8c; }
+    .mini-preview .comment { color: #b5c5de; }
+    .time-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .time-value { border: 1px solid #50596b; padding: 10px 12px; border-radius: 8px; background: #292f39; font: 23px/1.5 ui-monospace, monospace; }
+    .day-row { display: flex; justify-content: space-between; gap: 5px; }
+    .day-row span { flex: 1; text-align: center; min-width: 0; border-radius: 20px; background: #3e506d; color: #f3f6ff; padding: 7px 2px; font-size: 11px; }
+    .next-day { color: #ddc99d; font-size: 11px; margin: 4px 0; }
+    .mock-footer { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #383f4c; padding-top: 15px; margin-top: 20px; }
+    .fake-button { border-radius: 7px; padding: 6px 16px; background: #373e4d; font-size: 12px; }
+    .fake-button.primary { background: #3b5c8d; color: #f5f8ff; }
+    .override { margin-top: 22px; padding: 18px; border-radius: 10px; border: 1px solid #655a78; background: #2b2535; }
+    .override p { color: #d3c5e6; margin: 4px 0; }
+    .steps { counter-reset: step; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }
+    .step { counter-increment: step; padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+    .step::before { content: "0" counter(step); display: block; color: var(--accent); font: 13px/1.7 ui-monospace, monospace; margin-bottom: 8px; }
+    .step p { color: var(--muted); font-size: 13px; }
+    .source-list { padding-left: 23px; font-size: 13px; }
+    .source-list li { margin: 13px 0; overflow-wrap: anywhere; }
+    .source-note { color: var(--muted); font-size: 12px; }
+    footer { border-top: 1px solid var(--line); margin-top: 50px; padding-top: 28px; color: var(--muted); font-size: 12px; scroll-margin-top: 24px; }
+    footer h2 { font-size: 20px; }
+    @media (max-width: 1140px) { .three { grid-template-columns: 1fr; } .option-visual { min-height: 90px; } }
+    @media (max-width: 960px) { .grid, .steps { grid-template-columns: 1fr; } .mock { max-width: 470px; margin-inline: auto; } }
+    @media (max-width: 720px) { .toc { display: none; } main { margin: 0; padding: 20px; } header { padding-top: 30px; } h1 { letter-spacing: -.7px; } .lead { font-size: 16px; } section { padding-top: 32px; } }
+    @media (max-width: 370px) { main { padding: 14px; } .mock-body { padding: 14px; } .mode-control { display: none; } .mode-compact { display: block; } .time-value { padding: 9px 6px; font-size: 20px; } .card { padding: 18px; } }
+    @media print { .toc, #language { display: none; } main { margin: 0; } .card, figure { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <nav class="toc" aria-label="文档目录" data-en-label="Document sections">
+    <div class="brand"><svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true"><circle cx="14" cy="14" r="11" stroke="currentColor" stroke-width="1.5"/><path d="M14 7v7l5 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><strong>ONWARD</strong></div>
+    <div class="eyebrow">INTERACTION STUDY / 01</div>
+    <a href="#intent" data-en="01 · Intent & current state">01 · 需求与当前状态</a>
+    <a href="#research" data-en="02 · Product research">02 · 产品调研</a>
+    <a href="#options" data-en="03 · Interaction options">03 · 交互方案对比</a>
+    <a href="#proposal" data-en="04 · Recommended layout">04 · 推荐界面</a>
+    <a href="#behavior" data-en="05 · Behavior contract">05 · 行为与边界</a>
+    <a href="#delivery" data-en="06 · Engineering & acceptance">06 · 落地与验收</a>
+    <a href="#decisions" data-en="07 · Decisions to make">07 · 待确认决策</a>
+    <a href="#sources" data-en="08 · Sources & limits">08 · 来源与调研边界</a>
+    <a href="#named-timeline" data-en="09 · Named, editable regions">09 · 有名称、可编辑的时段</a>
+    <a href="#history" data-en="10 · Metadata & history">10 · 文档记录</a>
+    <small data-en="Research and concept diagrams. Recommended interaction approved; macOS implementation validated.">研究与概念图。推荐交互已确认，macOS 实现验证通过。</small>
+  </nav>
+  <main>
+    <div class="topline"><span class="eyebrow">PRODUCT DESIGN RESEARCH · 2026.10.19</span><button type="button" id="language" aria-label="Switch to English">English</button></div>
+    <header>
+      <span class="pill recommended" data-en="Approved direction · macOS acceptance passed">推荐方向已确认 · macOS 验收通过</span>
+      <h1 data-en="A theme for every part of your day.">让主题，跟着一天的节奏。</h1>
+      <p class="lead" data-en="Choose any theme for a recurring time range. The quality bar is a schedule you understand at a glance, can temporarily override, and can trust to resume correctly.">为预设时间段选择任意主题。体验的关键是：一眼看懂当前安排，随时临时改变，并且知道何时自动恢复。</p>
+      <div class="pills"><span class="pill" data-en="Any saved theme">任意已保存主题</span><span class="pill" data-en="Overnight ranges">跨午夜时间段</span><span class="pill" data-en="Repeat by weekday">按星期重复</span><span class="pill" data-en="Temporary overrides">临时切换</span></div>
+      <div class="callout"><strong data-en="Current direction: a named daily agenda with direct theme editing, plus recurring rules.">当前方向：直接显示主题名、点击即可更换的今日安排，配合重复规则。</strong><p data-en="The original color-only strip was not clear or actionable enough. The October 20 revision puts the name, exact time and editing entry together. Earlier concepts below are preserved as research history.">原来的纯色细条不够明确，也不能直接操作。10 月 20 日修订把主题名、准确时间和编辑入口放在一起。下方早期概念图保留为研究历史。</p><a href="#named-timeline" data-en="See the revised interaction →">查看本轮交互修订 →</a></div>
+    </header>
+
+    <section id="intent">
+      <span class="section-no">01 / CONTEXT</span><h2 data-en="The requirement is a recurring theme schedule.">需求是可重复的「主题时间表」</h2>
+      <div class="grid three">
+        <article class="card"><h3 data-en="A comfortable day">一天中的舒适度</h3><p data-en="Use Light Modern outside scheduled ranges, and Nord from 19:00 to 07:00 the next day.">其他时间用 Light Modern，19:00 至次日 07:00 用 Nord。</p></article>
+        <article class="card"><h3 data-en="Different work rhythms">不同的工作节奏</h3><p data-en="Give weekdays and weekends different ranges. A schedule can use two dark themes or an imported theme; light/dark is not the rule model.">工作日与周末可以不同；也可以在两个深色主题或导入主题之间切换，规则不受明暗分类限制。</p></article>
+        <article class="card"><h3 data-en="An occasional exception">偶尔改变主意</h3><p data-en="Temporarily choose a brighter theme during a late-night meeting, then let the saved schedule resume at a clearly stated time.">晚间开会临时换浅色主题，界面明确告诉我何时恢复已保存的安排。</p></article>
+      </div>
+      <div class="grid" style="margin-top:18px">
+        <article class="card"><h3 data-en="Current · verified in this repository">当前 · 已核对仓库</h3><div class="flow"><div class="flow-box" data-en="Mode: Follow System / Manual">模式：跟随系统 / 手动选择</div><div class="flow-arrow">↓</div><div class="flow-box" data-en="Resolve a named theme → app / terminal / editor">解析主题 → 应用 / 终端 / 编辑器</div><div class="flow-arrow">↓</div><div class="flow-box" data-en="Click a theme card → persist Manual mode">点击主题卡片 → 保存为手动模式</div></div><p class="small" data-en="There are featured previews, imported themes, light/dark pairing and transactional customization. The Settings panel is 300–600 px wide.">已具备主题预览、导入主题、浅深色配对和可取消的自定义草稿。设置面板宽度为 300–600px。</p></article>
+        <article class="card featured"><h3 data-en="Proposed · pending review">建议 · 待评审</h3><div class="flow"><div class="flow-box" data-en="Mode: Manual / Follow System / Scheduled">模式：手动 / 跟随系统 / 定时</div><div class="flow-arrow">↓</div><div class="flow-box" data-en="Temporary choice → active range → outside-ranges theme">临时选择 → 当前时间段 → 其他时间主题</div><div class="flow-arrow">↓</div><div class="flow-box" data-en="One resolved palette, plus a visible reason and next change">统一主题结果 + 可见的原因与下次切换</div></div><p class="small" data-en="An explicit outside-ranges theme makes gaps predictable. Theme cards used for a temporary choice must not silently disable the schedule.">显式设置「其他时间」让空档可预测。用于临时选择的主题卡片需要保留时间表，并显示恢复时间。</p></article>
+      </div>
+      <p class="small muted">Code: <code>src/types/theme.d.ts:67</code> · <code>src/components/Settings/ThemeSelector.tsx:368,535</code> · <code>src/themes/theme-engine.ts:202</code> · <code>docs/themes.md:8–23,40</code></p>
+    </section>
+
+    <section id="research">
+      <span class="section-no">02 / EVIDENCE</span><h2 data-en="Borrow the interaction model, with evidence.">从成熟产品提炼交互模型</h2>
+      <p data-en="The table separates documented product behavior from our design interpretation. Onward-specific overlap and override rules below are proposals, not claims about Apple’s undocumented behavior.">下表区分官方可验证行为与本项目的设计推导。后文的重叠、临时覆盖规则属于 Onward 的建议方案，不代表 Apple 未公开的内部规则。</p>
+      <div class="table-wrap"><table><thead><tr><th data-en="Product / source">产品 / 来源</th><th data-en="Documented behavior">已验证行为</th><th data-en="Design interpretation for Onward">对 Onward 的启发</th></tr></thead><tbody id="evidence-rows">
+        <tr><td><a href="#source-ios-appearance">iPhone · Dark Mode</a></td><td data-en="In the iOS 26 guide: Display & Brightness → Automatic → Options → Sunset to Sunrise or Custom Schedule. This schedules light/dark appearance.">iOS 26 指南：显示与亮度 → 自动 → 选项 → 日落到日出 / 自定时段。该入口调度的是浅色 / 深色外观。</td><td data-en="Excellent simplicity for a daily two-state schedule. It is not evidence for an arbitrary multi-theme scheduler.">每天两态切换可以非常简洁；这不能证明 Apple 系统外观已有任意多主题调度。</td></tr>
+        <tr><td><a href="#source-focus">Apple · Focus</a></td><td data-en="iPhone supports Time, Location and App schedules. The macOS 26 guide explicitly specifies start time, end time, repeat weekdays, editing and a switch to stop using a schedule.">iPhone 支持时间、地点、App 计划。macOS 26 指南明确列出开始时间、结束时间、重复星期、编辑计划及停用开关。</td><td data-en="The closest fit: an understandable range with its own enable state. Keep the theme action adjacent to the time condition.">最接近本需求：一条可理解的时间段配一个启用状态。把「何时」与「用哪个主题」放在同一条规则里。</td></tr>
+        <tr><td><a href="#source-focus-temporary">Focus · temporary activation</a></td><td data-en="iPhone offers durations such as one hour or until leaving a location. Mac also supports until a Calendar event ends. The docs do not establish a theme-restoration policy.">iPhone 提供一小时、离开此位置前等临时启用方式；Mac 还支持日历事件结束前。文档没有由此定义主题恢复规则。</td><td data-en="Give temporary choices an understandable endpoint. Our proposed “until the next range boundary” is a deliberate Onward contract.">临时选择要有可理解的终点。「到下一个时段边界」是本项目需要主动确定的契约。</td></tr>
+        <tr><td><a href="#source-mac-appearance">macOS · Auto appearance</a></td><td data-en="The macOS 26 guide says Auto follows the Night Shift schedule and waits until the Mac has been idle for at least one minute before switching.">macOS 26 指南说明：Auto 按 Night Shift 计划变化，并等待 Mac 空闲至少一分钟后切换。</td><td data-en="Timing itself is part of interaction quality. Onward should preserve active work; adopting any idle-based delay needs a separate decision because it changes schedule predictability.">切换时机本身也是交互品质。Onward 要保护正在进行的工作；是否延迟至空闲需另行决策，因为它会改变准点预期。</td></tr>
+        <tr><td><a href="#source-focus-filters">WWDC22 · Focus filters</a></td><td data-en="Apple explicitly gives app themes and layouts as examples of behavior a Focus filter can customize; Calendar demonstrates a visible filtered state and a toggle.">Apple 明确把 App 主题、布局列为 Focus filter 的应用场景；Calendar 示例展示了筛选状态与切换入口。</td><td data-en="An automatic context should explain what it changed and provide user control. Direct OS Focus integration would be a separate platform-specific feature.">自动情境需要解释自己改变了什么，并提供控制入口。直接接入系统 Focus 则是另一个平台相关功能。</td></tr>
+        <tr><td><a href="#source-vscode">VS Code</a></td><td data-en="OS color-scheme detection maps to separately selected light, dark and high-contrast themes. The theme picker previews themes with keyboard navigation.">监听系统外观；可分别指定浅色、深色与高对比度主题。主题选择器支持键盘浏览预览。</td><td data-en="Keep the activation condition separate from the chosen palette; reuse recognizable theme previews.">切换条件与主题内容分别配置；沿用用户熟悉的主题预览。</td></tr>
+        <tr><td><a href="#source-jetbrains">JetBrains IDEs</a></td><td data-en="Sync with OS has settings for the light/dark UI themes and editor schemes. OS day/night switching can drive the IDE.">Sync with OS 可配置映射的界面主题与编辑器配色；系统日夜切换可带动 IDE。</td><td data-en="Follow System remains a useful simple mode. App-specific schedules are a separate user choice.">保留简单的「跟随系统」入口；应用自己的时间表是独立选择。</td></tr>
+        <tr><td><a href="#source-powertoys">PowerToys Light Switch</a></td><td data-en="Supports fixed hours, sunset/sunrise, Follow Night Light and Off; also offers a manual toggle shortcut.">支持固定时间、日落日出、跟随 Night Light、关闭计划，以及手动切换快捷键。</td><td data-en="Fixed times meet the core need without location setup. Sunset adds a distinct location-dependent product decision.">固定时间可直接满足核心需求。日落日出引入地点依赖，应作为独立的后续决策。</td></tr>
+        <tr><td><a href="#source-adm">Auto Dark Mode</a></td><td data-en="Its official feature list includes postponing or delaying the next switch, and avoiding switches while gaming.">官方功能列表包含延后下一次切换，以及游戏期间避免切换。</td><td data-en="A predictable exception is part of good automation. Onward can make a temporary theme choice easy and visible.">好的自动化要容纳临时例外；临时主题需要容易操作、状态可见。</td></tr>
+      </tbody></table></div>
+      <div class="grid">
+        <article class="card"><h3 data-en="Apple HIG · respect the system">Apple HIG · 尊重系统</h3><p data-en="Dark Mode guidance advises against an app-specific appearance-mode setting. Onward already has user-selected named themes and the user explicitly requests scheduling, so the intentional adaptation is to keep System as the default for new profiles and make Scheduled an opt-in mode.">Dark Mode 指南建议避免额外的 App 外观模式设置。Onward 已有命名主题选择，且本次需求明确要求定时，因此这里的有意适配是：新用户仍默认跟随系统，定时由用户主动选择。</p><a class="small" href="#source-hig">Dark Mode / Settings</a></article>
+        <article class="card"><h3 data-en="Apple HIG · reveal only what is needed">Apple HIG · 按需呈现</h3><p data-en="Pickers should honor locale, allow keyboard input, and stay close to the value being edited. Disclosure controls can keep advanced options collapsed. Accessibility guidance requires more than color alone to communicate state.">选择器适配地区格式、支持键盘输入，并靠近被编辑值；展开控件可收起高级选项；无障碍指导要求状态表达不能只依赖颜色。</p><p class="small" data-en="Applied here: inline time fields, a focused rule editor, text-based status, and a supplementary overview rather than mandatory dragging.">落在本方案中：就地时间字段、专注的规则编辑区、文字状态，以及辅助概览而非强制拖拽。</p><a class="small" href="#source-hig">Pickers / Disclosure / Accessibility</a></article>
+      </div>
+      <div class="callout"><strong data-en="A real trust failure to learn from">值得借鉴的真实信任问题</strong><p data-en="A PowerToys 0.95.0 user report describes automatic switching being enabled after an update and overriding a manually selected theme. This is a historical report, not a claim about current versions. For Onward, scheduling should be an explicit opt-in, with a visible reason for every effective theme.">PowerToys 0.95.0 的用户报告描述：升级后自动切换被启用，覆盖了手动选择的主题。这是历史个案，不能当作当前版本结论。对 Onward 的启发是：定时应由用户主动启用，当前主题的来源应始终可解释。</p><a class="small" href="https://github.com/microsoft/PowerToys/issues/42577">PowerToys issue #42577 · 2025-10-18</a></div>
+    </section>
+
+    <section id="options">
+      <span class="section-no">03 / OPTIONS</span><h2 data-en="Three interaction models, different trade-offs.">三种交互方式，三种取舍</h2>
+      <div class="grid three">
+        <article class="card"><span class="pill">A</span><h3 data-en="Two-theme day / night">日间 / 夜间双主题</h3><div class="option-visual"><div class="duo"><span class="sun">07:00–19:00</span><span class="moon">19:00–07:00</span></div><div class="mini-line"><span>Light Modern</span><span>Nord</span></div></div><p data-en="Best for a simple daily pair: very few controls and no gaps or overlap.">适合每天固定两套主题：控件最少，天然没有空档与重叠。</p><p data-en="Trade-off: a third theme or weekday-specific ranges outgrows the model. Good as a starter template.">代价：第三套主题、工作日专属时间段会突破模型。适合作为入门模板。</p></article>
+        <article class="card featured"><span class="pill recommended" data-en="B · Recommended">B · 推荐</span><h3 data-en="Time-range list">时间段列表</h3><div class="option-visual"><div class="mini-line"><span>13:00–15:00</span><span>Solarized Light</span></div><div class="mini-line"><span>19:00–07:00 +1</span><span>Nord</span></div><div class="mini-line"><span data-en="Otherwise">其他时间</span><span>Light Modern</span></div></div><p data-en="Fits the user’s language: choose a theme for a period. Supports several themes, repeat days and overnight ranges.">最贴合「某段时间用哪个主题」的表达。支持多主题、星期重复与跨午夜。</p><p data-en="Trade-off: gaps, overlaps and manual overrides need explicit rules. A small overview makes the result legible.">代价：必须明确空档、重叠和手动覆盖规则。用小型概览帮助理解结果。</p></article>
+        <article class="card"><span class="pill">C</span><h3 data-en="Draggable 24-hour dial">可拖拽的 24 小时时钟</h3><div class="option-visual"><div class="clock">24 h</div></div><p data-en="Visually expressive for one start/end pair; makes an overnight interval feel continuous.">单组起止时间很有表现力；跨夜时间也能表达为连续的一段。</p><p data-en="Trade-off: precise mouse input, multiple ranges, repeat days and keyboard access become harder. Use a timeline for overview first.">代价：鼠标精确输入、多时间段、星期差异和键盘操作更复杂。优先把时间轴用作概览。</p></article>
+      </div>
+      <p class="small muted" data-en="These are qualitative design judgments, not measured usability scores. A short task-based usability check is still needed before calling the design Apple-quality.">以上是定性设计判断，不是实测可用性评分。是否真正达到高水准，还需要用具体任务检验理解成本与完成质量。</p>
+    </section>
+
+    <section id="proposal">
+      <span class="section-no">04 / CONCEPT</span><h2 data-en="A quiet overview. A focused editor.">概览足够安静，编辑足够专注</h2>
+      <p data-en="Static concept diagrams below. Example time: 20:30. They illustrate pending behavior choices; controls do not save app settings.">下方为静态概念图，示例当前时间为 20:30。用于讨论待确认的行为，图中控件不会保存应用设置。</p>
+      <div class="grid mock-grid">
+        <figure>
+          <div class="mock"><div class="mock-title" data-en="Settings / Appearance">设置 / 外观</div><div class="mock-body">
+            <h3 data-en="Theme">主题</h3><div class="mode-control"><span data-en="Manual">手动</span><span data-en="System">跟随系统</span><span class="selected" data-en="Scheduled">定时</span></div><div class="mode-compact"><div class="mock-label" data-en="Theme mode">切换方式</div><div class="fake-select row"><span data-en="Scheduled">定时</span><span aria-hidden="true">⌄</span></div></div>
+            <div class="status"><strong data-en="Nord · Scheduled">Nord · 按时间表</strong><p data-en="Tomorrow at 07:00 → Light Modern">明天 07:00 → Light Modern</p></div>
+            <div class="mock-label" data-en="Today’s schedule · overview">今日安排 · 概览</div>
+            <div class="timeline" role="img" aria-label="今日：Nord 00–07；Light Modern 07–13；Solarized Light 13–15；Light Modern 15–19；Nord 19–24" data-en-label="Today: Nord 00–07; Light Modern 07–13; Solarized Light 13–15; Light Modern 15–19; Nord 19–24"><span></span><span></span><span></span><span></span><span></span></div>
+            <div class="ticks"><span>00:00</span><span>12:00</span><span>24:00</span></div><div class="legend"><span style="--swatch:#e4e8f0">Light Modern</span><span style="--swatch:#d9bd78">Solarized Light</span><span style="--swatch:#566b85">Nord</span></div>
+            <div class="mock-label" data-en="Time ranges">时间段</div><div class="settings-group"><div class="settings-row"><div><strong>13:00 – 15:00</strong><small data-en="Every day · Solarized Light">每天 · Solarized Light</small></div><span class="switch" aria-hidden="true"></span></div><div class="settings-row"><div><strong data-en="19:00 – 07:00 next day">19:00 – 次日 07:00</strong><small data-en="Every day · Nord · Active">每天 · Nord · 生效中</small></div><span class="switch" aria-hidden="true"></span></div></div>
+            <span class="fake-action" data-en="+ Add Time Range">＋ 添加时间段</span>
+            <div class="mock-label" data-en="Outside these ranges">其他时间</div><div class="fake-select"><div class="row"><span>Light Modern</span><span aria-hidden="true">⌄</span></div></div>
+            <p class="small muted" data-en="Uses your device’s local time.">使用设备当前的本地时间。</p><span class="fake-action" data-en="Temporarily Change Theme…">临时切换主题…</span>
+          </div></div>
+          <figcaption data-en="The compact overview answers three questions: what is active, why, and what happens next. Rules stay in a readable list; the timeline is supplementary.">简洁概览回答三个问题：现在是什么、为什么、接下来是什么。列表是主要操作入口，时间轴是辅助信息。</figcaption>
+        </figure>
+        <figure>
+          <div class="mock"><div class="mock-title" data-en="Edit Time Range">编辑时间段</div><div class="mock-body">
+            <div class="mock-label" data-en="Theme">使用主题</div><div class="fake-select"><div class="row"><span>Nord</span><span aria-hidden="true">⌄</span></div></div>
+            <div class="mini-preview" aria-hidden="true"><span class="comment">// A quieter evening</span><br><span class="keyword">const</span> workspace = {<br>&nbsp; theme: <span class="string">'Nord'</span><br>};</div>
+            <div class="time-fields"><div><div class="mock-label" data-en="Starts">开始</div><div class="time-value">19:00</div></div><div><div class="mock-label" data-en="Ends">结束</div><div class="time-value">07:00</div><div class="next-day" data-en="Next day">次日</div></div></div>
+            <div class="mock-label" data-en="Repeat · Every day">重复 · 每天</div><div class="day-row"><span data-en="M">一</span><span data-en="T">二</span><span data-en="W">三</span><span data-en="T">四</span><span data-en="F">五</span><span data-en="S">六</span><span data-en="S">日</span></div>
+            <div class="callout small" data-en="Every day, from 19:00 to 07:00 the next day, use Nord.">每天 19:00 至次日 07:00，使用 Nord。</div>
+            <p class="small muted" data-en="A theme preview stays inside this editor. Saving applies the range if it is currently active.">主题预览只在编辑区展示。保存后，若当前处于该时段则立即生效。</p>
+            <div class="mock-footer"><span class="fake-button" data-en="Cancel">取消</span><span class="fake-button primary" data-en="Save">保存</span></div>
+          </div></div>
+          <figcaption data-en="An in-panel detail editor suits the existing narrow Settings surface. Desktop time fields support typing and arrow keys. A natural-language summary confirms overnight meaning.">面板内详情页适配现有窄设置区域。桌面时间输入支持键入与方向键；自然语言摘要确认跨夜含义。</figcaption>
+          <div class="override"><span class="eyebrow" data-en="Another state · temporary choice">另一种状态 · 临时选择</span><p><strong data-en="Dracula · Until tomorrow at 07:00">Dracula · 临时至明天 07:00</strong></p><p class="small" data-en="Your time ranges are saved. Resume Schedule / Use Manually">时间段已保留。恢复定时 / 改为手动</p></div>
+        </figure>
+      </div>
+      <div class="steps">
+        <div class="step"><h3 data-en="Choose Scheduled">选择「定时」</h3><p data-en="First use shows an empty state with Add Time Range and an optional night template. The outside-ranges theme is shown explicitly.">首次显示空态，提供「添加时间段」和可选的夜间模板；明确显示其他时间使用的主题。</p></div>
+        <div class="step"><h3 data-en="Choose theme + time">选择主题与时间</h3><p data-en="Theme, start, end and repeat days. Every day is the initial repeat choice; a rule name is optional rather than required.">选择主题、起止时间、重复日期。默认每天，不强迫命名；跨午夜直接标注「次日」。</p></div>
+        <div class="step"><h3 data-en="Save and understand">保存并看懂结果</h3><p data-en="Show the active rule and next transition. Cancel/Escape discards the draft. The editor returns focus to the originating control.">展示当前生效规则与下一次切换。取消 / Escape 放弃草稿，返回后恢复到原入口焦点。</p></div>
+      </div>
+      <div class="callout"><strong data-en="The quality details">决定完成度的细节</strong><p data-en="Use color + theme names + an active label, not color alone. Give time fields locale-aware 12/24-hour display, full accessible weekday names, visible focus and keyboard operation. At 300 px, use a labeled mode dropdown and stacked fields if needed. Keep the timeline optional and non-draggable in the first design. Theme changes must preserve Prompt focus, drafts, terminal sessions and editor state.">主题颜色同时配名称与「生效中」文字；时间字段适配系统 12/24 小时制，星期按钮提供完整的无障碍名称、可见焦点与键盘操作。300px 窄面板可改用有标签的模式下拉框，必要时上下排列字段。第一版时间轴只作概览。切换时要保留 Prompt 焦点、草稿、终端会话与编辑器状态。</p></div>
+    </section>
+
+    <section id="behavior">
+      <span class="section-no">05 / CONTRACT</span><h2 data-en="The rules that make automation trustworthy.">让自动切换可信的行为规则</h2>
+      <p class="muted" data-en="The user approved proceeding with the recommended combination on 2026-10-19: recurring ranges, an explicit fallback, and temporary choices through the next boundary. The table records the original rationale; the implementation contract is documented in docs/themes.md.">用户于 2026-10-19 回复 go，同意按推荐组合推进：重复时间段、显式空档主题、临时选择保持到下一时段边界。下表保留原方案依据；实现契约记录于 docs/themes.md。</p>
+      <div class="table-wrap"><table><thead><tr><th data-en="Situation">场景</th><th data-en="Recommended contract">建议行为</th><th data-en="Why / trade-off">原因 / 代价</th></tr></thead><tbody>
+        <tr><td data-en="Outside all ranges">未命中时间段</td><td data-en="Use an explicitly chosen outside-ranges theme. On first setup, prefill the current effective theme visibly.">使用显式指定的「其他时间」主题；首次可预填当前生效主题，并展示出来。</td><td data-en="Predictable and simple. Following System outside ranges is an alternative, but adds another live cause of change.">确定、简单。另一选项是其他时间跟随系统，但会多一个动态切换来源。</td></tr>
+        <tr><td data-en="Two ranges overlap">时间段重叠</td><td data-en="Block saving/enabling an overlapping range with an inline message identifying the other range, date pattern and conflicting time. Adjacent boundaries are allowed.">保存或启用时，行内指出与哪条规则、哪些日期、哪个时段冲突；允许首尾相接。</td><td data-en="No invisible priority order. The cost is requiring the user to adjust a range; disabled rules may remain stored.">避免隐藏优先级。代价是用户需要调整时间；已关闭规则可以保留。</td></tr>
+        <tr><td data-en="Overnight weekdays">跨夜与星期</td><td data-en="Repeat days refer to the start day. Mon–Fri 19:00–07:00 includes Friday night through Saturday morning. Show “next day.” Start is inclusive, end exclusive.">星期按开始日计算：周一至周五 19:00–07:00 包含周五晚到周六早。显示「次日」；包含开始、不包含结束。</td><td data-en="Matches the whole evening as one occurrence. Start = end is an error, not a hidden all-day shortcut.">把一整晚理解为同一次安排。开始等于结束时报错，避免暗含「全天」语义。</td></tr>
+        <tr><td data-en="Manual choice while scheduled">定时期间手动选主题</td><td data-en="A clearly labeled temporary choice lasts until the next enabled range starts or ends, whichever is sooner. Show an exact date/time. Resume Schedule clears it; Manual mode is the explicit permanent exit.">明确的「临时切换」保持到下一个已启用时段的开始或结束，以较早者为准，并显示具体日期时间。「恢复定时」立即取消覆盖；「手动」明确永久退出。</td><td data-en="Preserves the user’s schedule and avoids immediate snap-back. With no enabled ranges, show the outside-ranges theme and guide the user to add a range or choose Manual.">保留安排，也避免立刻跳回。没有启用规则时显示其他时间主题，并引导添加规则或改为手动。</td></tr>
+        <tr><td data-en="Schedule edited during an override">临时覆盖期间修改时间表</td><td data-en="On saving a schedule change, clear the temporary override and recompute now. Preview this effect beside Save when applicable.">保存时间表变更时结束临时覆盖，按新安排重新计算；适用时在保存按钮旁预告这一效果。</td><td data-en="Avoids a stale resume time. Alternative: keep a fixed expiry, which requires more explanatory state.">避免恢复时间与新规则不一致。另一个选择是固定原恢复时间，但需更多状态解释。</td></tr>
+        <tr><td data-en="Restart / resume / all windows closed">重启 / 唤醒 / 关闭所有窗口</td><td data-en="Resolve the theme for the current time on launch/resume; do not replay missed transitions. A temporary override should retain its explicit expiry across app restart and expire on time.">启动、唤醒时使用此刻对应的主题，不补播错过的切换。临时覆盖建议带明确到期时间跨应用重启保留，到期自动失效。</td><td data-en="Prevents the wrong first frame and surprising restart resets. Requires a reviewed persistence contract and consistent native/preload/renderer resolution.">避免错误首屏与重启后意外变色。需要评审持久化契约，并统一原生窗口、preload 与 Renderer 的结果。</td></tr>
+        <tr><td data-en="Time zone / daylight saving">时区 / 夏令时</td><td data-en="Schedules follow the device’s local wall clock. Re-evaluate after clock/time-zone changes. For skipped or repeated hours, derive the current range from local time instead of replaying every edge.">规则跟随设备本地钟表时间；时钟、时区改变后重新判断。夏令时跳过或重复某小时，按当前本地时间判断，不逐条补触发。</td><td data-en="Matches a daily routine while travelling. Next-transition and temporary-expiry behavior on DST changes needs explicit acceptance cases before implementation.">更贴合出差时的日常作息。夏令时中的下一次切换及临时覆盖到期，需在实现前列出明确验收用例。</td></tr>
+        <tr><td data-en="Theme editing / save failure">主题编辑 / 保存失败</td><td data-en="Keep an existing full-app color-customization draft pinned. On Save/Cancel, resolve the current schedule again. A new range’s theme picker uses a local preview. Failed saves keep the draft and last acknowledged schedule.">现有全局调色草稿保持预览；保存或取消后按当下时间重新解析。新增时段的选主题采用局部预览。保存失败保留草稿及上次成功保存的时间表。</td><td data-en="A timed transition cannot disrupt a color edit or make a failed save look successful.">定时事件不能打断调色，也不能让保存失败看起来已经生效。</td></tr>
+        <tr><td data-en="Unavailable theme / switching off">主题不可用 / 关闭定时</td><td data-en="If a referenced theme is missing, use the outside-ranges theme and mark the affected rule for repair. Changing mode retains saved ranges. All ranges disabled means outside-ranges theme.">引用主题不可用时用其他时间主题，并标注对应规则待修复；切换模式保留已配置时间段；全部规则关闭时使用其他时间主题。</td><td data-en="Recoverable with a visible explanation. A corrupt outside-ranges reference also needs a defined built-in fallback.">可恢复且原因可见；其他时间主题自身损坏时，还需要明确内置兜底。</td></tr>
+      </tbody></table></div>
+      <p class="small" data-en="The first release candidate is fixed local times + repeat weekdays + any saved theme. Sunrise/sunset, location/app triggers, calendar exceptions and cross-device syncing each add a separate product contract and can be evaluated later.">首版候选范围：固定本地时间 + 按星期重复 + 任意已保存主题。日落日出、地点 / 应用触发、节假日例外、跨设备同步，各自需要独立产品契约，可后续评估。</p>
+    </section>
+
+    <section id="delivery">
+      <span class="section-no">06 / DELIVERY</span><h2 data-en="Fit the existing theme system, and prove the experience.">接入现有主题体系，并验证真实体验</h2>
+      <div class="grid">
+        <article class="card"><h3 data-en="Integration direction · pending review">集成方向 · 待评审</h3><p data-en="The existing resolver is shared by native window setup, preload first paint and React. A small, pure time-range decision can feed this pipeline. A single lifecycle owner should handle time boundaries and resume/clock-change reconciliation; renderer work stays focused on input and applying the palette.">现有解析器同时服务原生窗口、preload 首屏与 React。建议让小型纯函数的时间段判定接入这条链路，由一个生命周期管理入口处理时刻边界、唤醒与时钟变化；Renderer 负责输入和配色应用。</p><p data-en="A main-process owner is a candidate because background renderer timers can be throttled. IPC, expiry persistence and timer semantics require review after the interaction contract is agreed. This small decision alone does not justify a new Worker.">主进程统一管理是候选方向，可避免依赖后台 Renderer 定时器。交互契约确认后，再评审 IPC、覆盖到期持久化与计时语义；如此小的判定无需单独增加 Worker。</p><p class="small">Refs: <code>electron/main/index.ts:657,693,962</code> · <code>electron/preload/theme-bootstrap.ts:18</code> · <code>src/contexts/SettingsContext.tsx:167</code></p></article>
+        <article class="card"><h3 data-en="Trace evidence planned for implementation">实现阶段的诊断证据计划</h3><p data-en="Trace schedule entry/exit, save/validation/rollback, temporary override start/end, clock reconciliation, decision publication/reception and actual theme application. Report only bounded IDs/reasons, never imported names or user content.">记录定时启停、保存 / 校验 / 回滚、临时覆盖开始 / 结束、时钟校准、决策发送 / 接收与实际应用。只带有界标识与原因，不记录导入名称或用户内容。</p><p data-en="Reuse the existing theme-application spans. Register additional event names and update infra/trace.md before instrumentation. First-frame and native/renderer mismatches are part of the acceptance surface.">复用已有主题应用耗时事件；新增事件需先登记并更新 infra/trace.md。首屏和原生 / Renderer 主题不一致也属于验收范围。</p><p class="small">Index: <code>infra/trace.md:804–831</code></p></article>
+      </div>
+      <div class="callout"><strong data-en="Runner discovery result">已发现的相邻测试入口</strong><p data-en="test/README.md maps this surface to run-themes, run-themes-draft, run-themes-visual, run-themes-persistence and run-themes-latency. Extend the overlapping suites; only add an independent runner if setup or timeout scope requires it.">test/README.md 已将该功能面映射到 run-themes、run-themes-draft、run-themes-visual、run-themes-persistence、run-themes-latency。优先扩展相邻测试；只有独立初始化或超时范围确有必要才拆新 runner。</p></div>
+      <div class="grid">
+        <article class="card"><h3 data-en="Unit coverage · deterministic logic">单元层 · 确定性逻辑</h3><ul class="facts small"><li data-en="Same-day and overnight intervals; exact boundaries; week wrap; Friday night into Saturday; all days disabled.">同日 / 跨夜、精确边界、跨周、周五晚到周六、无启用日期。</li><li data-en="Overlap validation including cross-midnight intersections; adjacent ranges; equal start/end; missing themes; invalid stored values.">跨午夜重叠、首尾相接、起止相等、主题缺失、非法存储值。</li><li data-en="Outside-ranges resolution; override expiry; mode changes; migration from existing manual/system settings without enabling scheduling.">空档主题、临时覆盖到期、模式变更、旧手动 / 系统设置迁移且不自动开启定时。</li><li data-en="Inject a clock and zone: leap/date boundaries, forward/backward clock changes, DST gaps/repeats, and next-transition calculation.">注入时钟与时区：日期边界、时钟前拨 / 后拨、夏令时缺失 / 重复小时与下次切换计算。</li></ul></article>
+        <article class="card"><h3 data-en="Autotest coverage · real user behavior">自动化层 · 真实用户体验</h3><ul class="facts small"><li data-en="Common paths: create/edit/toggle/delete a range, Save/Cancel/Escape, no premature global preview, visible current/next reason, temporary choice and resume.">常见路径：增改启停删除、保存 / 取消 / Escape、编辑不提前全局变色、当前 / 下次原因、临时切换与恢复。</li><li data-en="Frequent paths: repeated mode/rule changes and boundary crossings with five correctness trials; preserve Prompt input, focus, terminals and editor models.">高频路径：反复改模式 / 规则、跨时段边界，正确性内部重复五次；保留 Prompt 输入、焦点、终端与编辑器模型。</li><li data-en="Stress paths: six streaming Tasks during switches, repeated resume, schedule edits near boundaries, failed save + retry, and stale results after rapid edits.">压力路径：六个 Task 输出中切主题、反复唤醒、边界时刻修改规则、保存失败重试、快速修改后的旧结果。</li><li data-en="Bilingual layouts at 300–600 px; keyboard/screen-reader labels; real restart and first-paint consistency; macOS/Windows/Linux native acceptance.">300–600px 中英布局、键盘与读屏标签、真实重启和首屏一致性；macOS / Windows / Linux 原生验收。</li></ul></article>
+      </div>
+      <p class="small muted" data-en="Acceptance plan, not completed feature tests. Existing loaded-theme tests use a previously approved 200 ms budget; any new latency metric or budget needs a separate product decision. Windows/Linux are design-reviewed here, not natively run.">这里是验收计划，不是已经完成的功能测试。现有已加载主题切换测试有已批准的 200ms 预算；新的延迟指标与预算需另行确认。本轮对 Windows / Linux 做设计层兼容性审视，未原生运行。</p>
+    </section>
+
+    <section id="decisions">
+      <span class="section-no">07 / DECISIONS</span><h2 data-en="Three decisions before implementation.">实现前，先确认三个产品选择</h2>
+      <div class="grid three">
+        <article class="card featured"><span class="pill recommended" data-en="Recommended">建议</span><h3 data-en="Multiple ranges">多个时间段</h3><p data-en="Use the range-list model, including repeat days and overnight ranges. Reject overlaps with an actionable inline explanation.">采用时间段列表，含星期重复、跨午夜；重叠时给出可操作的行内提示。</p><p class="small" data-en="Alternative: only a simple day/night pair.">另一选择：只做简单的日夜两套。</p></article>
+        <article class="card featured"><span class="pill recommended" data-en="Recommended">建议</span><h3 data-en="Explicit outside-ranges theme">明确的其他时间主题</h3><p data-en="Choose a fixed theme for uncovered hours, prefilled from the current theme on first setup.">空档使用指定主题，首次预填当前主题。</p><p class="small" data-en="Alternative: follow System outside ranges; more flexible, with another source of automatic changes.">另一选择：空档跟随系统；更灵活，也多一个自动切换来源。</p></article>
+        <article class="card featured"><span class="pill recommended" data-en="Recommended">建议</span><h3 data-en="Temporary manual choice">手动选择可临时生效</h3><p data-en="Keep the schedule; resume at the next range boundary, with its exact time visible. Manual mode is a separate permanent choice.">保留时间表，到下一时段边界恢复，明确显示时间；手动模式是单独的永久选择。</p><p class="small" data-en="Alternative: selecting a theme exits scheduling immediately, as cards currently exit System mode.">另一选择：选主题立即退出定时，延续目前卡片退出系统模式的行为。</p></article>
+      </div>
+      <p data-en="Assessment: a range list is a coherent extension of the existing theme model. Its main design debt would be unclear state ownership or hidden precedence; settle those contracts before implementation. Usability trials should verify that people can predict Friday-night behavior and a temporary override’s expiry without explanation.">评价：时间段列表是现有主题模型的自然扩展。主要潜在设计债是状态归属不清或隐藏优先级，因此应先确认行为契约再实现。后续可用性验证重点：用户能否无需解释就预测周五跨夜行为，以及临时主题何时结束。</p>
+    </section>
+
+    <section id="sources">
+      <span class="section-no">08 / REFERENCES</span><h2 data-en="Sources and research limits">来源与调研边界</h2>
+      <p class="source-note" data-en="Accessed 2026-10-19. Official documentation and repository behavior are evidence; transfer to Onward is a design inference. Product versions may differ. This study does not claim hands-on testing of iOS or macOS Settings.">查阅日期：2026-10-19。官方文档与仓库行为是证据；迁移到 Onward 的结论是设计推导。产品版本可能不同，本轮不声称已在 iOS 或 macOS 设置中实机测试。</p>
+      <p class="source-note" data-en="Apple behavior references are pinned to version 26 to avoid mixing navigation labels from different releases. The material does not specify automatic schedule-overlap priority, weekday ownership for overnight Focus schedules, or restoration after a temporary Focus. Those choices remain our explicit design decisions.">Apple 行为引用固定到 26 版，以免混用不同版本的入口名称。资料未明确自动计划重叠优先级、跨夜 Focus 的星期归属、临时 Focus 结束后的恢复语义，这些仍需作为本项目的明确设计决策。</p>
+      <ol class="source-list" id="source-list">
+        <li id="source-ios-appearance"><a href="https://support.apple.com/guide/iphone/adjust-screen-brightness-color-balance-iph60ba71065/26/ios/26">Apple · iPhone brightness and Dark Mode (iOS 26)</a></li>
+        <li id="source-focus"><a href="https://support.apple.com/guide/mac-help/set-up-a-focus-to-stay-on-task-mchl613dc43f/26/mac/26">Apple · Set up a Focus (macOS 26)</a> · <a href="https://support.apple.com/guide/iphone/set-up-a-focus-iphd6288a67f/26/ios/26">iPhone Focus (iOS 26)</a></li>
+        <li id="source-focus-temporary"><a href="https://support.apple.com/guide/iphone/turn-a-focus-on-or-off-iph5c3f5b77b/26/ios/26">Apple · Turn a Focus on/off (iOS 26)</a> · <a href="https://support.apple.com/guide/mac-help/turn-a-focus-on-or-off-mchl999b7c1a/26/mac/26">macOS 26</a></li>
+        <li id="source-mac-appearance"><a href="https://support.apple.com/guide/mac-help/use-a-light-or-dark-appearance-mchl52e1c2d2/26/mac/26">Apple · Auto / Light / Dark appearance (macOS 26)</a></li>
+        <li id="source-focus-filters"><a href="https://developer.apple.com/videos/play/wwdc2022/10121/">Apple · Meet Focus filters (WWDC22), transcript</a></li>
+        <li id="source-hig">Apple HIG: <a href="https://developer.apple.com/design/human-interface-guidelines/dark-mode">Dark Mode</a> · <a href="https://developer.apple.com/design/human-interface-guidelines/settings">Settings</a> · <a href="https://developer.apple.com/design/human-interface-guidelines/pickers">Pickers</a> · <a href="https://developer.apple.com/design/human-interface-guidelines/disclosure-controls">Disclosure controls</a> · <a href="https://developer.apple.com/design/human-interface-guidelines/accessibility">Accessibility</a></li>
+        <li id="source-vscode"><a href="https://code.visualstudio.com/docs/configure/themes#_automatically-switch-based-on-os-color-scheme">VS Code · Themes / automatic OS color-scheme switching</a></li>
+        <li id="source-jetbrains"><a href="https://www.jetbrains.com/help/idea/settings-appearance.html">JetBrains · Appearance (2026.2)</a> · <a href="https://www.jetbrains.com/help/idea/user-interface-themes.html">UI themes</a></li>
+        <li id="source-powertoys"><a href="https://learn.microsoft.com/en-us/windows/powertoys/light-switch">Microsoft PowerToys · Light Switch</a><br><span data-en="The rendered Learn page failed to fetch; the official MicrosoftDocs Markdown source was read successfully.">Learn 正文抓取失败，已读取官方 MicrosoftDocs Markdown 源文。</span> <a href="https://raw.githubusercontent.com/MicrosoftDocs/windows-dev-docs/docs/hub/powertoys/light-switch.md">Official source</a></li>
+        <li id="source-adm"><a href="https://github.com/AutoDarkMode/Windows-Auto-Night-Mode#features">Auto Dark Mode · official feature list</a></li>
+        <li><a href="https://github.com/microsoft/PowerToys/issues/42577">PowerToys #42577 · historical user report (0.95.0)</a></li>
+      </ol>
+    </section>
+
+    <section id="named-timeline">
+      <span class="section-no">09 / UX REVISION · 2026.10.20</span>
+      <h2 data-en="Read the theme. Click the region. Change it there.">看清主题，点击时段，就地更换。</h2>
+      <div class="grid">
+        <article class="card">
+          <span class="pill" data-en="Before">调整前</span>
+          <h3 data-en="Colors required interpretation">需要猜颜色的含义</h3>
+          <div class="timeline" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+          <div class="ticks" aria-hidden="true"><span>00:00</span><span>12:00</span><span>24:00</span></div>
+          <p data-en="Several dark themes can have similar swatches. Names only appeared on hover; the strip could not change a theme. A one-hour interval is only 12.5px wide in a 300px full-day strip.">多个深色主题可能颜色相近。名称只能悬停查看，色条不能更换主题。300px 的整日色条里，一小时只有 12.5px 宽。</p>
+        </article>
+        <article class="card featured">
+          <span class="pill recommended" data-en="After · static illustration">调整后 · 静态示意</span>
+          <h3 data-en="Names and actions share one place">名称与操作在同一个位置</h3>
+          <div class="settings-group">
+            <div class="settings-row"><span>00:00<br>09:00</span><span><strong>Nord</strong><small data-en="At other times">其他时间</small></span><span aria-hidden="true">›</span></div>
+            <div class="settings-row"><span>09:00<br>18:00</span><span><strong>Light Modern</strong><small data-en="Repeating range · Now">重复时段 · 当前</small></span><span aria-hidden="true">›</span></div>
+            <div class="settings-row"><span>18:00<br>24:00</span><span><strong>Nord</strong><small data-en="At other times">其他时间</small></span><span aria-hidden="true">›</span></div>
+          </div>
+          <p data-en="Click any row to reveal a nearby theme picker with names, miniature appearance samples and a selected checkmark. One selection saves; Escape or Close returns focus to the row.">点击任一行，在旁边展开主题选择面板：名称、外观小样和选中标记同时出现。选中即保存；Esc 或关闭返回原时段。</p>
+        </article>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th data-en="Apple evidence">Apple 依据</th><th data-en="Onward adaptation">Onward 的设计转化</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://support.apple.com/guide/calendar/add-modify-or-delete-events-icalwr13-events/mac">Calendar · Add, modify or delete events</a><p data-en="Events have titles and open their own editing surface. Changing an event's calendar is separate from changing its duration.">事件有标题，并从事件本身进入编辑；更换所属日历与调整时长是不同操作。</p></td><td data-en="Theme names remain visible. Clicking a displayed region changes its theme; the rules editor owns time and repeat-day changes.">主题名称直接可见。点击展示时段更换主题；时间与重复星期通过规则编辑器调整。</td></tr>
+          <tr><td><a href="https://developer.apple.com/design/human-interface-guidelines/accessibility">HIG · Accessibility</a><p data-en="Meaning must not rely on color alone; controls need labels and keyboard access.">信息不能只依赖颜色，控件需要文字标签与键盘操作。</p></td><td data-en="Exact names, start/end times, keyboard navigation and focus restoration. Short intervals keep usable row heights; long names wrap.">准确名称、起止时间、键盘导航和焦点恢复。短时段保留可点击行高，长主题名换行显示。</td></tr>
+          <tr><td><a href="https://developer.apple.com/design/human-interface-guidelines/popovers">HIG · Popovers</a><p data-en="Small property edits stay associated with their originating object.">小范围属性修改应与发起操作的对象保持关联。</p></td><td data-en="An inline contextual picker stays next to its region and explains the editing scope. This is an adaptation for a narrow settings panel, not an exact copy of Focus.">行内主题选择面板紧贴时段，并说明生效范围。这是对窄设置栏的适配，不声称与专注模式界面完全相同。</td></tr>
+        </tbody>
+      </table></div>
+      <div class="grid three">
+        <article class="card"><h3 data-en="Recurring owner">修改原重复规则</h3><p data-en="A Sunday 00:00–07:00 tail can belong to Saturday's 22:00–07:00 rule. The picker shows the full rule and its repeat days before selection.">周日 00:00–07:00 可能来自周六 22:00–07:00 的规则。选择面板会展示完整时间和重复星期。</p></article>
+        <article class="card"><h3 data-en="Shared fallback">共用其他时间主题</h3><p data-en="All uncovered intervals use one fallback. Editing a gap explicitly says that other days' gaps change too.">所有空档使用同一个默认主题。编辑空档时明确提示：其他日期的空档也会同步更换。</p></article>
+        <article class="card"><h3 data-en="Explicit trade-off">明确的取舍</h3><p data-en="Rows prioritize legible identity and usable targets over proportional duration. More intervals require more vertical space; exact times remain visible. No new timer, cache or persistence model is introduced.">等高行优先保证名称可读、操作目标足够大，不再按时长比例绘图。时段多时占用更多纵向空间，准确时间始终可见；复用现有定时、缓存与存储模型。</p></article>
+      </div>
+      <p class="source-note" data-en="Research accessed October 20, 2026. Official documentation is evidence; the vertical agenda and inline picker are Onward design choices. No Apple source code or assets were copied.">资料查阅于 2026 年 10 月 20 日。官方文档为依据，纵向安排与行内选择面板是 Onward 的设计选择；未复制 Apple 源代码或素材。</p>
+    </section>
+
+    <footer id="history">
+      <h2 data-en="Document metadata & append-only history">文档元数据与追加式历史</h2>
+      <p>Branch: <code>prompt-execute-shortcut</code> · App: <code>2.0.1</code> · Base commit: <code>7473714</code> · Document: <code>0.4</code> · Status: <span data-en="macOS acceptance passed (uncommitted)">macOS 验收通过（未提交）</span></p>
+      <div class="table-wrap"><table><thead><tr><th data-en="Version / date">版本 / 日期</th><th data-en="Branch">分支</th><th data-en="Summary">变更摘要</th></tr></thead><tbody><tr><td>0.1 · 2026-10-19</td><td><code>prompt-execute-shortcut</code></td><td data-en="Initial product research, interaction alternatives, static concepts, behavior decisions and paired acceptance plan.">首次产品调研、交互方案对比、静态概念图、行为决策与双层验收计划。</td></tr><tr><td>0.2 · 2026-10-19</td><td><code>prompt-execute-shortcut</code></td><td data-en="Recorded approval to proceed with the recommended interaction. Implementation uses a shared local-time resolver and one main-process scheduler; detailed contracts and paired tests are in docs/themes.md and test/README.md.">记录按推荐交互推进的确认。实现采用共享本地时间判定与单一主进程调度；详细契约与双层测试见 docs/themes.md 和 test/README.md。</td></tr><tr><td>0.3 · 2026-10-19</td><td><code>prompt-execute-shortcut</code></td><td data-en="macOS acceptance passed: 3 iterations × 5 runners, 99 scenario executions, 222 targeted theme assertions, all 178 unit files and trace self-check. English/Chinese 300/600px layouts, recurring/DST rules, temporary expiry, imported themes and real restarts verified. Windows/Linux structurally reviewed; native runs remain a follow-up.">macOS 验收通过：3 轮 × 5 个测试套件、99 次场景执行、222 项主题单测、全仓 178 个单测文件及追踪自检。覆盖中英 300/600px 布局、重复与夏令时规则、临时到期、导入主题和真实重启。Windows/Linux 已完成结构检查，实机验证待补。</td></tr>
+        <tr><td>0.4 · 2026-10-20</td><td><code>prompt-execute-shortcut</code></td><td data-en="Responded to hands-on UX feedback with a named, directly editable daily agenda, contextual theme choices and explicit recurring/fallback scope. Added Calendar/HIG evidence, before/after illustration, short-region and bilingual tests, focus restoration and diagnostic coverage.">根据实机体验反馈改为直接显示名称、可点击编辑的今日安排，加入就近主题选择及重复规则/共用空档的范围说明。补充 Calendar/HIG 依据、前后对比示意、短时段与双语测试、焦点恢复和诊断覆盖。</td></tr>
+      </tbody></table></div>
+      <p data-en="Implemented runtime nodes and explicit pure-data/test-only exemptions are audited in docs/theme-schedule-trace-audit.md. Final local evidence is indexed in traces/theme-schedule-final-acceptance.json.">已实现运行时节点及纯数据/测试代码豁免见 docs/theme-schedule-trace-audit.md；最终本地证据索引为 traces/theme-schedule-final-acceptance.json。</p>
+      <p data-en="October 20 UX acceptance: 224 targeted unit tests, 3 consecutive core/visual iterations with 63 scenario executions, draft regression and trace self-check passed. Real bilingual 300/600px screenshots were inspected. Evidence: traces/theme-timeline-final-acceptance.json. Windows/Linux received structural review only.">10 月 20 日 UX 验收：224 项主题单测、核心/视觉套件连续 3 轮共 63 次场景执行、草稿回归及追踪自检通过。已检查中英 300/600px 实机截图。证据：traces/theme-timeline-final-acceptance.json。Windows/Linux 仅完成结构审查。</p>
+    </footer>
+  </main>
+  <script>
+    const translations = [...document.querySelectorAll('[data-en]')];
+    for (const element of translations) element.dataset.zh = element.textContent;
+    const translatedLabels = [...document.querySelectorAll('[data-en-label]')];
+    for (const element of translatedLabels) element.dataset.zhLabel = element.getAttribute('aria-label');
+    const languageButton = document.getElementById('language');
+    languageButton.addEventListener('click', () => {
+      const english = document.documentElement.lang !== 'en';
+      document.documentElement.lang = english ? 'en' : 'zh-CN';
+      for (const element of translations) element.textContent = english ? element.dataset.en : element.dataset.zh;
+      for (const element of translatedLabels) element.setAttribute('aria-label', english ? element.dataset.enLabel : element.dataset.zhLabel);
+      languageButton.textContent = english ? '中文' : 'English';
+      languageButton.setAttribute('aria-label', english ? '切换为中文' : 'Switch to English');
+      document.title = english ? 'Onward · Theme schedule interaction research' : 'Onward · 主题定时切换交互研究';
+      updateSection();
+    });
+    const links = [...document.querySelectorAll('.toc a')];
+    const sections = links.map(link => document.querySelector(link.hash));
+    function updateSection() {
+      let current = sections[0];
+      for (const section of sections) if (section.getBoundingClientRect().top <= 150) current = section;
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) current = sections.at(-1);
+      for (const link of links) {
+        if (link.hash === '#' + current.id) link.setAttribute('aria-current', 'location');
+        else link.removeAttribute('aria-current');
+      }
+    }
+    window.addEventListener('scroll', updateSection, { passive: true });
+    window.addEventListener('resize', updateSection);
+    updateSection();
+  </script>
+</body>
+</html>

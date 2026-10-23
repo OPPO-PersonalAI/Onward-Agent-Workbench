@@ -1,0 +1,62 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.prompt-action-rail {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 4px 3px;
+  scrollbar-width: thin;
+}
+
+.prompt-action-swatch {
+  --prompt-action-color: var(--accent);
+  flex: 1 0 24px;
+  min-width: 24px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--prompt-action-color) 42%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--prompt-action-color) 12%, var(--panel));
+  cursor: pointer;
+}
+
+.prompt-action-swatch[data-preset="execute"] { --prompt-action-color: var(--rainbow-6); }
+.prompt-action-swatch[data-preset="sendAndExecute"] { --prompt-action-color: var(--rainbow-2); }
+.prompt-action-swatch[data-preset="send"] { --prompt-action-color: var(--rainbow-1); }
+.prompt-action-swatch[data-preset="sendAllAndExecute"] { --prompt-action-color: var(--rainbow-3); }
+.prompt-action-swatch[data-preset="queue"] { --prompt-action-color: var(--rainbow-5); }
+.prompt-action-swatch:hover:not(:disabled) { background: color-mix(in srgb, var(--prompt-action-color) 25%, var(--panel)); border-color: var(--prompt-action-color); }
+.prompt-action-swatch:focus-visible,
+.prompt-action-swatch[aria-pressed="true"] { outline: 2px solid var(--text-1); outline-offset: 1px; }
+.prompt-action-swatch:disabled { opacity: .4; cursor: not-allowed; }
+.prompt-action-swatch[data-preview-hit="true"] { outline: 3px solid var(--text-1); outline-offset: 1px; background: color-mix(in srgb, var(--prompt-action-color) 35%, var(--panel)); }
+.prompt-action-swatch[draggable="true"] { cursor: grab; }
+.prompt-action-swatch[data-drop="before"] { box-shadow: -4px 0 var(--text-1); }
+.prompt-action-swatch[data-drop="after"] { box-shadow: 4px 0 var(--text-1); }
+
+.prompt-action-emoji { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: 0 0 18px; font-size: 16px; line-height: 1; pointer-events: none; }
+.prompt-action-emoji img { display: block; width: 100%; height: 100%; object-fit: contain; }
+
+.prompt-action-focus-label {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text-1);
+  box-shadow: var(--shadow-1);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  font-size: var(--font-xs);
+  pointer-events: none;
+}

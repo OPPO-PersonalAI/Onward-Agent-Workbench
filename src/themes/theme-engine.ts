@@ -8,6 +8,7 @@ import type { LegacyThemeSettings, ResolvedTheme, ThemeColors, ThemeDefinition, 
 import { DEFAULT_THEME_SETTINGS, getThemePreset, PRESET_IDS } from '../constants/themes.ts'
 import { generateCustomTheme } from '../utils/theme-generator.ts'
 import { ANSI_COLOR_NAMES, BUILTIN_THEMES, CLASSIC_TERMINAL_THEME, CLASSIC_THEME_ID } from './theme-presets.ts'
+import { normalizeThemeSchedule, resolveThemeSchedule } from './theme-schedule.ts'
 
 export { FEATURED_THEME_IDS } from './theme-presets.ts'
 
@@ -127,7 +128,8 @@ function classicSettings(raw: unknown, fallback: LegacyThemeSettings['presetId']
 }
 
 function freshSettings(): ThemeSettings {
-  return { ...DEFAULT_THEME_SETTINGS, classic: { ...DEFAULT_THEME_SETTINGS.classic }, overrides: {}, imported: [] }
+  return { ...DEFAULT_THEME_SETTINGS, classic: { ...DEFAULT_THEME_SETTINGS.classic }, overrides: {}, imported: [],
+    schedule: { fallbackThemeId: 'dark-modern', ranges: [], temporary: null } }
 }
 
 /** Pure, one-way schema migration. Any explicit version prevents old style fields from being imported again. */
@@ -165,10 +167,11 @@ export function normalizeThemeSettings(raw: unknown, options: NormalizeThemeOpti
   const available = [...BUILTIN_THEMES, ...result.imported]
   const selected = (value: unknown, fallback: string, kind?: ThemeDefinition['kind']) =>
     typeof value === 'string' && available.some(t => t.id === value && (!kind || t.kind === kind)) ? value : fallback
-  result.mode = input.mode === 'manual' ? 'manual' : 'system'
+  result.mode = input.mode === 'manual' ? 'manual' : input.mode === 'schedule' ? 'schedule' : 'system'
   result.themeId = selected(input.themeId, 'dark-modern')
   result.lightThemeId = selected(input.lightThemeId, 'light-modern', 'light')
   result.darkThemeId = selected(input.darkThemeId, 'dark-modern', 'dark')
+  result.schedule = normalizeThemeSchedule(input.schedule, result.themeId, seen)
   for (const [id, values] of entries(input.overrides, BUILTIN_THEMES.length + THEME_LIMITS.imported)) {
     if (!seen.has(id)) continue
     const colors = colorMap(values)
@@ -199,7 +202,16 @@ export function getAvailableThemes(settings: ThemeSettings): ThemeDefinition[] {
   }))
 }
 
-export function getActiveThemeId(settings: ThemeSettings, systemDark: boolean): string {
+export function getAvailableThemeIds(settings: ThemeSettings): ReadonlySet<string> {
+  return new Set(availableThemes(settings).map(theme => theme.id))
+}
+
+export function getActiveThemeId(settings: ThemeSettings, systemDark: boolean, now = Date.now()): string {
+  if (settings.mode === 'schedule') {
+    const ids = getAvailableThemeIds(settings)
+    const id = resolveThemeSchedule(settings.schedule, now, ids, false).themeId
+    return ids.has(id) ? id : 'dark-modern'
+  }
   const kind = systemDark ? 'dark' : 'light'
   const id = settings.mode === 'manual' ? settings.themeId : systemDark ? settings.darkThemeId : settings.lightThemeId
   return availableThemes(settings).some(theme => theme.id === id && (settings.mode === 'manual' || theme.kind === kind))
@@ -303,8 +315,8 @@ function readable(value: string, backgrounds: string[], dark: boolean): string {
 }
 
 /** Bounded palette resolution only; callers own persistence, scheduling and DOM/xterm/Monaco commits. */
-export function resolveTheme(settings: ThemeSettings, systemDark: boolean): ResolvedTheme {
-  const id = getActiveThemeId(settings, systemDark)
+export function resolveTheme(settings: ThemeSettings, systemDark: boolean, now = Date.now()): ResolvedTheme {
+  const id = getActiveThemeId(settings, systemDark, now)
   const definition = availableThemes(settings).find(theme => theme.id === id)!
   const dark = definition.kind === 'dark'
   const fallback = BUILTIN_THEMES.find(theme => theme.id === (dark ? 'dark-modern' : 'light-modern'))!

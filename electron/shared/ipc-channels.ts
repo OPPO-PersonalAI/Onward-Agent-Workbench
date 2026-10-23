@@ -78,6 +78,7 @@ export const IPC = {
   COMMAND_PRESET_SAVE: 'command-preset:save',
 
   // debug / dialog
+  DEBUG_BLUR_WINDOW: 'debug:blur-window',
   DEBUG_EMIT_BUNDLE_MARKER: 'debug:emit-bundle-marker',
   DEBUG_FEEDBACK_GET_LAST_OPENED_URL: 'debug:feedback-get-last-opened-url',
   DEBUG_FEEDBACK_RESET: 'debug:feedback-reset',
@@ -98,6 +99,8 @@ export const IPC = {
   // fires 'destroyed' on reload, so reload is its own leak class).
   DEBUG_RELOAD_WINDOW: 'debug:reload-window',
   DEBUG_RESET_PERF_TRACE_METRICS: 'debug:reset-perf-trace-metrics',
+  DEBUG_SEND_INPUT_EVENT: 'debug:send-input-event',
+  DEBUG_GET_INPUT_FOCUS: 'debug:get-input-focus',
   // Autotest-only (ONWARD_AUTOTEST=1): read back / reset the paths recorded
   // by the shell open-path / show-item-in-folder stubs so the file-entry OS
   // action suite can assert IPC round-trips without launching external apps.
@@ -116,6 +119,9 @@ export const IPC = {
   THEMES_AUTOTEST_EXPORT_FILE: 'themes:autotest-export-file',
   THEMES_CANCEL_IMPORT: 'themes:cancel-import',
   THEMES_BOOTSTRAP: 'themes:bootstrap',
+  THEMES_SCHEDULE_CLOCK: 'themes:schedule-clock',
+  THEMES_SCHEDULE_CHANGED: 'themes:schedule-changed',
+  THEMES_AUTOTEST_CLOCK: 'themes:autotest-clock',
   THEMES_AUTOTEST_SELECT_FILE: 'themes:autotest-select-file',
 
   // feedback
@@ -239,6 +245,13 @@ export const IPC = {
   PROMPT_DELETE: 'prompt:delete',
   PROMPT_LOAD: 'prompt:load',
   PROMPT_SAVE: 'prompt:save',
+
+  // window-scoped prompt Leader and atomic terminal input
+  PROMPT_INPUT_SET_CONTEXT: 'prompt-input:set-context',
+  PROMPT_INPUT_SUSPEND: 'prompt-input:suspend',
+  PROMPT_INPUT_CANCEL: 'prompt-input:cancel',
+  PROMPT_INPUT_SHORTCUT: 'prompt-input:shortcut',
+  PROMPT_INPUT_SEND: 'prompt-input:send',
 
   // settings / shell / shortcut
   SETTINGS_CHECK_SHORTCUT_AVAILABLE: 'settings:check-shortcut-available',

@@ -16,6 +16,7 @@ import { buildColorCapableTerminalEnv, resolveUserZdotdirForShellIntegration, is
 import { resolveExistingTerminalCwd } from './terminal-cwd-validation'
 import { buildPowerShellInlineIntegrationCommand } from './powershell-inline-integration'
 import { parseOsc633Cwd, parseOsc7Cwd, parseOsc9Cwd } from '../../src/utils/terminal-cwd-osc'
+import { terminalKeyToSequence, type PromptInputPayload, type PromptInputResult } from '../../src/utils/prompt-input'
 import { listProcessTableDetailed } from './process-table'
 import {
   selectHangupEscalationTargets,
@@ -58,6 +59,8 @@ interface PtyRecord {
   exitPromise: Promise<PtyExitEvent>
   exited: boolean
   writeQueue: Promise<void>
+  queuedWrites: number
+  inputWaits: Set<() => void>
   disposed: boolean
 }
 
@@ -66,6 +69,30 @@ interface PtyRecord {
 const WINDOWS_CHUNK_SIZE = 8 * 1024
 const WINDOWS_CHUNK_DELAY_MS = 1
 const SMALL_WRITE_THRESHOLD = 1024
+// Match the existing Prompt send-and-execute settle contract on each platform.
+const PROMPT_INPUT_SETTLE_MS = process.platform === 'win32' ? 500 : 150
+
+/** Prompt text cannot impersonate terminal keys or break out of a paste frame. */
+export function isValidPromptInputContent(content: string): boolean {
+  // TAB, LF and CR are text separators; all other C0, DEL and C1 controls
+  // must come from the explicit terminal-key allowlist instead of the draft.
+  return /\S/u.test(content) && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(content)
+}
+
+const BRACKETED_PASTE_MODE_RE = /\x1b\[\?([0-9;]+)([hl])|\x1bc|\x1b\[!p/g
+
+/** Preserve stream order and a bounded incomplete tail across PTY output chunks. */
+export function scanPromptBracketedPasteMode(enabled: boolean, carry: string, data: string): { enabled: boolean; carry: string } {
+  const text = carry + data
+  let lastMatchEnd = 0
+  BRACKETED_PASTE_MODE_RE.lastIndex = 0
+  for (const match of text.matchAll(BRACKETED_PASTE_MODE_RE)) {
+    lastMatchEnd = match.index! + match[0].length
+    if (match[1] === undefined) enabled = false
+    else if (/(?:^|;)2004(?:;|$)/.test(match[1])) enabled = match[2] === 'h'
+  }
+  return { enabled, carry: text.slice(Math.max(lastMatchEnd, text.length - 64)) }
+}
 
 export class PtyManager {
   private instances: Map<string, PtyRecord> = new Map()
@@ -274,11 +301,14 @@ export class PtyManager {
       exitPromise,
       exited: false,
       writeQueue: Promise.resolve(),
+      queuedWrites: 0,
+      inputWaits: new Set(),
       disposed: false
     }
 
     record.exitDisposable = ptyProcess.onExit((event) => {
       record.exited = true
+      this.cancelInputWaits(record)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PTY_EXIT, {
         terminalId: id,
         shellKind,
@@ -298,12 +328,12 @@ export class PtyManager {
     if (!record || record.disposed || record.exited) return false
     const traceArgs = {
       terminalId: id,
-      writeMode: data.length <= SMALL_WRITE_THRESHOLD ? 'direct' : 'queued',
+      writeMode: data.length <= SMALL_WRITE_THRESHOLD && record.queuedWrites === 0 ? 'direct' : 'queued',
       includesEnter: data.includes('\r') || data.includes('\n'),
       ...performanceTrace.summarizeText('payload', data)
     }
 
-    if (data.length <= SMALL_WRITE_THRESHOLD) {
+    if (data.length <= SMALL_WRITE_THRESHOLD && record.queuedWrites === 0) {
       const startMs = Date.now()
       const startUs = performanceTrace.nowUs()
       try {
@@ -341,16 +371,16 @@ export class PtyManager {
     // This prevents the follow-up '\r' from arriving mid-content.
     const largeStartMs = Date.now()
     const startUs = performanceTrace.nowUs()
-    record.writeQueue = record.writeQueue.then(async () => {
+    const task = this.enqueueWrite(record, async () => {
       await this.writeLargeData(record, data)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PTY_WRITE, {
-        path: 'large',
+        path: data.length <= SMALL_WRITE_THRESHOLD ? 'transaction-buffered' : 'large',
         bytes: data.length,
         durationMs: Date.now() - largeStartMs,
         ok: true
       }, { terminalId: id })
     })
-    return record.writeQueue.then(() => {
+    return task.then(() => {
       performanceTrace.recordComplete('pty.write', startUs, { ...traceArgs, result: 'success' }, 'pty')
       return true
     }).catch((error) => {
@@ -377,7 +407,7 @@ export class PtyManager {
     let failedError: unknown = null
 
     const startUs = performanceTrace.nowUs()
-    const task = record.writeQueue.then(async () => {
+    const task = this.enqueueWrite(record, async () => {
       if (record.disposed || record.exited) {
         failedPhase = 'content'
         throw new Error(record.exited ? 'pty exited' : 'pty disposed')
@@ -395,7 +425,8 @@ export class PtyManager {
         return
       }
 
-      await new Promise<void>((resolve) => setTimeout(resolve, enterDelayMs))
+      failedPhase = 'enter'
+      await this.waitForInput(record, enterDelayMs)
 
       if (record.disposed || record.exited) {
         failedPhase = 'enter'
@@ -410,8 +441,6 @@ export class PtyManager {
         throw error
       }
     })
-
-    record.writeQueue = task.catch(() => {})
 
     try {
       await task
@@ -438,7 +467,104 @@ export class PtyManager {
     }
   }
 
+  /** Content and suffix own one queue slot, including ConPTY chunks and settling. */
+  async sendPromptInput(
+    id: string,
+    payload: PromptInputPayload,
+    bracketedPasteEnabled: () => boolean
+  ): Promise<PromptInputResult> {
+    const startUs = performanceTrace.nowUs()
+    const record = this.instances.get(id)
+    const suffix = terminalKeyToSequence(payload.terminalKey)
+    let phase: PromptInputResult['phase'] = payload.includePrompt ? 'content' : 'key'
+    let contentDelivered = false
+    const finish = (result: PromptInputResult): PromptInputResult => {
+      performanceTrace.recordComplete(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, startUs, {
+        stage: 'transaction-complete', terminalId: id.slice(0, 128),
+        includePrompt: payload.includePrompt, contentLength: payload.includePrompt ? payload.content.length : 0,
+        terminalKey: suffix === null ? 'invalid' : payload.terminalKey.slice(0, 32),
+        durationMs: Math.max(0, (performanceTrace.nowUs() - startUs) / 1000), ...result
+      }, 'pty')
+      return result
+    }
+    if (suffix === null) return finish({ ok: false, phase, contentDelivered, reason: 'invalid-input' })
+    if (payload.includePrompt && !isValidPromptInputContent(payload.content)) {
+      return finish({ ok: false, phase: 'content', contentDelivered, reason: 'invalid-input' })
+    }
+    if (!record || record.disposed || record.exited) return finish({ ok: false, phase, contentDelivered, reason: 'unavailable' })
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, { stage: 'transaction-enqueued', pendingWrites: record.queuedWrites }, { terminalId: id })
+    try {
+      const result = await this.enqueueWrite(record, async (): Promise<PromptInputResult> => {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, { stage: 'transaction-started' }, { terminalId: id })
+        this.assertWritable(record)
+        if (payload.includePrompt && payload.content.length > 0) {
+          const multiline = /[\r\n]/.test(payload.content)
+          // Read the main-owned capability INSIDE the queue slot: a previous
+          // transaction may have changed the foreground program while we waited.
+          const bracketed = bracketedPasteEnabled()
+          if (multiline && !bracketed) {
+            return { ok: false, phase: 'content', contentDelivered: false, reason: 'unsafe-multiline-send' }
+          }
+          const content = multiline
+            ? `\x1b[200~${payload.content.replace(/\r\n|\n/g, '\r')}\x1b[201~`
+            : payload.content
+          await this.writeLargeData(record, content)
+          contentDelivered = true
+        }
+        phase = 'key'
+        if (suffix) {
+          if (contentDelivered) await this.waitForInput(record, PROMPT_INPUT_SETTLE_MS)
+          this.assertWritable(record)
+          record.pty.write(suffix)
+        }
+        return { ok: true, phase: 'complete', contentDelivered }
+      })
+      return finish(result)
+    } catch {
+      return finish({ ok: false, phase, contentDelivered, reason: record.disposed || record.exited ? 'unavailable' : 'write-failed' })
+    }
+  }
+
+  private enqueueWrite<T>(record: PtyRecord, write: () => Promise<T>): Promise<T> {
+    // Idle keystrokes still take the synchronous path. Once a transaction or
+    // chunked write is pending, ALL producers share its FIFO until it drains.
+    record.queuedWrites += 1
+    const task = record.writeQueue.then(write).finally(() => { record.queuedWrites -= 1 })
+    // One failed write must not poison later input forever.
+    record.writeQueue = task.then(() => {}, () => {})
+    return task
+  }
+
+  private assertWritable(record: PtyRecord): void {
+    if (record.disposed || record.exited) throw new Error('PTY is unavailable')
+  }
+
+  private waitForInput(record: PtyRecord, delayMs: number): Promise<void> {
+    this.assertWritable(record)
+    if (delayMs <= 0) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      const cancel = () => {
+        clearTimeout(timer)
+        record.inputWaits.delete(cancel)
+        reject(new Error('PTY closed during input transaction'))
+      }
+      const timer = setTimeout(() => {
+        record.inputWaits.delete(cancel)
+        resolve()
+      }, delayMs)
+      record.inputWaits.add(cancel)
+    })
+  }
+
+  private cancelInputWaits(record: PtyRecord): void {
+    if (record.inputWaits.size > 0) {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT, { stage: 'transaction-waits-canceled', count: record.inputWaits.size })
+    }
+    for (const cancel of record.inputWaits) cancel()
+  }
+
   private async writeLargeData(record: PtyRecord, data: string): Promise<void> {
+    this.assertWritable(record)
     if (data.length === 0) return
     if (data.length <= SMALL_WRITE_THRESHOLD || platform() !== 'win32') {
       record.pty.write(data)
@@ -448,12 +574,16 @@ export class PtyManager {
   }
 
   private async writeChunked(record: PtyRecord, data: string): Promise<void> {
-    for (let offset = 0; offset < data.length; offset += WINDOWS_CHUNK_SIZE) {
-      if (record.disposed) return
-      const chunk = data.slice(offset, offset + WINDOWS_CHUNK_SIZE)
+    for (let offset = 0; offset < data.length;) {
+      this.assertWritable(record)
+      let end = Math.min(offset + WINDOWS_CHUNK_SIZE, data.length)
+      // Never split a UTF-16 surrogate pair across separate ConPTY writes.
+      if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end -= 1
+      const chunk = data.slice(offset, end)
       record.pty.write(chunk)
-      if (offset + WINDOWS_CHUNK_SIZE < data.length) {
-        await new Promise<void>((resolve) => setTimeout(resolve, WINDOWS_CHUNK_DELAY_MS))
+      offset = end
+      if (offset < data.length) {
+        await this.waitForInput(record, WINDOWS_CHUNK_DELAY_MS)
       }
     }
   }
@@ -559,6 +689,7 @@ export class PtyManager {
     if (record) {
       const startUs = performanceTrace.nowUs()
       record.disposed = true
+      this.cancelInputWaits(record)
       this.disposeExternalListeners(record)
       this.killRecord(record)
       record.exitDisposable.dispose()
@@ -573,6 +704,11 @@ export class PtyManager {
 
   get(id: string): pty.IPty | undefined {
     return this.instances.get(id)?.pty
+  }
+
+  hasLiveTerminal(id: string): boolean {
+    const record = this.instances.get(id)
+    return Boolean(record && !record.disposed && !record.exited)
   }
 
   registerListeners(id: string, disposables: pty.IDisposable[]): boolean {
@@ -872,6 +1008,8 @@ export class PtyManager {
     }
 
     for (const [, record] of records) {
+      record.disposed = true
+      this.cancelInputWaits(record)
       this.disposeExternalListeners(record)
     }
 

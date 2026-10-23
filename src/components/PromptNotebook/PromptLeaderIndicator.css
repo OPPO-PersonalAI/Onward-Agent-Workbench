@@ -1,0 +1,14 @@
+/*
+ * SPDX-FileCopyrightText: 2026 OPPO
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.prompt-leader-slot { display: flex; align-items: center; justify-content: center; flex: 0 0 68px; width: 68px; min-width: 68px; height: 100%; }
+.prompt-leader-indicator { display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 60px; height: 22px; box-sizing: border-box; border: 1px solid var(--accent); border-radius: 5px; background: color-mix(in srgb, var(--accent) 18%, var(--panel)); color: var(--text-1); font-size: 11px; font-weight: 600; line-height: 1; -webkit-app-region: no-drag; }
+.prompt-leader-indicator svg { flex-shrink: 0; color: var(--accent); }
+.prompt-task-target-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; height: 19px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg-2); color: var(--text-1); font-size: 11px; line-height: 1; pointer-events: none; }
+.prompt-task-target-badge[data-selected="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--panel)); font-weight: 700; }
+.prompt-target-map { position: absolute; top: 48px; right: 8px; left: 8px; z-index: 20; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; pointer-events: none; }
+.prompt-target-map > span { display: inline-flex; align-items: center; gap: 6px; max-width: 180px; min-width: 0; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); box-shadow: var(--shadow-1); color: var(--text-1); font-size: 12px; }
+.prompt-target-map b { flex-shrink: 0; color: var(--accent); }
+.prompt-target-map > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,0 +1,6 @@
+{
+  "_spdx": ["SPDX-FileCopyrightText: 2026 OPPO", "SPDX-License-Identifier: Apache-2.0"],
+  "content": "First line: 中文 👩🏽‍💻 café\nMiddle line: keep SELECT_ME 尾部\nLast line: untouched Ω",
+  "selection": "SELECT_ME",
+  "replacement": "z"
+}

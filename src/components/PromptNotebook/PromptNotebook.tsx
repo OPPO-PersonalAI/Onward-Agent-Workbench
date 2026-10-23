@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useMemo, useRef, useEffect, memo, startTransition } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, memo, startTransition } from 'react'
 import { Prompt, PromptSendRecord } from '../../types/electron'
 import type { TerminalBatchResult, TerminalInfo } from '../../types/prompt'
 import type { ResolvedLayout } from '../../utils/layout-mode'
 import type { EditorDraft, PromptCleanupConfig, PromptSchedule } from '../../types/tab.d.ts'
-import { usePromptActions } from '../../contexts/PromptActionsContext'
+import { usePromptActions, type PromptDraftSnapshot, type PromptInputDispatcher } from '../../contexts/PromptActionsContext'
+import { useSettings } from '../../contexts/SettingsContext'
+import { createDefaultPromptInputSettings, resolvePromptTargets, shouldClearPromptDraft, type PromptInputResult } from '../../utils/prompt-input'
+import { formatPromptInputFailureDetails } from '../../utils/prompt-input-labels'
+import { isAnyModalOpen } from '../../utils/modal-dismiss'
 import { buildAccelerator } from '../../utils/keyboard'
 import { performanceTrace } from '../../utils/performance-trace'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
@@ -32,6 +36,16 @@ import { PROMPT_COLORS, type PromptColor } from './prompt-colors'
 import './PromptNotebook.css'
 
 type PromptColorFilter = 'red' | 'yellow' | 'green' | null
+const DEFAULT_INPUT_SETTINGS = createDefaultPromptInputSettings()
+
+// Lazily created by the autotest-only API. Any active tab can release the
+// captured tab's gate after a switch; ordinary application builds never use it.
+let inputAckBarrierForAutotest: { tabId: string; waiters: Set<() => void> } | null = null
+function releaseInputAckForAutotest() {
+  const barrier = inputAckBarrierForAutotest
+  inputAckBarrierForAutotest = null
+  barrier?.waiters.forEach(resolve => resolve())
+}
 
 interface PromptColorFilterStats {
   red: number
@@ -48,8 +62,6 @@ interface PromptNotebookProps {
   terminals: TerminalInfo[]
   /** Active Task layout, mirrored by the sender's Task selector. */
   taskLayout: ResolvedLayout
-  onSend: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
-  onExecute: (terminalIds: string[]) => Promise<TerminalBatchResult>
   onSendAndExecute: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
   onTerminalRename: (id: string, newTitle: string) => void
   onChangeWorkDir: (terminalIds: string[], directory: string) => void
@@ -57,7 +69,7 @@ interface PromptNotebookProps {
   onWidthChange: (width: number) => void
   // Tab prompt related
   prompts: Prompt[]
-  onAddPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => void
+  onAddPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => void
   onAddPinnedPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt' | 'pinned'>) => void
   onUpdatePrompt: (prompt: Prompt, preserveTimestamp?: boolean) => void
   onDeletePrompt: (promptId: string) => void
@@ -85,6 +97,7 @@ interface PromptNotebookProps {
   addToHistoryShortcut: string | null
   // Hidden support
   hidden?: boolean
+  activeTab: boolean
   // Related to scheduled tasks
   tabId: string
   scheduleMap: Map<string, PromptSchedule>
@@ -128,8 +141,6 @@ interface RetentionConfirmState {
 export const PromptNotebook = memo(function PromptNotebook({
   terminals,
   taskLayout,
-  onSend,
-  onExecute,
   onSendAndExecute,
   onTerminalRename,
   onChangeWorkDir,
@@ -159,6 +170,7 @@ export const PromptNotebook = memo(function PromptNotebook({
   onEditorDraftChange,
   addToHistoryShortcut,
   hidden = false,
+  activeTab,
   tabId,
   scheduleMap,
   scheduleNotifications,
@@ -170,6 +182,56 @@ export const PromptNotebook = memo(function PromptNotebook({
   getTerminalBranch
 }: PromptNotebookProps) {
   const { t, locale } = useI18n()
+  const { settings } = useSettings()
+  const inputSettings = settings?.promptInput ?? DEFAULT_INPUT_SETTINGS
+  const { getDraftController, registerInputDispatcher, dispatchInputAction, isActiveInputTab, isInputBlocked, publishInputState } = usePromptActions()
+  const [selectedTerminalIds, setSelectedTerminalIds] = useState<string[]>([])
+  const selectedTerminalIdsRef = useRef(selectedTerminalIds)
+  const unavailableSelectionRef = useRef<string[]>([])
+  const selectionFlushRef = useRef<(() => void) | null>(null)
+  const registerSelectionFlush = useCallback((flush: () => void) => {
+    selectionFlushRef.current = flush
+    return () => {
+      if (selectionFlushRef.current === flush) selectionFlushRef.current = null
+    }
+  }, [])
+  const [inputBusy, setInputBusy] = useState(false)
+  const inputBusyRef = useRef(false)
+  const [inputNotice, setInputNotice] = useState<{ text: string; error: boolean } | null>(null)
+  const inputDispatcherRef = useRef<PromptInputDispatcher>(async () => false)
+  const inputMountedRef = useRef(true)
+  useEffect(() => {
+    inputMountedRef.current = true
+    return () => {
+      inputMountedRef.current = false
+      if (window.electronAPI?.debug?.autotest && inputAckBarrierForAutotest?.tabId === tabId) releaseInputAckForAutotest()
+    }
+  }, [tabId])
+  useLayoutEffect(() => registerInputDispatcher(tabId, (...args) => inputDispatcherRef.current(...args)), [registerInputDispatcher, tabId])
+  useLayoutEffect(() => {
+    publishInputState(tabId, { selectedIds: selectedTerminalIds, busy: inputBusy, notice: inputNotice })
+  }, [publishInputState, tabId, selectedTerminalIds, inputBusy, inputNotice])
+  const handleInputSelectionChange = useCallback((ids: string[]) => {
+    const previous = selectedTerminalIdsRef.current
+    if (previous.length === ids.length && previous.every((id, index) => id === ids[index])) return
+    selectedTerminalIdsRef.current = ids
+    setSelectedTerminalIds(ids)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'select-targets', tabId, count: ids.length })
+  }, [tabId])
+  useEffect(() => {
+    // Retain unavailable manual targets until an explicit selection gesture.
+    // Pruning here would silently reroute a default action to the active Task.
+    const unavailable = selectedTerminalIds.filter(id => !terminals.some(terminal => terminal.id === id))
+    const previous = unavailableSelectionRef.current
+    if (previous.length === unavailable.length && previous.every((id, index) => id === unavailable[index])) return
+    unavailableSelectionRef.current = unavailable
+    if (unavailable.some(id => !previous.includes(id))) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
+        phase: 'selection-unavailable', tabId, selected: selectedTerminalIds.length, unavailable: unavailable.length
+      })
+    }
+  }, [selectedTerminalIds, terminals, tabId])
+  const handleInputAction = useCallback((actionId: string) => dispatchInputAction(tabId, actionId, undefined, 'button'), [dispatchInputAction, tabId])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [filterEnabled, setFilterEnabled] = useState(false)
@@ -238,7 +300,6 @@ export const PromptNotebook = memo(function PromptNotebook({
   const lastEditorSendToTaskRef = useRef<{ content: string; terminalId: string } | null>(null)
   editorContentRef.current = editorContent
   editorTitleRef.current = editorTitle
-  const [clearEditorTrigger, setClearEditorTrigger] = useState(0)
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
     isOpen: false,
     promptId: '',
@@ -265,6 +326,153 @@ export const PromptNotebook = memo(function PromptNotebook({
   // Send history viewer state
   const [sendHistoryPrompt, setSendHistoryPrompt] = useState<Prompt | null>(null)
 
+  // One dispatcher owns buttons and shortcut IPC. The mutable latch is set
+  // before the first await, so two events in one React frame cannot both send.
+  inputDispatcherRef.current = async (actionId, targetId, origin = 'button') => {
+    const action = inputSettings.actions.find(candidate => candidate.id === actionId)
+    const reject = (reason: string, text: string) => {
+      setInputNotice({ text, error: true })
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'rejected', tabId, actionId, origin, reason })
+      return false
+    }
+    if (!isActiveInputTab(tabId)) return reject('inactive-tab', t('promptInput.runtime.unavailable'))
+    if (inputBusyRef.current) return reject('in-flight', t('promptInput.runtime.busy'))
+    if (isInputBlocked() || isAnyModalOpen()) return reject('blocked', t('promptInput.runtime.blocked'))
+    if (!action) return reject('action-unavailable', t('promptInput.runtime.failed'))
+    selectionFlushRef.current?.()
+    const controller = getDraftController(tabId)
+    if (!controller) return reject('draft-unavailable', t('promptInput.runtime.failed'))
+    const snapshotStartedAt = performance.now()
+    const snapshot: PromptDraftSnapshot = controller.snapshot()
+    if (snapshot.composing) return reject('composing', t('promptInput.runtime.blocked'))
+    const content = action.includePrompt ? transformVirtualPaddingForSend(snapshot.content) : ''
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+      phase: 'snapshot', tabId, revision: snapshot.revision, contentLen: content.length,
+      durationMs: performance.now() - snapshotStartedAt
+    })
+    if (action.includePrompt && !content) return reject('empty-draft', t('promptInput.runtime.empty'))
+    const targets = resolvePromptTargets(action, terminals.map(terminal => terminal.id),
+      terminals.find(terminal => terminal.isActive)?.id ?? null, selectedTerminalIdsRef.current, targetId)
+    if (!targets.ids.length) return reject(targets.reason ?? 'target-unavailable', t(targets.reason === 'target-conflict'
+      ? 'promptInput.runtime.conflict' : 'promptInput.runtime.unavailable'))
+    const api = window.electronAPI?.promptInput
+    if (!api) return reject('api-unavailable', t('promptInput.runtime.failed'))
+
+    inputBusyRef.current = true
+    setInputBusy(true)
+    setInputNotice(null)
+    const startedAt = performance.now()
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
+      phase: 'send', tabId, actionId, origin, targets: targets.ids.length,
+      includePrompt: action.includePrompt, terminalKey: action.terminalKey,
+      contentLen: content.length, revision: snapshot.revision
+    })
+    let delivered = false
+    try {
+      const legacyAction = !action.includePrompt ? 'execute' : action.terminalKey === 'None' ? 'send' : 'sendAndExecute'
+      try {
+        window.electronAPI.telemetry.track('prompt/use', { action: legacyAction })
+      } catch {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'usage-track-failed', tabId, actionId })
+      }
+      // Preserve the legacy Prompt action contract at the shared delivery boundary.
+      // Only accepted invocations own a flow; its span waits for every recipient.
+      const flowId = performanceTrace.enabled
+        ? performanceTrace.createFlowId(legacyAction === 'sendAndExecute' ? 'prompt-send-execute' : `prompt-${legacyAction}`)
+        : undefined
+      const traceArgs = { action: legacyAction, terminalIds: targets.ids, flowId, origin }
+      if (flowId) performanceTrace.recordFlowStart('ui.prompt.action', flowId, traceArgs, 'prompt')
+      const results = await performanceTrace.timeAsync('ui.prompt.action', traceArgs, async () => {
+        let successCount = 0
+        let sentOnlyCount = 0
+        try {
+          return await Promise.all(targets.ids.map(async (terminalId) => {
+            let result: PromptInputResult
+            try {
+              if (flowId) performanceTrace.setActiveTerminalFlow(terminalId, flowId)
+              result = await api.send(terminalId, { content, includePrompt: action.includePrompt, terminalKey: action.terminalKey })
+            } catch {
+              result = { ok: false, phase: action.includePrompt ? 'content' : 'key', contentDelivered: false, reason: 'unavailable' }
+            }
+            if (result.ok) successCount += 1
+            else if (result.contentDelivered) sentOnlyCount += 1
+            perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
+              phase: 'target-result', tabId, actionId, terminalId, ok: result.ok,
+              sendPhase: result.phase, contentDelivered: result.contentDelivered, reason: result.reason
+            })
+            return { terminalId, result }
+          }))
+        } finally {
+          if (flowId) performanceTrace.recordFlowEnd('ui.prompt.action.done', flowId, {
+            action: legacyAction, successCount, sentOnlyCount,
+            failedCount: targets.ids.length - successCount - sentOnlyCount
+          }, 'prompt')
+        }
+      }, 'prompt')
+      if (window.electronAPI?.debug?.autotest && inputAckBarrierForAutotest?.tabId === tabId) {
+        const barrier = inputAckBarrierForAutotest
+        await new Promise<void>(resolve => { barrier.waiters.add(resolve) })
+      }
+      const succeeded = results.filter(({ result }) => result.ok).length
+      const allSucceeded = succeeded === targets.ids.length
+      delivered = results.some(({ result }) => result.contentDelivered || result.ok)
+      // Key-only actions never save unsent text. Each content dispatch records
+      // its immutable snapshot once, including failed targets in mixed results.
+      if (action.includePrompt && results.some(({ result }) => result.contentDelivered)) {
+        const sentAt = Date.now()
+        const sendHistory: PromptSendRecord[] = results.map(({ terminalId, result }) => ({
+          taskId: terminalId,
+          taskName: terminals.find(terminal => terminal.id === terminalId)?.title ?? terminalId,
+          sentAt,
+          action: action.terminalKey === 'None' ? 'send' : 'sendAndExecute',
+          inputActionId: action.id,
+          inputTerminalKey: action.terminalKey,
+          inputResult: result
+        }))
+        onAddPrompt({ title: snapshot.title.trim(), content, color: snapshot.color, pinned: false, sendHistory }, tabId)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+          phase: 'history-recorded', tabId, revision: snapshot.revision, targets: targets.ids.length, contentLen: content.length
+        })
+      }
+      const currentRevision = controller.snapshot().revision
+      if (inputMountedRef.current && shouldClearPromptDraft(action.includePrompt, allSucceeded, snapshot.revision, currentRevision)) {
+        if (controller.clearIfRevision(snapshot.revision)) setSelectedId(null)
+      } else {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+          phase: 'clear-skipped', tabId, sentRevision: snapshot.revision, currentRevision,
+          reason: !inputMountedRef.current ? 'unmounted' : !action.includePrompt ? 'key-only' : !allSucceeded ? 'partial-failure' : 'newer-draft'
+        })
+      }
+      if (inputMountedRef.current) {
+        const contentOnly = results.some(({ result }) => !result.ok && result.contentDelivered)
+        const unsafeMultiline = results.every(({ result }) => result.reason === 'unsafe-multiline-send')
+        const summary = allSucceeded
+          ? t('promptInput.runtime.sent', { count: succeeded })
+          : contentOnly ? t('promptInput.runtime.keyFailed')
+            : unsafeMultiline ? t('promptInput.runtime.unsafeMultiline')
+              : succeeded ? t('promptInput.runtime.partial', { sent: succeeded, failed: targets.ids.length - succeeded })
+                : t('promptInput.runtime.failed')
+        const details = formatPromptInputFailureDetails(results.map(({ terminalId, result }) => ({
+          taskName: terminals.find(terminal => terminal.id === terminalId)?.title
+            || t('promptInput.runtime.task', { number: terminals.findIndex(terminal => terminal.id === terminalId) + 1 }),
+          result
+        })), t)
+        setInputNotice({ error: !allSucceeded, text: details ? `${summary}\n${details}` : summary })
+      }
+      return allSucceeded
+    } catch {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'failed', tabId, actionId, delivered })
+      if (inputMountedRef.current) setInputNotice({ error: true, text: t(delivered ? 'promptInput.runtime.historyFailed' : 'promptInput.runtime.failed') })
+      return false
+    } finally {
+      inputBusyRef.current = false
+      if (inputMountedRef.current) setInputBusy(false)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
+        phase: 'complete', tabId, actionId, durationMs: performance.now() - startedAt
+      })
+    }
+  }
+
   const recordPromptEdit = useCallback((field: 'title' | 'content', value: string) => {
     if (!performanceTrace.enabled) return
     performanceTrace.recordInstant('ui.prompt.edit', {
@@ -283,11 +491,6 @@ export const PromptNotebook = memo(function PromptNotebook({
     setEditorTitle(nextTitle)
     recordPromptEdit('title', nextTitle)
   }, [recordPromptEdit])
-
-  // Get the currently selected Prompt
-  const selectedPrompt = useMemo(() => {
-    return prompts.find(p => p.id === selectedId) || null
-  }, [prompts, selectedId])
 
   const promptTaskHistory = useMemo(
     () => buildPromptTaskHistorySummary(prompts, terminals.length),
@@ -367,7 +570,7 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Debug API (only exposed in automated testing mode)
   useEffect(() => {
-    if (!window.electronAPI?.debug?.autotest) return
+    if (!window.electronAPI?.debug?.autotest || !activeTab) return
 
     const mapScheduleToDebug = (s: PromptSchedule) => ({
       promptId: s.promptId,
@@ -397,7 +600,8 @@ export const PromptNotebook = memo(function PromptNotebook({
         color: p.color ?? undefined,
         lastUsedAt: p.lastUsedAt,
         taskNumbers: promptTaskHistory.promptTaskNumbers.get(p.id) ?? [],
-        sendHistoryCount: p.sendHistory?.length ?? 0
+        sendHistoryCount: p.sendHistory?.length ?? 0,
+        sendHistory: p.sendHistory ?? []
       })),
       getVisiblePromptItems: () => filteredPrompts.map(p => ({
         id: p.id,
@@ -485,6 +689,22 @@ export const PromptNotebook = memo(function PromptNotebook({
         lastAutoCleanupAt: promptCleanup.lastAutoCleanupAt
       }),
       getEditorContent: () => editorContentRef.current,
+      getLiveDraftSnapshot: () => getDraftController(tabId)?.snapshot() ?? null,
+      isInputBusy: () => inputBusyRef.current,
+      setInputAckHeld: (held: boolean) => {
+        releaseInputAckForAutotest()
+        if (held) inputAckBarrierForAutotest = { tabId, waiters: new Set() }
+      },
+      isInputAckWaiting: () => (inputAckBarrierForAutotest?.waiters.size ?? 0) > 0,
+      setDraftSyncHeld: (held: boolean) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: { setDraftSyncHeld: (held: boolean) => void }
+        }).__onwardPromptEditorContentControl
+        control?.setDraftSyncHeld(held)
+      },
+      isDraftSyncHeld: () => (window as unknown as {
+        __onwardPromptEditorContentControl?: { isDraftSyncHeld: () => boolean }
+      }).__onwardPromptEditorContentControl?.isDraftSyncHeld() ?? false,
       getEditorHeight: () => {
         const editor = document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor') as HTMLElement | null
         if (!editor) return null
@@ -492,26 +712,19 @@ export const PromptNotebook = memo(function PromptNotebook({
       },
       getPersistedEditorHeight: () => promptEditorHeight,
       setEditorContent: (content: string) => {
-        // Two things must happen for a send to durably see this content:
-        //  1. Drive the editor's REAL local-content state (PromptEditorWithAppend),
-        //     which syncs up to editorContent. Without this the editor's debounced
-        //     sync fires with its still-empty local content and re-clears
-        //     editorContent. The old synthetic-DOM-input approach did not reliably
-        //     fire the canvas/line editor's onChange, so the local content stayed ''.
-        //  2. Set the editorContent STATE — but deliberately NOT editorContentRef.
-        //     getEditorContent reads the ref (synced from editorContent on EVERY
-        //     render), so leaving the ref alone makes `editorReady` gate on the
-        //     COMMITTED state. Previously the ref was set synchronously here, so
-        //     editorReady passed BEFORE React committed the re-render, and the test
-        //     clicked send while the send-path callback (applySuccessSideEffects)
-        //     still closed over editorContent='' → it skipped the history add
-        //     (PL-05 createdPrompt: null). Gating on the commit hands the send a
-        //     fresh callback that sees the real content.
+        // Drive the real editor-local snapshot. Keep the debounced preview
+        // control for older tests that wait for a committed parent render.
         const control = (window as unknown as {
-          __onwardPromptEditorContentControl?: { setContent: (v: string) => void }
+          __onwardPromptEditorContentControl?: { setContent: (v: string) => void; isDraftSyncHeld: () => boolean }
         }).__onwardPromptEditorContentControl
         control?.setContent(content)
-        setEditorContent(content)
+        if (!control?.isDraftSyncHeld()) setEditorContent(content)
+      },
+      setEditorTitle: (value: string) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: { setTitle: (title: string) => void }
+        }).__onwardPromptEditorContentControl
+        control?.setTitle(value)
       },
       submitEditor: () => {
         if (!editorContentRef.current.trim()) return
@@ -602,6 +815,7 @@ export const PromptNotebook = memo(function PromptNotebook({
       }
     }
   }, [
+    activeTab,
     prompts,
     promptCleanup,
     promptEditorHeight,
@@ -626,33 +840,14 @@ export const PromptNotebook = memo(function PromptNotebook({
     colorFilterStats,
     activeTaskFilter,
     taskFilterOptions,
-    setFilterEnabledWithReset
+    setFilterEnabledWithReset,
+    getDraftController
   ])
 
-  // Get the content to be sent: use the editor content first, otherwise use the selected Prompt content
+  // Debounced preview only; dispatch reads the editor-local live snapshot.
   const editorContentForSend = useMemo(() => {
     return transformVirtualPaddingForSend(editorContent)
   }, [editorContent])
-
-  const contentToSend = useMemo(() => {
-    return editorContentForSend || selectedPrompt?.content || ''
-  }, [editorContentForSend, selectedPrompt])
-
-  const hasEditorContent = useMemo(() => {
-    return !!editorContentForSend
-  }, [editorContentForSend])
-
-  const saveEditorContentAsNewPrompt = useCallback((color?: Prompt['color'], sendRecords?: PromptSendRecord[]) => {
-    const sendContent = transformVirtualPaddingForSend(editorContent)
-    if (!sendContent) return
-    onAddPrompt({
-      title: editorTitle.trim(),
-      content: sendContent,
-      pinned: false,
-      color: color ?? undefined,
-      sendHistory: sendRecords
-    })
-  }, [editorContent, editorTitle, onAddPrompt])
 
   // Create new Prompt (commit)
   const handleSubmit = useCallback((title: string, content: string, color?: 'red' | 'yellow' | 'green' | null) => {
@@ -830,10 +1025,12 @@ export const PromptNotebook = memo(function PromptNotebook({
   // editor still holds the untouched original of the entry being edited
   // (browsing history by double-click must not duplicate entries).
   const handleDoubleClick = useCallback((prompt: Prompt) => {
-    const normalizedContent = transformVirtualPaddingForSend(editorContentRef.current)
+    const snapshot = getDraftController(tabId)?.snapshot()
+    const normalizedContent = transformVirtualPaddingForSend(snapshot?.content ?? editorContentRef.current)
+    const draftTitle = snapshot?.title ?? editorTitleRef.current
     const decision = decideDraftPreservation({
       normalizedContent,
-      title: editorTitleRef.current,
+      title: draftTitle,
       editingOriginal: editingPrompt
         ? {
             normalizedContent: transformVirtualPaddingForSend(editingPrompt.content),
@@ -843,7 +1040,7 @@ export const PromptNotebook = memo(function PromptNotebook({
     })
     if (decision.preserve) {
       onAddPrompt({
-        title: editorTitleRef.current.trim(),
+        title: draftTitle.trim(),
         content: normalizedContent,
         pinned: false,
         color: editingPrompt?.color ?? undefined
@@ -857,7 +1054,7 @@ export const PromptNotebook = memo(function PromptNotebook({
       hadEditingSource: Boolean(editingPrompt)
     })
     setEditingPrompt(prompt)
-  }, [editingPrompt, onAddPrompt, showDraftToast, t])
+  }, [editingPrompt, onAddPrompt, showDraftToast, t, getDraftController, tabId])
 
   // Cancel edit
   const handleCancelEdit = useCallback(() => {
@@ -995,64 +1192,6 @@ export const PromptNotebook = memo(function PromptNotebook({
     })
   }, [terminals])
 
-  const applySuccessSideEffects = useCallback((result: TerminalBatchResult, sendRecords?: PromptSendRecord[]): TerminalBatchResult => {
-    if (!hasDeliveredTerminals(result)) {
-      return result
-    }
-
-    // Save to history when the content is not empty (the editing state is saved as a new entry by default)
-    if (hasEditorContent) {
-      saveEditorContentAsNewPrompt(editingPrompt?.color, sendRecords)
-    } else if (selectedPrompt) {
-      onTouchPromptLastUsed(selectedPrompt.id)
-      // Record sending history to existing prompt
-      if (sendRecords && sendRecords.length > 0) {
-        const existing = selectedPrompt.sendHistory ?? []
-        const merged = [...sendRecords, ...existing].slice(0, 100)
-        onUpdatePrompt({ ...selectedPrompt, sendHistory: merged }, true)
-      }
-    }
-
-    // Clear editor and drafts
-    setClearEditorTrigger(prev => prev + 1)
-    onEditorDraftChange(null)
-
-    // Exit editing state
-    if (editingPrompt) {
-      setEditingPrompt(null)
-    }
-
-    setSelectedId(null)
-
-    return result
-  }, [editingPrompt, hasEditorContent, onEditorDraftChange, onTouchPromptLastUsed, onUpdatePrompt, saveEditorContentAsNewPrompt, selectedPrompt])
-
-  // Send to terminal (wrapper, add save and clear logic)
-  const handleSendToTerminal = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
-    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
-    try {
-      const rawResult = await onSend(terminalIds, content)
-      const sendRecords = rawResult.successIds.length > 0
-        ? buildSendRecords(rawResult.successIds, 'send')
-        : undefined
-      return applySuccessSideEffects(rawResult, sendRecords)
-    } catch (error) {
-      console.error('Prompt send failed:', error)
-      return fallback
-    }
-  }, [onSend, applySuccessSideEffects, buildSendRecords])
-
-  // Execution (wrapping, adding save and clear logic)
-  const handleExecuteTerminal = useCallback(async (terminalIds: string[]): Promise<TerminalBatchResult> => {
-    const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
-    try {
-      return applySuccessSideEffects(await onExecute(terminalIds))
-    } catch (error) {
-      console.error('Prompt execute failed:', error)
-      return fallback
-    }
-  }, [onExecute, applySuccessSideEffects])
-
   // Send-and-execute triggered from the prompt context menu. Unlike the main
   // sender, this must NOT clear the editor, drop the current selection, or
   // exit editing state — the user may have unrelated content in the editor.
@@ -1091,21 +1230,51 @@ export const PromptNotebook = memo(function PromptNotebook({
     void runContextMenuSendAndExecute(prompt, terminals.map(t => t.id))
   }, [runContextMenuSendAndExecute, terminals])
 
-  // Send and execute (wrapper, add save and clear logic)
+  // Explicit editor-menu text keeps its legacy transport while sharing the
+  // input latch and revision guard with the configured action workflow.
   const handleSendAndExecute = useCallback(async (terminalIds: string[], content: string): Promise<TerminalBatchResult> => {
     const fallback = createTerminalBatchResult({ failedIds: [...terminalIds] })
+    const controller = getDraftController(tabId)
+    const snapshot = controller?.snapshot()
+    if (inputBusyRef.current || !snapshot || snapshot.composing) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'editor-menu-rejected', tabId })
+      return fallback
+    }
+    inputBusyRef.current = true
+    setInputBusy(true)
+    const startedAt = performance.now()
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'editor-menu-send', tabId, targets: terminalIds.length })
     try {
       const rawResult = await onSendAndExecute(terminalIds, content)
       const sendRecords = [
         ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
         ...buildSendRecords(rawResult.sentOnlyIds, 'sendAndExecute', 'sent-only')
       ]
-      return applySuccessSideEffects(rawResult, sendRecords)
+      if (hasDeliveredTerminals(rawResult) && snapshot) {
+        onAddPrompt({ title: snapshot.title.trim(), content, color: snapshot.color, pinned: false, sendHistory: sendRecords }, tabId)
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, { phase: 'history-recorded', tabId, revision: snapshot.revision, origin: 'editor-menu' })
+        const sentWholeDraft = content === transformVirtualPaddingForSend(snapshot.content)
+        if (inputMountedRef.current && sentWholeDraft && !rawResult.failedIds.length && !rawResult.sentOnlyIds.length) {
+          if (controller?.clearIfRevision(snapshot.revision)) setSelectedId(null)
+        } else {
+          perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, { phase: 'clear-skipped', tabId, origin: 'editor-menu', sentWholeDraft })
+        }
+      }
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
+        phase: 'editor-menu-result', tabId, succeeded: rawResult.successIds.length,
+        sentOnly: rawResult.sentOnlyIds.length, failed: rawResult.failedIds.length
+      })
+      return rawResult
     } catch (error) {
       console.error('Prompt send and execute failed:', error)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'editor-menu-failed', tabId })
       return fallback
+    } finally {
+      inputBusyRef.current = false
+      if (inputMountedRef.current) setInputBusy(false)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'editor-menu-complete', tabId, durationMs: performance.now() - startedAt })
     }
-  }, [onSendAndExecute, applySuccessSideEffects, buildSendRecords])
+  }, [onSendAndExecute, buildSendRecords, getDraftController, tabId, onAddPrompt])
 
   // Save the editor's right-click selection as a brand-new pinned prompt.
   // Derive a sensible title from the first non-empty line, capped to 40
@@ -1318,6 +1487,8 @@ export const PromptNotebook = memo(function PromptNotebook({
 
         {/* input area */}
         <PromptEditorWithAppend
+          tabId={tabId}
+          activeTab={activeTab}
           draftToast={draftToast}
           onSubmit={handleSubmit}
           onUpdatePrompt={onUpdatePrompt}
@@ -1327,7 +1498,6 @@ export const PromptNotebook = memo(function PromptNotebook({
           onAppendContentUsed={handleAppendContentUsed}
           onContentChange={handleEditorContentChange}
           onTitleChange={handleEditorTitleChange}
-          clearTrigger={clearEditorTrigger}
           promptEditorHeight={promptEditorHeight}
           onPromptEditorHeightChange={onPromptEditorHeightChange}
           promptInputMode={promptInputMode}
@@ -1351,10 +1521,17 @@ export const PromptNotebook = memo(function PromptNotebook({
         <PromptSender
           terminals={terminals}
           taskLayout={taskLayout}
-          promptContent={contentToSend}
-          onSend={handleSendToTerminal}
-          onExecute={handleExecuteTerminal}
-          onSendAndExecute={handleSendAndExecute}
+          tabId={tabId}
+          hidden={hidden}
+          activeTab={activeTab}
+          promptContent={editorContentForSend}
+          inputSettings={inputSettings}
+          selectedIds={selectedTerminalIds}
+          onSelectionChange={handleInputSelectionChange}
+          registerSelectionFlush={registerSelectionFlush}
+          onAction={handleInputAction}
+          isSubmitting={inputBusy}
+          notice={inputNotice}
           onTerminalRename={onTerminalRename}
           onChangeWorkDir={onChangeWorkDir}
         />
@@ -1517,7 +1694,10 @@ export const PromptNotebook = memo(function PromptNotebook({
                   <div key={index} className="prompt-send-history-item">
                     <span className="prompt-send-history-task">{record.taskName}</span>
                     <span className={`prompt-send-history-action ${record.action}`}>
-                      {record.action === 'send'
+                      {record.inputResult
+                        ? t(record.inputResult.ok ? 'promptInput.runtime.recordSent'
+                          : record.inputResult.contentDelivered ? 'promptInput.runtime.recordContentOnly' : 'promptInput.runtime.recordFailed')
+                        : record.action === 'send'
                         ? t('promptNotebook.sendHistory.action.send')
                         : record.action === 'execute'
                           ? t('promptNotebook.sendHistory.action.execute')
@@ -1544,6 +1724,8 @@ export const PromptNotebook = memo(function PromptNotebook({
 
 // Editor wrapper component with additional functionality
 const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
+  tabId,
+  activeTab,
   draftToast,
   onSubmit,
   onUpdatePrompt,
@@ -1553,7 +1735,6 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onAppendContentUsed,
   onContentChange,
   onTitleChange,
-  clearTrigger,
   promptEditorHeight,
   onPromptEditorHeightChange,
   editorDraft,
@@ -1570,6 +1751,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   ctxCurrentBranch,
   ctxCurrentTaskTitle
 }: {
+  tabId: string
+  activeTab: boolean
   draftToast: string | null
   onSubmit: (title: string, content: string, color?: 'red' | 'yellow' | 'green' | null) => void
   onUpdatePrompt: (prompt: Prompt, preserveTimestamp?: boolean) => void
@@ -1579,7 +1762,6 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onAppendContentUsed: () => void
   onContentChange: (content: string) => void
   onTitleChange: (title: string) => void
-  clearTrigger: number
   promptEditorHeight: number
   onPromptEditorHeightChange: (height: number) => void
   promptInputMode: 'canvas' | 'line'
@@ -1607,8 +1789,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // (~16ms), which is why every large chat composer uses one. See
   // docs/html/prompt-input-latency-investigation.html.
   //
-  // The content is UNCONTROLLED: the DOM is the sole source of truth (read via
-  // innerText, written via textContent). Keeping the large value out of React
+  // The content is UNCONTROLLED: live DOM text is mirrored into a local ref
+  // on input so hidden panels retain newlines. Keeping it out of React
   // state means typing / IME costs zero React reconciliation. A tiny
   // `hasContent` boolean drives button-disabled state.
   const [hasContent, setHasContent] = useState(() => {
@@ -1635,13 +1817,31 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   const editorRef = useRef<HTMLDivElement>(null)
   // Tracks IME composition so composition-sensitive handlers can short-circuit.
   const isComposingRef = useRef(false)
-  const { registerFocusEditor, registerSubmitEditor } = usePromptActions()
+  const { registerFocusEditor, registerSubmitEditor, registerDraftController } = usePromptActions()
+  const localContentRef = useRef(editorDraft?.content ?? '')
+  const draftRevisionRef = useRef(0)
+  const sourceRef = useRef<Prompt | null>(null)
+  const hiddenRef = useRef(hidden)
+  hiddenRef.current = hidden
+  const onCancelEditRef = useRef(onCancelEdit)
+  onCancelEditRef.current = onCancelEdit
 
   // ---- Contenteditable value + caret plumbing ----
   // Read the live plain text. innerText (NOT textContent) is layout-aware and
   // renders line breaks as '\n' whether they are text-node newlines or block
   // boundaries; textContent would drop Enter-created line breaks.
-  const readContent = useCallback((): string => editorRef.current?.innerText ?? '', [])
+  const readContent = useCallback((): string => {
+    // Hidden innerText degrades to textContent and loses block boundaries.
+    // Capture text on the existing input read and retain it across panel hides.
+    if (!hiddenRef.current && editorRef.current) {
+      const live = editorRef.current.innerText
+      if (live !== localContentRef.current) {
+        localContentRef.current = live
+        draftRevisionRef.current += 1
+      }
+    }
+    return localContentRef.current
+  }, [])
 
   // Flat caret offset within the plain text (for context-menu operations). Uses
   // a Range from the element start to the caret and measures its length. For
@@ -1698,11 +1898,21 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // Parent-notification debounce timer + stable-identity plumbing. The parent
   // callbacks are routed through refs so writeContent / scheduleParentSync never
   // change identity; otherwise effects that depend on writeContent (edit-load,
-  // append, clearTrigger) would re-fire on unrelated parent renders and could
+  // append) would re-fire on unrelated parent renders and could
   // wipe the user's in-progress edits.
   const parentNotifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const draftSyncHeldForAutotestRef = useRef(false)
+  useEffect(() => () => {
+    draftSyncHeldForAutotestRef.current = false
+    if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
+    parentNotifyTimerRef.current = null
+  }, [])
   const titleRef = useRef(title)
-  titleRef.current = title
+  const writeTitle = useCallback((next: string) => {
+    titleRef.current = next
+    draftRevisionRef.current += 1
+    setTitle(next)
+  }, [])
   const onContentChangeRef = useRef(onContentChange)
   const onTitleChangeRef = useRef(onTitleChange)
   const onEditorDraftChangeRef = useRef(onEditorDraftChange)
@@ -1728,23 +1938,24 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
 
   // Re-render (button-disabled only) when the empty<->non-empty flag flips.
   // /\S/.test stops at the first non-whitespace char (O(1) for real content).
-  const syncHasContent = useCallback(() => {
-    const v = editorRef.current?.innerText ?? ''
+  const syncHasContent = useCallback((v = readContent()) => {
     const has = v.length > 0 && /\S/.test(v)
     if (has !== hasContentRef.current) {
       hasContentRef.current = has
       setHasContent(has)
     }
-  }, [])
+  }, [readContent])
 
   // Debounced parent sync (content / title / draft), called imperatively from
   // input, programmatic writes, and title/height changes. Stable identity.
   const scheduleParentSync = useCallback(() => {
     if (!hasMountedRef.current) return
+    if (draftSyncHeldForAutotestRef.current) return
     if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
     parentNotifyTimerRef.current = setTimeout(() => {
+      parentNotifyTimerRef.current = null
       startTransition(() => {
-        const content = editorRef.current?.innerText ?? ''
+        const content = readContent()
         const currentTitle = titleRef.current
         onContentChangeRef.current(content)
         onTitleChangeRef.current(currentTitle)
@@ -1753,24 +1964,60 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         } else {
           onEditorDraftChangeRef.current({ title: currentTitle, content, height: heightRef.current, savedAt: Date.now() })
         }
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+          phase: 'persist', tabId, revision: draftRevisionRef.current, contentLen: content.length
+        })
       })
     }, 300)
-  }, [])
+  }, [readContent, tabId])
 
   // Imperatively set the editor content (programmatic mutations only). Writes
   // textContent (a single text node with '\n' chars, rendered as line breaks by
   // white-space:pre-wrap) so the DOM stays simple and caret offsets are exact.
   // `caretAt` restores the caret; default is end-of-content.
   const writeContent = useCallback((next: string, caretAt?: number) => {
+    localContentRef.current = next
+    draftRevisionRef.current += 1
     const el = editorRef.current
     if (el) {
       el.textContent = next
       const pos = caretAt === undefined ? next.length : Math.max(0, Math.min(caretAt, next.length))
-      setCaretOffset(pos)
+      if (document.activeElement === el) setCaretOffset(pos)
     }
-    syncHasContent()
+    syncHasContent(next)
     scheduleParentSync()
-  }, [setCaretOffset, syncHasContent, scheduleParentSync])
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+      phase: 'write', tabId, revision: draftRevisionRef.current, contentLen: next.length
+    })
+  }, [setCaretOffset, syncHasContent, scheduleParentSync, tabId])
+
+  useLayoutEffect(() => registerDraftController(tabId, {
+    snapshot: () => ({
+      content: readContent(), title: titleRef.current, revision: draftRevisionRef.current,
+      sourceId: sourceRef.current?.id ?? null, color: sourceRef.current?.color ?? null,
+      composing: isComposingRef.current
+    }),
+    clearIfRevision: (revision) => {
+      readContent()
+      if (draftRevisionRef.current !== revision) {
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+          phase: 'clear-skipped', tabId, sentRevision: revision, currentRevision: draftRevisionRef.current
+        })
+        return false
+      }
+      writeTitle('')
+      writeContent('')
+      sourceRef.current = null
+      draftRevisionRef.current += 1
+      onCancelEditRef.current()
+      if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
+      onContentChangeRef.current('')
+      onTitleChangeRef.current('')
+      onEditorDraftChangeRef.current(null)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, { phase: 'cleared', tabId, sentRevision: revision })
+      return true
+    }
+  }), [registerDraftController, tabId, readContent, writeTitle, writeContent])
   const platform = window.electronAPI?.platform ?? 'darwin'
   const isMac = platform === 'darwin'
   const saveShortcutLabel = isMac ? '⌘S' : 'Ctrl+S'
@@ -1795,17 +2042,16 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
 
   // Silently restore drafts on first mount. Content is applied imperatively — a
   // contenteditable div has no defaultValue.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!hasMountedRef.current && editorDraft) {
-      setTitle(editorDraft.title)
-      if (editorRef.current) editorRef.current.textContent = editorDraft.content
+      writeTitle(editorDraft.title)
+      writeContent(editorDraft.content)
       setHeight(Math.max(promptEditorHeight, editorDraft.height, MIN_EDITOR_HEIGHT))
       hasMountedRef.current = true
-      syncHasContent()
     } else if (!hasMountedRef.current) {
       hasMountedRef.current = true
     }
-  }, [editorDraft, promptEditorHeight, syncHasContent])
+  }, [editorDraft, promptEditorHeight, writeContent, writeTitle])
 
   useEffect(() => {
     if (isDraggingRef.current) return
@@ -1815,38 +2061,50 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   }, [promptEditorHeight])
 
   // Populate content when edit mode is activated
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (sourceRef.current === editingPrompt) return
+    sourceRef.current = editingPrompt
+    draftRevisionRef.current += 1
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
+      phase: 'source-changed', tabId, revision: draftRevisionRef.current, hasSource: Boolean(editingPrompt)
+    })
     if (editingPrompt) {
-      setTitle(editingPrompt.title)
+      writeTitle(editingPrompt.title)
       writeContent(editingPrompt.content)
     }
-  }, [editingPrompt, writeContent])
+  }, [editingPrompt, writeContent, writeTitle, tabId])
 
-  // Autotest-only: expose this editor's REAL local-content setter. The send path
-  // reads PromptNotebook.editorContent, which this component owns and syncs up
-  // (debounced below). The notebook debug API's setEditorContent used a synthetic
-  // DOM `input` event + a mirror ref; the input event does NOT reliably fire this
-  // editor's onChange (it renders differently in 'canvas' vs 'line' mode), so the
-  // local content stayed '' and the debounced sync OVERWROTE editorContent back to
-  // '' before the send read it (PL-05 createdPrompt: null). Driving setContent here
-  // injects into the true source so the value survives the sync. Autotest-gated, so
-  // it never registers in user builds.
+  // Autotest-only controls mutate the same local snapshot as trusted input.
   useEffect(() => {
-    if (!window.electronAPI?.debug?.autotest) return
+    if (!window.electronAPI?.debug?.autotest || !activeTab) return
+    let live = true
     const control = {
       setContent: (value: string) => {
         hasMountedRef.current = true
         writeContent(value)
+      },
+      setTitle: writeTitle,
+      isDraftSyncHeld: () => draftSyncHeldForAutotestRef.current,
+      setDraftSyncHeld: (held: boolean) => {
+        if (!live || draftSyncHeldForAutotestRef.current === held) return
+        draftSyncHeldForAutotestRef.current = held
+        if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
+        parentNotifyTimerRef.current = null
+        // Release resumes the existing debounce, which reads the latest local
+        // draft rather than an older payload captured before the hold.
+        if (!held) scheduleParentSync()
       }
     }
     ;(window as unknown as { __onwardPromptEditorContentControl?: typeof control }).__onwardPromptEditorContentControl = control
     return () => {
+      control.setDraftSyncHeld(false)
+      live = false
       const w = window as unknown as { __onwardPromptEditorContentControl?: typeof control }
       if (w.__onwardPromptEditorContentControl === control) {
         delete w.__onwardPromptEditorContentControl
       }
     }
-  }, [writeContent])
+  }, [writeContent, writeTitle, scheduleParentSync, activeTab])
 
   // Title / height changes drive the debounced parent sync; content changes
   // drive it imperatively from handleInput / writeContent (content is no longer
@@ -1855,6 +2113,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     scheduleParentSync()
     return () => {
       if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
+      parentNotifyTimerRef.current = null
     }
   }, [title, height, scheduleParentSync])
 
@@ -1919,12 +2178,12 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     }
 
     // Clear editing state and drafts
-    setTitle('')
+    writeTitle('')
     writeContent('')
     onCancelEdit()
     onEditorDraftChange(null)
     onSaveSuccess?.()
-  }, [title, readContent, writeContent, editingPrompt, onSubmit, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
+  }, [title, readContent, writeContent, writeTitle, editingPrompt, onSubmit, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
   // Submit processing (add new Prompt, optionally with a color tag).
   const handleSubmit = useCallback((color?: PromptColor | null) => {
@@ -1932,11 +2191,11 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     if (!sendContent) return
 
     onSubmit(title.trim(), sendContent, color ?? null)
-    setTitle('')
+    writeTitle('')
     writeContent('')
     // Clear draft after submission
     onEditorDraftChange(null)
-  }, [title, readContent, writeContent, onSubmit, onEditorDraftChange])
+  }, [title, readContent, writeContent, writeTitle, onSubmit, onEditorDraftChange])
 
   // Edit mode: apply a color and save the current edit in one action
   const handleSaveWithColor = useCallback((color: PromptColor) => {
@@ -1951,29 +2210,29 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       lastUsedAt: Date.now()
     }, true)
 
-    setTitle('')
+    writeTitle('')
     writeContent('')
     onCancelEdit()
     onEditorDraftChange(null)
     onSaveSuccess?.()
-  }, [title, readContent, writeContent, editingPrompt, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
+  }, [title, readContent, writeContent, writeTitle, editingPrompt, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
   // Cancel edit
   const handleCancel = useCallback(() => {
-    setTitle('')
+    writeTitle('')
     writeContent('')
     onCancelEdit()
     // Clear draft after canceling
     onEditorDraftChange(null)
     // Cancel the blur input box after editing to ensure that ESC can close the Editor normally next time
     editorRef.current?.blur()
-  }, [writeContent, onCancelEdit, onEditorDraftChange])
+  }, [writeContent, writeTitle, onCancelEdit, onEditorDraftChange])
 
   // Parent content/title notifications are handled by the debounced
   // effect above — no separate immediate effects needed here.
 
   const handleTitleChange = useCallback((value: string) => {
-    setTitle(value)
+    writeTitle(value)
     if (performanceTrace.enabled) {
       performanceTrace.recordInstant('ui.prompt.edit', {
         field: 'title',
@@ -1981,31 +2240,25 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         ...performanceTrace.summarizeText('payload', value)
       }, 'prompt')
     }
-  }, [editingPrompt])
+  }, [editingPrompt, writeTitle])
 
   // Native input handler for the contenteditable. Does NOT push the value
   // through React state — the DOM is the source of truth. It only flips the
   // has-content flag (rare re-render) and schedules the debounced parent sync,
   // which is what keeps typing / IME O(1) in React terms regardless of size.
   const handleInput = useCallback(() => {
-    syncHasContent()
+    const content = readContent()
+    draftRevisionRef.current += 1
+    syncHasContent(content)
     scheduleParentSync()
     if (performanceTrace.enabled) {
       performanceTrace.recordInstant('ui.prompt.edit', {
         field: 'content',
         mode: editingPrompt ? 'edit' : 'new',
-        ...performanceTrace.summarizeText('payload', readContent())
+        ...performanceTrace.summarizeText('payload', content)
       }, 'prompt')
     }
   }, [editingPrompt, syncHasContent, scheduleParentSync, readContent])
-
-  // Respond to clear triggers
-  useEffect(() => {
-    if (clearTrigger > 0) {
-      setTitle('')
-      writeContent('')
-    }
-  }, [clearTrigger, writeContent])
 
   // Programmatic content mutation used by the right-click context menu.
   // Sets the content (running through React state so debounced parent
@@ -2080,6 +2333,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
 
   // Shortcut support
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || isComposingRef.current) return
     // Construct an accelerator format of the current keystroke
     const accelerator = buildAccelerator(e.nativeEvent)
 
@@ -2145,6 +2399,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       className="prompt-editor"
       style={{ height }}
       onKeyDown={handleKeyDown}
+      onCompositionStart={handleCompositionStart}
+      onCompositionEnd={handleCompositionEnd}
       data-prompt-editing={editingPrompt ? 'true' : undefined}
     >
       <div className="prompt-editor-resizer" onMouseDown={handleMouseDown} />
@@ -2175,8 +2431,6 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
           spellCheck={false}
           onInput={handleInput}
           onContextMenu={handleEditorContextMenu}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
         />
       </div>
       {ctxMenu && (

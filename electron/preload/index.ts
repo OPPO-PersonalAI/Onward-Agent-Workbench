@@ -6,9 +6,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { installThemeBootstrap } from './theme-bootstrap'
 import { IPC } from '../shared/ipc-channels'
+import type { AutotestInputFocusResult } from '../shared/autotest-input-focus'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import type { SettingsState } from '../../src/types/settings'
-import type { ThemeDefinition } from '../../src/types/theme'
+import type { ThemeDefinition, ThemeScheduleClock } from '../../src/types/theme'
+import type { PromptInputAPI, PromptInputResult, PromptShortcutEvent } from '../../src/utils/prompt-input'
+export type { PromptInputAPI } from '../../src/utils/prompt-input'
 export type { SettingsState } from '../../src/types/settings'
 import type {
   FeedbackActionResult,
@@ -1004,6 +1007,9 @@ export interface SettingsAPI {
 }
 
 export interface ThemesAPI {
+  scheduleClock: () => Promise<ThemeScheduleClock>
+  onScheduleChanged: (callback: (clock: ThemeScheduleClock) => void) => () => void
+  setClockForAutotest: (now: number | null, reason?: 'timer' | 'resume') => Promise<ThemeScheduleClock>
   export: (requestId: string, themeId: string) => Promise<{ success: boolean; canceled?: boolean }>
   cancelExport: (requestId: string) => Promise<{ canceled: boolean }>
   setExportPathForAutotest: (path: string | null, options?: { pauseAt?: 'before-worker' | 'before-commit'; waitUntilPaused?: boolean }) => Promise<void>
@@ -1262,6 +1268,9 @@ export interface DebugAPI {
   virtualCursorDisabled: boolean
   log: (message: string, data?: unknown) => void
   focusWindow: () => Promise<boolean>
+  blurWindow: () => Promise<boolean>
+  sendInputEvent: (input: Electron.KeyboardInputEvent, contentsId?: number) => Promise<boolean>
+  getInputFocus: () => Promise<AutotestInputFocusResult | null>
   simulateGpuProcessGone: () => Promise<{ success: boolean; notified?: number; error?: string }>
   runOcclusionFlipStress: (cycles?: number) => Promise<{
     success: boolean
@@ -1548,6 +1557,7 @@ export interface FeedbackAPI {
 export interface ElectronAPI {
   terminal: TerminalAPI
   prompt: PromptAPI
+  promptInput: PromptInputAPI
   terminalConfig: TerminalConfigAPI
   dialog: DialogAPI
   shell: ShellAPI
@@ -1568,6 +1578,51 @@ export interface ElectronAPI {
   debug: DebugAPI
   system: SystemAPI
   platform: 'darwin' | 'win32' | 'linux'
+}
+
+function tracePromptInputIpc(stage: string, data: Record<string, unknown> = {}): void {
+  if (!preloadPerfTraceEnabled) return
+  ipcRenderer.send(IPC.DEBUG_PERF_TRACE, { event: PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_IPC, data: { stage, ...data } })
+}
+
+async function invokePromptInput<T>(channel: string, ...args: unknown[]): Promise<T> {
+  tracePromptInputIpc('send', { channel })
+  return traceIpc(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_IPC, { channel, stage: 'complete' }, async () => {
+    try {
+      const result = await ipcRenderer.invoke(channel, ...args)
+      if (channel === IPC.PROMPT_INPUT_SEND) {
+        const response = result as PromptInputResult
+        tracePromptInputIpc(response.ok ? 'receive' : 'reject', {
+          channel, ok: response.ok, phase: response.phase, contentDelivered: response.contentDelivered, reason: response.reason
+        })
+      } else {
+        tracePromptInputIpc('receive', { channel })
+      }
+      return result as T
+    } catch (error) {
+      tracePromptInputIpc('reject', { channel, reason: 'invoke-failed' })
+      throw error
+    }
+  })
+}
+
+const promptInputAPI: PromptInputAPI = {
+  setContext: context => invokePromptInput(IPC.PROMPT_INPUT_SET_CONTEXT, context),
+  suspend: (suspended, preserveNativeMenus) => invokePromptInput(IPC.PROMPT_INPUT_SUSPEND, suspended, preserveNativeMenus),
+  cancel: reason => invokePromptInput(IPC.PROMPT_INPUT_CANCEL, reason),
+  send: (terminalId, payload) => invokePromptInput(IPC.PROMPT_INPUT_SEND, terminalId, payload),
+  onShortcut: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, event: PromptShortcutEvent) => {
+      tracePromptInputIpc('shortcut-receive', { kind: event.kind, active: event.active, reason: event.reason })
+      callback(event)
+    }
+    ipcRenderer.on(IPC.PROMPT_INPUT_SHORTCUT, listener)
+    tracePromptInputIpc('shortcut-subscribed')
+    return () => {
+      ipcRenderer.removeListener(IPC.PROMPT_INPUT_SHORTCUT, listener)
+      tracePromptInputIpc('shortcut-unsubscribed')
+    }
+  }
 }
 
 const terminalAPI: TerminalAPI = {
@@ -2174,6 +2229,22 @@ const projectAPI: ProjectAPI = {
 }
 
 const themesAPI: ThemesAPI = {
+  scheduleClock: () => traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { stage: 'clock-ipc' }, async () => {
+    if (preloadPerfTraceEnabled) ipcRenderer.send(IPC.DEBUG_PERF_TRACE, {
+      event: PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, data: { reason: 'clock-send' }
+    })
+    try { return await ipcRenderer.invoke(IPC.THEMES_SCHEDULE_CLOCK) }
+    catch { throw new Error('theme-clock-unavailable') }
+  }),
+  onScheduleChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, clock: ThemeScheduleClock) => callback(clock)
+    ipcRenderer.on(IPC.THEMES_SCHEDULE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(IPC.THEMES_SCHEDULE_CHANGED, listener)
+  },
+  setClockForAutotest: (now, reason) => {
+    if (!preloadAutotestEnabled) return Promise.reject(new Error('autotest-disabled'))
+    return ipcRenderer.invoke(IPC.THEMES_AUTOTEST_CLOCK, now, reason)
+  },
   export: (requestId, themeId) => traceIpc(PERF_TRACE_EVENT.RENDERER_THEME_EXPORT, { stage: 'ipc-complete' }, async () => {
     try { return await ipcRenderer.invoke(IPC.THEMES_EXPORT, requestId, themeId) }
     catch { throw new Error('theme-export-ipc-failed') }
@@ -2428,6 +2499,18 @@ const debugAPI: DebugAPI = {
   },
   focusWindow: () => {
     return ipcRenderer.invoke(IPC.DEBUG_FOCUS_WINDOW)
+  },
+  blurWindow: () => {
+    if (!debugAutotestEnabled) return Promise.resolve(false)
+    return ipcRenderer.invoke(IPC.DEBUG_BLUR_WINDOW)
+  },
+  sendInputEvent: (input, contentsId) => {
+    if (!debugAutotestEnabled) return Promise.resolve(false)
+    return ipcRenderer.invoke(IPC.DEBUG_SEND_INPUT_EVENT, input, contentsId)
+  },
+  getInputFocus: () => {
+    if (!debugAutotestEnabled) return Promise.resolve(null)
+    return ipcRenderer.invoke(IPC.DEBUG_GET_INPUT_FOCUS)
   },
   simulateGpuProcessGone: () => {
     return ipcRenderer.invoke(IPC.DEBUG_SIMULATE_GPU_PROCESS_GONE)
@@ -2944,6 +3027,7 @@ const systemAPI: SystemAPI = {
 contextBridge.exposeInMainWorld('electronAPI', {
   terminal: terminalAPI,
   prompt: promptAPI,
+  promptInput: promptInputAPI,
   terminalConfig: terminalConfigAPI,
   dialog: dialogAPI,
   shell: shellAPI,

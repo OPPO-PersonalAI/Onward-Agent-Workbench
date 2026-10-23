@@ -11,6 +11,7 @@ import ts from 'typescript'
 import * as engine from '../../src/themes/theme-engine.ts'
 import * as themes from '../../src/constants/themes.ts'
 import * as presets from '../../src/themes/theme-presets.ts'
+import * as schedule from '../../src/themes/theme-schedule.ts'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names.ts'
 import { handlerHarness, preloadBridge } from './support/theme-import-harness.mjs'
 import { importThemeFile } from '../../electron/main/theme-import-source.ts'
@@ -90,6 +91,8 @@ function createHarness(t, theme = initialTheme(), options = {}) {
     '../../constants/themes': themes,
     '../../themes/theme-engine': engine,
     '../../themes/theme-presets': presets,
+    '../../themes/theme-schedule': schedule,
+    './ThemeScheduleEditor': { ThemeScheduleEditor: () => null },
     '../../i18n/useI18n': { useI18n: () => ({ t: key => key }) },
     '../../hooks/useModalEscape': { useModalEscape: (active, callback, name) => escapes.set(name, active ? callback : null) },
     '../../utils/perf-trace': { perfTraceDiagnostic: (name, data) => traces.push({ name, data }) },
@@ -143,6 +146,22 @@ function createHarness(t, theme = initialTheme(), options = {}) {
 
 const CUSTOMIZE = PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE
 const IMPORT = PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_UI
+
+test('TSD-15: importing while scheduled preserves rules and shows the import-only action', async t => {
+  const theme = { ...initialTheme('nord'), mode: 'schedule' }
+  const h = createHarness(t, theme, { import: async () => ({ success: true, themes: [
+    { id: 'import-test', name: secret, kind: 'dark', colors: { 'editor.background': '#123456' } }
+  ] }) })
+  h.byId('theme-import').props.onClick()
+  await settled()
+  h.render()
+  assert.equal(h.byId('theme-import-confirm').props.children, 'settings.themes.schedule.importConfirm')
+  h.byId('theme-import-confirm').props.onClick()
+  await settled()
+  assert.equal(h.saves.at(-1).mode, 'schedule')
+  assert.deepEqual(h.saves.at(-1).schedule, theme.schedule)
+  assert.equal(h.saves.at(-1).imported[0].id, 'import-test')
+})
 
 test('TSD-01: effectiveColor maps app/editor/terminal/cursor/selection and all ANSI fields without mutation', t => {
   const h = createHarness(t)

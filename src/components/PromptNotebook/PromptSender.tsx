@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo, useRef, memo } from 'react'
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo } from 'react'
 import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react'
-import type { TerminalBatchResult, TerminalInfo } from '../../types/prompt'
+import type { TerminalInfo } from '../../types/prompt'
+import { resolvePromptTargets, type PromptInputSettings } from '../../utils/prompt-input'
+import { PromptActionButton } from './PromptActionButton'
 import { useI18n } from '../../i18n/useI18n'
-import { perfTrace } from '../../utils/perf-trace'
+import { perfTrace, perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { performanceTrace } from '../../utils/performance-trace'
 import type { ResolvedLayout } from '../../utils/layout-mode'
@@ -28,10 +30,17 @@ interface PromptSenderProps {
    * sides of the window.
    */
   taskLayout: ResolvedLayout
+  tabId: string
+  hidden: boolean
+  activeTab: boolean
   promptContent: string
-  onSend: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
-  onExecute: (terminalIds: string[]) => Promise<TerminalBatchResult>
-  onSendAndExecute: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
+  inputSettings: PromptInputSettings
+  selectedIds: string[]
+  onSelectionChange: (ids: string[]) => void
+  registerSelectionFlush: (flush: () => void) => () => void
+  onAction: (actionId: string) => Promise<boolean>
+  isSubmitting: boolean
+  notice: { text: string; error: boolean } | null
   onTerminalRename: (id: string, newTitle: string) => void
   onChangeWorkDir?: (terminalIds: string[], directory: string) => void
 }
@@ -48,36 +57,38 @@ function slotStyle(slot: TaskSelectorSlot | undefined): CSSProperties {
 export const PromptSender = memo(function PromptSender({
   terminals,
   taskLayout,
+  tabId,
+  hidden,
+  activeTab,
   promptContent,
-  onSend,
-  onExecute,
-  onSendAndExecute,
+  inputSettings,
+  selectedIds,
+  onSelectionChange,
+  registerSelectionFlush,
+  onAction,
+  isSubmitting,
+  notice,
   onTerminalRename
 }: PromptSenderProps) {
   const { t } = useI18n()
-  const [selectedTerminals, setSelectedTerminals] = useState<Set<string>>(new Set())
+  const selectedTerminals = useMemo(() => new Set(selectedIds), [selectedIds])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const editInputRef = useRef<HTMLInputElement>(null)
-  const [selectionNotice, setSelectionNotice] = useState('')
-  const noticeTimerRef = useRef<number | null>(null)
-  const selectClickTimerRef = useRef<number | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const submittingRef = useRef(false)
+  const pendingSelectionRef = useRef<{ id: string; timer: number; unavailableIds: string[] } | null>(null)
+  const [pendingCardId, setPendingCardId] = useState<string | null>(null)
   // Keep debug automation on the latest state without recreating the API object.
   const terminalsRef = useRef(terminals)
   const promptContentRef = useRef(promptContent)
   const selectedTerminalsRef = useRef(selectedTerminals)
-  const selectionNoticeRef = useRef(selectionNotice)
+  const selectionNoticeRef = useRef(notice?.text ?? '')
   const isSubmittingRef = useRef(isSubmitting)
-  const handleSendToSelectedRef = useRef<() => Promise<void>>(async () => {})
-  const handleExecuteRef = useRef<() => Promise<void>>(async () => {})
-  const handleSendAndExecuteRef = useRef<() => Promise<void>>(async () => {})
-  const handleSendAllAndExecuteRef = useRef<() => Promise<void>>(async () => {})
+  const actionRef = useRef(onAction)
+  const selectionChangeRef = useRef(onSelectionChange)
+  const settingsRef = useRef(inputSettings)
   // Mirror of the right-hand Task grid: same column / row track counts, and
   // for a custom layout the same per-Task rectangles. This component
-  // re-renders on every keystroke in the prompt editor (promptContent is a
-  // prop), so the mapping, its signature and the style object are all pinned
+  // receives debounced prompt content, so mapping and styles stay pinned
   // to the layout rather than recomputed per character.
   const geometry = useMemo(
     () => getTaskSelectorGeometry(taskLayout, terminals.length),
@@ -92,13 +103,33 @@ export const PromptSender = memo(function PromptSender({
   const taskLayoutKindRef = useRef(taskLayout.kind)
   const selectedCount = selectedTerminals.size
 
+  useEffect(() => {
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
+      phase: 'sender-feedback', state: notice ? notice.error ? 'error-visible' : 'success-muted' : 'cleared'
+    })
+  }, [notice])
+
   terminalsRef.current = terminals
   promptContentRef.current = promptContent
   selectedTerminalsRef.current = selectedTerminals
-  selectionNoticeRef.current = selectionNotice
+  selectionNoticeRef.current = notice?.text ?? ''
   isSubmittingRef.current = isSubmitting
   geometryRef.current = geometry
   taskLayoutKindRef.current = taskLayout.kind
+  actionRef.current = onAction
+  selectionChangeRef.current = onSelectionChange
+  settingsRef.current = inputSettings
+
+  const updateSelection = useCallback((next: Set<string>) => {
+    selectedTerminalsRef.current = next
+    selectionChangeRef.current([...next])
+  }, [])
+
+  const pruneUnavailableSelectionAtGesture = useCallback(() => {
+    const current = selectedTerminalsRef.current
+    const next = new Set([...current].filter(id => terminalsRef.current.some(terminal => terminal.id === id)))
+    if (next.size !== current.size) updateSelection(next)
+  }, [updateSelection])
 
   // Diagnostic breadcrumb for "the selector no longer matches the grid".
   // Keyed on the geometry signature, so this fires on a layout switch, a
@@ -113,7 +144,7 @@ export const PromptSender = memo(function PromptSender({
     })
   }, [geometrySignature])
 
-  const recordTaskSelectionTrace = (id: string, selected: boolean, selectedCount: number) => {
+  const recordTaskSelectionTrace = useCallback((id: string, selected: boolean, selectedCount: number) => {
     if (!performanceTrace.enabled) return
     performanceTrace.recordInstant('ui.prompt.task_select', {
       terminalId: id,
@@ -121,21 +152,7 @@ export const PromptSender = memo(function PromptSender({
       selectedCount,
       totalCount: terminalsRef.current.length
     }, 'prompt')
-  }
-
-  // When the terminal list changes, update the selected status (remove non-existing terminals)
-  useEffect(() => {
-    const terminalIds = new Set(terminals.map(t => t.id))
-    setSelectedTerminals(prev => {
-      const newSet = new Set<string>()
-      prev.forEach(id => {
-        if (terminalIds.has(id)) {
-          newSet.add(id)
-        }
-      })
-      return newSet
-    })
-  }, [terminals])
+  }, [])
 
   // Automatically focus on the edit input box
   useEffect(() => {
@@ -145,36 +162,66 @@ export const PromptSender = memo(function PromptSender({
     }
   }, [editingId])
 
-  const handleToggle = (id: string) => {
-    setSelectedTerminals(prev => {
-      const newSet = new Set(prev)
-      let selected = false
-      if (newSet.has(id)) {
-        newSet.delete(id)
-      } else {
-        newSet.add(id)
-        selected = true
-      }
-      recordTaskSelectionTrace(id, selected, newSet.size)
-      return newSet
-    })
-  }
+  const handleToggle = useCallback((id: string) => {
+    const newSet = new Set(selectedTerminalsRef.current)
+    let selected = false
+    if (newSet.has(id)) {
+      newSet.delete(id)
+    } else {
+      newSet.add(id)
+      selected = true
+    }
+    recordTaskSelectionTrace(id, selected, newSet.size)
+    updateSelection(newSet)
+  }, [recordTaskSelectionTrace, updateSelection])
+
+  const flushPendingSelection = useCallback(() => {
+    const pending = pendingSelectionRef.current
+    if (!pending) return
+    pendingSelectionRef.current = null
+    window.clearTimeout(pending.timer)
+    setPendingCardId(null)
+    // Only discard targets already unavailable at the click. A target lost
+    // during the rename delay must remain selected so dispatch rejects it.
+    if (pending.unavailableIds.length) {
+      updateSelection(new Set([...selectedTerminalsRef.current].filter(id => !pending.unavailableIds.includes(id))))
+    }
+    handleToggle(pending.id)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'selection-flushed', tabId })
+  }, [handleToggle, updateSelection, tabId])
+
+  useLayoutEffect(() => registerSelectionFlush(flushPendingSelection), [registerSelectionFlush, flushPendingSelection])
+
+  const cancelPendingSelection = useCallback(() => {
+    const pending = pendingSelectionRef.current
+    if (!pending) return
+    pendingSelectionRef.current = null
+    window.clearTimeout(pending.timer)
+    setPendingCardId(null)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'selection-cancelled', tabId })
+  }, [tabId])
 
   const handleCardClick = (event: MouseEvent<HTMLDivElement>, id: string) => {
     event.stopPropagation()
-    if (selectClickTimerRef.current) {
-      window.clearTimeout(selectClickTimerRef.current)
-      selectClickTimerRef.current = null
+    if (pendingSelectionRef.current?.id === id) {
+      cancelPendingSelection()
+    } else {
+      // A click on another card is not the first card's rename gesture.
+      flushPendingSelection()
     }
-    selectClickTimerRef.current = window.setTimeout(() => {
-      handleToggle(id)
-      selectClickTimerRef.current = null
-    }, 200)
+    pendingSelectionRef.current = {
+      id, timer: window.setTimeout(flushPendingSelection, 200),
+      unavailableIds: [...selectedTerminalsRef.current].filter(selected => !terminalsRef.current.some(terminal => terminal.id === selected))
+    }
+    setPendingCardId(id)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'selection-pending', tabId })
   }
 
   const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, id: string) => {
     if (event.key === ' ' || event.key === 'Enter') {
       event.preventDefault()
+      flushPendingSelection()
+      pruneUnavailableSelectionAtGesture()
       handleToggle(id)
     }
   }
@@ -210,125 +257,19 @@ export const PromptSender = memo(function PromptSender({
     }
   }
 
-  const showNotice = (message: string) => {
-    setSelectionNotice(message)
-    if (noticeTimerRef.current) {
-      window.clearTimeout(noticeTimerRef.current)
-    }
-    noticeTimerRef.current = window.setTimeout(() => {
-      setSelectionNotice('')
-    }, 2000)
-  }
-
-  const showSelectTerminalNotice = () => {
-    showNotice(t('promptSender.selectTerminalFirst'))
-  }
-
-  const runTerminalAction = async (
-    actionName: 'promptSender.action.send' | 'promptSender.action.execute' | 'promptSender.action.sendAndExecute',
-    runner: () => Promise<TerminalBatchResult>
-  ) => {
-    if (submittingRef.current) {
-      return false
-    }
-    submittingRef.current = true
-    setIsSubmitting(true)
-
-    try {
-      const result = await runner()
-      setSelectedTerminals(new Set())
-      const sentOnlyCount = result.sentOnlyIds.length
-      const failedCount = result.failedIds.length
-      const unsafeMultilineCount = result.issues.filter(
-        (issue) => issue.reason === 'unsafe-multiline-send'
-      ).length
-
-      if (sentOnlyCount > 0 && failedCount === 0) {
-        showNotice(t('promptSender.sentOnly', { count: sentOnlyCount }))
-      } else if (failedCount > 0 && sentOnlyCount === 0 && unsafeMultilineCount === failedCount) {
-        showNotice(t('promptSender.multilineBlocked', { count: failedCount }))
-      } else if (sentOnlyCount > 0 && failedCount > 0) {
-        showNotice(t('promptSender.mixedResult', {
-          sentOnlyCount,
-          failedCount
-        }))
-      } else if (failedCount > 0) {
-        showNotice(t('promptSender.partialFailure', {
-          count: failedCount,
-          action: t(actionName)
-        }))
-      } else {
-        setSelectionNotice('')
-      }
-      return true
-    } catch (error) {
-      console.error(`[PromptSender] ${actionName} failed:`, error)
-      showNotice(t('promptSender.failure', { action: t(actionName) }))
-      return false
-    } finally {
-      submittingRef.current = false
-      setIsSubmitting(false)
-    }
-  }
-
-  const handleSendToSelected = async () => {
-    if (selectedTerminals.size === 0) return
-    const terminalIds = Array.from(selectedTerminals)
-    perfTrace(PERF_TRACE_EVENT.RENDERER_PROMPT_SENDER_DISPATCH, {
-      action: 'send', targets: terminalIds.length, contentLen: promptContent.length
-    })
-    await runTerminalAction('promptSender.action.send', () => onSend(terminalIds, promptContent))
-  }
-
-  const handleSendAllAndExecute = async () => {
-    if (terminals.length === 0 || !promptContent) return
-    const terminalIds = terminals.map(t => t.id)
-    perfTrace(PERF_TRACE_EVENT.RENDERER_PROMPT_SENDER_DISPATCH, {
-      action: 'sendAllAndExecute', targets: terminalIds.length, contentLen: promptContent.length
-    })
-    await runTerminalAction('promptSender.action.sendAndExecute', () => onSendAndExecute(terminalIds, promptContent))
-  }
-
-  const handleExecute = async () => {
-    if (selectedTerminals.size === 0) return
-    const terminalIds = Array.from(selectedTerminals)
-    perfTrace(PERF_TRACE_EVENT.RENDERER_PROMPT_SENDER_DISPATCH, {
-      action: 'execute', targets: terminalIds.length, contentLen: 0
-    })
-    await runTerminalAction('promptSender.action.execute', () => onExecute(terminalIds))
-  }
-
-  const handleSendAndExecute = async () => {
-    if (selectedTerminals.size === 0) {
-      showSelectTerminalNotice()
-      return
-    }
-    const terminalIds = Array.from(selectedTerminals)
-    perfTrace(PERF_TRACE_EVENT.RENDERER_PROMPT_SENDER_DISPATCH, {
-      action: 'sendAndExecute', targets: terminalIds.length, contentLen: promptContent.length
-    })
-    await runTerminalAction('promptSender.action.sendAndExecute', () => onSendAndExecute(terminalIds, promptContent))
-  }
-
-  handleSendToSelectedRef.current = handleSendToSelected
-  handleExecuteRef.current = handleExecute
-  handleSendAndExecuteRef.current = handleSendAndExecute
-  handleSendAllAndExecuteRef.current = handleSendAllAndExecute
-
   useEffect(() => {
     return () => {
-      if (noticeTimerRef.current) {
-        window.clearTimeout(noticeTimerRef.current)
-      }
-      if (selectClickTimerRef.current) {
-        window.clearTimeout(selectClickTimerRef.current)
+      if (pendingSelectionRef.current) {
+        window.clearTimeout(pendingSelectionRef.current.timer)
+        pendingSelectionRef.current = null
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'selection-disposed', tabId })
       }
     }
-  }, [])
+  }, [tabId])
 
   // Debug API (only exposed in automated testing mode)
   useEffect(() => {
-    if (!window.electronAPI?.debug?.autotest) return
+    if (!window.electronAPI?.debug?.autotest || !activeTab) return
     const api = {
       getTerminalCards: () => terminalsRef.current.map(t => ({
         id: t.id,
@@ -343,9 +284,11 @@ export const PromptSender = memo(function PromptSender({
       })),
       getSelectedTerminalIds: () => Array.from(selectedTerminalsRef.current),
       getActionButtons: () => {
-        const btns = document.querySelectorAll('.prompt-sender-btn')
+        const root = Array.from(document.querySelectorAll<HTMLElement>('.prompt-sender')).find(element => element.dataset.tabId === tabId)
+        const btns = root?.querySelectorAll('.prompt-sender-btn') ?? []
         return Array.from(btns).map(btn => ({
-          label: btn.textContent?.trim() ?? '',
+          label: btn.getAttribute('aria-label') ?? '',
+          actionId: (btn as HTMLElement).dataset.actionId,
           disabled: (btn as HTMLButtonElement).disabled
         }))
       },
@@ -363,48 +306,34 @@ export const PromptSender = memo(function PromptSender({
         }))
       }),
       getNotice: () => selectionNoticeRef.current || null,
-      isSubmitting: () => submittingRef.current || isSubmittingRef.current,
-      clickAction: async (action: 'sendAndExecute' | 'execute' | 'send' | 'sendAllAndExecute') => {
-        if (action === 'sendAndExecute') {
-          await handleSendAndExecuteRef.current()
-          return true
-        }
-        if (action === 'execute') {
-          await handleExecuteRef.current()
-          return true
-        }
-        if (action === 'send') {
-          await handleSendToSelectedRef.current()
-          return true
-        }
-        if (action === 'sendAllAndExecute') {
-          await handleSendAllAndExecuteRef.current()
-          return true
-        }
-        return false
+      isSubmitting: () => isSubmittingRef.current,
+      clickAction: async (action: string) => {
+        if (!settingsRef.current.actions.some(candidate => candidate.id === action)) return false
+        return actionRef.current(action)
       },
       selectTerminal: (id: string) => {
         if (!terminalsRef.current.some(t => t.id === id)) return false
-        setSelectedTerminals(prev => {
-          const next = new Set(prev)
-          if (!next.has(id)) {
-            next.add(id)
-            recordTaskSelectionTrace(id, true, next.size)
-          }
-          return next
-        })
+        cancelPendingSelection()
+        pruneUnavailableSelectionAtGesture()
+        const next = new Set(selectedTerminalsRef.current)
+        if (!next.has(id)) {
+          next.add(id)
+          recordTaskSelectionTrace(id, true, next.size)
+        }
+        updateSelection(next)
         return true
       },
       deselectTerminal: (id: string) => {
-        setSelectedTerminals(prev => {
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
+        cancelPendingSelection()
+        pruneUnavailableSelectionAtGesture()
+        const next = new Set(selectedTerminalsRef.current)
+        next.delete(id)
+        updateSelection(next)
         return true
       },
       deselectAllTerminals: () => {
-        setSelectedTerminals(new Set())
+        cancelPendingSelection()
+        updateSelection(new Set())
       }
     }
     ;(window as any).__onwardPromptSenderDebug = api
@@ -413,10 +342,10 @@ export const PromptSender = memo(function PromptSender({
         delete (window as any).__onwardPromptSenderDebug
       }
     }
-  }, [])
+  }, [tabId, hidden, activeTab, updateSelection, cancelPendingSelection, pruneUnavailableSelectionAtGesture, recordTaskSelectionTrace])
 
   return (
-    <div className="prompt-sender">
+    <div className="prompt-sender" data-tab-id={tabId}>
       <div
         className="prompt-sender-terminals"
         style={gridTrackStyle}
@@ -446,10 +375,7 @@ export const PromptSender = memo(function PromptSender({
               onClick={(event) => handleCardClick(event, terminal.id)}
               onDoubleClick={(event) => {
                 event.stopPropagation()
-                if (selectClickTimerRef.current) {
-                  window.clearTimeout(selectClickTimerRef.current)
-                  selectClickTimerRef.current = null
-                }
+                if (pendingSelectionRef.current?.id === terminal.id) cancelPendingSelection()
                 handleStartEdit(terminal.id, terminal.customName)
               }}
               onKeyDown={(event) => handleCardKeyDown(event, terminal.id)}
@@ -521,45 +447,37 @@ export const PromptSender = memo(function PromptSender({
           </div>
         )}
 
-        <div className="prompt-sender-action-buttons">
-          <button
-            className="prompt-sender-btn prompt-sender-btn-send-execute"
-            onClick={() => { void handleSendAndExecute() }}
-            disabled={selectedCount === 0 || isSubmitting}
-            title={t('promptSender.title.sendAndExecute')}
-          >
-            {t('promptSender.button.sendAndExecute')}
-          </button>
-          <button
-            className="prompt-sender-btn prompt-sender-btn-execute"
-            onClick={() => { void handleExecute() }}
-            disabled={selectedCount === 0 || isSubmitting}
-            title={t('promptSender.title.execute')}
-          >
-            {t('promptSender.button.execute')}
-          </button>
-          <button
-            className="prompt-sender-btn prompt-sender-btn-send"
-            onClick={() => { void handleSendToSelected() }}
-            disabled={selectedCount === 0 || isSubmitting}
-            title={t('promptSender.title.send')}
-          >
-            {t('promptSender.button.send')}
-          </button>
-          <button
-            className="prompt-sender-btn prompt-sender-btn-send-all-execute"
-            onClick={() => { void handleSendAllAndExecute() }}
-            disabled={terminals.length === 0 || !promptContent || isSubmitting}
-            title={t('promptSender.title.sendAllAndExecute')}
-          >
-            {t('promptSender.button.sendAllAndExecute')}
-          </button>
+        <div className="prompt-sender-action-buttons prompt-action-rail">
+          {inputSettings.actions.filter(action => action.visible).map(action => {
+            const targets = resolvePromptTargets(action, terminals.map(terminal => terminal.id),
+              terminals.find(terminal => terminal.isActive)?.id ?? null, selectedIds)
+            const variant = action.preset === 'sendAndExecute' ? 'send-execute'
+              : action.preset === 'sendAllAndExecute' ? 'send-all-execute' : action.preset ?? 'custom'
+            return (
+              <PromptActionButton
+                key={action.id}
+                action={action} leader={inputSettings.leader}
+                className={`prompt-sender-btn prompt-sender-btn-${variant}`}
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => { void onAction(action.id) }}
+                disabled={isSubmitting || (targets.ids.length === 0 && pendingCardId === null)}
+              />
+            )
+          })}
         </div>
       </div>
 
-      {selectionNotice && (
-        <div className="prompt-sender-notice" role="status" aria-live="polite">
-          {selectionNotice}
+      {selectedIds.some(id => !terminals.some(terminal => terminal.id === id)) && (
+        <button type="button" className="prompt-sender-clear-targets" onClick={() => {
+          cancelPendingSelection()
+          updateSelection(new Set())
+        }}>
+          {t('promptInput.runtime.clearTargets')}
+        </button>
+      )}
+      {notice?.error && (
+        <div className="prompt-sender-notice" role="alert" aria-live="assertive">
+          {notice.text}
         </div>
       )}
 

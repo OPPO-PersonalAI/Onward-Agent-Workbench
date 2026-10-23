@@ -11,6 +11,7 @@ import { TabBar } from './components/TabBar'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { FeedbackModal } from './components/FeedbackModal'
 import { PromptNotebook } from './components/PromptNotebook/PromptNotebook'
+import { PromptInputShortcuts } from './components/PromptNotebook/PromptInputShortcuts'
 import { TerminalGrid } from './components/TerminalGrid/TerminalGrid'
 import { Settings } from './components/Settings'
 import { GitWatcherErrorBanner } from './components/common/GitWatcherErrorBanner'
@@ -38,7 +39,7 @@ import { requestOpenExternalHttpLink } from './utils/externalLink'
 import { perfTrace, perfTraceDiagnostic, perfTraceTask } from './utils/perf-trace'
 import { PERF_TRACE_EVENT } from './utils/perf-trace-names'
 import { computeNextExecution } from './utils/schedule'
-import { resolveLayout, getEffectiveCount } from './utils/layout-mode'
+import { resolveLayout, getEffectiveCount, isPresetCount } from './utils/layout-mode'
 import { DownsizeConfirmDialog, type DownsizeTerminalEntry } from './components/DownsizeConfirmDialog/DownsizeConfirmDialog'
 import {
   createTerminalBatchResult,
@@ -84,6 +85,9 @@ interface AppDebugApi {
   createTab: () => 'pending' | null
   /** Autotest-only: switch to an existing tab by id. Returns false if unknown. */
   switchToTabById: (tabId: string) => boolean
+  /** Autotest-only: change visible slots while retaining parked terminals. */
+  setLayoutCountForAutotest: (count: number) => boolean
+  reorderActiveTabTasksForAutotest: (fromIndex: number, toIndex: number) => boolean
 }
 
 interface SendAndExecuteDelayContext {
@@ -316,8 +320,6 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   tab,
   isActive,
   showSettings,
-  onSend,
-  onExecute,
   onSendAndExecute,
   onChangeWorkDir,
   addPrompt: onAddPrompt,
@@ -342,11 +344,9 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   tab: TabState
   isActive: boolean
   showSettings: boolean
-  onSend: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
-  onExecute: (terminalIds: string[]) => Promise<TerminalBatchResult>
   onSendAndExecute: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
   onChangeWorkDir: (terminalIds: string[], directory: string) => void
-  addPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => void
+  addPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => void
   addPinnedPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt' | 'pinned'>) => void
   updatePrompt: (prompt: Prompt, preserveTimestamp?: boolean) => void
   deletePrompt: (promptId: string) => void
@@ -516,8 +516,6 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     <PromptNotebook
       terminals={terminals}
       taskLayout={tabResolvedLayout}
-      onSend={onSend}
-      onExecute={onExecute}
       onSendAndExecute={onSendAndExecute}
       onTerminalRename={handleTerminalRename}
       onChangeWorkDir={onChangeWorkDir}
@@ -547,6 +545,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       onEditorDraftChange={handleEditorDraftChange}
       addToHistoryShortcut={addToHistoryShortcut}
       hidden={hidden}
+      activeTab={isActive}
       tabId={tab.id}
       scheduleMap={scheduleMap}
       scheduleNotifications={scheduleNotifications}
@@ -1919,6 +1918,14 @@ function AppContent({
       )}
       <GitWatcherErrorBanner />
       <TabBar />
+      <PromptInputShortcuts
+        tabId={activeTab.id}
+        terminals={terminals}
+        visibleCount={layoutEffectiveCount}
+        activeTerminalId={activeTab.activeTerminalId}
+        blocked={telemetryConsent === null || showChangeLog || showFeedbackModal || pendingDialog !== null}
+        promptHidden={showSettings || activePanel !== 'prompt'}
+      />
       <div className="app-body">
         <Sidebar
           activePanel={displayActivePanel}
@@ -1947,8 +1954,6 @@ function AppContent({
               tab={tab}
               isActive={tab.id === state.activeTabId}
               showSettings={showSettings}
-              onSend={handleSendToTerminals}
-              onExecute={handleExecuteOnTerminals}
               onSendAndExecute={handleSendAndExecuteOnTerminals}
               onChangeWorkDir={handleChangeWorkDir}
               addPrompt={addPrompt}
@@ -2029,6 +2034,7 @@ function SettingsProviderWithHandler() {
     switchTab,
     createTab,
     updateActiveTab,
+    reorderTerminals,
     activeTab,
     state,
     getLastFocusedTerminalId,
@@ -2272,6 +2278,17 @@ function SettingsProviderWithHandler() {
         if (!state.tabs.some((t) => t.id === tabId)) return false
         switchTab(tabId)
         return true
+      },
+      setLayoutCountForAutotest: (count) => {
+        if (!isPresetCount(count)) return false
+        updateActiveTab({ layoutMode: { kind: 'preset', count } })
+        return true
+      },
+      reorderActiveTabTasksForAutotest: (fromIndex, toIndex) => {
+        const tab = state.tabs.find(item => item.id === state.activeTabId)
+        if (!tab || ![fromIndex, toIndex].every(index => Number.isInteger(index) && index >= 0 && index < tab.terminals.length)) return false
+        reorderTerminals(tab.id, fromIndex, toIndex)
+        return true
       }
     }
     debugWindow.__onwardAppDebug = api
@@ -2280,7 +2297,7 @@ function SettingsProviderWithHandler() {
         delete debugWindow.__onwardAppDebug
       }
     }
-  }, [handleShortcutAction, state.tabs, state.activeTabId, createTab, switchTab])
+  }, [handleShortcutAction, state.tabs, state.activeTabId, createTab, switchTab, updateActiveTab, reorderTerminals])
 
   const restoreLastFocus = useCallback((reason: TerminalFocusRestoreReason) => {
     if (!activeTab) return

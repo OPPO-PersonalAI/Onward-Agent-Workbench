@@ -6,13 +6,14 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
-import { isReservedShortcut } from './reserved-shortcuts'
+import { isReservedShortcut, RESERVED_SHORTCUTS } from './reserved-shortcuts'
 import { DEFAULT_LOCALE, isAppLocale, type AppLocale } from '../../src/i18n/core'
 import type { ThemeSettings } from '../../src/types/theme'
 import { DEFAULT_THEME_SETTINGS } from '../../src/constants/themes'
-import { normalizeThemeSettings } from '../../src/themes/theme-engine'
+import { getAvailableThemeIds, normalizeThemeSettings } from '../../src/themes/theme-engine'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
+import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, promptTargetSlot, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
 
 /**
  * Shortcut configuration
@@ -71,6 +72,7 @@ interface GlobalTerminalStyle {
 interface SettingsState {
   version: number
   shortcuts: ShortcutConfig
+  promptInput: PromptInputSettings
   terminalStyles: Record<string, TerminalStyleConfig>
   globalTerminalStyle: GlobalTerminalStyle
   gitDiffFontSize: number | null
@@ -96,7 +98,8 @@ interface SettingsState {
 // v7: introduces performanceDiagnosticsEnabled (default false; legacy values reset on upgrade).
 // v8: unified named themes with per-theme customization and Task overrides.
 // v9: retire Task color overrides; preserve Task fonts and theme-level colors.
-const CURRENT_VERSION = 9
+// v10: ordered Prompt input actions with an opt-in, user-defined leader.
+const CURRENT_VERSION = 10
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
@@ -150,6 +153,7 @@ function createDefaultSettingsState(): SettingsState {
   return {
     version: CURRENT_VERSION,
     shortcuts: createDefaultShortcuts(),
+    promptInput: createDefaultPromptInputSettings(),
     terminalStyles: {},
     globalTerminalStyle: createDefaultGlobalTerminalStyle(),
     gitDiffFontSize: null,
@@ -190,13 +194,19 @@ class SettingsStorage {
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, {
           reason: (parsed.version ?? 0) < CURRENT_VERSION ? 'migrated' : 'loaded', mode: normalized.theme.mode
         })
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, {
+          reason: (parsed.version ?? 0) < 10 || !parsed.promptInput ? 'migrated' : 'loaded',
+          actions: normalized.promptInput.actions.length, leader: Boolean(normalized.promptInput.leader)
+        })
         return normalized
       }
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'new-profile' })
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'new-profile' })
       return createDefaultSettingsState()
     } catch (error) {
       console.error('Failed to load settings:', error)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'load-fallback' })
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'load-fallback' })
       return { ...createDefaultSettingsState(), theme: normalizeThemeSettings(undefined, { existing: true }) }
     }
   }
@@ -292,9 +302,43 @@ class SettingsStorage {
       ? state.autoFollowGitBranchForTaskName
       : true
 
+    const promptInput = normalizePromptInputSettings(state.promptInput)
+    // Preserve existing action bindings when a hand-edited selector collides.
+    if (promptInput.targetModifier && [promptInput.leader, shortcuts.activateAndFocusPrompt, ...promptInput.actions.map(action => action.shortcut)]
+      .some(key => promptTargetSlot(normalizePromptShortcut(key, process.platform), promptInput.targetModifier) !== null)) {
+      promptInput.targetModifier = null
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'selector-conflict-recovered' })
+    }
+    const leaderError = validatePromptInputSettings({ ...promptInput, actions: [] }, [
+      ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+    ], process.platform, [shortcuts.activateAndFocusPrompt])
+    if (leaderError) {
+      promptInput.leader = null
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'leader-rejected', error: leaderError })
+    }
+    // Apply first-binding-wins to host aliases while retaining portable strings on disk.
+    const leaderKey = normalizePromptShortcut(promptInput.leader, process.platform)
+    const globalKey = normalizePromptShortcut(shortcuts.activateAndFocusPrompt, process.platform)
+    const actionKeys = new Set<string>()
+    let changedCount = 0
+    for (const action of promptInput.actions) {
+      const key = normalizePromptShortcut(action.shortcut, process.platform)
+      if (!key) continue
+      if (key === leaderKey || key === globalKey || actionKeys.has(key)) {
+        action.shortcut = null
+        changedCount += 1
+      } else {
+        actionKeys.add(key)
+      }
+    }
+    if (changedCount > 0) {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'host-shortcuts-normalized', changedCount })
+    }
+
     return {
       version: CURRENT_VERSION,
       shortcuts,
+      promptInput,
       terminalStyles,
       globalTerminalStyle,
       gitDiffFontSize,
@@ -376,6 +420,7 @@ class SettingsStorage {
     } catch (error) {
       console.error('Failed to save settings:', error)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'write-failed', propagated: throwOnError })
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'write-failed', propagated: throwOnError })
       if (throwOnError) throw error
     }
   }
@@ -385,6 +430,13 @@ class SettingsStorage {
    */
   get(): SettingsState {
     return JSON.parse(JSON.stringify(this.state))
+  }
+
+  /** Bounded clock input: never clone imported color/token catalogs on timer ticks. */
+  getThemeScheduleSnapshot() {
+    const { mode, schedule } = this.state.theme
+    return { mode, schedule: { ...schedule, ranges: schedule.ranges.map(range => ({ ...range, days: [...range.days] })),
+      temporary: schedule.temporary ? { ...schedule.temporary } : null }, availableIds: getAvailableThemeIds(this.state.theme) }
   }
 
   /** A bounded snapshot for worker structured-cloning, excluding unrelated imported themes. */
@@ -406,9 +458,21 @@ class SettingsStorage {
    */
   save(settings: SettingsState): boolean {
     const previous = this.state
+    const started = performance.now()
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'save-received' })
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'save-received', legacySnapshot: settings?.promptInput === undefined })
     try {
-      const validated = this.validateState(settings)
+      // Older renderer bootstraps may omit this section; preserve the saved actions.
+      const promptInput = settings.promptInput ?? previous.promptInput
+      const shortcuts = settings.shortcuts ?? previous.shortcuts
+      const error = validatePromptInputSettings(promptInput, [
+        ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+      ], process.platform, [shortcuts.activateAndFocusPrompt])
+      if (error) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'save-invalid', error })
+        return false
+      }
+      const validated = this.validateState({ ...settings, promptInput })
       // Preserve telemetry state — only setTelemetryConsent() may modify these
       validated.telemetryConsent = this.state.telemetryConsent
       validated.telemetryInstanceId = this.state.telemetryInstanceId
@@ -418,11 +482,16 @@ class SettingsStorage {
       }
       this.persist(true)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'saved', mode: this.state.theme.mode, ok: true })
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, {
+        reason: 'saved', actions: this.state.promptInput.actions.length,
+        leader: Boolean(this.state.promptInput.leader), durationMs: performance.now() - started
+      })
       return true
     } catch (error) {
       this.state = previous
       console.error('Failed to save settings:', error)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'save-rejected', ok: false })
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'save-rejected', rollback: true })
       return false
     }
   }
@@ -432,9 +501,25 @@ class SettingsStorage {
    */
   update(partial: Partial<SettingsState>): boolean {
     const previous = this.state
+    const started = performance.now()
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'update-received', theme: Boolean(partial.theme) })
     try {
+      if (partial.promptInput !== undefined || partial.shortcuts) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'update-received' })
+        const promptInput = partial.promptInput ?? previous.promptInput
+        const shortcuts = { ...previous.shortcuts, ...partial.shortcuts }
+        const error = validatePromptInputSettings(promptInput, [
+          ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+        ], process.platform, [shortcuts.activateAndFocusPrompt])
+        if (error) {
+          performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'update-invalid', error })
+          return false
+        }
+      }
       this.state = { ...this.state, terminalStyles: { ...this.state.terminalStyles } }
+      if (partial.promptInput !== undefined) {
+        this.state.promptInput = normalizePromptInputSettings(partial.promptInput)
+      }
       if (partial.shortcuts) {
         this.state.shortcuts = {
           ...this.state.shortcuts,
@@ -474,11 +559,17 @@ class SettingsStorage {
       this.state.updatedAt = Date.now()
       this.persist(true)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'updated', theme: Boolean(partial.theme), mode: this.state.theme.mode, ok: true })
+      if (partial.promptInput !== undefined || partial.shortcuts) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'updated', durationMs: performance.now() - started })
+      }
       return true
     } catch (error) {
       this.state = previous
       console.error('Failed to update settings:', error)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'update-rejected', ok: false })
+      if (partial.promptInput !== undefined || partial.shortcuts) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'update-rejected', rollback: true })
+      }
       return false
     }
   }

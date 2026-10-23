@@ -29,8 +29,29 @@ import { CLICK_PHASE_EVENT_NAMES } from './click-phase-event-names.ts'
  * constants instead.
  */
 export const PERF_TRACE_EVENT = {
+  // Configurable prompt input: low-frequency action and lifecycle breadcrumbs.
+  MAIN_PROMPT_INPUT_SETTINGS: 'main:prompt-input.settings-changed',
+  MAIN_PROMPT_SHORTCUT: 'main:prompt-shortcut.state-changed',
+  MAIN_PROMPT_INPUT: 'main:prompt-input.send-sequence',
+  RENDERER_PROMPT_INPUT_SETTINGS: 'renderer:prompt-input.settings-changed',
+  RENDERER_PROMPT_INPUT_PREVIEW: 'renderer:prompt-input.preview-shortcut',
+  RENDERER_PROMPT_INPUT_REORDER: 'renderer:prompt-input.reorder-actions',
+  RENDERER_PROMPT_EMOJI_PICKER: 'renderer:prompt-emoji.picker-lifecycle',
+  RENDERER_PROMPT_EMOJI_CATALOG: 'renderer:prompt-emoji.load-catalog',
+  RENDERER_PROMPT_EMOJI_SEARCH: 'renderer:prompt-emoji.search-summary',
+  WORKER_PROMPT_EMOJI_CATALOG: 'worker:prompt-emoji.index-catalog',
+  WORKER_PROMPT_EMOJI_SEARCH: 'worker:prompt-emoji.search-summary',
+  RENDERER_PROMPT_EMOJI_ASSET: 'renderer:prompt-emoji.render-asset',
+  RENDERER_PROMPT_SHORTCUT: 'renderer:prompt-shortcut.state-changed',
+  RENDERER_PROMPT_LEADER_CUE: 'renderer:prompt-shortcut.present-leader',
+  RENDERER_PROMPT_ACTION: 'renderer:prompt-input.dispatch-action',
+  RENDERER_PROMPT_DRAFT: 'renderer:prompt-input.settle-draft',
+  RENDERER_PROMPT_INPUT_IPC: 'renderer:prompt-input.ipc',
   // Unified themes: selection, persistence, imports and consumer application.
   MAIN_THEME_SETTINGS: 'main:themes.settings-changed',
+  MAIN_THEME_SCHEDULE: 'main:themes.schedule-reconciled',
+  RENDERER_THEME_SCHEDULE: 'renderer:themes.schedule-action',
+  RENDERER_THEME_TIMELINE: 'renderer:themes.schedule-timeline-action',
   MAIN_THEME_NATIVE_APPLY: 'main:themes.native-applied',
   MAIN_THEME_IMPORT: 'main:themes.import-file',
   WORKER_THEME_IMPORT: 'worker:themes.parse-import',

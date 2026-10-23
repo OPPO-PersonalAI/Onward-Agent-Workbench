@@ -19,6 +19,7 @@ import {
   isAnyModalOpen,
   registerOpenModal,
   unregisterOpenModal,
+  subscribeOpenModals,
   resetOpenModalRegistryForTest
 } from '../../src/utils/modal-dismiss.ts'
 
@@ -88,4 +89,20 @@ test('MDP-U-10 unbalanced unregister clamps at zero (no negative leak)', () => {
   assert.equal(isAnyModalOpen(), true, 'a later register must still count after an unbalanced unregister')
   unregisterOpenModal()
   assert.equal(isAnyModalOpen(), false)
+})
+
+test('MDP-U-11 subscribers observe nested modal blocking and unsubscribe completely', () => {
+  const observed: boolean[] = []
+  const unsubscribe = subscribeOpenModals(() => observed.push(isAnyModalOpen()))
+  for (let trial = 0; trial < 5; trial++) {
+    registerOpenModal()
+    registerOpenModal()
+    unregisterOpenModal()
+    unregisterOpenModal()
+  }
+  assert.deepEqual(observed, Array.from({ length: 5 }, () => [true, true, true, false]).flat())
+  unsubscribe()
+  registerOpenModal()
+  unregisterOpenModal()
+  assert.equal(observed.length, 20)
 })

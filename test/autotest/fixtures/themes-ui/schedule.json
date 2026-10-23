@@ -1,0 +1,20 @@
+{
+  "_license": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "year": 2026,
+  "month": 10,
+  "day": 19,
+  "fallback": "nord",
+  "ranges": [
+    { "start": "09:00", "end": "18:00", "days": [1, 2, 3, 4, 5], "theme": "light-modern" },
+    { "start": "22:00", "end": "07:00", "days": [5, 6], "theme": "dracula" }
+  ],
+  "checks": [
+    { "day": 19, "hour": 8, "minute": 59, "theme": "nord" },
+    { "day": 19, "hour": 9, "minute": 0, "theme": "light-modern" },
+    { "day": 19, "hour": 18, "minute": 0, "theme": "nord" },
+    { "day": 23, "hour": 22, "minute": 0, "theme": "dracula" },
+    { "day": 24, "hour": 6, "minute": 59, "theme": "dracula" },
+    { "day": 24, "hour": 7, "minute": 0, "theme": "nord" },
+    { "day": 25, "hour": 0, "minute": 0, "theme": "dracula" }
+  ]
+}
