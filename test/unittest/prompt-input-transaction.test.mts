@@ -87,6 +87,7 @@ function harness(platform: typeof PLATFORMS[number]) {
     ['./api-server', { getApiPort: forbidden }],
     ['./performance-trace', { performanceTrace: trace }],
     ['./terminal-env', {}], ['./terminal-cwd-validation', {}], ['./powershell-inline-integration', {}],
+    ['./process-table', {}], ['./quit-activity', {}],
     ['../../src/utils/terminal-cwd-osc', {}],
     ['../../src/utils/prompt-input', contract],
     ['../../src/utils/perf-trace-names', { PERF_TRACE_EVENT }],

@@ -570,7 +570,7 @@ async function tasks(h) {
       await waitBase(h, 'dracula', 2)
       assert.deepEqual((await snapshot(h)).terminals.map(item => item.id), [first, second], 'Migration uses and retains real persisted Task IDs')
       const state = await h.state()
-      assert.equal(state.settings.version, 3)
+      assert.equal(state.settings.version, 4)
       assert(!Object.hasOwn(state.settings, 'taskOverrides'))
       const live = await h.page.evaluate(() => window.__onwardThemeDebug.getState().settings)
       assert.equal(live.version, 10)
@@ -582,7 +582,7 @@ async function tasks(h) {
         await setLanguage(h, before.language === 'en' ? 'zh-CN' : 'en')
         await setLanguage(h, before.language)
       }
-      await eventually('Retired fields absent from v10 disk settings', () => h.diskSettings(), data => data?.version === 10 && data.theme?.version === 3 &&
+      await eventually('Retired fields absent from v10 disk settings', () => h.diskSettings(), data => data?.version === 10 && data.theme?.version === 4 &&
         !Object.hasOwn(data.theme, 'taskOverrides') && [data.globalTerminalStyle, ...Object.values(data.terminalStyles)].every(style => !Object.hasOwn(style, 'foregroundColor') && !Object.hasOwn(style, 'backgroundColor')))
       const migrated = await h.diskSettings()
       assert.deepEqual(migrated.terminalStyles, before.terminalStyles)

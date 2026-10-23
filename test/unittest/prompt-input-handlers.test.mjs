@@ -51,7 +51,7 @@ function harness(t, platform) {
     ['fs', { existsSync: forbidden, mkdirSync: forbidden, writeFileSync: forbidden }],
     [path.join(ROOT, 'electron/main/performance-trace.ts'), { performanceTrace: trace }],
     [path.join(ROOT, 'electron/main/api-server.ts'), { getApiPort: forbidden }],
-    ...['terminal-env', 'terminal-cwd-validation', 'powershell-inline-integration'].map(name => [path.join(ROOT, `electron/main/${name}.ts`), {}])
+    ...['terminal-env', 'terminal-cwd-validation', 'powershell-inline-integration', 'process-table', 'quit-activity'].map(name => [path.join(ROOT, `electron/main/${name}.ts`), {}])
   ])
   const modules = new Map()
   function load(filename) {
