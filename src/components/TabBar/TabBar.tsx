@@ -12,6 +12,7 @@ import { perfTrace } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import type { UpdaterStatus } from '../../types/electron.d.ts'
 import './TabBar.css'
+import { PromptLeaderIndicator } from '../PromptNotebook/PromptLeaderIndicator'
 
 interface ConfirmDialogState {
   isOpen: boolean
@@ -430,6 +431,7 @@ export function TabBar() {
         {/* Right placeholder: drag area */}
         <div className="tab-bar-right">
           <div className="tab-bar-drag-region" />
+          <PromptLeaderIndicator />
         </div>
       </div>
 

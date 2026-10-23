@@ -46,6 +46,8 @@ function harness(t, autotest = true, traceEnabled = false) {
   const dispatchers = new Map()
   const eventListeners = new Set()
   const suspensions = []
+  const leaderViews = []
+  const cancellations = []
   let suspendHook
   class Element {
     textContent = ''
@@ -77,7 +79,7 @@ function harness(t, autotest = true, traceEnabled = false) {
       recordPerfTrace: event => legacyTraces.push(structuredClone(event))
     }, promptInput: {
       setContext: async value => { contexts.push(structuredClone(value)) },
-      cancel: async () => {},
+      cancel: async reason => { cancellations.push(reason) },
       onShortcut: callback => { shortcutListeners.add(callback); return () => shortcutListeners.delete(callback) }
     } }
   }
@@ -118,6 +120,7 @@ function harness(t, autotest = true, traceEnabled = false) {
     useEffect(create, dependencies) { effect('passive', create, dependencies) }
   }
   const actions = {
+    publishLeaderState: value => { leaderViews.push(value) },
     setActiveInputTab: noop, setInputBlocked: noop,
     dispatchInputAction: (...args) => {
       dispatches.push(args)
@@ -177,7 +180,7 @@ function harness(t, autotest = true, traceEnabled = false) {
     return module.exports
   }
   const h = {
-    window, document, timers, traces, legacyTraces, contexts, dispatches, dispatchResults, shortcutListeners, controllers, dispatchers, editorElement, previewElement, suspensions, load,
+    window, document, timers, traces, legacyTraces, contexts, dispatches, dispatchResults, shortcutListeners, controllers, dispatchers, editorElement, previewElement, suspensions, leaderViews, cancellations, load,
     advanceTraceTime(ms) { traceTimeMs += ms },
     setSuspensionHook(callback) { suspendHook = callback },
     mount(name, props) {
@@ -213,6 +216,13 @@ function harness(t, autotest = true, traceEnabled = false) {
       assert.fail('Frontend hooks did not settle')
     },
     emit(event) { for (const listener of shortcutListeners) listener(event); h.flush() },
+    focus(element) {
+      const previous = document.activeElement
+      document.activeElement = element
+      for (const listener of document.listeners.get('focusout')?.keys() ?? []) listener({ target: previous, relatedTarget: element })
+      for (const listener of document.listeners.get('focusin')?.keys() ?? []) listener({ target: element, relatedTarget: previous })
+      h.flush()
+    },
     previewKey(key, fields = {}) {
       const event = { type: 'keydown', key, target: previewElement, repeat: false,
         preventDefault() { this.defaultPrevented = true }, stopPropagation() { this.stopped = true },
@@ -252,6 +262,172 @@ function harness(t, autotest = true, traceEnabled = false) {
 const bridgeProps = () => ({ tabId: 'tab-a', terminals: [{ id: 'task-a', title: 'A' }, { id: 'task-b', title: 'B' }],
   visibleCount: 2, activeTerminalId: 'task-a', blocked: false, promptHidden: false })
 const indicator = h => h.window.__onwardPromptInputShortcutsDebug?.getLeaderState() ?? null
+
+test('PIFB-24: same-generation selector and target updates require a live DOM owner, while fresh arm still works', t => {
+  const h = harness(t)
+  h.mount('PromptInputShortcuts', bridgeProps())
+  const generation = h.contexts.at(-1).generation
+  const arm = { kind: 'state', active: true, tabId: 'tab-a', generation }
+  for (let trial = 0; trial < 5; trial++) {
+    for (const fields of [{ selecting: true }, { selecting: false }, { targetId: 'task-b' }, { targetId: 'task-b', selecting: false }]) {
+      const update = { ...arm, ...fields }
+      const dispatch = { kind: 'dispatch', active: false, tabId: 'tab-a', generation, actionId: 'queue', targetId: fields.targetId }
+      const before = h.dispatches.length
+      h.emit(update)
+      assert.equal(indicator(h), null, 'An ownerless continuation cannot become an initial arm')
+      h.emit(arm)
+      h.emit(update)
+      assert.deepEqual(indicator(h), update, 'The same continuation is valid with an existing owner')
+      h.focus(h.document.activeElement === h.editorElement ? h.previewElement : h.editorElement)
+      assert.equal(h.cancellations.at(-1), 'context-changed')
+      assert.equal(indicator(h), null)
+      assert.equal(h.leaderViews.at(-1), null)
+      h.emit(update)
+      assert.equal(indicator(h), null, 'Late selecting=true, selecting=false and target updates remain canceled')
+      assert.equal(h.leaderViews.at(-1), null)
+      h.emit(dispatch)
+      assert.equal(h.dispatches.length, before, 'A late state cannot authorize the queued action')
+      h.emit(arm)
+      h.emit(update)
+      h.emit(dispatch)
+      assert.equal(h.dispatches.length, before + 1)
+      assert.deepEqual(h.dispatches.at(-1), ['tab-a', 'queue', fields.targetId, 'shortcut'])
+      assert.equal(indicator(h), null)
+      assert(h.contexts.every(context => context.generation === generation), 'Local cancellation is not a Tab-generation rejection')
+    }
+  }
+  assert.equal(h.traces.filter(({ data }) => data.reason === 'stale-owner-state').length, 40)
+  assert.equal(h.traces.filter(({ data }) => data.reason === 'stale-owner-dispatch').length, 20)
+})
+
+test('PIFB-25: continuation barrier holds real subscription updates in order, never initial arm or cancellation', t => {
+  const h = harness(t)
+  h.mount('PromptInputShortcuts', bridgeProps())
+  const api = h.window.__onwardPromptInputShortcutsDebug
+  const generation = h.contexts.at(-1).generation
+  const arm = { kind: 'state', active: true, tabId: 'tab-a', generation }
+  const dispatch = { kind: 'dispatch', active: false, tabId: 'tab-a', generation, actionId: 'queue', targetId: 'task-b' }
+  for (let trial = 0; trial < 5; trial++) {
+    const before = h.dispatches.length
+    api.setContinuationsHeld(true)
+    h.emit(arm)
+    assert.deepEqual(indicator(h), arm)
+    assert.equal(api.getHeldContinuationCount(), 0)
+    for (const fields of [{ selecting: true }, { selecting: false }, { targetId: 'task-b', selecting: false }]) h.emit({ ...arm, ...fields })
+    h.emit(dispatch)
+    assert.equal(api.getHeldContinuationCount(), 4)
+    assert.equal(api.getHeldDispatchCount(), 0, 'The existing dispatch-only barrier is independent')
+    assert.deepEqual(indicator(h), arm)
+    assert.equal(h.dispatches.length, before)
+    h.focus(h.document.activeElement === h.editorElement ? h.previewElement : h.editorElement)
+    assert.equal(h.cancellations.at(-1), 'context-changed')
+    api.setContinuationsHeld(false)
+    h.flush()
+    assert.equal(api.getHeldContinuationCount(), 0)
+    assert.equal(h.dispatches.length, before)
+    assert.equal(h.leaderViews.at(-1), null)
+
+    api.setContinuationsHeld(true)
+    h.emit(arm)
+    h.emit({ ...arm, selecting: true })
+    h.emit({ kind: 'cancel', active: false, tabId: 'tab-a', generation, reason: 'escape' })
+    assert.equal(indicator(h), null, 'Cancellation passes through immediately')
+    assert.equal(api.getHeldContinuationCount(), 1)
+    api.setContinuationsHeld(false)
+    h.flush()
+    assert.equal(indicator(h), null)
+
+    api.setContinuationsHeld(true)
+    h.emit(arm)
+    h.emit({ ...arm, selecting: true })
+    h.emit({ ...arm, targetId: 'task-b', selecting: false })
+    h.emit(dispatch)
+    api.setContinuationsHeld(false)
+    assert.equal(h.dispatches.length, before + 1, 'An owned release drains synchronously through the original reader')
+    assert.deepEqual(h.dispatches.at(-1), ['tab-a', 'queue', 'task-b', 'shortcut'])
+    api.setContinuationsHeld(false)
+    assert.equal(h.dispatches.length, before + 1, 'An empty second release cannot replay')
+    h.flush()
+  }
+  assert.equal(h.traces.filter(({ data }) => data.reason === 'stale-owner-state').length, 20)
+  assert.equal(h.traces.filter(({ data }) => data.reason === 'stale-owner-dispatch').length, 5)
+})
+
+test('PIFB-26: unmount discards held continuations and production has no continuation controls', t => {
+  const h = harness(t)
+  const bridge = h.mount('PromptInputShortcuts', bridgeProps())
+  const api = h.window.__onwardPromptInputShortcutsDebug
+  const generation = h.contexts.at(-1).generation
+  api.setContinuationsHeld(true)
+  h.emit({ kind: 'state', active: true, tabId: 'tab-a', generation })
+  h.emit({ kind: 'state', active: true, tabId: 'tab-a', generation, selecting: false })
+  h.emit({ kind: 'dispatch', active: false, tabId: 'tab-a', generation, actionId: 'queue' })
+  assert.equal(api.getHeldContinuationCount(), 2)
+  bridge.close()
+  assert.equal(h.window.__onwardPromptInputShortcutsDebug, undefined)
+  assert.equal(api.getHeldContinuationCount(), 0)
+  api.setContinuationsHeld(false)
+  api.setContinuationsHeld(true)
+  assert.equal(api.getHeldContinuationCount(), 0)
+  assert.equal(h.dispatches.length, 0)
+  assert.equal(h.leaderViews.at(-1), null)
+
+  const production = harness(t, false)
+  production.mount('PromptInputShortcuts', bridgeProps())
+  const current = production.contexts.at(-1).generation
+  assert.equal(production.window.__onwardPromptInputShortcutsDebug, undefined)
+  production.emit({ kind: 'state', active: true, tabId: 'tab-a', generation: current })
+  production.emit({ kind: 'state', active: true, tabId: 'tab-a', generation: current, selecting: true })
+  assert.equal(production.leaderViews.at(-1).event.selecting, true)
+  production.emit({ kind: 'dispatch', active: false, tabId: 'tab-a', generation: current, actionId: 'queue' })
+  assert.equal(production.dispatches.length, 1)
+})
+
+test('PIFB-22: visible Leader snapshots follow accepted events, layout identity and cancellation without stale revival', t => {
+  const h = harness(t)
+  const bridge = h.mount('PromptInputShortcuts', bridgeProps())
+  for (let trial = 0; trial < 5; trial++) {
+    const generation = h.contexts.at(-1).generation
+    h.emit({ kind: 'state', active: true, tabId: 'tab-a', generation })
+    assert.equal(h.leaderViews.at(-1).targets.length, 2)
+    h.emit({ kind: 'state', active: true, tabId: 'tab-a', generation, selecting: true })
+    assert.equal(h.leaderViews.at(-1).event.selecting, true)
+    h.emit({ kind: 'state', active: true, tabId: 'tab-a', generation, selecting: false, targetId: 'task-b' })
+    assert.equal(h.leaderViews.at(-1).event.targetId, 'task-b')
+    bridge.update({ terminals: [...bridgeProps().terminals].reverse() })
+    assert.equal(h.leaderViews.at(-1).targets[0].id, 'task-b')
+    bridge.update({ blocked: true })
+    assert.equal(h.leaderViews.at(-1), null)
+    bridge.update({ ...bridgeProps(), tabId: 'tab-b' })
+    bridge.update({ tabId: 'tab-a' })
+    h.emit({ kind: 'state', active: true, tabId: 'tab-a', generation, selecting: true })
+    assert.equal(h.leaderViews.at(-1), null)
+  }
+  bridge.close()
+  assert.equal(h.leaderViews.at(-1), null)
+})
+
+test('PIFB-23: local preview owns selector release and retains the target without sending live input', async t => {
+  const h = harness(t)
+  const settings = { ...h.load(resolve(ROOT, 'src/utils/prompt-input.ts')).createDefaultPromptInputSettings(), leader: 'Control+X' }
+  const preview = h.mount('PromptShortcutPreview', { settings, disabled: false, onMatch: noop })
+  preview.tree.props.onFocus()
+  await Promise.resolve()
+  h.flush()
+  for (let trial = 0; trial < 5; trial++) {
+    h.previewKey('x', { code: 'KeyX', ctrlKey: true })
+    h.previewKey('Alt', { altKey: true })
+    assert.equal(preview.tree.props['data-selecting'], true)
+    h.previewKey('3', { code: 'Digit3', altKey: true })
+    h.previewKey('Alt', { type: 'keyup', altKey: true })
+    assert.equal(preview.tree.props['data-selecting'], false)
+    assert.equal(preview.tree.props['data-target-id'], '3')
+    h.previewKey('q', { code: 'KeyQ' })
+    assert.equal(preview.tree.props['data-action-id'], 'queue')
+    assert.equal(h.timers.size, 0)
+  }
+  assert.deepEqual(h.dispatches, [])
+})
 
 test('PIFB-19: every repeated shortcut-error occurrence can be shown and dismissed independently', t => {
   const h = harness(t)

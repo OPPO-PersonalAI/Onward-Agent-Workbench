@@ -422,7 +422,8 @@ function getShortcutLabel(key: string, t: ReturnType<typeof useI18n>['t']): stri
     promptEditSave: t('settings.shortcut.reservedPromptEditSave'),
     promptEditSaveAsNew: t('settings.shortcut.reservedPromptEditSaveAsNew'),
     promptInputLeader: t('promptInput.settings.leader'),
-    promptInputAction: t('promptInput.settings.actionShortcutLabel')
+    promptInputAction: t('promptInput.settings.actionShortcutLabel'),
+    promptInputTarget: t('promptInput.settings.selector')
   }
   return labels[key] || key
 }

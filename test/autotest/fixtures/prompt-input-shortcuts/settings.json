@@ -13,7 +13,8 @@
       { "id": "send", "preset": "send", "name": "", "visible": true, "includePrompt": true, "terminalKey": "None", "target": "default", "shortcut": "S" },
       { "id": "sendAllAndExecute", "preset": "sendAllAndExecute", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "all", "shortcut": "A" },
       { "id": "queue", "preset": "queue", "name": "", "visible": false, "includePrompt": true, "terminalKey": "Tab", "target": "default", "shortcut": "Q" },
-      { "id": "rawControlC", "name": "Raw control C", "visible": false, "includePrompt": false, "terminalKey": "Control+C", "target": "default", "shortcut": "C" }
+      { "id": "rawControlC", "name": "Raw control C", "visible": false, "includePrompt": false, "terminalKey": "Control+C", "target": "default", "shortcut": "C" },
+      { "id": "heldAltQueue", "name": "Held Alt queue", "visible": false, "includePrompt": true, "terminalKey": "Tab", "target": "default", "shortcut": "Alt+Q" }
     ]
   }
 }

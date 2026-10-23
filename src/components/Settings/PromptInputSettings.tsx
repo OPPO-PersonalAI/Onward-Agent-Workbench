@@ -11,11 +11,11 @@ import type { TranslationKey } from '../../i18n/core'
 import { RESERVED_SHORTCUTS } from '../../../electron/main/reserved-shortcuts'
 import {
   normalizePromptInputSettings, normalizePromptShortcut, validatePromptInputSettings, reorderPromptActions,
-  PROMPT_TERMINAL_KEYS, type PromptInputAction, type PromptInputValidationError
+  PROMPT_TERMINAL_KEYS, promptTargetSlot, normalizePromptTargetModifier, type PromptInputAction, type PromptInputValidationError
 } from '../../utils/prompt-input'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
-import { getPromptInputActionLabel } from '../../utils/prompt-input-labels'
+import { getPromptInputActionLabel, formatPromptShortcutLabel } from '../../utils/prompt-input-labels'
 import { ShortcutInput } from './ShortcutInput'
 import { PromptActionButton } from '../PromptNotebook/PromptActionButton'
 import { PromptShortcutPreview } from './PromptShortcutPreview'
@@ -27,7 +27,9 @@ const VALIDATION_KEYS: Record<PromptInputValidationError, TranslationKey> = {
   'invalid-shortcut': 'promptInput.settings.invalidShortcut',
   'duplicate-shortcut': 'promptInput.settings.duplicateShortcut',
   'invalid-action': 'promptInput.settings.invalidAction',
-  'shortcut-conflict': 'promptInput.settings.shortcutConflict'
+  'shortcut-conflict': 'promptInput.settings.shortcutConflict',
+  'invalid-selector': 'promptInput.settings.invalidSelector',
+  'selector-conflict': 'promptInput.settings.selectorConflict'
 }
 
 const ICONS = {
@@ -164,6 +166,7 @@ export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: num
     const canonical = normalizePromptShortcut(key, platform)
     if (!canonical || canonical === 'Escape' || /^[1-8]$/.test(canonical) || canonical === normalizePromptShortcut(draft.leader, platform)) return 'promptInput.settings.invalidShortcut'
     if (canonical === normalizePromptShortcut(globalShortcut, platform)) return 'promptInput.settings.globalShortcutConflict'
+    if (promptTargetSlot(canonical, draft.targetModifier) !== null) return 'promptInput.settings.selectorConflict'
     return draft.actions.some(action => action.id !== actionId && normalizePromptShortcut(action.shortcut, platform) === canonical)
       ? 'promptInput.settings.duplicateShortcut' : null
   }
@@ -282,6 +285,21 @@ export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: num
           onChange={event => { setTimeoutValue(event.target.value); setStatus(null); setSaveError(null) }} onBlur={() => traceEdit('timeout')} />
         </label>
       </div>
+      <label className="prompt-input-selector-row">
+        <span>{t('promptInput.settings.selector')}</span>
+        <select value={draft.targetModifier ?? ''} data-testid="prompt-input-target-modifier" onChange={event => {
+          setDraft(current => ({ ...current, targetModifier: normalizePromptTargetModifier(event.target.value) }))
+          traceEdit('target-modifier')
+        }}>
+          <option value="Alt">{t(platform === 'darwin' ? 'promptInput.selector.option' : 'promptInput.selector.alt')}</option>
+          <option value="Control">{t('promptInput.selector.control')}</option>
+          <option value="Shift">{t('promptInput.selector.shift')}</option>
+          <option value="">{t('promptInput.selector.direct')}</option>
+        </select>
+      </label>
+      <p className="prompt-input-hint" data-testid="prompt-input-target-hint">{draft.targetModifier
+        ? t('promptInput.settings.selectorHint', { key: formatPromptShortcutLabel(`${draft.targetModifier}+3`, platform) })
+        : t('promptInput.settings.selectorDirectHint')}</p>
       <div className="prompt-input-preview-heading">
         <span title={t('promptInput.settings.reorderHint')}>{t('promptInput.settings.preview')}</span>
         <select data-testid="prompt-input-action-select" aria-label={t('promptInput.settings.chooseAction')} value={action?.id ?? ''}

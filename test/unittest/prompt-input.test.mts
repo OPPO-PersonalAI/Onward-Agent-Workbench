@@ -7,17 +7,122 @@ import test from 'node:test'
 import {
   createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut,
   promptShortcutFromKey, reducePromptLeader, resolvePromptTargets, shouldClearPromptDraft,
-  terminalKeyToSequence, validatePromptInputSettings, normalizePromptActionColor, reorderPromptActions, promptShortcutCancellation,
+  terminalKeyToSequence, validatePromptInputSettings, normalizePromptActionColor, reorderPromptActions, promptShortcutCancellation, promptTargetModifierHeld, promptTargetSlot,
   type PromptInputSettings, type PromptLeaderState, type PromptShortcutContext
 } from '../../src/utils/prompt-input.ts'
 
 function configured(): PromptInputSettings {
-  return { ...createDefaultPromptInputSettings(), leader: 'Control+X' }
+  return { ...createDefaultPromptInputSettings(), leader: 'Control+X', targetModifier: null }
 }
 const context: PromptShortcutContext = {
   tabId: 'tab-a', visibleTerminalIds: ['task-a', 'task-b', 'task-c'], activeTerminalId: 'task-b', blocked: false
 }
 const armed = (targetId?: string): PromptLeaderState => ({ tabId: 'tab-a', deadline: 2500, ...(targetId ? { targetId } : {}) })
+
+test('PI-U22: selector migration preserves direct digits and validates conflicts without dropping bindings', () => {
+  assert.equal(createDefaultPromptInputSettings().targetModifier, 'Alt')
+  const legacy = configured()
+  delete legacy.targetModifier
+  assert.equal(normalizePromptInputSettings(legacy).targetModifier, null)
+  for (const modifier of [null, 'Alt', 'Control', 'Shift'] as const) {
+    const settings = { ...configured(), targetModifier: modifier }
+    assert.deepEqual(normalizePromptInputSettings(settings), settings)
+    assert.deepEqual(normalizePromptInputSettings(normalizePromptInputSettings(settings)), settings)
+    for (const platform of ['darwin', 'win32', 'linux']) {
+      assert.equal(validatePromptInputSettings(settings, [], platform), null)
+      if (!modifier) continue
+      assert.equal(validatePromptInputSettings({ ...settings, leader: `${modifier}+3` }, [], platform), 'selector-conflict')
+      assert.equal(validatePromptInputSettings(settings, [], platform, [`${modifier}+3`]), 'selector-conflict')
+      const conflict = { ...settings, actions: [{ ...settings.actions[0], shortcut: `${modifier}+3` }] }
+      assert.equal(validatePromptInputSettings(conflict, [], platform), 'selector-conflict')
+      assert.equal(normalizePromptInputSettings(conflict).actions[0].shortcut, `${modifier}+3`)
+    }
+  }
+  for (const value of ['Meta', 'a', 'Control+Alt', 3, {}]) {
+    const settings = { ...configured(), targetModifier: value } as PromptInputSettings
+    assert.equal(normalizePromptInputSettings(settings).targetModifier, null)
+    assert.equal(validatePromptInputSettings(settings), 'invalid-selector')
+  }
+})
+
+test('PI-U23: exact selector masks, physical digits and release flags are platform-neutral', () => {
+  for (const modifier of ['Alt', 'Control', 'Shift'] as const) {
+    const flag = modifier === 'Control' ? 'control' : modifier.toLowerCase()
+    const input = { key: '#', code: 'Digit3', [flag]: true }
+    for (const platform of ['darwin', 'win32', 'linux']) assert.equal(promptTargetSlot(promptShortcutFromKey(input, platform), modifier), 2)
+    assert(promptTargetModifierHeld(input, modifier))
+    assert(!promptTargetModifierHeld({ ...input, meta: true }, modifier))
+    assert(!promptTargetModifierHeld({ ...input, isComposing: true }, modifier))
+    assert(!promptTargetModifierHeld({ ...input, modifiers: ['altgr'] }, modifier))
+    assert(promptTargetModifierHeld({ key: modifier }, modifier))
+    assert(!promptTargetModifierHeld({ key: modifier, [flag]: true, type: 'keyUp' }, modifier))
+    assert(!promptTargetModifierHeld({ key: modifier, [flag]: true, type: 'keyup' }, modifier))
+    assert.equal(promptTargetSlot('3', modifier), null)
+    assert.equal(promptTargetSlot(`${modifier}+0`, modifier), null)
+    assert.equal(promptTargetSlot(`${modifier}+9`, modifier), null)
+    assert.equal(promptTargetSlot(`${modifier}+Shift+3`, modifier), null)
+  }
+  assert.equal(promptTargetSlot(promptShortcutFromKey({ key: '3', code: 'Numpad3', alt: true }), 'Alt'), 2)
+  assert.equal(promptTargetSlot(promptShortcutFromKey({ key: 'PageDown', code: 'Numpad3', alt: true }), 'Alt'), null)
+  assert(!promptTargetModifierHeld({ key: '3', control: true, alt: true }, 'Alt'))
+})
+
+test('PI-U24: held selection updates the cue without extending timeout and retains one-shot identity on release', () => {
+  const settings: PromptInputSettings = { ...configured(), targetModifier: 'Alt' }
+  for (let cycle = 0; cycle < 500; cycle++) {
+    let transition = reducePromptLeader(null, 'Control+X', 1000, settings, context)
+    transition = reducePromptLeader(transition.state, null, 1100, settings, context, { selecting: true })
+    assert.equal(transition.event?.selecting, true)
+    assert.equal(transition.state?.deadline, 2500)
+    transition = reducePromptLeader(transition.state, 'Alt+3', 1200, settings, context, { selecting: true })
+    assert.equal(transition.state?.targetId, 'task-c')
+    assert.equal(transition.state?.deadline, 2700)
+    assert.equal(transition.event?.selecting, false)
+    const repeated = reducePromptLeader(transition.state, 'Alt+1', 1300, settings, context, { repeat: true, selecting: true })
+    assert.equal(repeated.state, transition.state)
+    transition = reducePromptLeader(transition.state, null, 1400, settings, context, { selecting: false })
+    assert.equal(transition.event, undefined)
+    assert.equal(transition.state?.selecting, false)
+    assert.equal(reducePromptLeader(transition.state, null, 1450, settings, context, { selecting: true }).state?.selecting, false)
+    assert.equal(transition.state?.deadline, 2700)
+    const result = reducePromptLeader(transition.state, 'Q', 1500, settings, context)
+    assert.equal(result.event?.targetId, 'task-c')
+    assert.equal(result.state, null)
+  }
+  assert.equal(reducePromptLeader(armed(), '3', 1100, settings, context).event?.reason, 'unmatched')
+  assert.equal(reducePromptLeader(armed(), null, 2500, settings, context, { selecting: true }).event?.reason, 'timeout')
+  assert.equal(Boolean(reducePromptLeader(null, 'Control+X', 1000, { ...settings, targetModifier: 'Control' }, context, { selecting: true }).event?.selecting), false)
+})
+
+test('PI-U25: a held-selector action requires its exact binding and keeps its captured recipient', () => {
+  for (const platform of ['darwin', 'win32', 'linux']) {
+    for (const modifier of ['Alt', 'Control', 'Shift'] as const) {
+      const plain: PromptInputSettings = { ...configured(), targetModifier: modifier }
+      const modified = { ...plain, actions: plain.actions.map(action => action.id === 'queue'
+        ? { ...action, shortcut: `${modifier}+Q` } : action) }
+      assert.equal(validatePromptInputSettings(modified, [], platform), null)
+      const picked = reducePromptLeader(armed(), `${modifier}+3`, 1100, plain, context, { platform }).state
+      const reordered = { ...context, visibleTerminalIds: ['task-c', 'task-a', 'task-b'] }
+      for (const [settings, key, accepted] of [
+        [modified, `${modifier}+Q`, true],
+        [plain, `${modifier}+Q`, false],
+        [modified, 'Q', false],
+        [modified, `Meta+${modifier}+Q`, false]
+      ] as const) {
+        const result = reducePromptLeader(picked, normalizePromptShortcut(key, platform), 1200, settings, reordered, { platform })
+        assert.equal(result.state, null)
+        assert.equal(result.consume, true)
+        assert.equal(result.event?.kind, accepted ? 'dispatch' : 'cancel')
+        assert.equal(result.event?.actionId, accepted ? 'queue' : undefined)
+        assert.equal(result.event?.targetId, accepted ? 'task-c' : undefined)
+        assert.equal(result.event?.reason, accepted ? undefined : 'unmatched')
+        assert.equal(reducePromptLeader(result.state, 'Q', 1300, settings, reordered, { platform }).consume, false)
+      }
+      assert.equal(terminalKeyToSequence(modified.actions.find(action => action.id === 'queue')!.terminalKey), '\t',
+        'The invocation modifier never changes the terminal suffix')
+    }
+  }
+})
 
 test('PI-U21: optional emoji round-trip, copy and reorder preserve full sequences and v10 defaults', () => {
   const original = configured()
@@ -284,7 +389,7 @@ test('PI-U16: action continuations can override window shortcuts but cannot coll
 test('PI-U09: numeric choice locks identity across reorder and never silently retargets', () => {
   const settings = configured()
   const picked = reducePromptLeader(armed(), '3', 1400, settings, context)
-  assert.deepEqual(picked.state, { tabId: 'tab-a', deadline: 2900, targetId: 'task-c' })
+  assert.deepEqual(picked.state, { tabId: 'tab-a', deadline: 2900, targetId: 'task-c', selecting: false })
   const reordered = { ...context, visibleTerminalIds: ['task-c', 'task-b', 'task-a'] }
   assert.equal(reducePromptLeader(picked.state, 'Q', 1500, settings, reordered).event?.targetId, 'task-c')
   const removed = { ...context, visibleTerminalIds: ['task-a', 'task-b', 'task-new'] }

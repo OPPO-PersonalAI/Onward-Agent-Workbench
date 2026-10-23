@@ -56,7 +56,7 @@ import { registerThemeExportHandlers, cleanupThemeExportHandlers } from './theme
 import { getShortcutManager } from './shortcut-manager'
 import { promptInputShortcuts } from './prompt-input-shortcuts'
 import { registerPromptInputHandlers, cleanupPromptInputHandlers } from './prompt-input-handlers'
-import { normalizePromptShortcut } from '../../src/utils/prompt-input'
+import { normalizePromptShortcut, promptTargetSlot } from '../../src/utils/prompt-input'
 import { getAppInfo } from './app-info'
 import { createDiagnosticBundle } from './diagnostic-bundle'
 import { isUsableTerminalCwd } from './terminal-cwd-validation'
@@ -3071,12 +3071,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     const existing = shortcutManager.checkConflict(accelerator, excludeKey as keyof ShortcutConfig)
     const globalEdit = excludeKey === 'activateAndFocusPrompt'
     const key = globalEdit ? normalizePromptShortcut(accelerator, process.platform) : null
-    const actionConflict = Boolean(key && settingsStorage.get().promptInput.actions.some(action =>
+    const promptInput = key ? settingsStorage.get().promptInput : null
+    const selectorConflict = Boolean(key && promptInput?.targetModifier && promptTargetSlot(key, promptInput.targetModifier) !== null)
+    const actionConflict = Boolean(key && promptInput?.actions.some(action =>
       normalizePromptShortcut(action.shortcut, process.platform) === key))
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, {
-      reason: 'shortcut-conflict-checked', globalEdit, actionConflict, conflict: Boolean(existing) || actionConflict
+      reason: 'shortcut-conflict-checked', globalEdit, actionConflict, selectorConflict, conflict: Boolean(existing) || actionConflict || selectorConflict
     })
-    return existing ?? (actionConflict ? 'promptInputAction' : null)
+    return existing ?? (actionConflict ? 'promptInputAction' : selectorConflict ? 'promptInputTarget' : null)
   })
 
   // Initialize shortcuts on app start

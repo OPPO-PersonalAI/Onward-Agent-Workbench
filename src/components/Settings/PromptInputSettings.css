@@ -20,6 +20,9 @@
 .prompt-input-fields { border: 0; padding: 8px 0 0; margin: 0; min-width: 0; }
 .prompt-input-global-row { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; min-width: 0; font-size: var(--font-xs); }
 .prompt-input-global-row > span { white-space: nowrap; }
+.prompt-input-selector-row { display: flex; align-items: center; gap: 6px; font-size: var(--font-xs); }
+.prompt-input-selector-row > span { flex: 0 1 auto; }
+.prompt-input-selector-row select { flex: 1 1 0; width: 0; height: 28px; padding: 3px 4px; }
 .prompt-input-timeout { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .prompt-input-timeout input { width: 61px; height: 28px; padding: 3px; }
 .prompt-input-settings .shortcut-input-wrapper { flex: 1 1 0; min-width: 0; gap: 4px; flex-wrap: wrap; }

@@ -4,6 +4,12 @@
  */
 
 export const promptInputRuntimeEn = {
+  'promptInput.leader.short': 'L',
+  'promptInput.leader.waiting': 'Leader active. Choose an action; Esc cancels.',
+  'promptInput.leader.choosing': 'Leader active. Choose a Task (1–{{count}}); Esc cancels.',
+  'promptInput.leader.selected': 'Leader active. This action goes to Task {{number}} · {{name}}. Esc cancels.',
+  'promptInput.leader.slot': 'One-time recipient: Task {{number}}',
+  'promptInput.leader.map': 'One-time Task recipients',
   'promptInput.runtime.empty': 'The current tab’s Prompt draft is empty.',
   'promptInput.runtime.unavailable': 'The selected Task is no longer visible or available. Nothing was sent.',
   'promptInput.runtime.conflict': 'A one-time Task target cannot be combined with an all-Tasks action.',
@@ -43,6 +49,12 @@ export const promptInputRuntimeEn = {
 }
 
 export const promptInputRuntimeZhCN: Record<keyof typeof promptInputRuntimeEn, string> = {
+  'promptInput.leader.short': 'L',
+  'promptInput.leader.waiting': 'Leader 已激活，请选择动作；Esc 取消。',
+  'promptInput.leader.choosing': 'Leader 已激活，请选择任务（1–{{count}}）；Esc 取消。',
+  'promptInput.leader.selected': 'Leader 已激活，本次发送给任务 {{number}} · {{name}}。Esc 取消。',
+  'promptInput.leader.slot': '本次接收方：任务 {{number}}',
+  'promptInput.leader.map': '本次任务接收方',
   'promptInput.runtime.empty': '当前标签页的 Prompt 草稿为空。',
   'promptInput.runtime.unavailable': '所选任务已不可见或不可用，未发送任何内容。',
   'promptInput.runtime.conflict': '单次指定任务不能与“全部任务”动作同时使用。',

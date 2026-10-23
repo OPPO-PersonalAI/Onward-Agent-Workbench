@@ -9,6 +9,7 @@ import {
   normalizePromptInputSettings,
   promptShortcutCancellation,
   promptShortcutFromKey,
+  promptTargetModifierHeld,
   reducePromptLeader,
   type PromptInputSettings,
   type PromptLeaderState,
@@ -195,15 +196,18 @@ export class PromptInputShortcuts {
       this.reset('owner-changed')
       return false
     }
-    // Undo a one-stroke passthrough suppression on the next physical event.
-    if (!this.suspended && this.menuSuppressed.has(contents)) this.ignoreMenu(contents, false)
+    // Retain menu suppression for the chord; retire one-stroke passthrough on the next event.
+    if (!this.suspended && !this.state && this.menuSuppressed.has(contents)) this.ignoreMenu(contents, false)
     const physicalKey = input.code || input.key
+    const modifierKey = /^(Control|Meta|Alt|Shift|AltGraph)$/.test(input.key)
     if (input.type === 'keyUp') {
+      const ownsSelector = Boolean(this.state && input.key === this.settings.targetModifier)
+      if (modifierKey) this.updateSelector(contents, input)
       if (this.swallowedKeys.delete(physicalKey)) {
         event.preventDefault()
         return true
       }
-      return this.suspended
+      return this.suspended || ownsSelector
     }
     if (input.type !== 'keyDown') return false
     if (!this.window.isFocused()) {
@@ -230,7 +234,14 @@ export class PromptInputShortcuts {
     }
     if (!this.settings.leader && !this.state) return false
     // Modifier presses are part of a following stroke, not unmatched strokes.
-    if (/^(Control|Meta|Alt|Shift|AltGraph)$/.test(input.key)) return false
+    if (modifierKey) {
+      const ownsSelector = Boolean(this.state && input.key === this.settings.targetModifier)
+      this.updateSelector(contents, input)
+      // Preventing raw modifier-down suppresses its release in Chromium. Keep the
+      // native lifecycle and suppress only menu handling until the chord ends.
+      if (ownsSelector) this.ignoreMenu(contents, true)
+      return ownsSelector
+    }
     const key = promptShortcutFromKey(input, process.platform)
     if (this.state && !key) {
       this.cancel('unmatched')
@@ -272,6 +283,16 @@ export class PromptInputShortcuts {
     this.ownsTerminal = () => false
     this.trace('disposed')
     this.window = null
+  }
+
+  private updateSelector(contents: WebContents, input: Input): void {
+    if (!this.state || !this.settings.targetModifier) return
+    const transition = reducePromptLeader(this.state, null, Date.now(), this.settings, this.context, {
+      platform: process.platform, selecting: promptTargetModifierHeld(input, this.settings.targetModifier)
+    })
+    this.state = transition.state
+    if (!this.state) { this.owner = null; this.clearTimeout() }
+    if (transition.event) this.emit(transition.event, contents.id)
   }
 
   private reset(reason: string): void {

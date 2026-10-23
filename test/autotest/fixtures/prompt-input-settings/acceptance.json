@@ -4,7 +4,15 @@
   "workspaceName": "workspace with spaces 测试",
   "leader": "F6",
   "modifiedLeaderProbe": "Control+F6",
-  "recordingKeys": { "F6": "F6", "Control+F6": "Control+F6", "E": "e", "K": "k" },
+  "recordingKeys": { "F6": "F6", "Control+F6": "Control+F6", "E": "e", "K": "k", "Q": "q" },
+  "cancelDraftName": "Discard this new action · 放弃新动作",
+  "conflictBindings": {
+    "global": { "stroke": "Control+Alt+F8", "stored": "Ctrl+Alt+F8", "display": { "darwin": "Ctrl⌥F8", "win32": "Ctrl+Alt+F8", "linux": "Ctrl+Alt+F8" } },
+    "hidden": { "stroke": "Control+j", "action": "Control+J" },
+    "selector": { "stroke": "Control+Digit3", "stored": "Ctrl+3", "modifier": "Control", "display": { "darwin": "Ctrl3", "win32": "Ctrl+3", "linux": "Ctrl+3" } },
+    "local": { "stroke": "Control+Shift+p", "action": "Control+Shift+P" }
+  },
+  "liveToolbar": { "widths": [240, 600], "tailFixtureIndex": 19, "terminalKey": "Enter", "hiddenPreset": "queue" },
   "shortcutLabels": {
     "darwin": { "F6": "F6", "Control+F6": "Control+F6", "Enter": "Enter", "E": "E", "S": "S", "A": "A", "Q": "Q", "K": "K" },
     "win32": { "F6": "F6", "Control+F6": "Control+F6", "Enter": "Enter", "E": "E", "S": "S", "A": "A", "Q": "Q", "K": "K" },
@@ -26,7 +34,11 @@
       "title": "Prompt input actions",
       "save": "Save",
       "saved": "Actions saved.",
+      "cancelled": "Changes discarded.",
       "saveFailed": "Could not save. Your previous actions are still active; your draft is kept for retry.",
+      "globalActionConflict": "Action keys cannot use the global Wake / Hide shortcut.",
+      "hiddenActionConflict": "Conflicts with \"Prompt action shortcut\"",
+      "selectorConflict": "The target selector + 1–8 conflicts with the Leader, an action key or Wake/Hide. Change the selector or the conflicting shortcut.",
       "leaderNotSet": "Click to record",
       "shortcutNotSet": "Not set",
       "clearShortcut": "Clear shortcut",
@@ -39,7 +51,11 @@
       "title": "Prompt 输入动作",
       "save": "保存",
       "saved": "动作已保存。",
+      "cancelled": "已放弃更改。",
       "saveFailed": "保存失败。之前的动作仍然生效，编辑草稿已保留，可重试。",
+      "globalActionConflict": "动作键不能使用全局“唤醒 / 隐藏”快捷键。",
+      "hiddenActionConflict": "与“Prompt 动作快捷键”冲突",
+      "selectorConflict": "目标选择键 + 1–8 与 Leader、动作键或唤醒/隐藏快捷键冲突。请修改选择键或冲突的快捷键。",
       "leaderNotSet": "点击录制",
       "shortcutNotSet": "未设置",
       "clearShortcut": "清除快捷键",
@@ -51,6 +67,7 @@
   },
   "defaults": {
     "leader": null,
+    "targetModifier": "Alt",
     "timeoutMs": 1500,
     "actions": [
       { "id": "sendAndExecute", "preset": "sendAndExecute", "name": "", "visible": true, "includePrompt": true, "terminalKey": "Enter", "target": "default", "shortcut": "Enter" },

@@ -43,6 +43,7 @@ export const PERF_TRACE_EVENT = {
   WORKER_PROMPT_EMOJI_SEARCH: 'worker:prompt-emoji.search-summary',
   RENDERER_PROMPT_EMOJI_ASSET: 'renderer:prompt-emoji.render-asset',
   RENDERER_PROMPT_SHORTCUT: 'renderer:prompt-shortcut.state-changed',
+  RENDERER_PROMPT_LEADER_CUE: 'renderer:prompt-shortcut.present-leader',
   RENDERER_PROMPT_ACTION: 'renderer:prompt-input.dispatch-action',
   RENDERER_PROMPT_DRAFT: 'renderer:prompt-input.settle-draft',
   RENDERER_PROMPT_INPUT_IPC: 'renderer:prompt-input.ipc',

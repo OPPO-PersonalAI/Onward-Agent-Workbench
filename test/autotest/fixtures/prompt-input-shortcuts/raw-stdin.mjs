@@ -9,6 +9,7 @@ import path from 'node:path'
 
 const directory = path.resolve(process.argv[2] ?? '')
 assert(process.argv[2], 'Pass the suite-owned receiver directory')
+const receiverId = path.basename(directory)
 assert(process.stdin.isTTY && typeof process.stdin.setRawMode === 'function', 'Receiver requires a real PTY')
 const bytesPath = path.join(directory, 'stdin.bin')
 const commandPath = path.join(directory, 'command.json')
@@ -17,6 +18,8 @@ let length = 0
 let commandId = 0
 let bracketedPaste = true
 let stopped = false
+let pressure = null
+let outputTick = 0
 
 function status(extra = {}) {
   const temporary = `${statusPath}.next`
@@ -33,6 +36,7 @@ function stop(reason, code = 0) {
   if (stopped) return
   stopped = true
   clearInterval(commands)
+  clearInterval(pressure)
   clearTimeout(deadline)
   setBracketedPaste(false)
   process.stdin.setRawMode(false)
@@ -61,7 +65,14 @@ const commands = setInterval(() => {
   else if (command.operation === 'bracketed-paste') {
     setBracketedPaste(command.enabled === true)
     status()
-  } else if (command.operation === 'snapshot') status()
+  } else if (command.operation === 'pressure') {
+    clearInterval(pressure)
+    pressure = command.enabled ? setInterval(() => {
+      process.stdout.write(Array.from({ length: 64 }, (_, line) => `pressure ${receiverId} ${outputTick} line ${line}\r\n`).join(''))
+      outputTick += 1
+    }, 20) : null
+    status()
+  } else if (command.operation === 'snapshot') status({ outputTick })
   else throw new Error(`Unknown receiver command: ${command.operation}`)
 }, 15)
 // A leaked receiver cannot live beyond the regression runner's hard ceiling.

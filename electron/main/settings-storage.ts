@@ -13,7 +13,7 @@ import { DEFAULT_THEME_SETTINGS } from '../../src/constants/themes'
 import { getAvailableThemeIds, normalizeThemeSettings } from '../../src/themes/theme-engine'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
-import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
+import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, promptTargetSlot, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
 
 /**
  * Shortcut configuration
@@ -303,6 +303,12 @@ class SettingsStorage {
       : true
 
     const promptInput = normalizePromptInputSettings(state.promptInput)
+    // Preserve existing action bindings when a hand-edited selector collides.
+    if (promptInput.targetModifier && [promptInput.leader, shortcuts.activateAndFocusPrompt, ...promptInput.actions.map(action => action.shortcut)]
+      .some(key => promptTargetSlot(normalizePromptShortcut(key, process.platform), promptInput.targetModifier) !== null)) {
+      promptInput.targetModifier = null
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'selector-conflict-recovered' })
+    }
     const leaderError = validatePromptInputSettings({ ...promptInput, actions: [] }, [
       ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
     ], process.platform, [shortcuts.activateAndFocusPrompt])

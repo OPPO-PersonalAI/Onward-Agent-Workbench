@@ -66,7 +66,7 @@ function ipcHarness(platform, promptInput) {
     IPC: { SETTINGS_CHECK_SHORTCUT_CONFLICT: 'settings:check-shortcut-conflict' },
     shortcutManager: { checkConflict() { return existing } },
     settingsStorage: { get() { reads += 1; return { promptInput } } },
-    process: { platform }, normalizePromptShortcut: core.normalizePromptShortcut, PERF_TRACE_EVENT,
+    process: { platform }, normalizePromptShortcut: core.normalizePromptShortcut, promptTargetSlot: core.promptTargetSlot, PERF_TRACE_EVENT,
     performanceTrace: { record(name, data) { traces.push({ name, data }) } }
   }, 'undefined')
   return { traces, check: (key, field) => handler({}, key, field), existing: value => { existing = value }, reads: () => reads }
@@ -81,7 +81,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
         draft.leader = 'F6'
         draft.actions[1].visible = visible
         const validate = evaluate(`const ${actionValidator}`, { draft, globalShortcut, platform,
-          normalizePromptShortcut: core.normalizePromptShortcut
+          normalizePromptShortcut: core.normalizePromptShortcut, promptTargetSlot: core.promptTargetSlot
         }, 'validateActionKey')
         assert.equal(validate('execute', key), 'promptInput.settings.globalShortcutConflict')
         assert.equal(validate('execute', 'Control+Shift+P'), null, 'A window command remains a usable continuation key')
@@ -99,7 +99,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
         assert.equal(h.check(globalShortcut, 'activateAndFocusPrompt'), 'promptInputAction')
         assert.equal(h.reads(), 1)
         assert.deepEqual(h.traces, [{ name: 'main:prompt-input.settings-changed',
-          data: { reason: 'shortcut-conflict-checked', globalEdit: true, actionConflict: true, conflict: true } }])
+          data: { reason: 'shortcut-conflict-checked', globalEdit: true, actionConflict: true, selectorConflict: false, conflict: true } }])
         assert.equal(h.check(globalShortcut, 'focusPromptEditor'), null)
         assert.equal(h.reads(), 1, 'Window shortcut editing must not inspect action bindings')
         assert.equal(h.check(null, 'activateAndFocusPrompt'), null)
@@ -110,6 +110,19 @@ for (const platform of ['darwin', 'win32', 'linux']) {
       }
     }
   })
+
+  test(`PIGC-04-${platform}: global recorder names a held-selector collision without blocking window-local shortcuts`, () => {
+    for (const targetModifier of ['Alt', 'Control', 'Shift']) {
+      const h = ipcHarness(platform, { ...structuredClone(DEFAULTS), targetModifier })
+      for (let digit = 1; digit <= 8; digit++) {
+        assert.equal(h.check(`${targetModifier}+${digit}`, 'activateAndFocusPrompt'), 'promptInputTarget')
+        assert.equal(h.traces.at(-1).data.selectorConflict, true)
+        assert.equal(h.check(`${targetModifier}+${digit}`, 'focusPromptEditor'), null)
+      }
+      assert.equal(h.check(`${targetModifier}+9`, 'activateAndFocusPrompt'), null)
+    }
+    assert.equal(ipcHarness(platform, { ...structuredClone(DEFAULTS), targetModifier: null }).check('Alt+3', 'activateAndFocusPrompt'), null)
+  })
 }
 
 test('PIGC-03: the action conflict label and generic conflict copy are localized in both dictionaries', () => {
@@ -118,6 +131,7 @@ test('PIGC-03: the action conflict label and generic conflict copy are localized
   for (const dictionary of [en, zhCN]) {
     const translate = key => dictionary[key] ?? key
     assert.equal(label('promptInputAction', translate), dictionary['promptInput.settings.actionShortcutLabel'])
+    assert.equal(label('promptInputTarget', translate), dictionary['promptInput.settings.selector'])
     assert(dictionary['promptInput.settings.globalShortcutConflict'])
     for (const key of Object.keys(en)) {
       assert.deepEqual(dictionary[key].match(/\{\{\w+\}\}/g) ?? [], en[key].match(/\{\{\w+\}\}/g) ?? [])

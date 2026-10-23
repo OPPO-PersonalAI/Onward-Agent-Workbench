@@ -129,13 +129,26 @@ policy is changed for this feature.
 
 ## Leader grammar and ownership
 
-`L → Q` invokes Queue with default targeting. `L → 3 → Q` invokes Queue on the
-Task in visible slot 3 **without moving focus**. Bare digits 1–8 and Escape
-are reserved within a sequence. An action cannot use the Leader itself.
+`L → Q` invokes Queue with default targeting. With the Alt/Option selector,
+`L → hold Alt + 3 → release Alt → Q` invokes Queue on the Task in visible slot 3
+**without moving focus**. Control and Shift are also selectable. Existing
+configurations without `targetModifier` retain `L → 3 → Q`; a new configuration
+defaults to Alt with Leader still disabled. `targetModifier: null` explicitly
+selects direct digits. This additive field does not change the settings version.
+Bare digits 1–8, Escape, the Leader itself and configured selector+digit chords
+remain reserved as action bindings. Conflicting edits are rejected visibly,
+including edits to the OS-global Wake/Hide shortcut. Malformed on-disk selector
+conflicts recover to direct digits while preserving existing action bindings.
 
 - Default timeout is 1,500 ms; configurable range is 500–10,000 ms. Arming or
   choosing a slot restarts the timeout. Held-key repeats never extend it or
-  dispatch an action.
+  dispatch an action. Modifier-only hold/release updates presentation without
+  extending the deadline; releasing the selector retains the one-shot Task ID.
+  A digit immediately retires the number map and emphasizes the chosen recipient;
+  later digits can replace that recipient. The Leader's own modifiers do not
+  automatically open the map: a subsequent observed modifier event does.
+  Each digit checks its own exact modifier flags, so a missing release cannot
+  turn a later bare digit into a modified selector. Extra modifiers do not match.
 - Escape and unmatched continuations are consumed and cancel the sequence.
   Timeout cancels; subsequent ordinary input follows its native route.
 - `L → L` cancels and lets the second physical Leader key reach the original
@@ -151,6 +164,36 @@ are reserved within a sequence. An action cannot use the Leader itself.
   on the current host and remains portable when persisted.
 - Recording acknowledges main-process suppression before accepting input.
   A recorded key must not also invoke an existing action or navigation shortcut.
+
+### Transient Leader feedback (approved 2026-10-20)
+
+The app-bar reserves a small fixed slot for a theme-aware, 22px-high keycap:
+`⌨ L` while armed, `⌨ 1–N` while choosing, and `⌨ →3` after selecting slot 3.
+It uses an accessible live status and textual/numeric feedback as well as color.
+No countdown, minimum on-time or animation extends the session. Completion,
+cancellation, timeout and owner changes remove it immediately.
+
+Before selecting, holding the selector displays numbers in layout-visible Task
+headers; release without a selection hides them. Selecting a digit immediately
+leaves only that recipient's number emphasized, even while the modifier remains
+held. A covered grid uses a pointer-transparent number/name strip until selection
+or release, without changing focus or the active subpage. The app-bar remains visible when Prompt is hidden.
+The real current-Tab ID/order defines every cue; titles are presentation only.
+
+Main retains recognition, timeout and owner authority. The existing shortcut
+IPC carries the `selecting` flag. A small `useSyncExternalStore` subscription
+updates cue components only, with no full AppState publication or timer-driven
+rendering. Settings preview uses the same reducer and native modifier flags but
+only sample recipients. See `docs/html/prompt-leader-target-design.html` for the
+approved interaction, comparison and trade-offs.
+
+The user approved selection-driven collapse after native tests exposed
+[Chromium's handled-keydown suppression](https://github.com/chromium/chromium/blob/150.0.7871.129/content/browser/renderer_host/render_widget_host_impl.cc#L1734-L1818):
+consuming a digit can discard the later modifier release before both Electron
+keyboard callbacks. Standalone selector modifiers retain native delivery while
+`setIgnoreMenuShortcuts` suppresses app-menu handling during the chord. No release
+event is required to retire a selected target's map, and no synthetic key is
+injected to reset Chromium's suppression latch.
 
 ## Destination and draft rules
 
@@ -198,10 +241,10 @@ from failure after content/before suffix.
 
 | Layer | Coverage |
 |---|---|
-| Pure unit | Defaults/migration, aliases/conflicts, key bytes, Leader transitions, target precedence/identity, revision completion |
+| Pure unit | Defaults/legacy selector migration, aliases/selector/global conflicts, exact modifier masks, key bytes, Leader hold/release/deadline transitions, target precedence/identity, revision completion |
 | Sender/integrity | Five presets and custom actions, layout-visible scope, exact child stdin framing/suffix, partial failures, retained draft |
-| Trusted keyboard | Native interception, no leaked keys, hidden live drafts, IME, repeat/cancel/passthrough, stable destinations and focus |
-| Settings restart | UI edits → acknowledged durable save → new process; migration, bilingual narrow controls, failed save |
+| Trusted keyboard | Native interception, no leaked keys, held Alt/Control/Shift and release, app-bar/Task cue lifecycle, covered-grid mapping, hidden live drafts, IME, repeat/cancel/passthrough, stable destinations and focus |
+| Settings restart | UI edits → acknowledged durable save → new process; selector/emoji migration, isolated native preview, bilingual narrow controls, failed save |
 | Existing performance | Prompt input/longtail/IME gates with their existing workloads and thresholds |
 | Diagnostics | Main/renderer send and receive, state/cancel/reject/results, clear/preserve, settings lifecycle; no raw drafts |
 
@@ -267,6 +310,13 @@ ordinary typing does not emit a new event for each keystroke.
 | Emoji layout, native-dialog centering and bilingual copy | Exempt: presentation/data only, no runtime control-flow node; PIS-05 checks centered unclipped layout in both languages and five Settings widths | `src/components/Settings/PromptActionAppearance.css:7`, `src/components/PromptNotebook/PromptActionButton.css:15`, `src/i18n/prompt-input.ts:6` |
 | Emoji test drivers and fixtures | Exempt: autotest-only code under isolated ONWARD_AUTOTEST profiles; no product-runtime node | `test/autotest/prompt-input-settings-driver.mjs`, `src/autotest/test-prompt-sender.ts`, `test/unittest/prompt-emoji.test.mts` |
 | Renderer owner-state readout replacing the removed status-row test witness | Exempt: autotest-only, under the existing `ONWARD_AUTOTEST=1` gate | `src/components/PromptNotebook/PromptInputShortcuts.tsx:212–226` |
+| Selector migration/invalid-load recovery, durable validation, global-recorder selector conflicts | `MAIN_PROMPT_INPUT_SETTINGS` | `electron/main/settings-storage.ts:305`; `electron/main/ipc-handlers.ts:3070` |
+| Native held/released selector transitions, selection-driven collapse, menu suppression/restoration, exact-mask target decisions, timeout and IPC publication | `MAIN_PROMPT_SHORTCUT` (`event-send`, `menu-suppression-changed` / `-rejected`, owner/reset stages) | `electron/main/prompt-input-shortcuts.ts:191–319`; pure reducer/flags are unit-exempt (PI-U22..24, PIMS-U22..24) |
+| Accepted/rejected IPC snapshots, current-layout mapping, publication/clearing and unmount | `RENDERER_PROMPT_SHORTCUT` (`receive`, `rejected`, `view-published`, `unmount`) | `src/components/PromptNotebook/PromptInputShortcuts.tsx:39–75,165–254`; `src/contexts/PromptActionsContext.tsx:81–96` |
+| App-bar first mount, snapshot-to-layout duration, clear/disposal; Task number and covered-grid map lifecycle | `RENDERER_PROMPT_LEADER_CUE` (`X` for commit, `i` for state/cleanup) | `src/components/PromptNotebook/PromptLeaderIndicator.tsx:13–66`; placement in `TabBar.tsx` / `TerminalGrid.tsx` |
+| Selector edit/validation/save, local preview modifier release/match/cancel/cleanup, localized recorder conflict | `RENDERER_PROMPT_INPUT_SETTINGS`, `RENDERER_PROMPT_INPUT_PREVIEW`; existing recorder request/ACK events | `src/components/Settings/PromptInputSettings.tsx:74–78,288–302`; `PromptShortcutPreview.tsx:62–66,113–147`; `ShortcutInput.tsx:203–268,425–426` |
+| Selector normalization, validation, masks and slot/reducer decisions | Exempt: side-effect-free, unit-locked by PI-U22..24; native and frontend adapters covered by PIMS-U22..24 / PIFB-22..23 | `src/utils/prompt-input.ts:168–188,191–330` |
+| Extended shortcut/settings test preparation, native activation, receiver output, byte/trace oracles and fixtures | Exempt: autotest-only; isolated profiles and temporary workspaces, with no production-runtime node | `test/autotest/prompt-input-shortcuts-driver.mjs`, `prompt-input-settings-driver.mjs`, `test/autotest/fixtures/**`, `test/unittest/**` |
 
 CSS, locale dictionaries, trace registry entries and the standalone design
 document are presentation/data, without a product control-flow node to emit from.

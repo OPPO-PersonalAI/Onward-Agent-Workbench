@@ -67,6 +67,7 @@ import {
 import { resolveGitSyncDisplay, resolveGitSyncFreshness, bucketSyncAge } from './gitSyncDisplay'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
+import { PromptTaskTargetBadge, PromptTargetMap } from '../PromptNotebook/PromptLeaderIndicator'
 import '../../styles/path-copy-toast.css'
 
 const DEBUG_TERMINAL_GRID = Boolean(window.electronAPI?.debug?.enabled)
@@ -3408,6 +3409,7 @@ export const TerminalGrid = memo(function TerminalGrid({
                     forceClose={hidden || globalOverlayActive}
                   />
                   <div className="terminal-grid-header-left">
+                    <PromptTaskTargetBadge tabId={_tabId} terminalId={termInfo.id} index={index} />
                     {editingId === termInfo.id ? (
                       <input
                         ref={editInputRef}
@@ -3692,6 +3694,7 @@ export const TerminalGrid = memo(function TerminalGrid({
           data-active-subpage={activeSubpage ?? ''}
           aria-hidden={!anySubpageOpen}
         >
+          {anySubpageOpen && <PromptTargetMap tabId={_tabId} />}
           {anySubpageOpen && renderedPanelShellState && (
             <SubpagePanelShell
               // SN-05: drive `current` from `activeSubpage` directly. Going

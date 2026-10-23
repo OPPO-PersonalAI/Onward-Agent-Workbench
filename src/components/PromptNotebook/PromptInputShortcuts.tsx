@@ -25,6 +25,8 @@ interface PromptInputShortcutsProps {
 interface PromptInputShortcutsDebugApi {
   setDispatchHeld: (held: boolean) => void
   getHeldDispatchCount: () => number
+  setContinuationsHeld: (held: boolean) => void
+  getHeldContinuationCount: () => number
   getLeaderState: () => PromptShortcutEvent | null
 }
 
@@ -33,10 +35,15 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
   tabId, terminals, visibleCount, activeTerminalId, blocked, promptHidden
 }: PromptInputShortcutsProps) {
   const { t } = useI18n()
-  const { setActiveInputTab, setInputBlocked, dispatchInputAction } = usePromptActions()
+  const { setActiveInputTab, setInputBlocked, dispatchInputAction, publishLeaderState } = usePromptActions()
   const inputState = usePromptInputTabState(tabId)
   const leaderStateRef = useRef<PromptShortcutEvent | null>(null)
-  const setLeaderState = useCallback((state: PromptShortcutEvent | null) => { leaderStateRef.current = state }, [])
+  const [visibleLeaderState, setVisibleLeaderState] = useState<PromptShortcutEvent | null>(null)
+  const setLeaderState = useCallback((state: PromptShortcutEvent | null) => {
+    leaderStateRef.current = state
+    setVisibleLeaderState(state)
+    if (!state) publishLeaderState(null)
+  }, [publishLeaderState])
   const [interactionBlocked, setInteractionBlocked] = useState(false)
   const [modalBlocked, setModalBlocked] = useState(isAnyModalOpen)
   const [bridgeNotice, setBridgeNotice] = useState<{ text: string } | null>(null)
@@ -49,6 +56,12 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
   const visibleIds = useMemo(() => visibleIdSignature ? visibleIdSignature.split('\u0000') : [], [visibleIdSignature])
   const visibleActiveId = activeTerminalId && visibleIds.includes(activeTerminalId) ? activeTerminalId : null
   const contextBlocked = blocked || modalBlocked || interactionBlocked
+  useLayoutEffect(() => {
+    const valid = visibleLeaderState?.tabId === tabId && !contextBlocked &&
+      (!visibleLeaderState.targetId || visibleIds.includes(visibleLeaderState.targetId))
+    publishLeaderState(valid ? { event: visibleLeaderState, publishedAt: performance.now(),
+      targets: visibleTerminals.map(terminal => ({ id: terminal.id, title: terminal.title })) } : null)
+  }, [visibleLeaderState, tabId, contextBlocked, visibleTerminals, visibleIds, publishLeaderState])
   useLayoutEffect(() => {
     const previous = currentRef.current
     currentRef.current = {
@@ -67,7 +80,7 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
     }).catch(() => {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_SHORTCUT, { phase: 'owner-cancel-failed', reason })
     })
-  }, [])
+  }, [setLeaderState])
 
   useLayoutEffect(() => {
     setActiveInputTab(tabId)
@@ -175,7 +188,7 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
         return
       }
       if (event.active) {
-        if (event.targetId && !armedOwnerRef.current) {
+        if ((event.targetId || event.selecting !== undefined) && !armedOwnerRef.current) {
           perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_SHORTCUT, { phase: 'rejected', reason: 'stale-owner-state' })
           return
         }
@@ -200,7 +213,15 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
     // Allocated only in autotest mode. The queue survives tab/context changes;
     // releasing it exercises the same reader against its current refs.
     let dispatchHoldForAutotest: { held: boolean; events: PromptShortcutEvent[] } | null = null
+    let continuationHoldForAutotest: { held: boolean; events: PromptShortcutEvent[] } | null = null
     const unsubscribe = api.onShortcut(event => {
+      // Initial arm and cancellation still run immediately; only actual
+      // post-arm IPC callbacks wait across a local DOM-owner cancellation.
+      if (continuationHoldForAutotest?.held && (event.kind === 'dispatch' ||
+        (event.kind === 'state' && event.active && (event.targetId || event.selecting !== undefined)))) {
+        continuationHoldForAutotest.events.push(event)
+        return
+      }
       if (dispatchHoldForAutotest?.held && event.kind === 'dispatch') {
         dispatchHoldForAutotest.events.push(event)
         return
@@ -211,6 +232,7 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
     let debugApi: PromptInputShortcutsDebugApi | undefined
     if (window.electronAPI?.debug?.autotest) {
       dispatchHoldForAutotest = { held: false, events: [] }
+      continuationHoldForAutotest = { held: false, events: [] }
       debugApi = {
         setDispatchHeld: (held) => {
           const hold = dispatchHoldForAutotest
@@ -222,23 +244,36 @@ export const PromptInputShortcuts = memo(function PromptInputShortcuts({
           }
         },
         getHeldDispatchCount: () => dispatchHoldForAutotest?.events.length ?? 0,
+        setContinuationsHeld: (held) => {
+          const hold = continuationHoldForAutotest
+          if (!hold) return
+          hold.held = held
+          if (!held) {
+            const pending = hold.events.splice(0)
+            for (const event of pending) handleShortcut(event)
+          }
+        },
+        getHeldContinuationCount: () => continuationHoldForAutotest?.events.length ?? 0,
         getLeaderState: () => leaderStateRef.current ? { ...leaderStateRef.current } : null
       }
       debugWindow.__onwardPromptInputShortcutsDebug = debugApi
     }
     return () => {
       dispatchHoldForAutotest = null
+      continuationHoldForAutotest = null
       if (debugApi && debugWindow.__onwardPromptInputShortcutsDebug === debugApi) {
         delete debugWindow.__onwardPromptInputShortcutsDebug
       }
       armedOwnerRef.current = null
+      leaderStateRef.current = null
+      publishLeaderState(null)
       unsubscribe()
       void api.cancel('unmount').catch(() => {
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_SHORTCUT, { phase: 'cancel-failed' })
       })
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_SHORTCUT, { phase: 'unmount' })
     }
-  }, [dispatchInputAction, t])
+  }, [dispatchInputAction, t, setLeaderState, publishLeaderState])
 
   useLayoutEffect(() => {
     armedOwnerRef.current = null

@@ -67,6 +67,7 @@ function harness(t, platform = 'darwin', configure = () => {}) {
   const { PromptInputShortcuts, isPromptShortcutContext } = load(path.join(ROOT, 'electron/main/prompt-input-shortcuts.ts'))
   const core = load(path.join(ROOT, 'src/utils/prompt-input.ts'))
   const settings = core.createDefaultPromptInputSettings()
+  settings.targetModifier = null
   settings.leader = 'Control+Space'
   configure(settings)
   const owned = new Set(['a', 'b'])
@@ -117,6 +118,69 @@ function harness(t, platform = 'darwin', configure = () => {}) {
 }
 
 for (const platform of PLATFORMS) {
+  test(`PIMS-U22 ${platform}: held selector down/up is owned, publishes cues and sends exactly once on host and guests`, t => {
+    const h = harness(t, platform, settings => { settings.targetModifier = 'Alt' })
+    for (const source of [h.host, h.guest, h.html]) for (let trial = 0; trial < 5; trial++) {
+      h.leader(source)
+      const deadline = [...h.timers.values()][0].at
+      assert.deepEqual(h.input(source, 'Alt', { alt: true }), { skip: true, prevented: false })
+      assert.equal(h.last().selecting, true)
+      assert.equal([...h.timers.values()][0].at, deadline)
+      h.press(source, '2', { alt: true })
+      assert.equal(h.last().targetId, 'b')
+      assert.equal(h.last().selecting, false, 'Selection retires the map even if Chromium drops the release')
+      h.input(source, '2', { alt: true, isAutoRepeat: true })
+      assert.deepEqual(h.input(source, 'Alt', { type: 'keyUp', alt: true }), { skip: true, prevented: false })
+      assert.equal(h.last().selecting, false)
+      assert.equal(h.last().targetId, 'b')
+      h.press(source, 'q')
+      assert.equal(h.last().kind, 'dispatch')
+      assert.equal(h.last().targetId, 'b')
+      assert.equal(h.timers.size, 0)
+    }
+    assert.equal(h.events().filter(event => event.kind === 'dispatch').length, 15)
+  })
+
+  test(`PIMS-U23 ${platform}: modifier-only timeout, blur, AltGr and missing release cannot revive targeting`, t => {
+    const h = harness(t, platform, settings => { settings.targetModifier = 'Alt' })
+    h.leader(h.host)
+    h.input(h.host, 'Alt', { alt: true })
+    h.elapse(1500, false)
+    h.input(h.host, 'Alt', { type: 'keyUp' })
+    assert.equal(h.last().reason, 'timeout')
+    assert.equal(h.timers.size, 0)
+    h.leader(h.host)
+    h.input(h.host, 'Alt', { alt: true })
+    h.window.emit('blur')
+    assert.equal(h.last().reason, 'blur')
+    h.leader(h.host)
+    h.press(h.host, '2')
+    assert.equal(h.last().reason, 'unmatched', 'A missing Alt release must not turn bare 2 into a selector')
+    h.leader(h.host)
+    h.input(h.host, 'AltGraph', { alt: true, control: true })
+    assert.equal(h.last().reason, 'altgr')
+    h.leader(h.host)
+    h.press(h.host, '2', { control: true, alt: true })
+    assert.equal(h.last().reason, 'unmatched', 'Control+Alt never matches exact Alt targeting')
+    assert.equal(h.events().filter(event => event.kind === 'dispatch').length, 0)
+  })
+
+  test(`PIMS-U24 ${platform}: Leader sharing the selector modifier and other modifier releases reconcile the cue`, t => {
+    const h = harness(t, platform, settings => { settings.targetModifier = 'Control' })
+    h.input(h.host, 'Control', { control: true })
+    h.press(h.host, ' ', { control: true })
+    assert.equal(Boolean(h.last().selecting), false, 'Leader modifiers cannot leave a cue stuck when their release is suppressed')
+    h.input(h.host, 'Shift', { control: true, shift: true })
+    assert.equal(Boolean(h.last().selecting), false)
+    h.input(h.host, 'Shift', { type: 'keyUp', control: true, shift: true })
+    assert.equal(h.last().selecting, true)
+    h.press(h.host, '2', { control: true })
+    h.input(h.host, 'Control', { type: 'keyUp', control: true })
+    assert.equal(h.last().selecting, false)
+    h.press(h.host, 'q')
+    assert.equal(h.last().targetId, 'b')
+  })
+
   test(`PIMS-U01 ${platform}: disabled Leader and unfocused window keep native input`, t => {
     const h = harness(t, platform, settings => { settings.leader = null })
     assert.deepEqual(h.leader(h.host), { skip: false, prevented: false })

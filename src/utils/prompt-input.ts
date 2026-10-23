@@ -22,8 +22,11 @@ export interface PromptInputAction {
   /** Optional supported Unicode sequence; absent values follow the preset icon. */
   emoji?: string
 }
+export type PromptTargetModifier = 'Alt' | 'Control' | 'Shift'
 export interface PromptInputSettings {
   leader: string | null
+  /** Missing/null preserves direct-digit targeting in existing profiles. */
+  targetModifier?: PromptTargetModifier | null
   timeoutMs: number
   actions: PromptInputAction[]
 }
@@ -41,6 +44,7 @@ export interface PromptShortcutEvent {
   generation?: number
   active: boolean
   targetId?: string
+  selecting?: boolean
   actionId?: string
   reason?: string
 }
@@ -74,6 +78,7 @@ export function createDefaultPromptInputSettings(): PromptInputSettings {
     ({ id, preset: id, name: '', visible: true, includePrompt, terminalKey, shortcut, target })
   return {
     leader: null,
+    targetModifier: 'Alt',
     timeoutMs: 1500,
     actions: [
       action('sendAndExecute', true, 'Enter', 'Enter'),
@@ -160,6 +165,29 @@ export function terminalKeyToSequence(key: string): string | null {
   return null
 }
 
+export function normalizePromptTargetModifier(value: unknown): PromptTargetModifier | null {
+  return value === 'Alt' || value === 'Control' || value === 'Shift' ? value : null
+}
+
+/** Exact masks keep AltGr/extra modifiers out of single-modifier targeting. */
+export function promptTargetModifierHeld(event: PromptKeyboardInput & { type?: string }, modifier: PromptTargetModifier | null | undefined): boolean {
+  if (!modifier || promptShortcutCancellation(event)) return false
+  const flags = {
+    Alt: Boolean(event.alt || event.altKey), Control: Boolean(event.control || event.ctrlKey),
+    Shift: Boolean(event.shift || event.shiftKey), Meta: Boolean(event.meta || event.metaKey)
+  }
+  // Electron and DOM may differ on the released key's own modifier flag.
+  if (event.key in flags) flags[event.key as keyof typeof flags] = event.type !== 'keyUp' && event.type !== 'keyup'
+  return flags[modifier] && Object.entries(flags).every(([key, held]) => key === modifier || !held)
+}
+
+export function promptTargetSlot(key: string | null, modifier: PromptTargetModifier | null | undefined): number | null {
+  const prefix = modifier ? `${modifier}+` : ''
+  if (!key?.startsWith(prefix)) return null
+  const digit = key.slice(prefix.length)
+  return /^[1-8]$/.test(digit) ? Number(digit) - 1 : null
+}
+
 export function normalizePromptInputSettings(value: unknown): PromptInputSettings {
   const defaults = createDefaultPromptInputSettings()
   if (!value || typeof value !== 'object') return defaults
@@ -201,18 +229,22 @@ export function normalizePromptInputSettings(value: unknown): PromptInputSetting
   }
   return {
     leader,
+    targetModifier: normalizePromptTargetModifier(raw.targetModifier),
     timeoutMs: typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs)
       ? Math.max(500, Math.min(10000, Math.round(raw.timeoutMs))) : defaults.timeoutMs,
     actions
   }
 }
 
-export type PromptInputValidationError = 'invalid-leader' | 'invalid-shortcut' | 'duplicate-shortcut' | 'invalid-action' | 'shortcut-conflict'
+export type PromptInputValidationError = 'invalid-leader' | 'invalid-shortcut' | 'duplicate-shortcut' | 'invalid-action' | 'shortcut-conflict' | 'invalid-selector' | 'selector-conflict'
 export function validatePromptInputSettings(settings: PromptInputSettings, existingShortcuts: Array<string | null> = [], platform = 'darwin', globalShortcuts: Array<string | null> = []): PromptInputValidationError | null {
   if (!settings || !Array.isArray(settings.actions) || !Number.isInteger(settings.timeoutMs) || settings.timeoutMs < 500 || settings.timeoutMs > 10000) return 'invalid-action'
+  if (settings.targetModifier != null && !normalizePromptTargetModifier(settings.targetModifier)) return 'invalid-selector'
   const leader = normalizePromptShortcut(settings.leader, platform)
   if (settings.leader && (!leader || (!leader.includes('+') && !/^F\d+$/.test(leader)))) return 'invalid-leader'
   if (leader && existingShortcuts.some(key => normalizePromptShortcut(key, platform) === leader)) return 'shortcut-conflict'
+  if (leader && promptTargetSlot(leader, settings.targetModifier) !== null) return 'selector-conflict'
+  if (settings.targetModifier && globalShortcuts.some(key => promptTargetSlot(normalizePromptShortcut(key, platform), settings.targetModifier) !== null)) return 'selector-conflict'
   const keys = new Set<string>()
   const ids = new Set<string>()
   for (const action of settings.actions) {
@@ -228,6 +260,7 @@ export function validatePromptInputSettings(settings: PromptInputSettings, exist
     if (!action.shortcut) continue
     const key = normalizePromptShortcut(action.shortcut, platform)
     if (!key || key === 'Escape' || /^[1-8]$/.test(key) || key === leader) return 'invalid-shortcut'
+    if (promptTargetSlot(key, settings.targetModifier) !== null) return 'selector-conflict'
     if (globalShortcuts.some(shortcut => normalizePromptShortcut(shortcut, platform) === key)) return 'shortcut-conflict'
     if (keys.has(key)) return 'duplicate-shortcut'
     keys.add(key)
@@ -235,7 +268,7 @@ export function validatePromptInputSettings(settings: PromptInputSettings, exist
   return null
 }
 
-export interface PromptLeaderState { tabId: string; deadline: number; targetId?: string }
+export interface PromptLeaderState { tabId: string; deadline: number; targetId?: string; selecting?: boolean }
 export interface PromptLeaderTransition {
   state: PromptLeaderState | null
   consume: boolean
@@ -244,7 +277,7 @@ export interface PromptLeaderTransition {
 export function reducePromptLeader(
   state: PromptLeaderState | null, key: string | null, now: number,
   settings: PromptInputSettings, context: PromptShortcutContext,
-  options: { repeat?: boolean; composing?: boolean; platform?: string } = {}
+  options: { repeat?: boolean; composing?: boolean; platform?: string; selecting?: boolean } = {}
 ): PromptLeaderTransition {
   const cancel = (reason: string, consume = true): PromptLeaderTransition => ({
     state: null, consume, event: { kind: 'cancel', tabId: state?.tabId ?? context.tabId, active: false, reason }
@@ -258,22 +291,32 @@ export function reducePromptLeader(
     state = null
   }
   if (options.repeat) return { state, consume: Boolean(state || key === leader), event: expired }
-  if (!key) return { state, consume: false, event: expired }
+  if (!key) {
+    if (state && !state.targetId && options.selecting !== undefined && Boolean(state.selecting) !== options.selecting) {
+      const next = { ...state, selecting: options.selecting }
+      return { state: next, consume: false, event: { kind: 'state', active: true, tabId: state.tabId, targetId: state.targetId, selecting: next.selecting } }
+    }
+    return { state, consume: false, event: expired }
+  }
   if (key === leader) {
     if (state) return { state: null, consume: false, event: { kind: 'passthrough', active: false, tabId: context.tabId } }
     return {
+      // The Leader's own modifiers can lose keyup after interception. Reveal only
+      // from a later observed modifier event; digit matching uses its exact flags.
       state: { tabId: context.tabId, deadline: now + settings.timeoutMs }, consume: true,
       event: { kind: 'state', active: true, tabId: context.tabId }
     }
   }
   if (!state) return { state: null, consume: false, event: expired }
   if (key === 'Escape') return cancel('escape')
-  if (/^[1-8]$/.test(key)) {
-    const targetId = context.visibleTerminalIds[Number(key) - 1]
+  const slot = promptTargetSlot(key, settings.targetModifier)
+  if (slot !== null) {
+    const targetId = context.visibleTerminalIds[slot]
     if (!targetId) return cancel('target-unavailable')
     return {
-      state: { ...state, deadline: now + settings.timeoutMs, targetId }, consume: true,
-      event: { kind: 'state', active: true, tabId: context.tabId, targetId }
+      // A handled native digit can suppress subsequent keyup, so selection itself retires the map.
+      state: { ...state, deadline: now + settings.timeoutMs, targetId, selecting: false }, consume: true,
+      event: { kind: 'state', active: true, tabId: context.tabId, targetId, selecting: false }
     }
   }
   const action = settings.actions.find(candidate => normalizePromptShortcut(candidate.shortcut, options.platform) === key)

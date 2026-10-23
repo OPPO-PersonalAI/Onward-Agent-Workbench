@@ -193,10 +193,28 @@ test('PISU-05: invalid bindings reject the whole requested write without changin
 
 test('PISU-06: cleared Leader and intentional empty actions survive save/reload without default resurrection', () => {
   const h = storageHarness(LEGACY_TEXT)
-  const promptInput = { leader: null, timeoutMs: 500, actions: [] }
+  const promptInput = { leader: null, targetModifier: null, timeoutMs: 500, actions: [] }
   assert.equal(h.storage.update({ promptInput }), true)
   assert.deepEqual(storageHarness(h.text()).storage.get().promptInput, promptInput)
   const snapshot = h.storage.get()
   snapshot.promptInput.actions.push({ id: 'outside-mutation' })
   assert.deepEqual(h.storage.get().promptInput, promptInput, 'Read snapshots cannot mutate storage')
+})
+
+test('PISU-07: persisted selectors survive restart; conflicting loaded selectors preserve legacy bindings', () => {
+  for (const targetModifier of [null, 'Alt', 'Control', 'Shift']) {
+    const h = storageHarness(LEGACY_TEXT)
+    const settings = { ...configuredActions(), targetModifier }
+    assert.equal(h.storage.update({ promptInput: settings }), true)
+    assert.deepEqual(storageHarness(h.text()).storage.get().promptInput, settings)
+  }
+  const settings = { ...configuredActions(), targetModifier: 'Alt' }
+  settings.actions[0].shortcut = 'Alt+3'
+  const h = storageHarness(JSON.stringify({ ...JSON.parse(LEGACY_TEXT), version: 10, promptInput: settings }))
+  assert.equal(h.storage.get().promptInput.targetModifier, null)
+  assert.equal(h.storage.get().promptInput.actions[0].shortcut, 'Alt+3')
+  assert(h.traces.some(({ data }) => data.reason === 'selector-conflict-recovered'))
+  const valid = h.storage.get()
+  assert.equal(h.storage.update({ promptInput: { ...valid.promptInput, targetModifier: 'Alt' } }), false)
+  assert.deepEqual(h.storage.get(), valid)
 })

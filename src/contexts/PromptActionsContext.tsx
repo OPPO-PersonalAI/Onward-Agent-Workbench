@@ -6,6 +6,13 @@
 import { createContext, useContext, useRef, useCallback, useMemo, useSyncExternalStore, ReactNode } from 'react'
 import { perfTraceDiagnostic } from '../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../utils/perf-trace-names'
+import type { PromptShortcutEvent } from '../utils/prompt-input'
+
+export interface PromptLeaderView {
+  event: PromptShortcutEvent
+  targets: Array<{ id: string; title: string }>
+  publishedAt: number
+}
 
 export interface PromptDraftSnapshot {
   revision: number
@@ -53,6 +60,9 @@ interface PromptActionsContextValue {
   publishInputState: (tabId: string, state: PromptInputTabState) => void
   getInputState: (tabId: string) => PromptInputTabState
   subscribeInputState: (listener: () => void) => () => void
+  publishLeaderState: (state: PromptLeaderView | null) => void
+  getLeaderState: () => PromptLeaderView | null
+  subscribeLeaderState: (listener: () => void) => () => void
 }
 
 const PromptActionsContext = createContext<PromptActionsContextValue | null>(null)
@@ -68,6 +78,22 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
   const inputListenersRef = useRef(new Set<() => void>())
   const activeInputTabRef = useRef<string | null>(null)
   const inputBlockedRef = useRef(false)
+  const leaderStateRef = useRef<PromptLeaderView | null>(null)
+  const leaderListenersRef = useRef(new Set<() => void>())
+  const publishLeaderState = useCallback((state: PromptLeaderView | null) => {
+    const previous = leaderStateRef.current
+    if (previous === state || (previous && state && previous.event === state.event &&
+      previous.targets.length === state.targets.length && previous.targets.every((target, index) =>
+        target.id === state.targets[index].id && target.title === state.targets[index].title))) return
+    leaderStateRef.current = state
+    leaderListenersRef.current.forEach(listener => listener())
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_SHORTCUT, { phase: 'view-published', active: Boolean(state), selecting: Boolean(state?.event.selecting) })
+  }, [])
+  const getLeaderState = useCallback(() => leaderStateRef.current, [])
+  const subscribeLeaderState = useCallback((listener: () => void) => {
+    leaderListenersRef.current.add(listener)
+    return () => { leaderListenersRef.current.delete(listener) }
+  }, [])
 
   const registerDraftController = useCallback((tabId: string, controller: PromptDraftController) => {
     draftControllersRef.current.set(tabId, controller)
@@ -166,11 +192,13 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
     registerDraftController, getDraftController, registerInputDispatcher,
     setActiveInputTab, isActiveInputTab, dispatchInputAction,
     setInputBlocked, isInputBlocked,
-    publishInputState, getInputState, subscribeInputState
+    publishInputState, getInputState, subscribeInputState,
+    publishLeaderState, getLeaderState, subscribeLeaderState
   }), [registerFocusEditor, registerSubmitEditor, registerCloseSettings, registerTryCloseSettingsOnSwitch,
     focusEditor, submitEditor, closeSettings, tryCloseSettingsOnSwitch,
     registerDraftController, getDraftController, registerInputDispatcher, setActiveInputTab,
-    isActiveInputTab, dispatchInputAction, setInputBlocked, isInputBlocked, publishInputState, getInputState, subscribeInputState])
+    isActiveInputTab, dispatchInputAction, setInputBlocked, isInputBlocked, publishInputState, getInputState, subscribeInputState,
+    publishLeaderState, getLeaderState, subscribeLeaderState])
 
   return (
     <PromptActionsContext.Provider value={value}>
@@ -192,4 +220,10 @@ export function usePromptInputTabState(tabId: string) {
   const { getInputState, subscribeInputState } = usePromptActions()
   const getSnapshot = useCallback(() => getInputState(tabId), [getInputState, tabId])
   return useSyncExternalStore(subscribeInputState, getSnapshot, getSnapshot)
+}
+
+/** Only the small cue consumers subscribe; Task output and editor typing do not. */
+export function usePromptLeaderState() {
+  const { getLeaderState, subscribeLeaderState } = usePromptActions()
+  return useSyncExternalStore(subscribeLeaderState, getLeaderState, getLeaderState)
 }

@@ -157,6 +157,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
       const changedCount = platform === 'darwin' ? scenario.changedMac : scenario.changedOther
       const expected = {
         ...promptInput,
+        targetModifier: null,
         actions: promptInput.actions.map((action, index) => ({ ...action, shortcut: expectedShortcuts[index] }))
       }
       const original = JSON.stringify({ ...LEGACY, version: 10, promptInput,

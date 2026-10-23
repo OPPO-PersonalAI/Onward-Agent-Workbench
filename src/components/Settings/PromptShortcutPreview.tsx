@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/useI18n'
 import { getPromptInputActionLabel } from '../../utils/prompt-input-labels'
-import { promptShortcutCancellation, promptShortcutFromKey, reducePromptLeader, type PromptInputSettings, type PromptLeaderState, type PromptShortcutEvent } from '../../utils/prompt-input'
+import { promptShortcutCancellation, promptShortcutFromKey, promptTargetModifierHeld, reducePromptLeader, type PromptInputSettings, type PromptLeaderState, type PromptShortcutEvent } from '../../utils/prompt-input'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { setRecordingSuspended } from './ShortcutInput'
@@ -61,7 +61,7 @@ export function PromptShortcutPreview({ settings, disabled, onMatch }: {
     // Scope ownership to this focused surface; preserve unconsumed Tab traversal.
     const captureKey = (event: KeyboardEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) return
-      if (event.type === 'keydown') keyHandlerRef.current(event)
+      if (event.type === 'keydown' || event.type === 'keyup') keyHandlerRef.current(event)
       if (event.key !== 'Tab' || event.ctrlKey || event.metaKey || event.altKey) event.preventDefault()
       event.stopImmediatePropagation()
     }
@@ -113,9 +113,9 @@ export function PromptShortcutPreview({ settings, disabled, onMatch }: {
   keyHandlerRef.current = (event: KeyboardEvent) => {
     if (!sessionRef.current?.ready) return
     const started = performance.now()
-    const key = promptShortcutFromKey(event, window.electronAPI.platform)
+    const key = event.type === 'keyup' ? null : promptShortcutFromKey(event, window.electronAPI.platform)
     const cancellation = promptShortcutCancellation(event)
-      ?? (stateRef.current && !key && !/^(Control|Meta|Alt|Shift)$/.test(event.key) ? 'unmatched' : null)
+      ?? (event.type !== 'keyup' && stateRef.current && !key && !/^(Control|Meta|Alt|Shift)$/.test(event.key) ? 'unmatched' : null)
     if (cancellation) {
       const wasArmed = stateRef.current !== null
       reset()
@@ -127,7 +127,8 @@ export function PromptShortcutPreview({ settings, disabled, onMatch }: {
     }
     const transition = reducePromptLeader(stateRef.current,
       key, started, settings, PREVIEW_CONTEXT,
-      { repeat: event.repeat, platform: window.electronAPI.platform })
+      { repeat: event.repeat, platform: window.electronAPI.platform,
+        selecting: /^(Control|Meta|Alt|Shift)$/.test(event.key) ? promptTargetModifierHeld(event, settings.targetModifier) : undefined })
     if (transition.consume) { event.preventDefault(); event.stopPropagation() }
     if (!transition.event) return
     reset()
@@ -135,7 +136,7 @@ export function PromptShortcutPreview({ settings, disabled, onMatch }: {
     setResult(transition.event)
     // Only chord transitions are recorded, never ordinary typing or held-key repeats.
     trace('transition', { kind: transition.event.kind, cause: transition.event.reason,
-      actionId: transition.event.actionId, targetId: transition.event.targetId, durationMs: performance.now() - started })
+      actionId: transition.event.actionId, targetId: transition.event.targetId, selecting: transition.event.selecting, durationMs: performance.now() - started })
     if (transition.state) {
       timerRef.current = setTimeout(() => {
         reset()
@@ -153,13 +154,14 @@ export function PromptShortcutPreview({ settings, disabled, onMatch }: {
         : matched ? t('promptInput.preview.matched', {
           name: getPromptInputActionLabel(matched, t), target: result?.targetId
             ? t('promptInput.target.explicit', { index: result.targetId }) : t(matched.target === 'all' ? 'promptInput.target.all' : 'promptInput.target.default')
-        }) : result?.active ? t('promptInput.preview.waiting', { target: result.targetId ?? '—' })
+        }) : result?.active ? result.selecting ? t('promptInput.preview.selecting', { target: result.targetId ?? '—' })
+          : t('promptInput.preview.waiting', { target: result.targetId ?? '—' })
           : result?.kind === 'passthrough' ? t('promptInput.preview.passthrough')
             : result?.kind === 'cancel' ? t('promptInput.preview.cancelled') : t('promptInput.preview.idle')
   return <div className="prompt-input-preview-test" ref={rootRef} role="group" tabIndex={disabled ? -1 : 0}
     aria-label={t('promptInput.preview.label')} aria-disabled={disabled}
     data-testid="prompt-input-preview-test" data-prompt-shortcut-recorder="true" data-phase={phase}
-    data-result={result?.kind ?? ''} data-action-id={matched?.id} data-target-id={result?.targetId}
+    data-result={result?.kind ?? ''} data-action-id={matched?.id} data-target-id={result?.targetId} data-selecting={Boolean(result?.active && result.selecting)}
     onFocus={() => { void start() }} onClick={() => { void start() }} onBlur={() => stop('blur')}
     onCompositionStart={() => { reset(); setResult(null); trace('composition-cancel') }}>
     <span role={phase === 'failed' ? 'alert' : 'status'} aria-live="polite">{text}</span>

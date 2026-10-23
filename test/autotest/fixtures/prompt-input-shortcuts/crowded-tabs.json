@@ -1,0 +1,23 @@
+{
+  "_spdx": ["SPDX-FileCopyrightText: 2026 OPPO", "SPDX-License-Identifier: Apache-2.0"],
+  "widths": [600, 1720],
+  "draft": "crowded-tab-geometry-draft",
+  "titles": [
+    "Prompt ownership and recipient geometry — crowded workspace one",
+    "Independent receiver history must survive — crowded workspace two",
+    "Long-running feature investigation — crowded workspace three",
+    "Cross-platform keyboard verification — crowded workspace four",
+    "多任务输入与接收目标布局验证 — crowded workspace five",
+    "应用标题栏与快捷键提示边界 — crowded workspace six"
+  ],
+  "copy": {
+    "en": {
+      "choosing": "Leader active. Choose a Task (1–{count}); Esc cancels.",
+      "selected": "Leader active. This action goes to Task 3 · {name}. Esc cancels."
+    },
+    "zh-CN": {
+      "choosing": "Leader 已激活，请选择任务（1–{count}）；Esc 取消。",
+      "selected": "Leader 已激活，本次发送给任务 3 · {name}。Esc 取消。"
+    }
+  }
+}

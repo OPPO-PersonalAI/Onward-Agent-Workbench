@@ -20,7 +20,7 @@ const SEQUENCES_PER_ROUND = 20
 // These are deadlock guards, not product latency acceptance thresholds.
 const RUNNER_CEILING_MS = 180000
 const WORK_DEADLINE_MS = RUNNER_CEILING_MS - 30000
-const GROUP_CASE_COUNTS = { user: 18, guests: 4, boundaries: 17, readers: 4 }
+const GROUP_CASE_COUNTS = { user: 23, guests: 4, boundaries: 18, readers: 4 }
 const GROUPS = Object.keys(GROUP_CASE_COUNTS)
 const MAIN_TAB = 'pis-main-tab'
 const OTHER_TAB = 'pis-other-tab'
@@ -178,6 +178,14 @@ class ShortcutHarness extends ThemeUiHarness {
       }
     }
     const seed = await json(path.join(FIXTURES, 'app-state.json'))
+    const mainTab = seed.tabs.find(tab => tab.id === MAIN_TAB)
+    this.extraTargets = []
+    if (this.testGroup === 'user') {
+      const extra = await json(path.join(FIXTURES, 'eight-targets.json'))
+      mainTab.terminals.splice(mainTab.terminals.length - 1, 0, ...extra.terminals)
+      this.extraTargets = extra.terminals.map(terminal => terminal.id)
+    }
+    this.fixtureTaskCount = mainTab.terminals.length
     for (const tab of seed.tabs) for (const terminal of tab.terminals) terminal.lastCwd = this.workspace
     await Promise.all([
       writeFile(path.join(this.userData, 'app-state.json'), JSON.stringify(seed)),
@@ -345,14 +353,14 @@ class ShortcutHarness extends ThemeUiHarness {
     const state = await eventually('Real Task order reaches persisted AppState',
       () => this.page.evaluate(() => window.electronAPI.appState.load()), state => {
         const terminals = state.tabs.find(tab => tab.id === MAIN_TAB)?.terminals ?? []
-        return terminals.length === TASKS.length + 1 && order.every((id, index) => terminals[index]?.id === id)
+        return terminals.length === this.fixtureTaskCount && order.every((id, index) => terminals[index]?.id === id)
       })
     assert.equal(state.activeTabId, MAIN_TAB, 'Reordering must not switch the active Tab')
     assert.equal(state.tabs.find(tab => tab.id === MAIN_TAB).terminals.at(-1).id, PARKED_TASK, 'Reordering visible Tasks leaves the parked tail intact')
   }
 
   async parkLayout(count) {
-    assert([2, 4].includes(count), 'Only the fixture\'s two/four visible Task layouts are used')
+    assert([2, 4, 8].includes(count), 'Only the fixture\'s two/four/eight visible Task layouts are used')
     const accepted = await this.page.evaluate(count => window.__onwardAppDebug.setLayoutCountForAutotest(count), count)
     assert.notEqual(accepted, false, 'The real AppState layout mutation was accepted')
     await this.page.waitForFunction(({ count, tabId }) => {
@@ -363,7 +371,7 @@ class ShortcutHarness extends ThemeUiHarness {
     }, { count, tabId: MAIN_TAB })
     await eventually('Layout visibility reaches real AppState', () => this.page.evaluate(() => window.electronAPI.appState.load()), state => {
       const tab = state.tabs.find(tab => tab.id === MAIN_TAB)
-      return tab?.layoutMode.kind === 'preset' && tab.layoutMode.count === count && tab.terminals.length === TASKS.length + 1
+      return tab?.layoutMode.kind === 'preset' && tab.layoutMode.count === count && tab.terminals.length === this.fixtureTaskCount
     })
   }
 
@@ -411,12 +419,54 @@ class ShortcutHarness extends ThemeUiHarness {
 
   async leaderState(active) {
     await this.page.waitForFunction(active => Boolean(window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active) === active, active)
+    await this.page.getByTestId('prompt-leader-indicator').waitFor({ state: active ? 'visible' : 'detached' })
+    if (!active) await this.page.waitForFunction(() => !document.querySelector(
+      '[data-testid="prompt-task-target-badge"], [data-testid="prompt-target-map"]'))
+  }
+
+  async choosingTargets(order) {
+    await this.page.waitForFunction(count => {
+      const cue = document.querySelector('[data-testid="prompt-leader-indicator"]')
+      return cue?.dataset.selecting === 'true' && cue.textContent === `1–${count}` &&
+        document.querySelectorAll('.terminal-grid-wrapper:not(.terminal-grid-hidden) [data-testid="prompt-task-target-badge"]').length === count
+    }, order.length)
+    const badges = await this.page.getByTestId('prompt-task-target-badge').evaluateAll(nodes => nodes.map(node => ({
+      id: node.closest('[data-terminal-id]')?.getAttribute('data-terminal-id'), number: node.textContent,
+      selected: node.dataset.selected
+    })))
+    assert.deepEqual(badges, order.map((id, index) => ({ id, number: String(index + 1), selected: 'false' })),
+      'Choosing labels follow visible slot order and never include another Tab or parked Task')
+  }
+
+  async selectedTarget(id, number) {
+    await this.page.waitForFunction(({ id, number }) => {
+      const cue = document.querySelector('[data-testid="prompt-leader-indicator"]')
+      const badges = [...document.querySelectorAll('[data-testid="prompt-task-target-badge"]')]
+      return cue?.dataset.targetId === id && cue.dataset.selecting === 'false' && cue.textContent === `→${number}` &&
+        badges.length === 1 && badges[0].dataset.selected === 'true' && badges[0].textContent === String(number) &&
+        badges[0].closest('[data-terminal-id]')?.getAttribute('data-terminal-id') === id &&
+        !document.querySelector('[data-testid="prompt-target-map"]')
+    }, { id, number })
+  }
+
+  async setTargetModifier(modifier) {
+    await this.openSettings('shortcuts')
+    const selector = this.page.getByTestId('prompt-input-target-modifier')
+    if (await selector.inputValue() !== (modifier ?? '')) {
+      await selector.selectOption(modifier ?? '')
+      await this.page.getByTestId('prompt-input-save').click()
+      await this.page.waitForFunction(() => document.querySelector('[data-testid="prompt-input-status"]')?.dataset.state === 'saved')
+    }
+    assert.equal((await this.page.evaluate(() => window.electronAPI.settings.load())).promptInput.targetModifier, modifier)
+    await this.page.getByTestId('sidebar-settings-button').click()
+    await this.page.locator('.settings-container').waitFor({ state: 'hidden' })
+    this.targetModifier = modifier
   }
 
   async chord(key, { keyboard = this.keyboard, digit } = {}) {
     const mark = await this.eventMark()
     await keyboard.press(LEADER)
-    if (digit) await keyboard.press(`Digit${digit}`)
+    if (digit) await keyboard.press(`${this.targetModifier ? `${this.targetModifier}+` : ''}Digit${digit}`)
     await keyboard.press(key)
     return mark
   }
@@ -577,6 +627,8 @@ class GuestKeyboard {
   }
 
   press(stroke) { return this.keyboard.press(stroke) }
+  down(code) { return this.keyboard.down(code) }
+  up(code) { return this.keyboard.up(code) }
 
   async read(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
@@ -597,6 +649,7 @@ async function startup(h) {
     await h.boot()
     const settings = await h.page.evaluate(() => window.electronAPI.settings.load())
     assert.equal(settings.promptInput.leader, 'Control+X')
+    assert.equal(settings.promptInput.targetModifier, null, 'Existing settings retain direct digits')
     assert.equal(settings.promptInput.timeoutMs, 1500)
     assert.equal(await h.sender().locator('[data-action-id="queue"]').count(), 0, 'Hidden action has no button')
     const state = await h.page.evaluate(() => window.electronAPI.appState.load())
@@ -604,6 +657,79 @@ async function startup(h) {
     assert.equal(await h.sender().locator(`[data-terminal-id="${PARKED_TASK}"]`).count(), 0, 'Parked Task is outside the selector')
     return { receivers: [...h.receivers.keys()], bytes: await h.checkBytes(), screenshot: await h.screenshot('startup') }
   })
+}
+
+async function caretContinuity(h, fixture) {
+  const target = (await h.taskOrder())[2]
+  const history = await h.history()
+  const selection = await h.selectedIds()
+  const outcomes = []
+  for (const [action, selectText] of [['KeyE', true], ['Escape', false]]) {
+    await h.seed(fixture.content)
+    // Establish a precise user selection once; never repair it after native input.
+    await h.editor().evaluate((editor, { text, selectText }) => {
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT)
+      let node
+      while ((node = walker.nextNode())) {
+        const offset = node.data.indexOf(text)
+        if (offset < 0) continue
+        const range = document.createRange()
+        range.setStart(node, offset)
+        range.setEnd(node, offset + (selectText ? text.length : 0))
+        const selection = window.getSelection()
+        selection.removeAllRanges()
+        selection.addRange(range)
+        const prefix = document.createRange()
+        prefix.selectNodeContents(editor)
+        prefix.setEnd(node, offset)
+        editor.__pikCaret = { start: prefix.toString().length,
+          end: prefix.toString().length + (selectText ? text.length : 0) }
+        return
+      }
+      throw new Error('The committed caret fixture selection must exist in the live editor')
+    }, { text: fixture.selection, selectText })
+    const draft = await h.snapshot()
+    await h.rememberFocus()
+    try {
+      const mark = await h.chord(action, { digit: 3 })
+      if (action === 'KeyE') await h.sent(mark, [target], '\r')
+      else {
+        await h.eventAfter(mark, 'cancel', 'escape')
+        assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, 0)
+        await h.checkBytes()
+      }
+      await h.leaderState(false)
+      await h.focusPreserved()
+      assert.deepEqual(await h.snapshot(), draft, 'Key-only delivery and cancellation retain the full draft revision')
+      assert.deepEqual(await h.history(), history)
+      assert.deepEqual(await h.selectedIds(), selection)
+      const caret = await h.editor().evaluate(editor => {
+        const current = window.getSelection(), previous = editor.__pikCaret
+        if (current.rangeCount !== 1 || !editor.contains(current.anchorNode) || !editor.contains(current.focusNode)) {
+          return { retained: false, selected: current.toString() }
+        }
+        const prefix = document.createRange()
+        prefix.selectNodeContents(editor)
+        prefix.setEnd(current.anchorNode, current.anchorOffset)
+        const start = prefix.toString().length
+        prefix.setEnd(current.focusNode, current.focusOffset)
+        return { retained: start === previous.start && prefix.toString().length === previous.end, selected: current.toString() }
+      })
+      assert.deepEqual(caret, { retained: true, selected: selectText ? fixture.selection : '' })
+      await h.keyboard.press('KeyZ')
+      const offset = fixture.content.indexOf(fixture.selection)
+      const expected = fixture.content.slice(0, offset) + fixture.replacement +
+        fixture.content.slice(offset + (selectText ? fixture.selection.length : 0))
+      await eventually('Native typing resumes at the untouched caret or selection', () => h.editor().innerText(), value => value === expected)
+      await h.checkBytes()
+      assert.deepEqual(await h.history(), history)
+      outcomes.push({ action, selectedText: selectText, typedAtOriginalPosition: true })
+    } finally {
+      await h.keyboard.releaseAll()
+      await h.editor().evaluate(editor => { delete editor.__pikCaret })
+    }
+  }
+  return outcomes
 }
 
 async function core(h) {
@@ -673,19 +799,32 @@ async function core(h) {
     return { trial, dispatches: 1 }
   })
 
+  await h.setTargetModifier('Alt')
   await h.repeat('PIK-05b-timeout-cancels-then-native-key-passes', async trial => {
     await h.seed(`timeout-${trial}`)
     await h.focusTerminal(TASKS[0])
+    const draft = await h.snapshot()
+    const history = await h.history()
+    const selection = await h.selectedIds()
     const mark = await h.eventMark()
-    await h.keyboard.press(LEADER)
-    await h.eventAfter(mark, 'state')
-    await h.eventAfter(mark, 'cancel', 'timeout')
+    try {
+      await h.keyboard.press(LEADER)
+      await h.eventAfter(mark, 'state')
+      await h.keyboard.down('Alt')
+      await h.choosingTargets(await h.taskOrder())
+      await h.eventAfter(mark, 'cancel', 'timeout')
+      await h.leaderState(false)
+    } finally { await h.keyboard.releaseAll() }
     await h.keyboard.press('KeyQ')
     h.expect([TASKS[0]], 'q')
     await h.checkBytes()
     assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, 0)
-    return { trial, configuredTimeoutMs: 1500 }
+    assert.deepEqual(await h.snapshot(), draft)
+    assert.deepEqual(await h.history(), history)
+    assert.deepEqual(await h.selectedIds(), selection)
+    return { trial, configuredTimeoutMs: 1500, heldSelectorCleared: true }
   })
+  await h.setTargetModifier(null)
 
   await h.repeat('PIK-06-numeric-target-overrides-manual-and-is-one-shot', async trial => {
     await h.select([TASKS[1]])
@@ -832,6 +971,7 @@ async function core(h) {
     assert(Number.isSafeInteger(selected.generation), 'The native capture acknowledges the current Tab generation')
     await h.leaderState(true)
     await h.page.waitForFunction(targetId => window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.targetId === targetId, targetId)
+    await h.selectedTarget(targetId, 3)
     const reordered = await h.page.evaluate(() => ({
       contextFromMs: Date.now(), accepted: window.__onwardAppDebug.reorderActiveTabTasksForAutotest(2, 0)
     }))
@@ -844,6 +984,10 @@ async function core(h) {
     assert.equal(await h.page.evaluate(() => window.__onwardPromptInputShortcutsDebug.getLeaderState()?.active), true, 'A non-modal reorder retains the armed owner')
     assert.equal(await h.page.evaluate(() => window.__onwardPromptInputShortcutsDebug.getLeaderState()?.targetId), targetId,
       'The renderer retains the captured ID after normal context propagation')
+    await h.selectedTarget(targetId, 1)
+    const title = await h.task(targetId).locator('.terminal-grid-title').innerText()
+    assert((await h.page.getByTestId('prompt-leader-indicator').getAttribute('aria-label')).includes(title),
+      'The visible selected-recipient label follows the moved Task as well as its new slot number')
     const pendingEvents = await h.eventsSince(mark)
     assert(pendingEvents.every(event => event.tabId === selected.tabId && event.generation === selected.generation), 'Pending native state retains the original Tab and generation')
     assert.equal(pendingEvents.filter(event => event.kind !== 'state').length, 0, 'No cancellation or action may precede the continuation')
@@ -936,6 +1080,8 @@ async function core(h) {
     return { trial, rejectedActions: 4 }
   })
 
+  await h.setTargetModifier('Alt')
+  const caretFixture = await json(path.join(h.workspace, 'caret-draft.json'))
   await h.repeat('PIK-12-key-only-retains-draft-and-raw-control-c', async trial => {
     const content = `unsent-key-only-${trial}`
     const count = (await h.history()).length
@@ -946,42 +1092,221 @@ async function core(h) {
     assert.equal(await h.editor().innerText(), content)
     assert.equal((await h.history()).length, count)
     assert.equal((await h.receivers.get(TASKS[0]).command('snapshot')).stopped, false, 'Ctrl+C is data and never terminates the oracle')
-    return { trial, rawHex: '0d03', draftRetained: true }
+    const caret = await caretContinuity(h, caretFixture)
+    return { trial, rawHex: '0d03', draftRetained: true, caret }
   })
 
   await h.repeat('PIK-13-native-ime-composition-never-dispatches', async trial => {
     await h.seed('')
+    const history = await h.history()
     const compositions = await h.page.evaluate(() => window.__pisProbe.compositionStarts)
     const mark = await h.eventMark()
-    await h.hostCdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
-    assert.equal(await h.page.evaluate(() => window.__pisProbe.compositionStarts), compositions + 1, 'Native IME composition really started')
     await h.keyboard.press(LEADER)
-    await h.keyboard.press('KeyQ')
-    await h.hostCdp.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 })
+    try {
+      await h.keyboard.down('Alt')
+      await h.choosingTargets(await h.taskOrder())
+      await h.hostCdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
+      const cancellation = await h.eventAfter(mark, 'cancel')
+      assert(['blocked', 'ime'].includes(cancellation.reason), 'Composition cancels the pending selector before its timeout')
+      await h.leaderState(false)
+      assert.equal(await h.page.evaluate(() => window.__pisProbe.compositionStarts), compositions + 1, 'Native IME composition really started')
+      await h.keyboard.up('Alt')
+      await h.keyboard.press(LEADER)
+      await h.keyboard.press('KeyQ')
+    } finally {
+      await h.keyboard.releaseAll()
+      await h.hostCdp.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 })
+    }
     await h.hostCdp.send('Input.insertText', { text: '\u4f60' })
     await h.checkBytes()
     assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, 0)
-    return { trial, compositionObserved: true }
+    assert.deepEqual(await h.history(), history)
+    await h.leaderState(false)
+    return { trial, compositionObserved: true, armedSelectorCanceled: true }
   })
 
+  await h.setTargetModifier('Alt')
   await h.repeat('PIK-14-twenty-sequences-per-round-no-loss-or-duplication', async trial => {
     const content = `stress-draft-${trial}`
     await h.seed(content)
     await h.focusTerminal(TASKS[0])
     const count = (await h.history()).length
     const mark = await h.eventMark()
+    const target = (await h.taskOrder())[2]
     for (let sequence = 0; sequence < SEQUENCES_PER_ROUND; sequence += 1) {
-      const start = await h.chord('KeyE')
+      const start = await h.chord('KeyE', { digit: 3 })
       await h.eventAfter(start, 'dispatch')
       await h.idle()
-      h.expect([TASKS[0]], '\r')
+      h.expect([target], '\r')
     }
     await h.checkBytes()
     assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, SEQUENCES_PER_ROUND)
     assert.equal(await h.editor().innerText(), content)
     assert.equal((await h.history()).length, count)
+    await h.leaderState(false)
     return { trial, trustedSequences: SEQUENCES_PER_ROUND }
   })
+  await h.setTargetModifier(null)
+}
+
+async function heldTargets(h) {
+  const assertCanceledInput = async (mark, retained, history, selectedId) => {
+    await h.leaderState(false)
+    await h.checkBytes()
+    assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, 0)
+    await h.keyboard.releaseAll()
+    await h.keyboard.press('KeyQ')
+    h.expect([TASKS[0]], 'q')
+    await h.checkBytes()
+    assert.deepEqual(await h.snapshot(), retained)
+    assert.deepEqual(await h.history(), history)
+    assert.deepEqual(await h.selectedIds(), [selectedId])
+    await h.focusPreserved()
+  }
+  for (const modifier of ['Alt', 'Control', 'Shift']) {
+    await h.setTargetModifier(modifier)
+    await h.repeat(`PIK-36-${modifier}-target-cue-and-one-shot`, async trial => {
+      const order = await h.taskOrder()
+      await h.select([order[1]])
+      const content = `held-${modifier}-${trial}`
+      await h.seed(content)
+      const count = (await h.history()).length
+      if (trial % 2) {
+        await h.page.getByTitle('Prompt notebook', { exact: true }).click()
+        await h.editor().waitFor({ state: 'hidden' })
+      }
+      await h.focusTerminal(TASKS[0])
+      await h.rememberFocus()
+      const mark = await h.eventMark()
+      try {
+        await h.keyboard.press(LEADER)
+        await h.leaderState(true)
+        await h.keyboard.down(modifier)
+        await h.choosingTargets(order)
+        await h.keyboard.press('Digit2')
+        await h.keyboard.press('Digit3')
+        await h.selectedTarget(order[2], 3)
+        await h.keyboard.up(modifier)
+        if (trial === 0) await h.screenshot(`leader-${modifier}-selected`)
+        await h.checkBytes()
+        await h.keyboard.press('KeyQ')
+        await h.sent(mark, [order[2]], `${content}\t`, content, count)
+        await h.leaderState(false)
+        await h.focusPreserved()
+        await h.sent(await h.chord('KeyE'), [order[1]], '\r')
+        await h.keyboard.press(LEADER)
+        await h.keyboard.down(modifier)
+        await h.page.waitForFunction(() => document.querySelector('[data-testid="prompt-leader-indicator"]')?.dataset.selecting === 'true')
+        await h.keyboard.up(modifier)
+        await h.page.waitForFunction(() => document.querySelector('[data-testid="prompt-leader-indicator"]')?.dataset.selecting === 'false')
+        assert.equal(await h.page.locator('.terminal-grid-wrapper:not(.terminal-grid-hidden) [data-testid="prompt-task-target-badge"]').count(), 0)
+        await h.keyboard.press('Escape')
+        await h.leaderState(false)
+        if (modifier === 'Alt') {
+          const modifiedContent = `held-action-${trial}`
+          await h.seed(modifiedContent)
+          await h.focusTerminal(TASKS[0])
+          await h.rememberFocus()
+          const modifiedCount = (await h.history()).length
+          const modifiedMark = await h.eventMark()
+          await h.keyboard.press(LEADER)
+          await h.keyboard.down('Alt')
+          await h.keyboard.press('Digit3')
+          await h.selectedTarget(order[2], 3)
+          // Keep Alt physically held through the action, not just its digit.
+          await h.keyboard.press('KeyQ')
+          const dispatched = await h.sent(modifiedMark, [order[2]], `${modifiedContent}\t`, modifiedContent, modifiedCount)
+          assert.equal(dispatched.actionId, 'heldAltQueue')
+          await h.leaderState(false)
+          await h.focusPreserved()
+          await h.keyboard.up('Alt')
+          await h.focusPreserved()
+        }
+
+        await h.seed(`held-mismatch-${modifier}-${trial}`)
+        await h.focusTerminal(TASKS[0])
+        await h.rememberFocus()
+        const retained = await h.snapshot()
+        const history = await h.history()
+        const mismatch = await h.eventMark()
+        await h.keyboard.press(LEADER)
+        await h.keyboard.down(modifier)
+        await h.keyboard.press('Digit3')
+        if (modifier === 'Alt') await h.keyboard.down('Shift')
+        await h.keyboard.press('KeyQ')
+        await h.eventAfter(mismatch, 'cancel', 'unmatched')
+        await assertCanceledInput(mismatch, retained, history, order[1])
+
+        const escape = await h.eventMark()
+        await h.keyboard.press(LEADER)
+        await h.keyboard.down(modifier)
+        await h.choosingTargets(order)
+        await h.keyboard.press('Escape')
+        const canceled = await h.eventAfter(escape, 'cancel')
+        assert(['escape', 'unmatched'].includes(canceled.reason), 'Escape cancels even while the selector modifier remains physically held')
+        await assertCanceledInput(escape, retained, history, order[1])
+      } finally { await h.keyboard.releaseAll(); await h.showPrompt() }
+      return { trial, modifier, target: order[2], followingManualTarget: order[1] }
+    })
+  }
+  await h.select([])
+  await h.setTargetModifier(null)
+}
+
+async function eightTargetPressure(h) {
+  await h.parkLayout(8)
+  const ids = [...TASKS, ...h.extraTargets]
+  await h.waitTasks(ids)
+  for (const id of h.extraTargets) await h.startReceiver(id)
+  await h.setTargetModifier('Alt')
+  await h.select([])
+  try {
+    await Promise.all(ids.map(id => h.receivers.get(id).command('pressure', { enabled: true })))
+    await h.repeat('PIK-37-eight-task-targeting-under-real-pty-output', async trial => {
+      const prefix = `eight-task-pressure-${trial}`
+      const suffix = '-native-typed'
+      const content = prefix + suffix
+      const digit = trial % 2 ? 8 : 7
+      const target = (await h.taskOrder())[digit - 1]
+      await h.seed(prefix)
+      await h.rememberFocus()
+      const count = (await h.history()).length
+      const before = await Promise.all(ids.map(async id => ({ id, ...(await h.receivers.get(id).command('snapshot')) })))
+      assert(before.every(value => Number.isInteger(value.outputTick)), 'Every receiver exposes its actual output counter')
+      await h.page.keyboard.type(suffix)
+      assert.equal(await h.editor().innerText(), content, 'Ordinary trusted typing must land intact under all eight PTY streams')
+      const mark = await h.eventMark()
+      await h.keyboard.press(LEADER)
+      await h.keyboard.down('Alt')
+      await h.choosingTargets(await h.taskOrder())
+      await h.keyboard.press(`Digit${digit}`)
+      await h.selectedTarget(target, digit)
+      await h.keyboard.up('Alt')
+      await h.keyboard.press('KeyQ')
+      const after = await Promise.all(ids.map(async id => ({ id, ...(await h.receivers.get(id).command('snapshot')) })))
+      const output = after.map((value, index) => ({ id: value.id, before: before[index].outputTick, after: value.outputTick }))
+      assert(output.every(value => value.after > value.before), `All eight Tasks must advance during each interaction: ${JSON.stringify(output)}`)
+      await h.sent(mark, [target], `${content}\t`, content, count)
+      const rendered = await eventually('Fresh per-trial PTY tick markers reach every addressed terminal buffer',
+        () => h.page.evaluate(ids => ids.map(id => {
+          // Buffer snapshots expose physical rows, including soft wraps and trimmed row-end spaces.
+          const text = (window.__onwardTerminalDebug.getTailText(id, 80) ?? '').replace(/\s/g, '')
+          const pattern = new RegExp(`pressure${id}(\\d+)line\\d+`, 'g')
+          return { id, ticks: [...text.matchAll(pattern)].map(match => Number(match[1])) }
+        }), ids),
+        values => values.every((value, index) => value.ticks.some(tick => tick >= before[index].outputTick)))
+      await h.focusPreserved()
+      await h.leaderState(false)
+      assert.deepEqual(await h.selectedIds(), [])
+      return { trial, digit, target, typedSuffix: suffix, output,
+        rendered: rendered.map(value => ({ id: value.id, newestTick: Math.max(...value.ticks) })) }
+    })
+  } finally {
+    await h.keyboard.releaseAll()
+    await Promise.all(ids.map(id => h.receivers.get(id).command('pressure', { enabled: false })))
+  }
+  await h.parkLayout(4)
+  await h.setTargetModifier(null)
 }
 
 // Electron sendInputEvent targets the top-level widget, not a focused OOPIF.
@@ -998,15 +1323,16 @@ class HtmlFrameKeyboard extends NativeShortcutKeyboard {
   async send(input) {
     const keys = {
       Control: { code: 'ControlLeft', key: 'Control', windowsVirtualKeyCode: 17 },
+      3: { code: 'Digit3', key: '3', windowsVirtualKeyCode: 51 },
       Escape: { code: 'Escape', key: 'Escape', windowsVirtualKeyCode: 27 },
       x: { code: 'KeyX', key: 'x', windowsVirtualKeyCode: 88 },
       q: { code: 'KeyQ', key: 'q', windowsVirtualKeyCode: 81 },
       z: { code: 'KeyZ', key: 'z', windowsVirtualKeyCode: 90 }
     }
     const nativeCodes = {
-      darwin: { Control: 59, Escape: 53, x: 7, q: 12, z: 6 },
-      win32: { Control: 17, Escape: 27, x: 88, q: 81, z: 90 },
-      linux: { Control: 37, Escape: 9, x: 53, q: 24, z: 52 }
+      darwin: { Control: 59, Escape: 53, x: 7, q: 12, z: 6, 3: 20 },
+      win32: { Control: 17, Escape: 27, x: 88, q: 81, z: 90, 3: 51 },
+      linux: { Control: 37, Escape: 9, x: 53, q: 24, z: 52, 3: 12 }
     }
     const key = keys[input.keyCode]
     const nativeVirtualKeyCode = nativeCodes[process.platform]?.[input.keyCode]
@@ -1071,7 +1397,66 @@ async function guestFocus(h, surface) {
   assert.equal(native?.windowFocused, true, 'The guest trial starts in the real native key window')
 }
 
+async function exerciseGuestQueue(h, surface, trial, keyboard) {
+  const content = `${surface}-guest-${trial}`
+  const count = (await h.history()).length
+  await h.seed(content)
+  await guestFocus(h, surface)
+  const initial = await guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, count: window.pisGuest.events.length })`)
+  await keyboard.press('KeyZ')
+  const before = await eventually('One native printable character reaches the guest',
+    () => guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, count: window.pisGuest.events.length, events: window.pisGuest.events.slice(${initial.count}) })`),
+    value => value.value === `${initial.value}z` && value.events.some(event => event.type === 'keyup' && event.code === 'KeyZ'))
+  assert.equal(before.value, `${initial.value}z`, 'A non-leader physical key inserts exactly one character')
+  assert.deepEqual(before.events.map(event => ({ type: event.type, code: event.code, trusted: event.trusted })), [
+    { type: 'keydown', code: 'KeyZ', trusted: true },
+    { type: 'keyup', code: 'KeyZ', trusted: true }
+  ], 'Ordinary input proves trusted native down/up reached the real guest')
+  await h.rememberFocus()
+  const mapping = await h.page.locator('.terminal-grid-wrapper:not(.terminal-grid-hidden) .terminal-grid-cell[data-terminal-id]')
+    .evaluateAll(nodes => nodes.map(node => ({ id: node.dataset.terminalId, title: node.querySelector('.terminal-grid-title').textContent })))
+  assert.deepEqual(mapping.map(value => value.id), TASKS)
+  const targetMark = await h.eventMark()
+  await keyboard.press(LEADER)
+  await keyboard.down('Control')
+  if (surface === 'html') {
+    const map = h.page.getByTestId('prompt-target-map')
+    await map.waitFor({ state: 'visible' })
+    const presented = await map.evaluate(node => ({
+      items: [...node.children].map(item => ({ number: item.querySelector('b').textContent,
+        title: item.querySelector('span').textContent })),
+      pointerTransparent: getComputedStyle(node).pointerEvents === 'none' && [...node.children].every(item => {
+        const rect = item.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+        return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight &&
+          hit !== null && !node.contains(hit)
+      })
+    }))
+    assert.deepEqual(presented.items, mapping.map((value, index) => ({ number: String(index + 1), title: value.title })),
+      'Covered-grid numbers and names identify the same ordered recipients as the actual Task headers')
+    assert.equal(presented.pointerTransparent, true, 'Recipient labels fit the viewport without intercepting the covered reader')
+    await h.focusPreserved()
+    assert.equal(await guestRead(h, surface, 'document.activeElement?.id'), 'guest-input')
+  }
+  await keyboard.press('Digit3')
+  await h.page.getByTestId('prompt-target-map').waitFor({ state: 'detached' })
+  await keyboard.up('Control')
+  await keyboard.press('KeyQ')
+  await h.sent(targetMark, [TASKS[2]], `${content}\t`, content, count)
+  await h.leaderState(false)
+  await h.focusPreserved()
+  const native = await h.guestNativeFocus()
+  await h.log('GUEST_NATIVE_FOCUS', { surface, trial, phase: 'after-send', ...native })
+  assert.equal(native?.windowFocused, true, 'Sending retains the native window owner as well as the guest DOM focus')
+  const after = await guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, focused: document.hasFocus() && document.activeElement?.id === 'guest-input', events: window.pisGuest.events.slice(${before.count}) })`)
+  assert.equal(after.value, before.value)
+  assert.equal(after.focused, true)
+  assert.equal(after.events.filter(event => !['ControlLeft', 'ControlRight'].includes(event.code)).length, 0)
+  return { before, content }
+}
+
 async function guests(h) {
+  await h.setTargetModifier('Control')
   // Playwright normally emulates page focus even when the native app is not
   // key. These ownership assertions must observe real focus instead.
   await h.hostCdp.send('Emulation.setFocusEmulationEnabled', { enabled: false })
@@ -1105,30 +1490,7 @@ async function guests(h) {
     }
     const id = surface === 'html' ? 'PIK-15-html-iframe-focus-and-consumed-keys' : 'PIK-16-openbrowser-guest-focus-and-consumed-keys'
     await h.repeat(id, async trial => {
-      const content = `${surface}-guest-${trial}`
-      const count = (await h.history()).length
-      await h.seed(content)
-      await guestFocus(h, surface)
-      const initial = await guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, count: window.pisGuest.events.length })`)
-      await keyboard.press('KeyZ')
-      const before = await eventually('One native printable character reaches the guest',
-        () => guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, count: window.pisGuest.events.length, events: window.pisGuest.events.slice(${initial.count}) })`),
-        value => value.value === `${initial.value}z` && value.events.some(event => event.type === 'keyup' && event.code === 'KeyZ'))
-      assert.equal(before.value, `${initial.value}z`, 'A non-leader physical key inserts exactly one character')
-      assert.deepEqual(before.events.map(event => ({ type: event.type, code: event.code, trusted: event.trusted })), [
-        { type: 'keydown', code: 'KeyZ', trusted: true },
-        { type: 'keyup', code: 'KeyZ', trusted: true }
-      ], 'Ordinary input proves trusted native down/up reached the real guest')
-      await h.rememberFocus()
-      await h.sent(await h.chord('KeyQ', { keyboard }), [TASKS[0]], `${content}\t`, content, count)
-      await h.focusPreserved()
-      const native = await h.guestNativeFocus()
-      await h.log('GUEST_NATIVE_FOCUS', { surface, trial, phase: 'after-send', ...native })
-      assert.equal(native?.windowFocused, true, 'Sending retains the native window owner as well as the guest DOM focus')
-      const after = await guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, focused: document.hasFocus() && document.activeElement?.id === 'guest-input', events: window.pisGuest.events.slice(${before.count}) })`)
-      assert.equal(after.value, before.value)
-      assert.equal(after.focused, true)
-      assert.equal(after.events.filter(event => ['KeyX', 'KeyQ'].includes(event.code)).length, 0, 'Consumed leader/action keydown AND keyup never reach the guest')
+      const { before, content } = await exerciseGuestQueue(h, surface, trial, keyboard)
 
       const beforePass = await guestRead(h, surface, 'window.pisGuest.events.length')
       const pass = await h.eventMark()
@@ -1200,23 +1562,41 @@ async function additionalBoundaries(h) {
     } finally { await receiver.bracketedPaste(true) }
   })
 
+  await h.setTargetModifier('Alt')
   await h.repeat('PIK-20-tab-change-cancels-pending-chord', async trial => {
+    await h.select([TASKS[1]])
     await h.seed(`tab-cancel-${trial}`)
+    const draft = await h.snapshot()
+    const history = await h.history()
     const mark = await h.eventMark()
-    await h.keyboard.press(LEADER)
-    await h.eventAfter(mark, 'state')
-    await h.switchTab(OTHER_TAB)
-    await h.eventAfter(mark, 'cancel', 'tab-changed')
+    try {
+      await h.keyboard.press(LEADER)
+      await h.eventAfter(mark, 'state')
+      await h.keyboard.down('Alt')
+      const order = await h.taskOrder()
+      await h.choosingTargets(order)
+      await h.keyboard.press('Digit3')
+      await h.selectedTarget(order[2], 3)
+      await h.switchTab(OTHER_TAB)
+      await h.eventAfter(mark, 'cancel', 'tab-changed')
+      await h.leaderState(false)
+    } finally { await h.keyboard.releaseAll() }
     await h.focusTerminal(OTHER_TASK)
+    await h.keyboard.press('Digit3')
     await h.keyboard.press('KeyQ')
-    h.expect([OTHER_TASK], 'q')
+    h.expect([OTHER_TASK], '3q')
     await h.checkBytes()
     assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, 0)
     await h.switchTab(MAIN_TAB)
     await h.showPrompt()
     assert.equal(await h.editor().innerText(), `tab-cancel-${trial}`)
-    return { trial, originDraftRetained: true }
+    assert.deepEqual(await h.snapshot(), draft)
+    assert.deepEqual(await h.history(), history)
+    assert.deepEqual(await h.selectedIds(), [TASKS[1]], 'Tab cancellation preserves the origin\'s manual recipient selection')
+    await h.leaderState(false)
+    return { trial, originDraftRetained: true, selectedCueCleared: true }
   })
+  await h.setTargetModifier(null)
 
   await h.repeat('PIK-21-control-content-rejected-before-any-byte', async trial => {
     await h.showPrompt()
@@ -1490,6 +1870,7 @@ async function delayedAcknowledgements(h) {
 }
 
 async function staleDestinations(h) {
+  await h.setTargetModifier('Alt')
   for (const [id, manual] of [
     ['PIK-29-stale-explicit-target-rejects-and-reselect-recovers', false],
     ['PIK-33-stale-manual-target-rejects-and-reselect-recovers', true]
@@ -1503,6 +1884,40 @@ async function staleDestinations(h) {
       const activeId = order[0]
       const recoveryId = order[1]
       assert.notEqual(recoveryId, activeId, 'Recovery must select a destination other than the valid active fallback')
+      if (!manual) {
+        await h.select([recoveryId])
+        const content = `pending-target-loss-${trial}`
+        await h.seed(content)
+        const draft = await h.snapshot()
+        const history = await h.history()
+        await h.rememberFocus()
+        const mark = await h.eventMark()
+        try {
+          await h.keyboard.press(LEADER)
+          await h.keyboard.down('Alt')
+          await h.keyboard.press('Digit4')
+          await h.selectedTarget(lostId, 4)
+          await h.parkLayout(2)
+          await h.eventAfter(mark, 'cancel', 'target-unavailable')
+          await h.leaderState(false)
+          await h.focusPreserved()
+          await h.checkBytes()
+          assert.deepEqual(await h.snapshot(), draft)
+          assert.deepEqual(await h.selectedIds(), [recoveryId])
+          await h.keyboard.releaseAll()
+          await h.keyboard.press('KeyQ')
+          await eventually('A continuation after recipient loss is ordinary Prompt text', () => h.editor().innerText(), value => value === `${content}q`)
+          await h.checkBytes()
+          assert.equal((await h.eventsSince(mark)).filter(event => event.kind === 'dispatch').length, 0,
+            'Recipient loss cancels before an action; neither manual nor active fallback receives it')
+          assert.deepEqual(await h.history(), history)
+          await h.focusPreserved()
+        } finally {
+          await h.keyboard.releaseAll()
+          await h.parkLayout(4)
+          await h.select([])
+        }
+      }
       if (manual) await h.select([lostId])
       const content = `lost-${manual ? 'manual' : 'explicit'}-${trial}`
       await h.seed(content)
@@ -1572,6 +1987,7 @@ async function staleDestinations(h) {
       }
     })
   }
+  await h.setTargetModifier(null)
 }
 
 async function staleGeneration(h) {
@@ -1632,8 +2048,204 @@ async function staleGeneration(h) {
   })
 }
 
+async function lateContinuations(h) {
+  h.lateContinuationEvidence = []
+  await h.setTargetModifier('Alt')
+  try {
+    await h.repeat('PIK-38-local-cancel-rejects-real-late-continuations', async trial => {
+      const order = await h.taskOrder()
+      await h.select([order[1]])
+      const content = `late-continuation-${trial}`
+      await h.seed(content)
+      const snapshot = await h.snapshot()
+      const history = await h.history()
+      const selection = await h.selectedIds()
+      const mark = await h.eventMark()
+      await h.page.evaluate(() => {
+        const api = window.__onwardPromptInputShortcutsDebug
+        if (!api?.setContinuationsHeld || !api.getHeldContinuationCount) throw new Error('The real continuation barrier is required')
+        api.setContinuationsHeld(true)
+      })
+      try {
+        await h.keyboard.press(LEADER)
+        const arm = await h.eventAfter(mark, 'state')
+        await h.leaderState(true)
+        assert.equal(arm.selecting, undefined, 'Initial native arm is never held')
+        assert(Number.isSafeInteger(arm.generation))
+        await h.keyboard.down('Alt')
+        await h.keyboard.up('Alt')
+        await h.keyboard.down('Alt')
+        await h.keyboard.press('Digit3')
+        await h.keyboard.up('Alt')
+        await h.keyboard.press('KeyQ')
+        const dispatch = await h.eventAfter(mark, 'dispatch')
+        await h.page.waitForFunction(() => window.__onwardPromptInputShortcutsDebug.getHeldContinuationCount() === 5)
+        const native = await h.eventsSince(mark)
+        assert(native.every(event => event.tabId === MAIN_TAB && event.generation === arm.generation))
+        assert.deepEqual(native.map(event => [event.kind, event.selecting ?? null, event.targetId ?? null]), [
+          ['state', null, null], ['state', true, null], ['state', false, null], ['state', true, null],
+          ['state', false, order[2]], ['dispatch', null, order[2]]
+        ], 'The held callbacks are real main-process states and dispatch, including both selector transitions')
+        assert.equal(dispatch.actionId, 'queue')
+        await h.leaderState(true)
+        await h.checkBytes()
+        const fromMs = await h.page.evaluate(() => Date.now())
+        await h.title().focus()
+        await h.leaderState(false)
+        await h.rememberFocus()
+        const released = await h.page.evaluate(async () => {
+          const api = window.__onwardPromptInputShortcutsDebug
+          api.setContinuationsHeld(false)
+          // This ordinary IPC ACK also drains the preceding diagnostic sends.
+          await window.electronAPI.settings.load()
+          return { held: api.getHeldContinuationCount(), state: api.getLeaderState(), throughMs: Date.now() }
+        })
+        assert.equal(released.held, 0)
+        assert.equal(released.state, null)
+        await h.leaderState(false)
+        await h.checkBytes()
+        assert.deepEqual(await h.snapshot(), snapshot)
+        assert.deepEqual(await h.history(), history)
+        assert.deepEqual(await h.selectedIds(), selection)
+        await h.focusPreserved()
+        const freshMark = await h.chord('KeyQ', { digit: 3 })
+        const fresh = await h.sent(freshMark, [order[2]], `${content}\t`, content, history.length)
+        assert.equal(fresh.generation, arm.generation, 'Recovery and rejection share the same Tab activation')
+        assert.equal(fresh.targetId, order[2])
+        await h.leaderState(false)
+        await h.focusPreserved()
+        assert.deepEqual(await h.selectedIds(), selection)
+        const evidence = { trial, fromMs, throughMs: released.throughMs, generation: arm.generation,
+          sentRevision: snapshot.revision, targetId: order[2], heldStates: 4 }
+        h.lateContinuationEvidence.push(evidence)
+        return evidence
+      } finally {
+        try { await h.keyboard.releaseAll() }
+        finally { await h.page.evaluate(() => window.__onwardPromptInputShortcutsDebug?.setContinuationsHeld(false)) }
+      }
+    })
+  } finally {
+    await h.setTargetModifier(null)
+  }
+}
+
+async function renameGeometryTab(h, id, title) {
+  const ids = await h.page.evaluate(() => window.__onwardAppDebug.getTabIds())
+  const index = ids.indexOf(id)
+  assert(index >= 0, 'Only a fixture-owned Tab may be renamed')
+  const tab = h.page.locator('.tab-list .tab-item').nth(index)
+  await tab.locator('.tab-name').dblclick()
+  await tab.locator('.tab-name-input').fill(title ?? '')
+  await tab.locator('.tab-name-input').press('Enter')
+  await tab.locator('.tab-name-input').waitFor({ state: 'detached' })
+  if (title) assert.equal(await tab.locator('.tab-name').innerText(), `Tab ${index + 1}: ${title}`)
+}
+
+async function cueGeometry(h, expectedLabel, narrow) {
+  const measured = await h.page.evaluate(() => {
+    const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON()
+    const list = document.querySelector('.tab-list')
+    const cue = document.querySelector('[data-testid="prompt-leader-indicator"]')
+    return {
+      viewport: innerWidth, bar: rect('.tab-bar'), left: rect('.tab-bar-left'), center: rect('.tab-bar-center'),
+      right: rect('.tab-bar-right'), slot: rect('.prompt-leader-slot'), cue: cue.getBoundingClientRect().toJSON(),
+      list: list.getBoundingClientRect().toJSON(), add: rect('.tab-add-btn'),
+      scrollWidth: list.scrollWidth, clientWidth: list.clientWidth, label: cue.getAttribute('aria-label'),
+      tabs: [...list.querySelectorAll('.tab-item')].map(node => node.getBoundingClientRect().toJSON()),
+      hit: document.elementFromPoint(cue.getBoundingClientRect().x + 8, cue.getBoundingClientRect().y + 8)
+        ?.closest('[data-testid="prompt-leader-indicator"]') === cue
+    }
+  })
+  const { bar, left, center, right, slot, cue, list, add } = measured
+  assert.equal(measured.label, expectedLabel)
+  assert.equal(measured.tabs.length, 6)
+  assert(right.width >= 68 && slot.width >= 68, 'The outer flex region reserves the entire cue slot')
+  assert(cue.width === 60 && cue.height === 22 && measured.hit, 'The actual keycap remains visible and unobscured')
+  for (const bounds of [center, slot, cue, list, add]) {
+    assert(bounds.width > 0 && bounds.left >= bar.left - 0.5 && bounds.right <= bar.right + 0.5 && bounds.right <= measured.viewport + 0.5,
+      'Every visible bar surface fits the real viewport')
+  }
+  assert(left.right <= center.left + 0.5 && center.right <= right.left + 0.5, 'Window controls, center and cue region do not overlap')
+  assert(list.right <= add.left + 0.5 && add.right <= slot.left + 0.5, 'The Tab viewport and add button remain separate from the cue')
+  assert(cue.left >= slot.left && cue.right <= slot.right && cue.top >= bar.top && cue.bottom <= bar.bottom)
+  for (const tab of measured.tabs) {
+    const visibleLeft = Math.max(tab.left, list.left), visibleRight = Math.min(tab.right, list.right)
+    if (visibleRight > visibleLeft) assert(visibleRight <= cue.left, 'Clipped, visible Tabs cannot cover the cue')
+  }
+  if (narrow) assert(measured.scrollWidth > measured.clientWidth, 'Crowded Tabs use the existing horizontal scroll viewport')
+  return measured
+}
+
+async function crowdedTabGeometry(h) {
+  const fixture = await json(path.join(h.workspace, 'crowded-tabs.json'))
+  const initialTabCount = await h.page.evaluate(() => window.__onwardAppDebug.getTabIds().length)
+  const viewport = h.page.viewportSize()
+  const setLanguage = async language => {
+    await h.openSettings('general')
+    await h.page.getByTestId('settings-language-select').selectOption(language)
+    await eventually('geometry locale is acknowledged', () => h.page.evaluate(() => window.electronAPI.settings.load()), settings => settings.language === language)
+    await h.page.getByTestId('sidebar-settings-button').click()
+    await h.page.locator('.settings-container').waitFor({ state: 'hidden' })
+  }
+  try {
+    await h.setTargetModifier('Alt')
+    for (let count = initialTabCount; count < fixture.titles.length; count++) {
+      assert.equal(await h.page.evaluate(() => window.__onwardAppDebug.createTab()), 'pending')
+      await h.page.waitForFunction(count => window.__onwardAppDebug.getTabIds().length === count + 1, count)
+    }
+    const ids = await h.page.evaluate(() => window.__onwardAppDebug.getTabIds())
+    assert.equal(ids.length, 6)
+    for (const [index, id] of ids.entries()) await renameGeometryTab(h, id, fixture.titles[index])
+    await h.switchTab(MAIN_TAB)
+    await h.seed(fixture.draft)
+    const draft = await h.snapshot()
+    const history = await h.history()
+    const order = await h.taskOrder()
+    const title = await h.task(order[2]).locator('.terminal-grid-title').innerText()
+    await h.repeat('PIK-39-bilingual-crowded-tab-cue-geometry', async trial => {
+      const measurements = []
+      for (const [language, copy] of Object.entries(fixture.copy)) {
+        await setLanguage(language)
+        for (const width of fixture.widths) {
+          await h.page.setViewportSize({ width, height: viewport.height })
+          await h.page.waitForFunction(width => innerWidth === width, width)
+          await h.editor().focus()
+          await h.rememberFocus()
+          const mark = await h.eventMark()
+          try {
+            await h.keyboard.press(LEADER)
+            await h.keyboard.down('Alt')
+            await h.choosingTargets(order)
+            const choosing = await cueGeometry(h, copy.choosing.replace('{count}', String(order.length)), width === fixture.widths[0])
+            await h.keyboard.press('Digit3')
+            await h.selectedTarget(order[2], 3)
+            const selected = await cueGeometry(h, copy.selected.replace('{name}', title), width === fixture.widths[0])
+            assert.deepEqual(selected.slot, choosing.slot, 'Choosing and selected keycaps occupy the same reserved slot')
+            await h.keyboard.up('Alt')
+            await h.keyboard.press('Escape')
+            await h.eventAfter(mark, 'cancel', 'escape')
+            await h.leaderState(false)
+            await h.focusPreserved()
+            measurements.push({ language, width, choosing, selected })
+          } finally { await h.keyboard.releaseAll() }
+        }
+      }
+      await h.checkBytes()
+      assert.deepEqual(await h.snapshot(), draft)
+      assert.deepEqual(await h.history(), history)
+      assert.equal(measurements.length, 4)
+      return { trial, measurements }
+    })
+  } finally {
+    await h.keyboard.releaseAll()
+    await h.page.evaluate(() => window.electronAPI.promptInput.cancel('geometry-cleanup'))
+    await h.page.setViewportSize(viewport)
+  }
+}
+
 async function nativeWindowBoundaries(h) {
   const id = 'PIK-30-native-window-blur-cancels-without-revival'
+  await h.setTargetModifier('Alt')
   await h.repeat(id, async trial => {
     const content = `native-blur-${trial}`
     const count = (await h.history()).length
@@ -1643,26 +2255,34 @@ async function nativeWindowBoundaries(h) {
     await h.keyboard.press(LEADER)
     await h.eventAfter(mark, 'state')
     try {
+      await h.keyboard.down('Alt')
+      await h.choosingTargets(await h.taskOrder())
       assert.equal(await h.page.evaluate(() => window.electronAPI.debug.blurWindow()), true, 'The real owned BrowserWindow must blur')
       const canceled = await h.eventAfter(mark, 'cancel')
       assert(['blur', 'contents-blur'].includes(canceled.reason), 'Native owner-window blur really canceled the Leader')
+      await h.leaderState(false)
     } finally {
       assert(await h.page.evaluate(() => window.electronAPI.debug.focusWindow()), 'Refocus only the owned app through its debug IPC')
       await h.page.bringToFront()
+      await h.keyboard.releaseAll()
     }
     await h.focusTerminal(TASKS[0])
+    await h.keyboard.press('Digit3')
     await h.keyboard.press('KeyQ')
-    h.expect([TASKS[0]], 'q')
+    h.expect([TASKS[0]], '3q')
     await h.checkBytes()
     assert.equal((await h.eventsSince(mark)).filter(value => value.kind === 'dispatch').length, 0)
     assert.equal((await h.history()).length, count)
     assert.equal(await h.editor().innerText(), content)
     await h.sent(await h.chord('KeyE'), [TASKS[0]], '\r')
-    return { trial, canceled: true, freshSequenceWorks: true }
+    await h.leaderState(false)
+    return { trial, canceled: true, heldSelectorCleared: true, freshSequenceWorks: true }
   })
+  await h.setTargetModifier(null)
 }
 
 async function readers(h) {
+  await h.setTargetModifier('Alt')
   await h.select([TASKS[0]])
   await h.focusTerminal(TASKS[0])
   await h.task(TASKS[0]).locator('[data-terminal-dropdown-trigger]').click()
@@ -1740,15 +2360,25 @@ async function readers(h) {
         assert(native.events.some(event => event.type === 'keydown' && event.code === 'KeyZ' && event.trusted), 'Ordinary trusted input reaches the loaded reader frame')
         const mark = native.events.length
         await h.rememberFocus()
-        await h.sent(await h.chord('KeyQ'), [TASKS[0]], `${content}\t`, content, count)
+        await h.sent(await h.chord('KeyQ', { digit: 3 }), [TASKS[2]], `${content}\t`, content, count)
+        await h.leaderState(false)
         await h.focusPreserved()
         const sent = await read()
         assert(sent.focused)
         assert.equal(sent.value, native.value, 'The Prompt action never inserts keys into the reader input')
-        assert.equal(sent.events.slice(mark).filter(event => ['KeyX', 'KeyQ'].includes(event.code)).length, 0)
+        assert.equal(sent.events.slice(mark).filter(event => ['KeyX', 'Digit3', 'KeyQ'].includes(event.code)).length, 0)
+
+        await h.keyboard.press('Digit3')
+        const freshDigit = await eventually('A fresh consumed-digit key delivers one trusted down/up pair to the reader', read,
+          value => value.events.slice(sent.events.length).some(event => event.type === 'keyup' && event.code === 'Digit3' && event.trusted) &&
+            (sent.value === null || value.value === `${sent.value}3`))
+        assert(freshDigit.focused)
+        assert.deepEqual(freshDigit.events.slice(sent.events.length).filter(event => event.code === 'Digit3').map(event => ({ type: event.type, trusted: event.trusted })),
+          [{ type: 'keydown', trusted: true }, { type: 'keyup', trusted: true }])
+        await h.checkBytes()
 
         const pass = await h.eventMark()
-        const beforePass = sent.events.length
+        const beforePass = freshDigit.events.length
         await h.keyboard.press(LEADER)
         await h.keyboard.press(LEADER)
         await h.eventAfter(pass, 'passthrough')
@@ -1810,6 +2440,7 @@ async function traces(h) {
     const { files, retainedFiles, events } = await retainNativeTrace(h)
     const required = [
       'main:prompt-shortcut.state-changed', 'renderer:prompt-shortcut.state-changed',
+      'renderer:prompt-shortcut.present-leader',
       'renderer:prompt-input.ipc', 'main:prompt-input.send-sequence',
       'renderer:prompt-input.dispatch-action', 'renderer:prompt-input.settle-draft',
       ...(h.testGroup === 'user' ? ['renderer:task-reorder.mode-enter', 'renderer:task-reorder.commit', 'renderer:task-reorder.mode-exit'] : [])
@@ -1824,8 +2455,19 @@ async function traces(h) {
     }
     assert(events.some(event => event.name === 'main:prompt-input.send-sequence' && event.ph === 'X' && event.args?.stage === 'transaction-complete'), 'PTY transaction emits a duration span')
     const transactions = events.filter(event => event.name === 'main:prompt-input.send-sequence' && event.args?.stage === 'transaction-complete')
-    assert(transactions.every(event => TASKS.includes(event.args.terminalId)), 'No action reaches parked or inactive-Tab targets')
+    let extraTargetsVisible = false
+    for (const event of [...events].sort((left, right) => left.ts - right.ts)) {
+      if (event.name === 'main:prompt-shortcut.state-changed' && event.args?.stage === 'context-received') {
+        extraTargetsVisible = event.args.tabId === MAIN_TAB && event.args.visibleCount === 8
+      }
+      if (event.name === 'main:prompt-input.send-sequence' && event.args?.stage === 'transaction-complete') {
+        assert(TASKS.includes(event.args.terminalId) || (extraTargetsVisible && h.extraTargets.includes(event.args.terminalId)),
+          'No action reaches parked or inactive-Tab targets; extra receivers are valid only during the eight-Task context')
+      }
+    }
     if (h.testGroup === 'user') {
+      assert.equal(transactions.filter(event => h.extraTargets.includes(event.args.terminalId)).length, TRIALS,
+        'The eight-Task stress trials deliver exactly once each')
       assert.equal(h.reorderEvidence.filter(evidence => evidence.kind === 'real-drag').length, TRIALS)
       assert.equal(h.reorderEvidence.filter(evidence => evidence.kind === 'state-update').length, TRIALS)
       assert.equal(events.filter(event => event.name === 'renderer:task-reorder.mode-enter' && event.args?.trigger === 'long-press').length, TRIALS)
@@ -1861,6 +2503,18 @@ async function traces(h) {
       }
     }
     if (h.testGroup === 'boundaries') {
+      assert.equal(h.lateContinuationEvidence.length, TRIALS)
+      for (const evidence of h.lateContinuationEvidence) {
+        const rejected = events.filter(event => event.name === 'renderer:prompt-shortcut.state-changed' &&
+          event.ts >= evidence.fromMs * 1000 && event.ts < (evidence.throughMs + 1) * 1000)
+        assert.equal(rejected.filter(event => event.args?.reason === 'stale-owner-state').length, evidence.heldStates,
+          'Every held selector/target continuation reaches the existing owner rejection')
+        assert.equal(rejected.filter(event => event.args?.reason === 'stale-owner-dispatch').length, 1)
+        assert(rejected.some(event => event.args?.phase === 'owner-cancel-send' && event.args.reason === 'context-changed'))
+        assert(!rejected.some(event => event.args?.phase === 'view-published' && event.args.active), 'Late states never republish an active cue')
+        assert.equal(events.filter(event => event.name === 'renderer:prompt-input.dispatch-action' && event.args?.phase === 'send' &&
+          event.args.tabId === MAIN_TAB && event.args.revision === evidence.sentRevision).length, 1, 'Only the fresh recovery may send this revision')
+      }
       assert.equal(h.ackEvidence.length, 5 * TRIALS)
       for (const evidence of h.ackEvidence) {
         const recorded = events.filter(event => event.name === 'renderer:prompt-input.settle-draft' && event.args?.phase === 'history-recorded' &&
@@ -1890,7 +2544,8 @@ async function traces(h) {
     assert.equal(other.tabs.find(tab => tab.id === OTHER_TAB).editorDraft.content, 'PIS_OTHER_TAB_DRAFT_MUST_SURVIVE')
     await writeFile(path.join(h.artifacts, 'trace-coverage.json'), JSON.stringify({
       files: retainedFiles, sourceFiles: files, counts, bytes, ackEvidence: h.ackEvidence, targetLossEvidence: h.targetLossEvidence,
-      generationEvidence: h.generationEvidence, reorderEvidence: h.reorderEvidence
+      generationEvidence: h.generationEvidence, reorderEvidence: h.reorderEvidence,
+      lateContinuationEvidence: h.lateContinuationEvidence
     }, null, 2))
     return { files: retainedFiles, counts, bytes }
   })
@@ -1901,6 +2556,11 @@ async function runShortcutCases(h) {
   assert(!h.cancelled, 'Runner canceled during application startup')
   if (h.testGroup === 'user') {
     await core(h)
+    await heldTargets(h)
+    await eightTargetPressure(h)
+    // Last scenario: leaves disposable Tabs/settings changed. Only trace/byte
+    // auditing and harness teardown may follow; receiver/profile cleanup is shared.
+    await crowdedTabGeometry(h)
   } else if (h.testGroup === 'guests') {
     await guests(h)
   } else if (h.testGroup === 'boundaries') {
@@ -1909,6 +2569,7 @@ async function runShortcutCases(h) {
     await staleDestinations(h)
     await staleGeneration(h)
     await nativeWindowBoundaries(h)
+    await lateContinuations(h)
   } else {
     await readers(h)
   }

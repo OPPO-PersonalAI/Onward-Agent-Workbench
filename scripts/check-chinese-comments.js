@@ -32,6 +32,8 @@ const ALLOWLIST = new Set([
   'test/autotest/fixtures/prompt-input-settings/acceptance.json',
   'test/autotest/fixtures/prompt-input-settings/legacy-settings-v9.json',
   'test/autotest/fixtures/prompt-input-shortcuts/guest-input.html',
+  'test/autotest/fixtures/prompt-input-shortcuts/caret-draft.json',
+  'test/autotest/fixtures/prompt-input-shortcuts/crowded-tabs.json',
   'test/unittest/prompt-input-shortcuts-main.test.mjs',
   // Project instruction files may quote Chinese phrases from user usage.
   'CLAUDE.md',
