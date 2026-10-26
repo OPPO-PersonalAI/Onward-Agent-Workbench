@@ -822,10 +822,16 @@ export interface GitAPI {
   // watcher dropped the `.git` write. The raw command line NEVER crosses IPC;
   // the renderer classifies it and sends only the subcommand keyword + flags.
   notifyTerminalGitCommand: (payload: { terminalId: string; subcommand: string; createsRepo: boolean }) => Promise<{ success: boolean }>
-  // User-initiated `git fetch` for one repo — the Task badge's click. Unlike
-  // revalidateMirror below it actually contacts the remote, so it is the only
-  // renderer-reachable way to move the behind count. `busy` = already in flight.
-  fetchNow: (repoRoot: string) => Promise<{ ok: boolean; busy?: boolean }>
+  // User-initiated `git fetch` for one repo — the Task badge's sync button.
+  // Unlike revalidateMirror below it actually contacts the remote, so it is the
+  // only renderer-reachable way to move the behind count. A call made while a
+  // fetch is running joins it (`joined`); `failure` is set on failure only.
+  fetchNow: (repoRoot: string) => Promise<{
+    ok: boolean
+    joined?: boolean
+    failure?: 'timeout' | 'auth' | 'no-remote' | 'network' | 'other'
+    fetchId?: number
+  }>
   // Git Diff revalidate-on-open: re-check the cwd's mirror state (no generation
   // bump) so a watcher-missed commit/edit self-heals when the panel opens.
   revalidateMirror: (cwd: string) => Promise<{ success: boolean }>
@@ -1319,6 +1325,9 @@ export interface DebugAPI {
     exitCode?: number | null
     killedByTimeout?: boolean
     stderrTail?: string
+    /** Join evidence: equal ids across callers prove a single spawned process. */
+    fetchId?: number
+    joined?: boolean
   }>
   recordPerfTrace: (event: PerformanceTraceRendererEvent) => void
   getPerfTraceStatus: () => Promise<PerformanceTraceStatus>
@@ -1942,7 +1951,12 @@ const gitAPI: GitAPI = {
   },
 
   fetchNow: (repoRoot: string) => {
-    return ipcRenderer.invoke(IPC.GIT_FETCH_NOW, { repoRoot }) as Promise<{ ok: boolean; busy?: boolean }>
+    return ipcRenderer.invoke(IPC.GIT_FETCH_NOW, { repoRoot }) as Promise<{
+      ok: boolean
+      joined?: boolean
+      failure?: 'timeout' | 'auth' | 'no-remote' | 'network' | 'other'
+      fetchId?: number
+    }>
   },
   revalidateMirror: (cwd: string) => {
     return ipcRenderer.invoke(IPC.GIT_STATE_MIRROR_REVALIDATE, cwd)
@@ -2589,6 +2603,9 @@ const debugAPI: DebugAPI = {
     exitCode?: number | null
     killedByTimeout?: boolean
     stderrTail?: string
+    /** Join evidence: equal ids across callers prove a single spawned process. */
+    fetchId?: number
+    joined?: boolean
   }>
   },
   recordPerfTrace: (event: PerformanceTraceRendererEvent) => {

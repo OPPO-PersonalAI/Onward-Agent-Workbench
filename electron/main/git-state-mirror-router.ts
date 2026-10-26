@@ -998,13 +998,17 @@ class GitStateMirrorRouter {
       lastFetchAttemptAt: freshness.lastFetchAttemptAt ?? prev?.lastFetchAttemptAt,
       // Reachability describes the LATEST attempt only, so it is replaced, not
       // merged — a success must clear a previous unreachable.
-      remoteUnreachable: freshness.remoteUnreachable ?? prev?.remoteUnreachable
+      remoteUnreachable: freshness.remoteUnreachable ?? prev?.remoteUnreachable,
+      // In-flight is a live flag: the start publish sets it, the settle publish
+      // clears it in the same delta as the outcome timestamps.
+      fetchInFlight: freshness.fetchInFlight ?? prev?.fetchInFlight
     }
     if (
       prev &&
       prev.lastFetchOkAt === next.lastFetchOkAt &&
       prev.lastFetchAttemptAt === next.lastFetchAttemptAt &&
-      prev.remoteUnreachable === next.remoteUnreachable
+      prev.remoteUnreachable === next.remoteUnreachable &&
+      prev.fetchInFlight === next.fetchInFlight
     ) {
       return 0
     }
@@ -1029,6 +1033,7 @@ class GitStateMirrorRouter {
     state.lastFetchOkAt = fresh.lastFetchOkAt
     state.lastFetchAttemptAt = fresh.lastFetchAttemptAt
     state.remoteUnreachable = fresh.remoteUnreachable
+    state.fetchInFlight = fresh.fetchInFlight
   }
 
   /**

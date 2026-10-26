@@ -460,6 +460,20 @@ export interface TerminalGitInfo {
  * `MirrorState` in `electron/main/git-state-mirror-types.ts` — duplicated
  * here so renderer code never reaches into electron/main.
  */
+/** Failure class a manual fetch reports back to the sync button. */
+export type GitFetchFailureKind = 'timeout' | 'auth' | 'no-remote' | 'network' | 'other'
+
+/** Result of `git.fetchNow` (the Task badge's sync button). */
+export interface GitFetchNowResult {
+  ok: boolean
+  /** True when the click attached to a fetch that was already running. */
+  joined?: boolean
+  /** Set on failure only. */
+  failure?: GitFetchFailureKind
+  /** Id of the spawned fetch; equal for every caller that joined the same run. */
+  fetchId?: number
+}
+
 export interface GitStateMirrorSnapshot {
   cwd: string
   repoRoot: string | null
@@ -501,6 +515,11 @@ export interface GitStateMirrorSnapshot {
    * full classification stays in the perf trace for diagnosis.
    */
   remoteUnreachable?: boolean
+  /**
+   * True while a `git fetch` for this repo is running (background, manual or
+   * forced). Drives the sync button's spinner for background fetches too.
+   */
+  fetchInFlight?: boolean
   status: TerminalGitStatus | null
   files: GitFileStatus[]
   repos?: GitRepoContext[]
@@ -819,11 +838,13 @@ export interface GitAPI {
   notifyTerminalGitCommand: (payload: { terminalId: string; subcommand: string; createsRepo: boolean }) => Promise<{ success: boolean }>
   /**
    * User-initiated `git fetch` for one repo — what the Task branch badge's
-   * click calls. Unlike {@link revalidateMirror} (local recompute only) this
-   * contacts the remote, so it is the only renderer-reachable way to move the
-   * behind count. `busy` means a fetch for this repo was already running.
+   * sync button calls. Unlike {@link revalidateMirror} (local recompute only)
+   * this contacts the remote, so it is the only renderer-reachable way to move
+   * the behind count. If a fetch for the repo is already running the call
+   * joins it (`joined: true`) and resolves with that run's outcome. `failure`
+   * is the class shown on the button after a failed manual fetch.
    */
-  fetchNow: (repoRoot: string) => Promise<{ ok: boolean; busy?: boolean }>
+  fetchNow: (repoRoot: string) => Promise<GitFetchNowResult>
   revalidateMirror: (cwd: string) => Promise<{ success: boolean }>
   warmDiffCache: (cwd: string) => Promise<{ success: boolean }>
   onTerminalInfo: (callback: (terminalId: string, info: TerminalGitInfo) => void) => () => void
@@ -1237,6 +1258,9 @@ export interface DebugAPI {
     exitCode?: number | null
     killedByTimeout?: boolean
     stderrTail?: string
+    /** Join evidence: equal ids across callers prove a single spawned process. */
+    fetchId?: number
+    joined?: boolean
   }>
   recordPerfTrace: (event: PerformanceTraceRendererEvent) => void
   getPerfTraceStatus: () => Promise<PerformanceTraceStatus>

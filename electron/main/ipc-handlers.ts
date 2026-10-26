@@ -83,7 +83,8 @@ import {
 import { gitStateMirrorRouter } from './git-state-mirror-router'
 import { shellIntegrationLiveness } from './shell-integration-liveness'
 import { executeVerifiedChangeWorkDir } from './terminal-change-workdir'
-import { gitAutofetchManager } from './git-autofetch-manager'
+import { gitAutofetchManager, resolveFetchFailureKind } from './git-autofetch-manager'
+import type { FetchFailureReason } from './git-fetch-failure-classify'
 import { getUpdateService } from './update-service'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { IPC } from '../shared/ipc-channels'
@@ -1295,23 +1296,31 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
    * here. Distinct from GIT_STATE_MIRROR_FORCE_REFRESH, which only re-runs the
    * LOCAL status recompute and therefore can never move the behind count.
    *
-   * Returns `{ ok, busy }`: `busy` means a fetch for this repo was already in
-   * flight, so the renderer should keep showing its spinner rather than treat
-   * it as a failure. Failure DETAIL is deliberately not returned — it goes to
-   * the perf trace; the UI only needs "did it work".
+   * Returns `{ ok, joined, failure, fetchId }`. A click that lands while a
+   * fetch for the repo is already running JOINS it and resolves with that run's
+   * outcome (`joined: true`) — it used to return `{ busy: true }` immediately,
+   * which the renderer ignored, so the click was dropped (2026-10-26 field
+   * bundle: 5 clicks, 0 main-side requests). `failure` is the single class the
+   * sync button shows after a failed MANUAL fetch (user decision 2026-10-26);
+   * stderr and the rest of the evidence stay in the perf trace.
    */
   ipcMain.handle(IPC.GIT_FETCH_NOW, async (
     _event,
     payload?: { repoRoot?: unknown }
-  ): Promise<{ ok: boolean; busy?: boolean }> => {
+  ): Promise<{ ok: boolean; joined?: boolean; failure?: FetchFailureReason; fetchId?: number }> => {
     const repoRoot = typeof payload?.repoRoot === 'string' ? payload.repoRoot : ''
-    if (!repoRoot) return { ok: false }
+    if (!repoRoot) return { ok: false, failure: 'other' }
     try {
       const result = await gitAutofetchManager.fetchNow(repoRoot)
-      if (result === null) return { ok: false, busy: true }
-      return { ok: result.ok }
+      if (result === null) return { ok: false, failure: 'other' }
+      return {
+        ok: result.ok,
+        joined: result.joined,
+        fetchId: result.fetchId,
+        ...(result.ok ? {} : { failure: resolveFetchFailureKind(result) ?? 'other' })
+      }
     } catch {
-      return { ok: false }
+      return { ok: false, failure: 'other' }
     }
   })
 
@@ -1331,6 +1340,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     exitCode?: number | null
     killedByTimeout?: boolean
     stderrTail?: string
+    /** Join evidence: equal ids across callers prove a single spawned process. */
+    fetchId?: number
+    joined?: boolean
   }> => {
     if (process.env.ONWARD_AUTOTEST !== '1') {
       return { ok: false, error: 'debug:autotest-git-autofetch requires ONWARD_AUTOTEST=1' }
@@ -1350,7 +1362,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
         classified: result.classified,
         exitCode: result.exitCode ?? null,
         killedByTimeout: result.killedByTimeout,
-        stderrTail: result.stderrTail
+        stderrTail: result.stderrTail,
+        fetchId: result.fetchId,
+        joined: result.joined
       }
     } catch (error) {
       return { ok: false, error: String(error) }

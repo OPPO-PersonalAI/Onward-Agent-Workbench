@@ -45,6 +45,14 @@ export function classifyFetchFailure(stderr: string): FetchFailureReason {
   if (/no remote repository|does not appear to be a git repository|no such remote|no configured push destination|'origin' does not appear/.test(s)) {
     return 'no-remote'
   }
+  // Transport-level stall aborts from the S1 policy (git-fetch-policy.ts):
+  // curl's low-speed guard ("curl 28 Operation too slow. Less than N bytes/sec
+  // transferred the last M seconds") and ssh's keepalive drop ("Timeout, server
+  // <host> not responding."). Checked BEFORE `network` because curl wraps the
+  // first one in "unable to access", which would otherwise read as unreachable.
+  if (/operation too slow|bytes\/sec transferred the last|timeout, server .* not responding/.test(s)) {
+    return 'timeout'
+  }
   if (/could not resolve host|connection timed out|connection refused|unable to access|network is unreachable|failed to connect|timed out/.test(s)) {
     return 'network'
   }

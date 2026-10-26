@@ -12,17 +12,19 @@
  *   1. every tick, hands the scheduler the current set of in-use repo roots
  *      (from the mirror router) and spawns a hardened fetch for each due repo,
  *      capped at {@link MAX_CONCURRENT_FETCHES};
- *   2. hardens the fetch so it can NEVER hang or prompt (the two worst
- *      background-fetch failure modes documented across peer products):
- *        - `GIT_TERMINAL_PROMPT=0`  → no https credential prompt (fail fast)
- *        - `GIT_SSH_COMMAND … BatchMode=yes -o ConnectTimeout=10`
- *                                   → a passphrase-locked SSH key fails fast
- *                                     instead of hanging invisibly
- *        - `GCM_INTERACTIVE=never`  → git-credential-manager never pops UI
- *        - `GIT_OPTIONAL_LOCKS=0`   → no index.lock churn racing the user
- *        - a hard 20 s process timeout kills a wedged transport;
+ *   2. hardens the fetch so it can NEVER hang or prompt (see
+ *      {@link buildHardenedFetchEnv} in git-fetch-policy.ts): no credential
+ *      prompts, SSH BatchMode + keepalives, and transport-level stall detection
+ *      (curl low-speed abort). A wedged transport is cut by the transport; a
+ *      slow-but-alive one is allowed to finish. Only a long wall-clock ceiling
+ *      ({@link GIT_FETCH_CEILING_MS}) remains as a last resort — the old fixed
+ *      20 s kill made a binary-heavy repo un-syncable (2026-10-26 field bundle);
  *   3. on success, asks the mirror to revalidate that repo so the recompute
- *      re-reads `# branch.ab` and the badge's behind count refreshes.
+ *      re-reads `# branch.ab` and the badge's behind count refreshes;
+ *   4. runs at most ONE fetch per repo: a manual click or forced run that
+ *      arrives while one is in flight joins it ({@link InFlightRegistry}), and
+ *      the in-flight state is published to the renderer so the sync button
+ *      spins for background fetches too.
  *
  * The fetch is spawned DIRECTLY (not through the shared git runtime queue) so a
  * slow network fetch never occupies a concurrency slot meant for the fast local
@@ -36,6 +38,8 @@
  */
 
 import { execFile } from 'child_process'
+import { readdir, stat } from 'fs/promises'
+import { join, resolve as resolvePath } from 'path'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { getExecEnv, resolveGitExecutable } from './git-utils'
@@ -55,11 +59,11 @@ import {
   computeAutofetchBackoffMs,
   type PriorityRetryRefusal
 } from './git-autofetch-scheduler'
+import { InFlightRegistry } from './git-fetch-inflight'
+import { buildHardenedFetchEnv, resolveFetchCeilingMs, GIT_FETCH_CEILING_MS } from './git-fetch-policy'
 
 /** Never run more than this many fetches at once (many-repo cost guard). */
 const MAX_CONCURRENT_FETCHES = 3
-/** Hard ceiling on one fetch — kills a wedged transport / DNS hang. */
-const FETCH_TIMEOUT_MS = 20_000
 /** Tick cadence floor / ceiling; derived from the interval so a small (test) interval still ticks promptly. */
 const TICK_FLOOR_MS = 1_000
 const TICK_CEIL_MS = 30_000
@@ -73,6 +77,8 @@ const TICK_CEIL_MS = 30_000
 const HIDDEN_SKIP_MIN_REPEAT_MS = 600_000
 /** Own timeout for the (cached, failure-only) remote-URL lookup. */
 const REMOTE_URL_TIMEOUT_MS = 5_000
+/** Own timeout for the (failure-only) pack-directory lookup. */
+const PACK_DIR_TIMEOUT_MS = 5_000
 /**
  * Priority-retry refusals that are ordinary steady state rather than a signal,
  * and so are NOT traced. Both fire on every Task focus: `not-backed-off` for any
@@ -84,17 +90,25 @@ const STEADY_STATE_REFUSALS: ReadonlySet<PriorityRetryRefusal> = new Set<Priorit
   'unknown-repo'
 ])
 
+/** Who started a fetch run. Carried on every lifecycle event. */
+export type FetchSource = 'autofetch' | 'manual' | 'autofetch-forced'
+
 export interface AutofetchResult {
   ok: boolean
   reason?: FetchFailureReason
   durationMs: number
+  /**
+   * Monotonic id of the spawned fetch. Callers that joined an in-flight run see
+   * the SAME id, which is how a test proves only one process was spawned.
+   */
+  fetchId?: number
   /** Failure only: git's exit code, or null when the process was killed. */
   exitCode?: number | null
-  /** Failure only: true when the {@link FETCH_TIMEOUT_MS} ceiling killed it. */
+  /** Failure only: true when the wall-clock ceiling killed the process. */
   killedByTimeout?: boolean
   /**
    * Failure only: {@link classifyFetchFailure} applied to stderr **even when the
-   * process was killed by the timeout**. `reason` stays `'timeout'` because that
+   * process was killed by the ceiling**. `reason` stays `'timeout'` because that
    * is what happened to the process; a killed fetch still usually printed
    * something first ("Permission denied (publickey)", "Could not resolve host"),
    * and discarding it made auth-wall, unreachable-remote and slow-transport
@@ -117,18 +131,17 @@ function readIntervalMsFromEnv(): number {
 }
 
 function buildFetchEnv(): NodeJS.ProcessEnv {
-  const base = getExecEnv()
-  const existingSsh = base.GIT_SSH_COMMAND || process.env.GIT_SSH_COMMAND || 'ssh'
-  return {
-    ...base,
-    // Read-only-ish: fetch only writes remote-tracking refs; disabling optional
-    // locks avoids index.lock churn racing the user's own git commands.
-    GIT_OPTIONAL_LOCKS: '0',
-    // The anti-hang / anti-prompt trio (see module doc).
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_SSH_COMMAND: `${existingSsh} -o BatchMode=yes -o ConnectTimeout=10`,
-    GCM_INTERACTIVE: 'never'
-  }
+  return buildHardenedFetchEnv(getExecEnv(), process.env.GIT_SSH_COMMAND) as NodeJS.ProcessEnv
+}
+
+/**
+ * Map a failed result onto the single failure class the UI shows for a manual
+ * fetch. A ceiling kill is a timeout regardless of what stderr said.
+ */
+export function resolveFetchFailureKind(result: AutofetchResult): FetchFailureReason | undefined {
+  if (result.ok) return undefined
+  if (result.killedByTimeout) return 'timeout'
+  return result.classified ?? result.reason ?? 'other'
 }
 
 class GitAutofetchManager {
@@ -145,6 +158,11 @@ class GitAutofetchManager {
   private hiddenSkipEmittedAt = 0
   /** repoRoot → transport class of its `origin`. Resolved lazily, on failure only. */
   private readonly remoteSchemeCache = new Map<string, RemoteScheme>()
+  /** One fetch per repo; later requests join the running one. */
+  private readonly inflight = new InFlightRegistry<AutofetchResult>()
+  private nextFetchId = 1
+  /** Wall-clock ceiling for one fetch (autotest may shorten it). */
+  private ceilingMs = GIT_FETCH_CEILING_MS
 
   /**
    * Start the background loop. No-op if already started, or if the kill switch
@@ -154,6 +172,13 @@ class GitAutofetchManager {
   start(): void {
     if (this.started || this.disposed) return
     this.started = true
+    // Resolved BEFORE the kill-switch check: manual (`fetchNow`) and forced
+    // fetches still run when the background loop is parked, and they must obey
+    // the same ceiling.
+    this.ceilingMs = resolveFetchCeilingMs(process.env)
+    if (this.ceilingMs !== GIT_FETCH_CEILING_MS) {
+      console.log(`[GitAutofetch] fetch ceiling overridden to ${this.ceilingMs}ms (ONWARD_GIT_FETCH_CEILING_MS, autotest)`)
+    }
 
     if (process.env.ONWARD_DISABLE_GIT_AUTOFETCH === '1') {
       this.enabled = false
@@ -170,12 +195,13 @@ class GitAutofetchManager {
     })
 
     const tickMs = Math.min(TICK_CEIL_MS, Math.max(TICK_FLOOR_MS, Math.floor(this.intervalMs / 2)))
-    console.log(`[GitAutofetch] enabled; interval=${this.intervalMs}ms tick=${tickMs}ms`)
+    console.log(`[GitAutofetch] enabled; interval=${this.intervalMs}ms tick=${tickMs}ms ceiling=${this.ceilingMs}ms`)
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_LIFECYCLE, {
       phase: 'start',
       enabled: true,
       intervalMs: this.intervalMs,
-      tickMs
+      tickMs,
+      ceilingMs: this.ceilingMs
     })
     this.tickTimer = setInterval(() => this.runTick(), tickMs)
     this.tickTimer.unref?.()
@@ -292,86 +318,120 @@ class GitAutofetchManager {
   }
 
   private async runScheduledFetch(repoRoot: string): Promise<void> {
-    this.scheduler.onFetchStart(repoRoot)
+    // The tick only offers repos the scheduler considers idle, but a manual or
+    // forced run may own the repo without the scheduler having seen it yet
+    // (e.g. a repo the scheduler has not synced) — join instead of doubling up.
+    // Recorded BEFORE the spawn so `scheduled` precedes `started` in the trace.
+    if (!this.inflight.has(repoRoot)) {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_SCHEDULED, { repoRoot })
+    }
+    await this.inflight.runOrJoin(repoRoot, () => this.startFetch(repoRoot, 'autofetch')).promise
+  }
+
+  /**
+   * One complete fetch lifecycle. Every path (scheduled, manual, forced) goes
+   * through here exactly once per spawned process, so the scheduler's
+   * start/done hooks, the in-flight publish and the outcome events stay paired.
+   */
+  private async startFetch(repoRoot: string, source: FetchSource): Promise<AutofetchResult> {
+    const fetchId = this.nextFetchId++
+    // The autotest force path deliberately leaves the scheduler alone (start AND
+    // done): it drives one fetch deterministically, it does not model the loop.
+    const tracksScheduler = source !== 'autofetch-forced'
+    if (tracksScheduler) this.scheduler.onFetchStart(repoRoot)
     this.activeFetches += 1
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_SCHEDULED, { repoRoot })
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_STARTED, { repoRoot })
+    // Publish BEFORE spawning so the button starts spinning for background
+    // fetches too (user decision 2026-10-26) — the dropped-click report came
+    // from a user who could not see that a fetch was already running.
+    const inFlightFanoutCount = gitStateMirrorRouter.setFetchFreshness(repoRoot, { fetchInFlight: true })
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_STARTED, {
+      repoRoot,
+      source,
+      fetchId,
+      inFlightFanoutCount,
+      ...(source === 'autofetch-forced' ? { forced: true } : {})
+    })
     let result: AutofetchResult
     try {
-      result = await this.executeFetch(repoRoot)
+      result = { ...(await this.executeFetch(repoRoot)), fetchId }
+    } catch (error) {
+      // executeFetch never rejects by contract; this keeps the in-flight flag
+      // and the scheduler's streak honest if that contract is ever broken.
+      result = { ok: false, reason: 'other', classified: 'other', durationMs: 0, fetchId, stderrTail: sanitizeGitStderr(String(error)) }
     } finally {
       this.activeFetches -= 1
     }
-    this.scheduler.onFetchDone(repoRoot, Date.now(), result.ok)
-    this.reportResult(repoRoot, result, 'autofetch')
+    if (tracksScheduler) this.scheduler.onFetchDone(repoRoot, Date.now(), result.ok)
+    this.reportResult(repoRoot, result, source)
+    return result
   }
 
   /**
    * User-initiated fetch for one repo — the recovery path behind the Task
-   * badge's click (BUG-0005 follow-up).
+   * badge's sync button (BUG-0005 follow-up).
    *
    * Deliberately bypasses the due-timer and the failure backoff: the backoff
    * exists to stop an UNATTENDED dead repo from burning resources, and a user
-   * who just clicked is by definition attending. It still routes through the
-   * scheduler's start/done hooks so a success RESETS the failure streak — the
-   * manual fetch fixing the repo must also un-stick the background loop.
+   * who just clicked is by definition attending. A success RESETS the failure
+   * streak, so the manual fetch fixing the repo also un-sticks the loop.
    *
-   * Returns `null` when a fetch for this repo is already in flight, so the
-   * caller can keep its button idempotent instead of stacking spawns.
+   * When a fetch for this repo is already running the click JOINS it and
+   * resolves with that run's outcome (user decision 2026-10-26, VS Code's
+   * `@throttle` semantics). It used to return `null` here, which the renderer
+   * ignored — the click was dropped with one frame of spinner.
    */
-  async fetchNow(repoRoot: string): Promise<AutofetchResult | null> {
+  async fetchNow(repoRoot: string): Promise<(AutofetchResult & { joined: boolean }) | null> {
     if (this.disposed || !repoRoot) return null
-    const inFlight = this.scheduler.inspect().repos.find((r) => r.repoKey === repoRoot)?.inFlight
-    if (inFlight) return null
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_FETCH_USER_REQUESTED, { repoRoot })
-    this.scheduler.onFetchStart(repoRoot)
-    this.activeFetches += 1
-    let result: AutofetchResult
-    try {
-      result = await this.executeFetch(repoRoot)
-    } finally {
-      this.activeFetches -= 1
-    }
-    this.scheduler.onFetchDone(repoRoot, Date.now(), result.ok)
-    this.reportResult(repoRoot, result, 'manual')
-    return result
+    // Recorded BEFORE runOrJoin (which spawns synchronously on a miss) so
+    // `user-requested` precedes the `started` it causes in the trace.
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_FETCH_USER_REQUESTED, {
+      repoRoot,
+      joined: this.inflight.has(repoRoot)
+    })
+    const run = this.inflight.runOrJoin(repoRoot, () => this.startFetch(repoRoot, 'manual'))
+    const result = await run.promise
+    return { ...result, joined: run.joined }
   }
 
   /**
    * Autotest-only deterministic driver: fetch one repo NOW (bypassing due
-   * timing), revalidate on success, and return the result. Gated by the caller
-   * (`ONWARD_AUTOTEST=1`), never wired in production.
+   * timing), revalidate on success, and return the result. Shares the in-flight
+   * registry so a test can model "background fetch running, then a click".
+   * Gated by the caller (`ONWARD_AUTOTEST=1`), never wired in production.
    */
-  async forceFetchForAutotest(repoRoot: string): Promise<AutofetchResult> {
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_STARTED, { repoRoot, forced: true })
-    const result = await this.executeFetch(repoRoot)
-    this.reportResult(repoRoot, result, 'autofetch-forced')
-    return result
+  async forceFetchForAutotest(repoRoot: string): Promise<AutofetchResult & { joined: boolean }> {
+    const run = this.inflight.runOrJoin(repoRoot, () => this.startFetch(repoRoot, 'autofetch-forced'))
+    const result = await run.promise
+    return { ...result, joined: run.joined }
   }
 
-  private reportResult(repoRoot: string, result: AutofetchResult, source: string): void {
+  private reportResult(repoRoot: string, result: AutofetchResult, source: FetchSource): void {
     // Publish fetch freshness to the badge regardless of outcome, so a ↓behind
     // whose backing fetch has been failing can be RENDERED as stale instead of
     // silently presenting a days-old number as current (BUG-0005 R3).
     const settledAt = Date.now()
-    // Only ONE failure class reaches the UI: the remote could not be reached.
-    // Auth walls, missing remotes and bare timeouts are not actionable from a
-    // badge tooltip, and their full classification already travels to us in the
-    // perf trace. Note a 20 s kill with no stderr classifies as 'other', not
-    // 'network' — we genuinely do not know why it hung, so we do not claim to.
+    // Only ONE failure class reaches the BADGE tooltip: the remote could not be
+    // reached. A MANUAL fetch additionally reports its failure class through
+    // the fetchNow IPC result (user decision 2026-10-26); background failures
+    // stay silent. Note a ceiling kill with no stderr classifies as 'other',
+    // not 'network' — we genuinely do not know why it hung, so we do not claim to.
     const remoteUnreachable = !result.ok && result.classified === 'network'
     // freshnessFanoutCount closes a diagnostic gap: without it, "published to
     // nobody because no cwd matched" and "published, but the renderer never
     // applied it" look identical in a bundle. Folded into the outcome events
-    // below rather than getting an event of its own.
+    // below rather than getting an event of its own. `fetchInFlight: false`
+    // rides the same delta so the spinner stops in the same render.
     const freshnessFanoutCount = gitStateMirrorRouter.setFetchFreshness(repoRoot, {
       lastFetchAttemptAt: settledAt,
       remoteUnreachable,
+      fetchInFlight: false,
       ...(result.ok ? { lastFetchOkAt: settledAt } : {})
     })
     if (result.ok) {
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_SUCCEEDED, {
         repoRoot,
+        source,
+        fetchId: result.fetchId ?? null,
         durationMs: result.durationMs,
         freshnessFanoutCount
       })
@@ -380,7 +440,7 @@ class GitAutofetchManager {
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_TRIGGERED_RECOMPUTE, { repoRoot })
       return
     }
-    void this.recordFailure(repoRoot, result, freshnessFanoutCount)
+    void this.recordFailure(repoRoot, result, freshnessFanoutCount, source)
   }
 
   /**
@@ -394,11 +454,21 @@ class GitAutofetchManager {
   private async recordFailure(
     repoRoot: string,
     result: AutofetchResult,
-    freshnessFanoutCount: number
+    freshnessFanoutCount: number,
+    source: FetchSource
   ): Promise<void> {
     const remoteScheme = await this.resolveRemoteScheme(repoRoot)
+    // A killed fetch leaves its partial pack behind (git neither resumes nor
+    // reuses it; gc prunes it later). Its size is the only evidence that the
+    // transfer was progressing rather than wedged — the field bundle could only
+    // prove this by inspecting the user's disk. Ceiling kills only, so a healthy
+    // repo never pays for the directory read.
+    const leftovers = result.killedByTimeout ? await this.probeTmpPacks(repoRoot) : null
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_AUTOFETCH_FAILED, {
       repoRoot,
+      source,
+      fetchId: result.fetchId ?? null,
+      ...(leftovers ? { tmpPackCount: leftovers.count, tmpPackBytes: leftovers.bytes } : {}),
       reason: result.reason ?? 'other',
       durationMs: result.durationMs,
       freshnessFanoutCount,
@@ -443,13 +513,53 @@ class GitAutofetchManager {
     return scheme
   }
 
+  /**
+   * Count leftover `tmp_pack_*` files in the repo's pack directory. Resolved via
+   * `git rev-parse --git-path` so linked worktrees and `GIT_COMMON_DIR` layouts
+   * point at the shared object store. Returns null on any error — this is
+   * diagnostic enrichment, never a reason to fail the failure event.
+   */
+  private async probeTmpPacks(repoRoot: string): Promise<{ count: number; bytes: number } | null> {
+    if (!this.gitPathPromise) this.gitPathPromise = resolveGitExecutable()
+    const gitPath = await this.gitPathPromise
+    if (!gitPath) return null
+    const packDir = await new Promise<string | null>((resolve) => {
+      execFile(
+        gitPath,
+        // No `--path-format=absolute` (git >= 2.31 only): the output may be
+        // relative to repoRoot, so resolve it ourselves on every git version.
+        ['-C', repoRoot, 'rev-parse', '--git-path', 'objects/pack'],
+        { env: getExecEnv(), timeout: PACK_DIR_TIMEOUT_MS, windowsHide: true, maxBuffer: 64 * 1024 },
+        (error, stdout) => {
+          const out = error ? '' : String(stdout ?? '').trim()
+          resolve(out ? resolvePath(repoRoot, out) : null)
+        }
+      )
+    })
+    if (!packDir) return null
+    try {
+      const names = (await readdir(packDir)).filter((name) => name.startsWith('tmp_pack_'))
+      let bytes = 0
+      for (const name of names) {
+        try {
+          bytes += (await stat(join(packDir, name))).size
+        } catch {
+          // Raced with gc / another fetch — skip it.
+        }
+      }
+      return { count: names.length, bytes }
+    } catch {
+      return null
+    }
+  }
+
   private async executeFetch(repoRoot: string): Promise<AutofetchResult> {
     if (!this.gitPathPromise) this.gitPathPromise = resolveGitExecutable()
     const gitPath = await this.gitPathPromise
     if (!gitPath) {
       return { ok: false, reason: 'other', durationMs: 0 }
     }
-    return runFetchProcess(gitPath, repoRoot)
+    return runFetchProcess(gitPath, repoRoot, this.ceilingMs)
   }
 }
 
@@ -458,13 +568,17 @@ class GitAutofetchManager {
  * a failed background fetch is safe to swallow (it touches only remote-tracking
  * refs + FETCH_HEAD, never the working tree) and the caller backs it off.
  */
-export function runFetchProcess(gitPath: string, repoRoot: string): Promise<AutofetchResult> {
+export function runFetchProcess(
+  gitPath: string,
+  repoRoot: string,
+  ceilingMs: number = GIT_FETCH_CEILING_MS
+): Promise<AutofetchResult> {
   return new Promise((resolve) => {
     const startMs = Date.now()
     execFile(
       gitPath,
       ['-C', repoRoot, 'fetch', '--quiet'],
-      { env: buildFetchEnv(), timeout: FETCH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024 },
+      { env: buildFetchEnv(), timeout: ceilingMs, windowsHide: true, maxBuffer: 1024 * 1024 },
       (error, _stdout, stderr) => {
         const durationMs = Date.now() - startMs
         if (!error) {
@@ -474,7 +588,7 @@ export function runFetchProcess(gitPath: string, repoRoot: string): Promise<Auto
         const killedByTimeout = (error as NodeJS.ErrnoException & { killed?: boolean }).killed === true
         const stderrText = typeof stderr === 'string' ? stderr : String(stderr ?? '')
         const evidence = stderrText || error.message || ''
-        // Classify ALWAYS, including on the timeout path. `reason` still
+        // Classify ALWAYS, including on the ceiling-kill path. `reason` still
         // reports what happened to the PROCESS; `classified` reports what
         // git was complaining about while it hung. The timeout branch used to
         // short-circuit past classifyFetchFailure and drop stderr entirely,

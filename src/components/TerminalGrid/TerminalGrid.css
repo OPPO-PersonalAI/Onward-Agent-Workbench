@@ -332,6 +332,17 @@
   animation: terminal-grid-branch-sync-spin 0.9s linear infinite;
 }
 
+/*
+ * A MANUAL fetch just failed (user decision 2026-10-26): the glyph turns the
+ * warning colour at full strength for SYNC_FAILURE_HINT_MS, and the button's
+ * tooltip names the failure class. Colour only — no motion — so it reads as a
+ * state, not as activity, and is unaffected by prefers-reduced-motion.
+ */
+.terminal-grid-branch-sync--failed {
+  color: var(--warning, #f59e0b);
+  opacity: 1;
+}
+
 @keyframes terminal-grid-branch-sync-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

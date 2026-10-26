@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<!--
+SPDX-FileCopyrightText: 2026 OPPO
+SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git fetch 超时策略 · 现状 vs 候选方案 · 决策文档</title>
+<style>
+  :root{
+    --bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:#30363d;--border2:#3d444d;
+    --fg:#e6edf3;--fg2:#adbac7;--fg3:#768390;
+    --accent:#58a6ff;--accent2:#79c0ff;--ok:#3fb950;--warn:#d29922;--danger:#f85149;
+    --purple:#bc8cff;--cyan:#39c5cf;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:auto!important}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.75}
+  #toc{position:fixed;top:0;left:0;width:280px;height:100vh;overflow-y:auto;
+    background:var(--bg2);border-right:1px solid var(--border);padding:22px 0 40px}
+  #toc .brand{padding:0 20px 14px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  #toc .brand h2{margin:0 0 4px;font-size:14px;color:var(--accent);letter-spacing:.5px}
+  #toc .brand p{margin:0;font-size:11px;color:var(--fg3);font-family:var(--mono)}
+  #toc a{display:block;padding:7px 20px;color:var(--fg2);text-decoration:none;font-size:13px;border-left:3px solid transparent}
+  #toc a:hover{background:var(--bg3);color:var(--fg)}
+  #toc a.active{color:var(--accent2);border-left-color:var(--accent);background:#1f2a3a;font-weight:600}
+  #toc a.sub{padding-left:36px;font-size:12px;color:var(--fg3)}
+  main{margin-left:280px;padding:44px 52px 120px;max-width:1180px}
+  @media (max-width:900px){#toc{display:none}main{margin-left:0;padding:24px 18px 80px}}
+  h1{font-size:28px;margin:0 0 6px}
+  .subtitle{color:var(--fg3);font-size:13px;margin:0 0 28px;font-family:var(--mono)}
+  h2{font-size:22px;margin:54px 0 18px;padding-bottom:10px;border-bottom:1px solid var(--border);scroll-margin-top:20px}
+  h3{font-size:17px;margin:28px 0 12px;color:var(--accent2);scroll-margin-top:20px}
+  code{font-family:var(--mono);font-size:.875em;background:var(--bg3);padding:2px 6px;border-radius:4px;border:1px solid var(--border);color:var(--cyan)}
+  pre{background:#010409;border:1px solid var(--border);border-radius:8px;padding:15px 17px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--fg2)}
+  pre code{background:none;border:none;padding:0;color:inherit}
+  .c-com{color:var(--fg3);font-style:italic}.c-good{color:var(--ok)}.c-bad{color:var(--danger)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+  th,td{border:1px solid var(--border);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--bg3);font-weight:600}
+  tr:nth-child(even) td{background:#12171e}
+  td.mono{font-family:var(--mono);font-size:12px}
+  .badge{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11.5px;font-weight:600;font-family:var(--mono);white-space:nowrap}
+  .b-ok{background:rgba(63,185,80,.16);color:var(--ok);border:1px solid rgba(63,185,80,.4)}
+  .b-warn{background:rgba(210,153,34,.16);color:var(--warn);border:1px solid rgba(210,153,34,.4)}
+  .b-danger{background:rgba(248,81,73,.16);color:var(--danger);border:1px solid rgba(248,81,73,.4)}
+  .b-info{background:rgba(88,166,255,.16);color:var(--accent);border:1px solid rgba(88,166,255,.4)}
+  .b-grey{background:rgba(118,131,144,.16);color:var(--fg3);border:1px solid rgba(118,131,144,.4)}
+  .callout{border-left:4px solid;border-radius:0 8px 8px 0;padding:13px 17px;margin:17px 0;background:var(--bg2)}
+  .callout .ct{font-weight:700;margin-bottom:5px;font-size:14px}
+  .callout p{margin:6px 0}
+  .co-info{border-color:var(--accent)}.co-info .ct{color:var(--accent)}
+  .co-warn{border-color:var(--warn);background:rgba(210,153,34,.06)}.co-warn .ct{color:var(--warn)}
+  .co-danger{border-color:var(--danger);background:rgba(248,81,73,.07)}.co-danger .ct{color:var(--danger)}
+  .co-ok{border-color:var(--ok);background:rgba(63,185,80,.06)}.co-ok .ct{color:var(--ok)}
+  .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin:18px 0}
+  .opt{border:1px solid var(--border);border-radius:10px;background:var(--bg2);overflow:hidden}
+  .opt h4{margin:0;padding:11px 15px;font-size:13.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .opt .body{padding:12px 15px;font-size:13px}
+  .opt .body p{margin:6px 0}
+  .opt.rec{border-color:rgba(63,185,80,.55);box-shadow:0 0 0 1px rgba(63,185,80,.14)}
+  .opt.rec h4{background:rgba(63,185,80,.12);color:var(--ok)}
+  .opt.alt h4{background:var(--bg3);color:var(--fg2)}
+  .opt.bad h4{background:rgba(248,81,73,.1);color:var(--danger)}
+  .pro{color:var(--ok)}.con{color:var(--danger)}
+  .pro::before{content:"＋ ";font-weight:700}.con::before{content:"－ ";font-weight:700}
+  .tl{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin:18px 0}
+  .tl .cap{font-size:12.5px;color:var(--fg3);margin-bottom:8px}
+  .tlrow{display:flex;align-items:center;margin:9px 0;font-size:12px;font-family:var(--mono)}
+  .tlrow .lbl{width:170px;flex:none;color:var(--fg2)}
+  .track{position:relative;flex:1;height:22px;background:var(--bg3);border-radius:3px;border:1px solid var(--border)}
+  .seg{position:absolute;top:0;bottom:0;border-radius:3px;display:flex;align-items:center;padding-left:6px;font-size:10.5px;color:#0d1117;font-weight:700;overflow:hidden;white-space:nowrap}
+  .seg.ok{background:var(--ok)}.seg.fail{background:var(--danger)}.seg.run{background:var(--warn)}.seg.hold{background:repeating-linear-gradient(45deg,#3d444d,#3d444d 6px,#2a3038 6px,#2a3038 12px);color:var(--fg2)}
+  .axis{display:flex;margin-left:170px;font-size:10px;color:var(--fg3);font-family:var(--mono);justify-content:space-between}
+  .footer{margin-top:66px;padding-top:24px;border-top:2px solid var(--border);font-size:13px;color:var(--fg3)}
+  ul,ol{padding-left:23px}li{margin:4px 0}
+  a{color:var(--accent2)}
+</style>
+</head>
+<body>
+<nav id="toc">
+  <div class="brand"><h2>策略决策文档</h2><p>git fetch timeout<br>BUG-0005 follow-up · v1.0</p></div>
+  <a href="#s0">0 · 需要你决定什么</a>
+  <a href="#s1">1 · 现状与真实数据</a>
+  <a href="#s2">2 · 候选方案</a>
+  <a href="#s3">3 · 四种场景的推演</a>
+  <a href="#s4">4 · 参数（若选 S1 / S2）</a>
+  <a href="#s5">5 · 独立维度：手动 vs 后台</a>
+  <a href="#s6">6 · 附带问题</a>
+  <a href="#s7">7 · 同类产品</a>
+  <a href="#s8">8 · 决策清单</a>
+  <a href="#meta">文档元数据</a>
+</nav>
+<main>
+
+<h1>Git fetch 超时策略：现状 vs 候选方案</h1>
+<p class="subtitle">BUG-0005 后续 · 代码基线 4c4580d · 分支 20261022-candidate · 2026-10-26</p>
+
+<h2 id="s0">0 · 需要你决定什么</h2>
+<div class="callout co-danger">
+  <div class="ct">一个策略问题：后台 / 手动 fetch 应该在什么情况下被终止？</div>
+  <p>现在是"运行满 20 秒就终止"，不管它是卡住了，还是正在正常下载。<code>Project_Books_Translation</code> 这次要下载 87.9 MiB，正常下载就需要 20 多秒，结果每次都在 20 秒被终止，已下载的部分作废，下一次又从零开始，所以<b>永远不会成功</b>。</p>
+  <p>超时属于调度策略。按项目规则，要由你选定方案之后才能改代码。本文档列出 4 个方案和我的推荐。</p>
+</div>
+<div class="callout co-info">
+  <div class="ct">已经确认、正在实施的部分（不需要在这里决定）</div>
+  <p>点击时如果已有 fetch 在运行，就等它完成；后台 fetch 期间按钮也转圈；手动 fetch 失败时显示原因。这些修的是"点了没反应"。<b>"<code>↓N</code> 一直不出现"要靠本文档的决定才能解决。</b></p>
+</div>
+
+<h2 id="s1">1 · 现状与真实数据</h2>
+<pre><code><span class="c-com">// electron/main/git-autofetch-manager.ts</span>
+const FETCH_TIMEOUT_MS = 20_000                                   <span class="c-com">// :62</span>
+execFile(git, ['-C', repoRoot, 'fetch', '--quiet'],
+         { env: buildFetchEnv(), timeout: FETCH_TIMEOUT_MS, ... }) <span class="c-com">// :464-467</span>
+<span class="c-com">// buildFetchEnv(): GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never, GIT_OPTIONAL_LOCKS=0,</span>
+<span class="c-com">//                  GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"</span>
+<span class="c-com">// failure → backoff min(10 min × 2^streak, 1 h); success resets the streak</span></code></pre>
+
+<table>
+  <tr><th>本次的观测（2026-10-26 诊断包）</th><th>数值</th></tr>
+  <tr><td>需要下载的数据（4 个提交、308 个 blob、主要是 PDF）</td><td class="mono">87.9 MiB（原始 105.8 MiB）</td></tr>
+  <tr><td>用户终端里 <code>git pull</code> 的 fetch 阶段</td><td class="mono">≈30.2 s</td></tr>
+  <tr><td>app 后台 fetch</td><td class="mono">20,007 ms 时被终止，<code>classified: other</code>，stderr 为空</td></tr>
+  <tr><td>被终止时已经下载的部分（<code>tmp_pack_*</code> 残留文件）</td><td class="mono">28.7 MB</td></tr>
+  <tr><td>同一主机上另外两个仓库的 fetch</td><td class="mono">44/44 成功，p50 ≈1.6 s，最长 6.8 s</td></tr>
+  <tr><td>两份 fetch 重叠时的合计下载速度</td><td class="mono">≈3.9 MB/s → 即使 app 独占带宽，也需要约 23 s</td></tr>
+</table>
+
+<div class="tl">
+  <div class="cap">现状：每次重试都从零开始，远端积累越多，需要下载的越多（示意，时间轴不按比例）</div>
+  <div class="tlrow"><span class="lbl">第 1 次 fetch</span><div class="track"><div class="seg run" style="left:0;width:20%">下载中…</div><div class="seg fail" style="left:20%;width:3%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">等待 backoff 20 min</span><div class="track"><div class="seg hold" style="left:23%;width:30%">↓N 不显示</div></div></div>
+  <div class="tlrow"><span class="lbl">第 2 次（下载更多）</span><div class="track"><div class="seg run" style="left:53%;width:20%">从零开始…</div><div class="seg fail" style="left:73%;width:3%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">等待 backoff 40 min</span><div class="track"><div class="seg hold" style="left:76%;width:24%">一直到用户手动 pull</div></div></div>
+</div>
+
+<h2 id="s2">2 · 候选方案</h2>
+<div class="opts">
+  <div class="opt rec"><h4>S1 · git 自带的低速中止 + 总上限 <span class="badge b-ok">推荐</span></h4><div class="body">
+    <p>在 fetch 的环境变量里加上 <code>GIT_HTTP_LOW_SPEED_LIMIT</code> 和 <code>GIT_HTTP_LOW_SPEED_TIME</code>：下载速度<b>持续</b>低于阈值超过指定秒数才中止，速度一回升计时就重置。ssh 在 <code>GIT_SSH_COMMAND</code> 里加 <code>ServerAliveInterval/CountMax</code>，用来发现对端没有响应。把 20 s 改成一个较长的总上限，作为最后的保障。</p>
+    <p class="pro">由传输层（curl / ssh）判断，能区分"慢但在下载"和"卡住"</p>
+    <p class="pro">只改环境变量和一个常量，代码量最小；不需要解析输出，所以不受 locale 影响</p>
+    <p class="pro">Windows / macOS / Linux 的行为一致，都是 git 和 curl 自己的逻辑</p>
+    <p class="con">只覆盖 https 和 ssh；<code>file://</code>、<code>git://</code>、<code>ext::</code> 只能靠总上限</p>
+    <p class="con">服务端打包大仓库时可能长时间不发数据。git 的 upload-pack 默认每 5 s 发一次 keepalive，通常不会误判，但 GitHub 以外的服务端需要实测</p>
+  </div></div>
+  <div class="opt alt"><h4>S2 · 解析 <code>--progress</code> 判断是否停滞 + 总上限</h4><div class="body">
+    <p>加上 <code>--progress</code>（它的优先级高于 <code>--quiet</code>），持续读取 stderr；连续 N 秒没有任何新输出就终止。</p>
+    <p class="pro">和传输协议无关，所有协议都适用</p>
+    <p class="pro">顺便拿到已下载的字节数，可以写进 trace，将来还能把进度显示在界面上（GitHub Desktop 就是这么做的）</p>
+    <p class="con">要自己实现流式读取和停滞计时器，代码量和测试量明显更大</p>
+    <p class="con">git 的进度只在计数变化时刷新，每秒最多一次；服务端准备数据的阶段可能长时间没有输出，停滞阈值需要留出余量</p>
+  </div></div>
+  <div class="opt alt"><h4>S3 · 调大固定超时（例如 60 s 或 120 s）</h4><div class="body">
+    <p>只改 <code>FETCH_TIMEOUT_MS</code>。GitLens 对所有 git 命令默认用 60 s。</p>
+    <p class="pro">改动最小，只有一行</p>
+    <p class="con">本质没变：只要需要下载的数据超过"上限 × 速度"，还是永远不会成功（1 MB/s 的网络下，120 s 只够下载 120 MB）</p>
+    <p class="con">真正卡死的连接要等更久才会被终止，期间一直占着并发名额</p>
+  </div></div>
+  <div class="opt bad"><h4>S4 · 不设超时</h4><div class="body">
+    <p>VS Code 和 GitHub Desktop 的做法。</p>
+    <p class="pro">大仓库一定能下载完</p>
+    <p class="con">一个卡死的连接会永久占用 <code>MAX_CONCURRENT_FETCHES = 3</code> 中的一个名额</p>
+    <p class="con">配合本轮的"点击时等后台那次完成"，用户的点击也会跟着一直等下去；必须再加一个"取消"按钮</p>
+  </div></div>
+</div>
+
+<h2 id="s3">3 · 四种场景的推演</h2>
+<table>
+  <tr><th>场景</th><th>现状（20 s）</th><th>S1（低速中止 + 10 min 上限）</th><th>S2（停滞 60 s + 10 min 上限）</th><th>S3（120 s）</th><th>S4（不设超时）</th></tr>
+  <tr><td><b>① 本次的情况</b>：88 MiB，约 3.9 MB/s，需要约 23 s</td><td><span class="badge b-danger">失败，永远不会成功</span></td><td><span class="badge b-ok">约 23 s 完成</span></td><td><span class="badge b-ok">约 23 s 完成</span></td><td><span class="badge b-ok">约 23 s 完成</span></td><td><span class="badge b-ok">约 23 s 完成</span></td></tr>
+  <tr><td><b>② 更大的下载量</b>：300 MiB，1.5 MB/s，需要约 210 s</td><td><span class="badge b-danger">失败</span></td><td><span class="badge b-ok">约 210 s 完成</span></td><td><span class="badge b-ok">约 210 s 完成</span></td><td><span class="badge b-danger">120 s 被终止，永远不会成功</span></td><td><span class="badge b-ok">完成</span></td></tr>
+  <tr><td><b>③ 连接卡死</b>：TCP 连上了，但之后一直没有数据</td><td><span class="badge b-ok">20 s 终止</span></td><td><span class="badge b-ok">https 约 60 s；ssh 约 60 s</span><br><span class="badge b-warn">其他协议要到 10 min 上限</span></td><td><span class="badge b-ok">60 s 终止</span></td><td><span class="badge b-warn">120 s 终止</span></td><td><span class="badge b-danger">永远不终止，一直占着名额</span></td></tr>
+  <tr><td><b>④ 网速极慢</b>：持续低于 1 KB/s</td><td><span class="badge b-ok">20 s 终止</span></td><td><span class="badge b-ok">60 s 后中止</span></td><td><span class="badge b-warn">有数据就不算停滞，一直跑到 10 min 上限</span></td><td><span class="badge b-warn">120 s 终止</span></td><td><span class="badge b-danger">几乎永远不会结束</span></td></tr>
+</table>
+
+<div class="tl">
+  <div class="cap">场景 ①（本次的情况）：横轴 0 → 120 s</div>
+  <div class="tlrow"><span class="lbl">现状 20 s</span><div class="track"><div class="seg run" style="left:0;width:16.7%">28.7 MB</div><div class="seg fail" style="left:16.7%;width:2.5%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">S1 / S2 / S3 / S4</span><div class="track"><div class="seg ok" style="left:0;width:19.2%">88 MiB ✓</div></div></div>
+</div>
+<div class="tl">
+  <div class="cap">场景 ③（连接卡死）：横轴 0 → 120 s</div>
+  <div class="tlrow"><span class="lbl">现状 20 s</span><div class="track"><div class="seg hold" style="left:0;width:16.7%">无数据</div><div class="seg fail" style="left:16.7%;width:2.5%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">S1（https / ssh）</span><div class="track"><div class="seg hold" style="left:0;width:50%">无数据</div><div class="seg fail" style="left:50%;width:2.5%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">S2 停滞 60 s</span><div class="track"><div class="seg hold" style="left:0;width:50%">无输出</div><div class="seg fail" style="left:50%;width:2.5%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">S3 120 s</span><div class="track"><div class="seg hold" style="left:0;width:97.5%">无数据</div><div class="seg fail" style="left:97.5%;width:2.5%">✕</div></div></div>
+  <div class="tlrow"><span class="lbl">S4</span><div class="track"><div class="seg hold" style="left:0;width:100%">一直占着名额 →</div></div></div>
+  <div class="axis"><span>0</span><span>30 s</span><span>60 s</span><span>90 s</span><span>120 s</span></div>
+</div>
+
+<h2 id="s4">4 · 参数（选 S1 或 S2 时需要定）</h2>
+<table>
+  <tr><th>参数</th><th>推荐值</th><th>说明</th></tr>
+  <tr><td><code>GIT_HTTP_LOW_SPEED_LIMIT</code></td><td class="mono">1000（B/s）</td><td>低于约 1 KB/s 才算"太慢"。就算 0.1 MB/s 的慢网络也远高于这个值</td></tr>
+  <tr><td><code>GIT_HTTP_LOW_SPEED_TIME</code></td><td class="mono">60（s）</td><td>速度持续低于阈值 60 s 才中止，给服务端准备数据留出余量</td></tr>
+  <tr><td>ssh <code>ServerAliveInterval</code> / <code>ServerAliveCountMax</code></td><td class="mono">15 / 4</td><td>对端约 60 s 没有响应就断开；保留现有的 <code>ConnectTimeout=10</code></td></tr>
+  <tr><td>总上限（S1 / S2 都需要）</td><td class="mono">600 s（10 min）</td><td>最后的保障，覆盖 <code>file://</code>、<code>ext::</code> 等协议，以及服务端出现异常行为的情况</td></tr>
+  <tr><td>S2 的停滞窗口</td><td class="mono">60 s</td><td>连续 60 s 没有任何 stderr 输出就终止</td></tr>
+</table>
+<p>补充：一次 fetch 最长占用一个并发名额 10 分钟（上限是 3 个），对后台功能来说可以接受。在此期间按钮会一直转圈，用户能看到"正在同步"。</p>
+
+<h2 id="s5">5 · 独立维度：手动 fetch 要不要用不同的上限</h2>
+<table>
+  <tr><th>选项</th><th>说明</th></tr>
+  <tr><td><b>D1 · 和后台一样</b> <span class="badge b-ok">推荐</span></td><td>本轮已经确定，点击会等正在运行的那次完成，所以两者本来就会共用同一次 fetch。分成两套上限反而会出现"点击等的那次 fetch 用的是后台的上限"这种情况</td></tr>
+  <tr><td>D2 · 手动的更宽松</td><td>只对新启动的手动 fetch 生效；如果点击时已经有后台 fetch 在运行，等的还是后台那一次，效果有限</td></tr>
+</table>
+
+<h2 id="s6">6 · 附带问题（可以一起决定，也可以以后再说）</h2>
+<table>
+  <tr><th>问题</th><th>现状</th><th>可选做法</th></tr>
+  <tr><td>被终止后残留的 <code>tmp_pack_*</code></td><td>这次残留了 28.7 MB，要等以后 gc 才会删除</td><td>(a) 选了 S1 / S2 以后很少会被终止，残留问题自然变小，<b>推荐</b>；(b) 终止时清理当次产生的 tmp_pack，需要识别"这个文件是不是这次产生的"，有误删正在进行的 fetch 产生的文件的风险</td></tr>
+  <tr><td>终端里正在运行 git 网络命令时，后台 fetch 也同时启动</td><td>这次两者重叠了 20 s，互相抢带宽</td><td>需要先识别命令的<b>开始</b>（现在只知道命令什么时候结束），工作量较大，建议以后单独做</td></tr>
+  <tr><td>fetch 失败时，trace 里记录已下载的字节数</td><td>只能事后去磁盘上查 <code>tmp_pack</code></td><td>选 S2 时天然就有；选 S1 时可以在失败时统计一次 <code>tmp_pack</code> 的大小（只读一次目录）</td></tr>
+</table>
+
+<h2 id="s7">7 · 同类产品</h2>
+<table>
+  <tr><th>产品</th><th>超时</th><th>来源</th></tr>
+  <tr><td>VS Code（git 扩展）</td><td>autofetch <b>不设超时</b>，只能通过取消令牌终止</td><td><a href="https://github.com/microsoft/vscode/blob/af3b54ddd0c4f81765fc218856e2e73491051092/extensions/git/src/autofetch.ts#L109-L131">autofetch.ts</a>，<a href="https://github.com/microsoft/vscode/blob/af3b54ddd0c4f81765fc218856e2e73491051092/extensions/git/src/git.ts#L218-L260">git.ts</a></td></tr>
+  <tr><td>GitHub Desktop</td><td><b>不设超时</b>（dugite 支持 AbortSignal，但 Desktop 没有使用）</td><td><a href="https://github.com/desktop/desktop/blob/bf4ec63e50eae5c5cde7043fe2eb7c94c881dd34/app/src/lib/git/core.ts#L83-L87">core.ts</a></td></tr>
+  <tr><td>GitLens</td><td>所有 git 命令默认 <b>60 s</b>，设为 0 表示不限</td><td><a href="https://github.com/gitkraken/vscode-gitlens/blob/5a7c061756ae3059973c98182c2b58e133670977/packages/git-cli/src/exec/git.ts#L1080-L1084">git.ts</a></td></tr>
+  <tr><td>JetBrains / GitKraken / Sublime Merge / Fork</td><td>没有找到相关文档</td><td>—</td></tr>
+  <tr><td>git 自带的机制</td><td><code>http.lowSpeedLimit/Time</code>：速度持续低于阈值才中止；ssh 用 <code>ServerAliveInterval</code></td><td><a href="https://github.com/git/git/blob/7e34d8174dcda3435d1404c9a30bef46afe6c13e/Documentation/config/http.adoc#L303-L309">http.adoc</a>，<a href="https://github.com/curl/curl/blob/bc677a8f16a51e728136eff130509cfac57aad19/lib/progress.c#L132-L166">curl progress.c</a>，<a href="https://man.openbsd.org/ssh_config">ssh_config(5)</a></td></tr>
+</table>
+<div class="callout co-info">
+  <div class="ct">为什么推荐 S1，而不是照搬 VS Code / GitHub Desktop 的"不设超时"</div>
+  <p>那两个产品的 fetch 都是独立的操作，没有"每个仓库最多一个、全局最多 3 个"的并发名额，也没有"点击等后台那次完成"的设计。我们的 fetch 有这两个约束，一个永远不结束的 fetch 会卡住整个仓库的同步按钮。S1 让传输层自己判断"慢"和"卡住"，既能保证大仓库下载完，又保留了对卡死连接的处理。</p>
+</div>
+
+<h2 id="s8">8 · 决策清单</h2>
+<table>
+  <tr><th>#</th><th>问题</th><th>推荐</th></tr>
+  <tr><td>1</td><td>超时策略选哪个？</td><td><b>S1</b>：低速中止 + 10 min 总上限</td></tr>
+  <tr><td>2</td><td>参数用 § 4 的推荐值吗？</td><td>1000 B/s · 60 s · ssh 15×4 · 上限 600 s</td></tr>
+  <tr><td>3</td><td>手动 fetch 用不同的上限吗？</td><td><b>D1</b>：和后台一样</td></tr>
+  <tr><td>4</td><td>附带问题本轮做不做？</td><td>只做"失败时在 trace 里记录 tmp_pack 大小"，其余以后再说</td></tr>
+</table>
+
+<div class="footer" id="meta">
+  <h3 style="margin-top:0">文档元数据</h3>
+  <table>
+    <tr><th>项目</th><th>值</th></tr>
+    <tr><td>生成分支</td><td class="mono">20261022-candidate</td></tr>
+    <tr><td>对应代码</td><td class="mono">4c4580d · app 2.0.1（dev）</td></tr>
+    <tr><td>关联档案</td><td class="mono">docs/bug-tracking/BUG-0005-autofetch-timeout-backoff-freezes-behind.md § 8c</td></tr>
+    <tr><td>诊断报告</td><td class="mono">Logs/reports/onward-diagnostic-2026-10-25_23-39-47-autofetch-fixed-timeout-kills-progressing-fetch.html</td></tr>
+    <tr><td>文档版本</td><td class="mono">v1.0</td></tr>
+  </table>
+  <h4>更新历史（只追加，不修改已有行）</h4>
+  <table>
+    <tr><th>版本</th><th>日期</th><th>分支</th><th>说明</th></tr>
+    <tr><td class="mono">v1.2</td><td class="mono">2026-10-26</td><td class="mono">20261022-candidate</td><td><b>已实现</b>（未提交）：<code>electron/main/git-fetch-policy.ts</code>，参数和 § 4 一致。验证结果：AB-17 中延迟 22 秒的 fetch 用时 22,050 ms 完成（旧方案会在 20 秒时被终止）；AB-08 在测试设定的 30 秒上限处终止（实际 30,005 ms）；<code>--repeat 3</code> 三轮全部通过。</td></tr>
+    <tr><td class="mono">v1.1</td><td class="mono">2026-10-26</td><td class="mono">20261022-candidate</td><td><b>用户已决定</b>：超时策略 <b>S1</b>（git 低速中止，参数按 § 4：1000 B/s · 60 s · ssh 15 s × 4 · 总上限 600 s）；手动 fetch 用 <b>D1</b>（和后台一样）；本轮和点击修复一起实现。附带问题按 § 8 第 4 项的推荐：只在 fetch 被终止时，在 trace 里记录 tmp_pack 的数量和大小。</td></tr>
+    <tr><td class="mono">v1.0</td><td class="mono">2026-10-26</td><td class="mono">20261022-candidate</td><td>首版。用 2026-10-26 诊断包的真实数据（87.9 MiB、约 30 s、被终止时已下载 28.7 MB）对比现状和 S1–S4 四个方案，推演四种场景，给出参数建议、手动 / 后台上限维度、附带问题和同类产品调研。推荐 S1 + D1。</td></tr>
+  </table>
+</div>
+
+</main>
+<script>
+(function(){
+  var links=[].slice.call(document.querySelectorAll('#toc a'));
+  var targets=links.map(function(a){return document.getElementById(a.getAttribute('href').slice(1))});
+  links.forEach(function(a){
+    a.addEventListener('click',function(e){
+      e.preventDefault();
+      var el=document.getElementById(a.getAttribute('href').slice(1));
+      if(!el)return;
+      window.scrollTo(0, el.getBoundingClientRect().top+window.pageYOffset-12);
+      history.replaceState(null,'',a.getAttribute('href'));
+      links.forEach(function(l){l.classList.remove('active')});
+      a.classList.add('active');
+    });
+  });
+  var pending=false;
+  window.addEventListener('scroll',function(){
+    if(pending)return; pending=true;
+    window.requestAnimationFrame(function(){
+      var y=window.pageYOffset+90,idx=0;
+      for(var i=0;i<targets.length;i++){ if(targets[i]&&targets[i].offsetTop<=y) idx=i }
+      links.forEach(function(l){l.classList.remove('active')});
+      if(links[idx])links[idx].classList.add('active');
+      pending=false;
+    });
+  },{passive:true});
+})();
+</script>
+</body>
+</html>

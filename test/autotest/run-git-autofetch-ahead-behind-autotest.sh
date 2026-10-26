@@ -9,6 +9,12 @@
 # hook) refreshes a stale behind (AB-06). The automatic fetch loop is DISABLED
 # (ONWARD_DISABLE_GIT_AUTOFETCH=1) so only the explicit force-fetch flips behind —
 # the assertion stays deterministic and cannot race the scheduler's timer.
+#
+# 2026-10-26 additions: AB-14/15 (a click during a running fetch joins it; the
+# in-flight flag reaches the renderer), AB-16 (manual failures report their
+# class), AB-17 (a fetch slower than the old fixed 20 s kill completes). The
+# fetch ceiling is shortened to FETCH_CEILING_MS for AB-08 via the autotest-only
+# ONWARD_GIT_FETCH_CEILING_MS (production: 10 min, git-fetch-policy.ts).
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,11 +29,14 @@ if [[ -z "$APP_BIN" || ! -e "$APP_BIN" ]]; then
   exit 1
 fi
 
-# 240 (not 180): AB-08 spends the manager's full 20 s fetch ceiling BY DESIGN —
-# it asserts the timeout branch — and AB-07/09/10 add convergence polling on top.
-# Still well inside the 300 s per-runner regression ceiling; if this suite ever
-# needs more, split it rather than widening further (test/README.md § 3).
+# 240: AB-08 spends the (shortened) fetch ceiling BY DESIGN, AB-17 waits 22 s by
+# design, and AB-14/15 repeat a ~3 s in-flight window 5 times. Still inside the
+# 300 s per-runner regression ceiling; if this suite ever needs more, split it
+# rather than widening further (test/README.md § 3).
 WATCHDOG_SEC="${WATCHDOG_SEC:-240}"
+# Must exceed AB-17's 22 s delay (so the slow success is not killed) and stay
+# well under ext::sleep 60 (so AB-08 is killed by the ceiling, not by sleep).
+FETCH_CEILING_MS=30000
 RUN_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/onward-${SUITE}-XXXXXX")"
 USER_DATA_DIR="$RUN_TMP_DIR/user-data"
 mkdir -p "$USER_DATA_DIR"
@@ -36,7 +45,7 @@ mkdir -p "$USER_DATA_DIR"
 # no-upstream repo is genuinely upstream-less and clones do not resolve up to
 # Onward's own .git.
 mkdir -p "$RUN_TMP_DIR/fixture"
-FIXTURE_JSON="$(ONWARD_AB_FIXTURE_DIR="$RUN_TMP_DIR/fixture" node "$REPO_ROOT/test/autotest/create-git-autofetch-ahead-behind-fixture.mjs")"
+FIXTURE_JSON="$(ONWARD_AB_FIXTURE_DIR="$RUN_TMP_DIR/fixture" ONWARD_GIT_FETCH_CEILING_MS="$FETCH_CEILING_MS" node "$REPO_ROOT/test/autotest/create-git-autofetch-ahead-behind-fixture.mjs")"
 NEUTRAL_CWD="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).neutralCwd)' "$FIXTURE_JSON")"
 MANIFEST_PATH="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).manifestPath)' "$FIXTURE_JSON")"
 
@@ -68,6 +77,7 @@ ONWARD_AUTOTEST_CWD="$NEUTRAL_CWD" \
 ONWARD_AUTOTEST_FIXTURE_EXTRA="$MANIFEST_PATH" \
 ONWARD_AUTOTEST_EXIT=1 \
 ONWARD_DISABLE_GIT_AUTOFETCH=1 \
+ONWARD_GIT_FETCH_CEILING_MS="$FETCH_CEILING_MS" \
 node "$REPO_ROOT/test/autotest/run-with-timeout.mjs" "$WATCHDOG_SEC" "$APP_BIN" > "$LOG_FILE" 2>&1 || APP_EXIT=$?
 
 echo ""
@@ -105,6 +115,18 @@ require_marker "AB-03-behind-only"
 require_marker "AB-04-diverged"
 require_marker "AB-05-no-upstream-undefined"
 require_marker "AB-06-background-fetch-flips-behind"
+require_marker "AB-07-fast-failure-carries-evidence"
+require_marker "AB-08-timeout-failure-carries-evidence"
+require_marker "AB-09-success-stamps-last-fetch-ok"
+require_marker "AB-10-failure-marks-attempt-without-success"
+require_marker "AB-11-user-fetch-ipc-succeeds"
+require_marker "AB-12-no-remote-does-not-claim-unreachable"
+require_marker "AB-13-connection-refused-reports-unreachable"
+require_marker "AB-14-click-joins-running-fetch"
+require_marker "AB-15-in-flight-published-and-cleared"
+require_marker "AB-16a-manual-failure-reports-no-remote"
+require_marker "AB-16b-manual-failure-reports-network"
+require_marker "AB-17-slow-fetch-beyond-old-ceiling-succeeds"
 
 echo ""
 echo "git ahead/behind + auto-fetch autotest passed"
