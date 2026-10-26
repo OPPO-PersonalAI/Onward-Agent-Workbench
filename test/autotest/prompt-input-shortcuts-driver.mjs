@@ -400,6 +400,19 @@ class ShortcutHarness extends ThemeUiHarness {
   async rememberFocus() { await this.page.evaluate(() => { window.__pisFocus = document.activeElement }) }
   async focusPreserved() { assert(await this.page.evaluate(() => document.activeElement === window.__pisFocus), 'Action preserves the originating DOM focus') }
 
+  // Closing Settings hands focus back to the active Task one frame later
+  // (App settings-close effect -> requestAnimationFrame -> focusIfNeeded).
+  // Wait for that restore to land before a case places its own focus: a late
+  // restore would move focus off the Prompt editor and cancel an armed Leader
+  // as 'context-changed'. Only valid where the active Tab shows a live Task.
+  async settingsFocusRestored() {
+    await eventually('Settings close restores focus to the active Task', () => this.page.evaluate(() => {
+      const activeId = window.__onwardTerminalFocusDebug?.getState().activeTerminalId ?? null
+      const focusedId = document.activeElement?.closest('.terminal-grid-cell')?.getAttribute('data-terminal-id') ?? null
+      return { activeId, focusedId }
+    }), ({ activeId, focusedId }) => Boolean(activeId) && focusedId === activeId)
+  }
+
   async idle() {
     await this.page.waitForFunction(() => {
       const sender = document.querySelector('.prompt-sender[data-tab-id="pis-main-tab"]')
@@ -2194,6 +2207,7 @@ async function crowdedTabGeometry(h) {
     await eventually('geometry locale is acknowledged', () => h.page.evaluate(() => window.electronAPI.settings.load()), settings => settings.language === language)
     await h.page.getByTestId('sidebar-settings-button').click()
     await h.page.locator('.settings-container').waitFor({ state: 'hidden' })
+    await h.settingsFocusRestored()
   }
   try {
     await h.setTargetModifier('Alt')
