@@ -48,6 +48,19 @@ export interface PromptShortcutEvent {
   actionId?: string
   reason?: string
 }
+/**
+ * The Task a leader sequence has picked for `tabId`, or null. Only an active
+ * cue owned by the same Tab whose target is still listed counts, so a stale or
+ * foreign-Tab cue never lights up a sender card.
+ */
+export function promptLeaderTargetFor(
+  view: { event: Pick<PromptShortcutEvent, 'tabId' | 'active' | 'targetId'>; targets: ReadonlyArray<{ id: string }> } | null | undefined,
+  tabId: string
+): string | null {
+  if (!view || !view.event.active || view.event.tabId !== tabId) return null
+  const targetId = view.event.targetId
+  return targetId && view.targets.some(target => target.id === targetId) ? targetId : null
+}
 export interface PromptInputPayload {
   content: string
   includePrompt: boolean

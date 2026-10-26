@@ -6,7 +6,8 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo } from 'react'
 import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react'
 import type { TerminalInfo } from '../../types/prompt'
-import { resolvePromptTargets, type PromptInputSettings } from '../../utils/prompt-input'
+import { promptLeaderTargetFor, resolvePromptTargets, type PromptInputSettings } from '../../utils/prompt-input'
+import { usePromptLeaderState } from '../../contexts/PromptActionsContext'
 import { PromptActionButton } from './PromptActionButton'
 import { useI18n } from '../../i18n/useI18n'
 import { perfTrace, perfTraceDiagnostic } from '../../utils/perf-trace'
@@ -102,6 +103,14 @@ export const PromptSender = memo(function PromptSender({
   const geometryRef = useRef(geometry)
   const taskLayoutKindRef = useRef(taskLayout.kind)
   const selectedCount = selectedTerminals.size
+  // Leader-picked Task mirrors the card selection highlight while the cue is
+  // live. Visual only: the real selection (and aria-pressed) is untouched.
+  const leaderTargetId = promptLeaderTargetFor(usePromptLeaderState(), tabId)
+  useLayoutEffect(() => {
+    if (!leaderTargetId) return
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_LEADER_CUE, { surface: 'sender-card', phase: 'state', selected: true })
+    return () => { perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_LEADER_CUE, { surface: 'sender-card', phase: 'clear' }) }
+  }, [leaderTargetId])
 
   useEffect(() => {
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, {
@@ -359,7 +368,7 @@ export const PromptSender = memo(function PromptSender({
           terminals.map((terminal, index) => (
             <div
               key={terminal.id}
-              className={`prompt-sender-terminal ${selectedTerminals.has(terminal.id) ? 'is-selected' : ''}`}
+              className={`prompt-sender-terminal ${selectedTerminals.has(terminal.id) ? 'is-selected' : ''}${leaderTargetId === terminal.id ? ' is-leader-target' : ''}`}
               // Only six rainbow accents exist; an 8-Task layout would
               // otherwise resolve `var(--rainbow-7)` to nothing and drop the
               // card's border colour entirely.
@@ -369,6 +378,7 @@ export const PromptSender = memo(function PromptSender({
               } as React.CSSProperties}
               data-terminal-id={terminal.id}
               data-slot-index={index}
+              data-leader-target={leaderTargetId === terminal.id ? 'true' : undefined}
               role="button"
               tabIndex={0}
               aria-pressed={selectedTerminals.has(terminal.id)}

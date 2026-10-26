@@ -1074,10 +1074,17 @@ body.resizing-editor-height * {
   transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 
-.prompt-sender-terminal.is-selected {
+.prompt-sender-terminal.is-selected,
+.prompt-sender-terminal.is-leader-target {
   border-color: var(--t-color, var(--accent));
   background: color-mix(in srgb, var(--t-color, var(--accent)) 12%, var(--bg-2));
   color: var(--text-1);
+}
+
+/* Leader-picked Task: same highlight as a selected card plus a ring, so it
+   still reads as "the shortcut target" when the card is already selected. */
+.prompt-sender-terminal.is-leader-target {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-color, var(--accent)) 55%, transparent);
 }
 
 .prompt-sender-terminal:hover {

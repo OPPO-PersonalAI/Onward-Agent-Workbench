@@ -421,14 +421,15 @@ class ShortcutHarness extends ThemeUiHarness {
     await this.page.waitForFunction(active => Boolean(window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active) === active, active)
     await this.page.getByTestId('prompt-leader-indicator').waitFor({ state: active ? 'visible' : 'detached' })
     if (!active) await this.page.waitForFunction(() => !document.querySelector(
-      '[data-testid="prompt-task-target-badge"], [data-testid="prompt-target-map"]'))
+      '[data-testid="prompt-task-target-badge"], [data-testid="prompt-target-map"], .prompt-sender-terminal[data-leader-target]'))
   }
 
   async choosingTargets(order) {
     await this.page.waitForFunction(count => {
       const cue = document.querySelector('[data-testid="prompt-leader-indicator"]')
       return cue?.dataset.selecting === 'true' && cue.textContent === `1–${count}` &&
-        document.querySelectorAll('.terminal-grid-wrapper:not(.terminal-grid-hidden) [data-testid="prompt-task-target-badge"]').length === count
+        document.querySelectorAll('.terminal-grid-wrapper:not(.terminal-grid-hidden) [data-testid="prompt-task-target-badge"]').length === count &&
+        !document.querySelector('.prompt-sender-terminal[data-leader-target]')
     }, order.length)
     const badges = await this.page.getByTestId('prompt-task-target-badge').evaluateAll(nodes => nodes.map(node => ({
       id: node.closest('[data-terminal-id]')?.getAttribute('data-terminal-id'), number: node.textContent,
@@ -442,10 +443,17 @@ class ShortcutHarness extends ThemeUiHarness {
     await this.page.waitForFunction(({ id, number }) => {
       const cue = document.querySelector('[data-testid="prompt-leader-indicator"]')
       const badges = [...document.querySelectorAll('[data-testid="prompt-task-target-badge"]')]
+      // Left sender mirror: exactly the picked card when the sender is shown,
+      // never another card, and the real selection (aria-pressed) untouched.
+      const senderCards = [...document.querySelectorAll('.prompt-sender-terminal[data-leader-target="true"]')]
+      const senderShown = [...document.querySelectorAll('.prompt-sender-terminal')]
+        .some(card => card.getAttribute('data-terminal-id') === id && card.getClientRects().length > 0)
+      const senderOk = senderCards.every(card => card.getAttribute('data-terminal-id') === id &&
+        card.classList.contains('is-leader-target')) && (!senderShown || senderCards.length >= 1)
       return cue?.dataset.targetId === id && cue.dataset.selecting === 'false' && cue.textContent === `→${number}` &&
         badges.length === 1 && badges[0].dataset.selected === 'true' && badges[0].textContent === String(number) &&
         badges[0].closest('[data-terminal-id]')?.getAttribute('data-terminal-id') === id &&
-        !document.querySelector('[data-testid="prompt-target-map"]')
+        !document.querySelector('[data-testid="prompt-target-map"]') && senderOk
     }, { id, number })
   }
 
