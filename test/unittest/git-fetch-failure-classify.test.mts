@@ -163,3 +163,30 @@ test('remote scheme: no field of the result can carry the URL itself', () => {
     assert.ok(allowed.has(classifyRemoteScheme(url)), `${url} → a class, not the URL`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Transport-level stall aborts (2026-10-26, option S1 in git-fetch-policy.ts)
+// ---------------------------------------------------------------------------
+
+test('classify: curl low-speed abort → timeout (not network, despite "unable to access")', () => {
+  assert.equal(
+    classifyFetchFailure(
+      'error: RPC failed; curl 28 Operation too slow. Less than 1000 bytes/sec transferred the last 60 seconds'
+    ),
+    'timeout'
+  )
+  assert.equal(
+    classifyFetchFailure(
+      "fatal: unable to access 'https://example.com/x.git/': Operation too slow. Less than 1000 bytes/sec transferred the last 60 seconds"
+    ),
+    'timeout'
+  )
+})
+
+test('classify: ssh keepalive drop → timeout', () => {
+  assert.equal(classifyFetchFailure('Timeout, server github.com not responding.\r\nfatal: the remote end hung up unexpectedly'), 'timeout')
+})
+
+test('classify: a plain connect timeout stays network (the remote was never reached)', () => {
+  assert.equal(classifyFetchFailure('ssh: connect to host example.com port 22: Connection timed out'), 'network')
+})

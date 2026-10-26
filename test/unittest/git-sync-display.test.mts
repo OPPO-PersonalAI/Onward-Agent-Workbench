@@ -14,10 +14,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import {
   resolveGitSyncDisplay,
   resolveGitSyncFreshness,
   bucketSyncAge,
+  resolveSyncButtonState,
+  syncFailureMessageKey,
+  SYNC_FAILURE_HINT_MS,
+  SYNC_FAILURE_MESSAGE_KEY_LIST,
   SYNC_RELATIVE_WINDOW_MS
 } from '../../src/components/TerminalGrid/gitSyncDisplay.ts'
 
@@ -226,5 +233,93 @@ test('age bucket: garbage degrades to "just now", never NaN in the UI', () => {
   for (const bad of [Number.NaN, -5, Number.POSITIVE_INFINITY]) {
     const b = bucketSyncAge(bad)
     assert.ok(b.unit === 'just-now' || Number.isFinite((b as { value: number }).value), String(bad))
+  }
+})
+
+// --- sync button state (BUG-0005 follow-up, user decisions 2026-10-26) ---
+// Field bundle: a click during a background fetch was dropped and the spinner
+// showed for one frame; a failed fetch showed nothing at all. These rows pin
+// what the button must show instead.
+
+const BUTTON_NOW = 1_800_000_000_000
+
+test('button: idle → click hint, not busy, no tint', () => {
+  const r = resolveSyncButtonState({ manualSyncing: false, fetchInFlight: false, failure: null, now: BUTTON_NOW })
+  assert.deepEqual(r, { busy: false, failedKind: null, titleKey: 'terminalGrid.syncClickHint' })
+})
+
+test('button: a BACKGROUND fetch spins it too (not only the user\'s own click)', () => {
+  const r = resolveSyncButtonState({ manualSyncing: false, fetchInFlight: true, failure: null, now: BUTTON_NOW })
+  assert.equal(r.busy, true)
+  assert.equal(r.titleKey, 'terminalGrid.syncInProgress')
+})
+
+test('button: the user\'s own click spins it', () => {
+  const r = resolveSyncButtonState({ manualSyncing: true, fetchInFlight: false, failure: null, now: BUTTON_NOW })
+  assert.equal(r.busy, true)
+})
+
+test('button: busy wins over a fresh failure (a new attempt is the newest fact)', () => {
+  const r = resolveSyncButtonState({
+    manualSyncing: false,
+    fetchInFlight: true,
+    failure: { kind: 'timeout', at: BUTTON_NOW - 1_000 },
+    now: BUTTON_NOW
+  })
+  assert.equal(r.busy, true)
+  assert.equal(r.failedKind, null)
+  assert.equal(r.titleKey, 'terminalGrid.syncInProgress')
+})
+
+test('button: a manual failure tints it and names the class, inside the window', () => {
+  const r = resolveSyncButtonState({
+    manualSyncing: false,
+    fetchInFlight: false,
+    failure: { kind: 'timeout', at: BUTTON_NOW - (SYNC_FAILURE_HINT_MS - 1) },
+    now: BUTTON_NOW
+  })
+  assert.deepEqual(r, { busy: false, failedKind: 'timeout', titleKey: 'terminalGrid.syncFailed.timeout' })
+})
+
+test('button: the window boundary belongs to "expired"', () => {
+  const r = resolveSyncButtonState({
+    manualSyncing: false,
+    fetchInFlight: false,
+    failure: { kind: 'network', at: BUTTON_NOW - SYNC_FAILURE_HINT_MS },
+    now: BUTTON_NOW
+  })
+  assert.equal(r.failedKind, null)
+  assert.equal(r.titleKey, 'terminalGrid.syncClickHint')
+})
+
+test('button: a failure stamped in the future (clock skew) or NaN does not tint', () => {
+  for (const at of [BUTTON_NOW + 5_000, Number.NaN]) {
+    const r = resolveSyncButtonState({ manualSyncing: false, fetchInFlight: false, failure: { kind: 'auth', at }, now: BUTTON_NOW })
+    assert.equal(r.failedKind, null, String(at))
+  }
+})
+
+test('button: the hint window is the decided 15 s', () => {
+  assert.equal(SYNC_FAILURE_HINT_MS, 15_000)
+})
+
+test('failure copy: every class maps to its own key; unknown degrades to "other"', () => {
+  assert.equal(syncFailureMessageKey('timeout'), 'terminalGrid.syncFailed.timeout')
+  assert.equal(syncFailureMessageKey('network'), 'terminalGrid.syncFailed.network')
+  assert.equal(syncFailureMessageKey('auth'), 'terminalGrid.syncFailed.auth')
+  assert.equal(syncFailureMessageKey('no-remote'), 'terminalGrid.syncFailed.noRemote')
+  assert.equal(syncFailureMessageKey('other'), 'terminalGrid.syncFailed.other')
+  assert.equal(syncFailureMessageKey('something-new'), 'terminalGrid.syncFailed.other')
+  assert.equal(syncFailureMessageKey(null), 'terminalGrid.syncFailed.other')
+  assert.equal(syncFailureMessageKey('toString'), 'terminalGrid.syncFailed.other', 'no prototype leakage')
+})
+
+test('failure copy: every key exists in BOTH en and zh-CN dictionaries', () => {
+  const dictPath = fileURLToPath(new URL('../../src/i18n/core.ts', import.meta.url))
+  const source = readFileSync(dictPath, 'utf8')
+  assert.equal(SYNC_FAILURE_MESSAGE_KEY_LIST.length, 5)
+  for (const key of SYNC_FAILURE_MESSAGE_KEY_LIST) {
+    const occurrences = source.split(`'${key}':`).length - 1
+    assert.equal(occurrences, 2, `${key} must be defined once per locale (en + zh-CN)`)
   }
 })

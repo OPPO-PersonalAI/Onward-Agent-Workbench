@@ -16,7 +16,7 @@ import { ProjectEditor } from '../ProjectEditor'
 import { SubpageSubtreeFreeze } from './SubpageSubtreeFreeze'
 import { SubpagePanelShell, type SubpagePanelShellState } from '../SubpageSwitcher'
 import { CodingAgentModal } from '../CodingAgentModal'
-import type { CodingAgentConfigInput, GitStateMirrorSnapshot, GitStateMirrorDelta, TerminalGitStatus } from '../../types/electron'
+import type { CodingAgentConfigInput, GitFetchNowResult, GitStateMirrorSnapshot, GitStateMirrorDelta, TerminalGitStatus } from '../../types/electron'
 import { BrowserPanel } from '../BrowserPanel/BrowserPanel'
 import { decideTaskNameAutoFollow } from './auto-follow-name'
 import { useTaskRearrange } from './useTaskRearrange'
@@ -64,7 +64,14 @@ import {
   removeMirrorAlias,
   resolveTerminalGitDisplayState
 } from './gitStatusIdentity'
-import { resolveGitSyncDisplay, resolveGitSyncFreshness, bucketSyncAge } from './gitSyncDisplay'
+import {
+  resolveGitSyncDisplay,
+  resolveGitSyncFreshness,
+  bucketSyncAge,
+  resolveSyncButtonState,
+  SYNC_FAILURE_HINT_MS,
+  type SyncFailureKind
+} from './gitSyncDisplay'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
 import { PromptTaskTargetBadge, PromptTargetMap } from '../PromptNotebook/PromptLeaderIndicator'
@@ -383,6 +390,9 @@ export const TerminalGrid = memo(function TerminalGrid({
     ahead: number
     behind: number
     syncKind: string
+    fetchInFlight: boolean
+    buttonBusy: boolean
+    buttonFailedKind: SyncFailureKind | null
   }>>({})
   /**
    * Per-cwd throttle for the mirror-update diagnostic. A single `git pull` that
@@ -393,6 +403,15 @@ export const TerminalGrid = memo(function TerminalGrid({
   const mirrorUpdateTraceAtRef = useRef<Map<string, number>>(new Map())
   /** repoRoots with a user-initiated fetch in flight — keeps the badge idempotent. */
   const [syncingRepoRoots, setSyncingRepoRoots] = useState<ReadonlySet<string>>(() => new Set())
+  /**
+   * repoRoot → the last MANUAL fetch failure, shown as a warning tint + reason
+   * on the sync button for SYNC_FAILURE_HINT_MS (user decision 2026-10-26).
+   * Background failures never land here — they stay silent by design.
+   */
+  const [syncFailures, setSyncFailures] = useState<ReadonlyMap<string, { kind: SyncFailureKind; at: number }>>(
+    () => new Map()
+  )
+  const syncFailureTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   /** Sampled on hover so the tooltip's "X minutes ago" is honest without a timer. */
   const [branchTooltipNow, setBranchTooltipNow] = useState<number>(() => Date.now())
   // macOS canonicalises `/var/...` to `/private/var/...` (the actual mount
@@ -778,7 +797,9 @@ export const TerminalGrid = memo(function TerminalGrid({
           deltaKeyCount: deltaKeys.length,
           hasAheadBehind: deltaKeys.includes('ahead') || deltaKeys.includes('behind'),
           hasFetchFreshness:
-            deltaKeys.includes('lastFetchOkAt') || deltaKeys.includes('lastFetchAttemptAt')
+            deltaKeys.includes('lastFetchOkAt') ||
+            deltaKeys.includes('lastFetchAttemptAt') ||
+            deltaKeys.includes('fetchInFlight')
         })
       }
       setMirrorSnapshots((prev) => mergeMirrorDeltaSnapshot(prev, cwd, typedDelta))
@@ -1154,13 +1175,26 @@ export const TerminalGrid = memo(function TerminalGrid({
         now: Date.now(),
         hasUpstream: gitState.ahead !== null || gitState.behind !== null
       })
+      // What the sync BUTTON painted — same pure decision as the render pass,
+      // so a bundle shows the spinner and the failure tint turning on and off
+      // (including the 15 s expiry and a newer fetch superseding it).
+      const signalRepoRoot = gitState.mirror?.repoRoot ?? null
+      const buttonSignal = resolveSyncButtonState({
+        manualSyncing: signalRepoRoot ? syncingRepoRoots.has(signalRepoRoot) : false,
+        fetchInFlight: gitState.fetchInFlight,
+        failure: signalRepoRoot ? syncFailures.get(signalRepoRoot) ?? null : null,
+        now: Date.now()
+      })
       const signal = {
         cwd: gitState.normalizedCwd ?? cwd,
         branch,
         status,
         ahead: syncSignal.ahead,
         behind: syncSignal.behind,
-        syncKind: freshnessSignal.kind
+        syncKind: freshnessSignal.kind,
+        fetchInFlight: gitState.fetchInFlight,
+        buttonBusy: buttonSignal.busy,
+        buttonFailedKind: buttonSignal.failedKind
       }
       const previous = lastRenderedGitSignalRef.current[termInfo.id]
       if (!previous || previous.branch !== signal.branch) {
@@ -1186,14 +1220,22 @@ export const TerminalGrid = memo(function TerminalGrid({
         !previous ||
         previous.ahead !== signal.ahead ||
         previous.behind !== signal.behind ||
-        previous.syncKind !== signal.syncKind
+        previous.syncKind !== signal.syncKind ||
+        previous.fetchInFlight !== signal.fetchInFlight ||
+        previous.buttonBusy !== signal.buttonBusy ||
+        previous.buttonFailedKind !== signal.buttonFailedKind
       ) {
+        // The button fields make "the button never spun" / "no failure was
+        // shown" checkable from a user-attached bundle rather than a guess.
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_TERMINAL_TITLE_SYNC_RENDERED, {
           terminalId: termInfo.id,
           cwd: signal.cwd,
           ahead: signal.ahead,
           behind: signal.behind,
-          syncKind: signal.syncKind
+          syncKind: signal.syncKind,
+          fetchInFlight: signal.fetchInFlight,
+          buttonBusy: signal.buttonBusy,
+          buttonFailedKind: signal.buttonFailedKind
         })
       }
       nextSignals[termInfo.id] = signal
@@ -1205,7 +1247,9 @@ export const TerminalGrid = memo(function TerminalGrid({
     terminalInfos,
     oscDetectedCwds,
     mirrorSnapshots,
-    mirrorSnapshotAliases
+    mirrorSnapshotAliases,
+    syncingRepoRoots,
+    syncFailures
   ])
 
 
@@ -1222,25 +1266,99 @@ export const TerminalGrid = memo(function TerminalGrid({
     if (!repoRoot) return
     if (syncingRepoRoots.has(repoRoot)) return
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_GIT_SYNC_FETCH_CLICKED, { cwd: cwd ?? null })
+    const startedAt = performance.now()
     setSyncingRepoRoots((prev) => {
       const next = new Set(prev)
       next.add(repoRoot)
       return next
     })
+    // A new attempt supersedes the previous failure hint.
+    setSyncFailures((prev) => {
+      if (!prev.has(repoRoot)) return prev
+      const next = new Map(prev)
+      next.delete(repoRoot)
+      return next
+    })
+    let outcome: GitFetchNowResult | null = null
     try {
-      await window.electronAPI?.git?.fetchNow?.(repoRoot)
+      // Resolves when the fetch SETTLES — including when the click joined a
+      // background fetch that was already running. The spinner therefore stays
+      // up for the whole run instead of one frame (2026-10-26 field bundle).
+      outcome = (await window.electronAPI?.git?.fetchNow?.(repoRoot)) ?? null
     } catch {
-      // Outcome detail lives in the trace; the badge only reflects done-ness.
+      outcome = null
     } finally {
+      const ok = outcome?.ok === true
+      const failure: SyncFailureKind | null = ok ? null : (outcome?.failure ?? 'other')
+      // Pairs with `fetch-clicked`: a click without a settle means the IPC never
+      // returned; a settle with `failure` is exactly what the button showed.
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_GIT_SYNC_FETCH_SETTLED, {
+        cwd: cwd ?? null,
+        ok,
+        joined: outcome?.joined === true,
+        failure,
+        durationMs: Math.round(performance.now() - startedAt)
+      })
       setSyncingRepoRoots((prev) => {
         const next = new Set(prev)
         next.delete(repoRoot)
         return next
       })
+      const timers = syncFailureTimersRef.current
+      const pendingTimer = timers.get(repoRoot)
+      if (pendingTimer) {
+        clearTimeout(pendingTimer)
+        timers.delete(repoRoot)
+      }
+      if (failure) {
+        const at = Date.now()
+        setSyncFailures((prev) => new Map(prev).set(repoRoot, { kind: failure, at }))
+        // Re-render when the hint expires; only clear the entry this click set.
+        timers.set(repoRoot, setTimeout(() => {
+          timers.delete(repoRoot)
+          setSyncFailures((prev) => {
+            if (prev.get(repoRoot)?.at !== at) return prev
+            const next = new Map(prev)
+            next.delete(repoRoot)
+            return next
+          })
+        }, SYNC_FAILURE_HINT_MS))
+      }
       // Re-date the tooltip so a success reads "just now" immediately.
       setBranchTooltipNow(Date.now())
     }
   }, [syncingRepoRoots])
+
+  // A NEW fetch starting (manual or background) supersedes an old failure hint,
+  // so the tint does not reappear for the rest of its window once that newer
+  // fetch settles. Keyed on the idle → in-flight EDGE, not on "in flight now":
+  // the settle delta (`fetchInFlight: false`, mirror channel) and the IPC reply
+  // that records the failure travel on different channels with no ordering
+  // guarantee, and a level check would erase a failure whose reply won the race.
+  const prevFetchInFlightRootsRef = useRef<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    const inFlightNow = new Set<string>()
+    for (const snapshot of Object.values(mirrorSnapshots)) {
+      if (snapshot?.fetchInFlight && snapshot.repoRoot) inFlightNow.add(snapshot.repoRoot)
+    }
+    const inFlightBefore = prevFetchInFlightRootsRef.current
+    prevFetchInFlightRootsRef.current = inFlightNow
+    const newlyStarted = [...inFlightNow].filter((root) => !inFlightBefore.has(root) && syncFailures.has(root))
+    if (newlyStarted.length === 0) return
+    setSyncFailures((prev) => {
+      const next = new Map(prev)
+      for (const root of newlyStarted) next.delete(root)
+      return next
+    })
+  }, [mirrorSnapshots, syncFailures])
+
+  useEffect(() => {
+    const timers = syncFailureTimersRef.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
 
   const formatCompactPath = useCallback((cwd: string): string => {
     const trimmed = cwd.trim()
@@ -3260,7 +3378,14 @@ export const TerminalGrid = memo(function TerminalGrid({
             })
             const branchRepoRoot = gitState.mirror?.repoRoot ?? null
             const branchCanSync = Boolean(branchRepoRoot)
-            const branchSyncing = branchRepoRoot ? syncingRepoRoots.has(branchRepoRoot) : false
+            // Spins for background fetches too (`fetchInFlight` from main), and
+            // carries the last manual failure's reason for a short window.
+            const syncButton = resolveSyncButtonState({
+              manualSyncing: branchRepoRoot ? syncingRepoRoots.has(branchRepoRoot) : false,
+              fetchInFlight: gitState.fetchInFlight,
+              failure: branchRepoRoot ? syncFailures.get(branchRepoRoot) ?? null : null,
+              now: Date.now()
+            })
             const branchStatusClass = sync.dotState !== 'clean'
               ? `terminal-grid-branch--${sync.dotState}`
               : ''
@@ -3528,11 +3653,14 @@ export const TerminalGrid = memo(function TerminalGrid({
                         {branchCanSync && (
                           <button
                             type="button"
-                            className="terminal-grid-branch-sync"
-                            title={branchSyncing ? t('terminalGrid.syncInProgress') : t('terminalGrid.syncClickHint')}
+                            className={syncButton.failedKind
+                              ? 'terminal-grid-branch-sync terminal-grid-branch-sync--failed'
+                              : 'terminal-grid-branch-sync'}
+                            title={t(syncButton.titleKey)}
                             aria-label={t('terminalGrid.syncAria')}
-                            aria-busy={branchSyncing || undefined}
-                            disabled={branchSyncing}
+                            aria-busy={syncButton.busy || undefined}
+                            data-sync-failure={syncButton.failedKind ?? undefined}
+                            disabled={syncButton.busy}
                             onClick={(e) => {
                               e.stopPropagation()
                               void handleBranchSync(branchRepoRoot, gitState.normalizedCwd)

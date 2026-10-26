@@ -103,6 +103,14 @@ export interface MirrorState {
    * it is outside the app's control and the user can recognise it instantly.
    */
   remoteUnreachable?: boolean
+  /**
+   * True while a `git fetch` for this repo is running — background, manual or
+   * forced. Drives the sync button's spinner for background fetches too (user
+   * decision 2026-10-26): the dropped-click field report came from a user who
+   * could not see that a fetch was already in flight. Replaced on every
+   * publish (never merged), like {@link remoteUnreachable}.
+   */
+  fetchInFlight?: boolean
   /** Status colour bucket — drives the terminal-grid-branch--{status} className. */
   status: TerminalGitStatus | null
   /** File list (unstaged + staged + untracked). Empty array when clean. */
@@ -176,6 +184,8 @@ export interface GitFetchFreshness {
   lastFetchOkAt?: number
   lastFetchAttemptAt?: number
   remoteUnreachable?: boolean
+  /** See {@link MirrorState.fetchInFlight}. */
+  fetchInFlight?: boolean
 }
 
 export type MirrorDelta = Partial<Omit<MirrorState, 'cwd' | 'capturedAt'>> & {

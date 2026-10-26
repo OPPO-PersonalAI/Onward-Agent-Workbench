@@ -42,6 +42,8 @@ export interface TerminalGitDisplayState {
   lastFetchAttemptAt: number | null
   /** Last attempt could not reach the remote. See MirrorState.remoteUnreachable. */
   remoteUnreachable: boolean
+  /** A fetch for this repo is running right now (background or manual). */
+  fetchInFlight: boolean
 }
 
 function collapsePathSegments(value: string): string {
@@ -187,6 +189,7 @@ export function resolveTerminalGitDisplayState(input: {
     behind: mirror?.behind ?? null,
     lastFetchOkAt: mirror?.lastFetchOkAt ?? null,
     lastFetchAttemptAt: mirror?.lastFetchAttemptAt ?? null,
-    remoteUnreachable: mirror?.remoteUnreachable === true
+    remoteUnreachable: mirror?.remoteUnreachable === true,
+    fetchInFlight: mirror?.fetchInFlight === true
   }
 }

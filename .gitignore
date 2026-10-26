@@ -37,6 +37,9 @@ logs/
 # alone would not cover `Logs/` there, only on Windows (core.ignorecase=true).
 Logs/
 .DS_Store
+# macOS AppleDouble metadata (resource forks / xattrs written as `._<name>` when
+# files pass through non-APFS volumes, archives, or network shares).
+._*
 # Local scheduled-task lock and other .claude/*.lock files produced by skill runtimes.
 .claude/*.lock
 # Per-developer Claude Code permission overrides. These vary by machine and

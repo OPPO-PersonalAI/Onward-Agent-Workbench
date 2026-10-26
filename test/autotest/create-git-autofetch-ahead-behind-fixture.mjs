@@ -18,8 +18,16 @@
 //   fail-fetch/   origin repointed at a non-existent path → fetch fails FAST
 //                 with a real exit code + stderr (BUG-0005 R4 payload proof)
 //   timeout-fetch/ origin uses git's ext:: transport running `sleep` → the fetch
-//                 hangs and is killed by the 20 s ceiling, reproducing the field
-//                 failure mode whose stderr used to be discarded
+//                 hangs and is killed by the wall-clock ceiling (shortened by the
+//                 runner via ONWARD_GIT_FETCH_CEILING_MS), proving a ceiling kill
+//                 still carries classified stderr
+//   slow-fail-fetch/ origin is `ext::sleep 3` → every fetch stays in flight for
+//                 ~3 s and then fails. A deterministic in-flight window for the
+//                 join (AB-14) and in-flight publish (AB-15) cases
+//   slow-ok-fetch/ origin waits 22 s and THEN serves the real bare remote, one
+//                 commit behind → a fetch slower than the OLD fixed 20 s kill must
+//                 now complete and flip behind 0 → 1 (AB-17, the 2026-10-26 field
+//                 case: a binary-heavy repo whose fetch took ~30 s)
 //   unreachable/  origin points at a dead local port → connection REFUSED, which
 //                 classifies as 'network' — the only failure the UI surfaces
 //   neutral/      the app's terminal cwd (not a git repo, never auto-subscribed)
@@ -147,6 +155,30 @@ const timeoutFetch = cloneFrom('timeout-fetch')
 git(timeoutFetch, ['config', 'protocol.ext.allow', 'always'])
 git(timeoutFetch, ['config', 'remote.origin.url', 'ext::sleep 60'])
 
+// slow-fail-fetch (AB-14/AB-15): an in-flight window of ~3 s that always ends
+// in a fast, ordinary failure — long enough to click into, short enough to
+// repeat N=5 times inside the runner budget.
+const slowFailFetch = cloneFrom('slow-fail-fetch')
+git(slowFailFetch, ['config', 'protocol.ext.allow', 'always'])
+git(slowFailFetch, ['config', 'remote.origin.url', 'ext::sleep 3'])
+
+// slow-ok-fetch (AB-17): delay 22 s, then speak the real protocol against the
+// bare remote. The local branch and its remote-tracking ref are both rewound one
+// commit so a completed fetch is observable as behind 0 → 1.
+// ext:: escaping: `% ` is a literal space and `%%` a literal percent; forward
+// slashes keep a Windows path valid for both sh and git.exe.
+const SLOW_OK_DELAY_SEC = 22
+const extRemotePath = remote.replace(/\\/g, '/').replace(/%/g, '%%').replace(/ /g, '% ')
+const slowOkFetch = cloneFrom('slow-ok-fetch')
+git(slowOkFetch, ['reset', '--hard', 'HEAD~1'])
+git(slowOkFetch, ['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+git(slowOkFetch, ['config', 'protocol.ext.allow', 'always'])
+git(slowOkFetch, [
+  'config',
+  'remote.origin.url',
+  `ext::sh -c sleep% ${SLOW_OK_DELAY_SEC};exec% git% upload-pack% '${extRemotePath}'`
+])
+
 // unreachable: origin points at a port nothing listens on, so the connection is
 // REFUSED instantly (no waiting). git prints "Connection refused", which
 // classifyFetchFailure buckets as 'network' — the one failure class the UI is
@@ -177,6 +209,12 @@ const manifest = {
   fetchBehind,
   failFetch,
   timeoutFetch,
+  slowFailFetch,
+  slowOkFetch,
+  slowOkDelaySec: SLOW_OK_DELAY_SEC,
+  // The runner passes the same ONWARD_GIT_FETCH_CEILING_MS it gives the app, so
+  // AB-08 can assert the kill happened AT the configured ceiling.
+  fetchCeilingMs: Number.parseInt(process.env.ONWARD_GIT_FETCH_CEILING_MS ?? '', 10) || null,
   unreachable,
   noUpstream,
   neutralCwd

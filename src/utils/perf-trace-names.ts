@@ -805,6 +805,15 @@ export const PERF_TRACE_EVENT = {
    * a recovery path nobody can prove was taken is not a recovery path.
    */
   RENDERER_GIT_SYNC_FETCH_CLICKED: 'renderer:git-sync.fetch-clicked',
+  /**
+   * The sync-button click got its answer: `ok`, `joined` (attached to a fetch
+   * that was already running), `failure` (the class the button then shows) and
+   * `durationMs`. Closes the pairing `fetch-clicked` → `git-fetch.user-requested`
+   * → `fetch-settled`; a click with no settle means the IPC never returned. Added
+   * for the 2026-10-26 field bundle, where 5 clicks produced no observable
+   * outcome. Diagnostic tier, one per click.
+   */
+  RENDERER_GIT_SYNC_FETCH_SETTLED: 'renderer:git-sync.fetch-settled',
   WORKER_GIT_STATE_MIRROR_WATCHER_FIRE: 'worker:git-state-mirror.watcher-fire',
   WORKER_GIT_STATE_MIRROR_WATCHER_FILTERED: 'worker:git-state-mirror.watcher-filtered',
   WORKER_GIT_STATE_MIRROR_WATCHER_SKIPPED: 'worker:git-state-mirror.watcher-skipped',
@@ -931,7 +940,8 @@ export const PERF_TRACE_EVENT = {
    * The user asked for a fetch by clicking the Task branch badge. Distinguishes
    * user-driven from scheduled fetches in the outcome events that follow, and
    * proves the recovery path was reachable at all — before this existed the app
-   * had no manual fetch affordance.
+   * had no manual fetch affordance. `joined` = the click attached to a fetch
+   * that was already running (it used to be dropped silently on that path).
    */
   MAIN_GIT_FETCH_USER_REQUESTED: 'main:git-fetch.user-requested',
   RENDERER_TERMINAL_TITLE_BRANCH_RENDERED: 'renderer:terminal-title.branch-rendered',

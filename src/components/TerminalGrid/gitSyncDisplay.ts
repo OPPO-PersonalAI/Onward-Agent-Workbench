@@ -27,6 +27,7 @@
  */
 
 import type { TerminalGitStatus } from '../../types/electron'
+import type { TranslationKey } from '../../i18n/core'
 
 /** The class suffix the dot renders with — the six tree states plus `ahead`. */
 export type GitBadgeDotState = TerminalGitStatus | 'ahead'
@@ -204,4 +205,73 @@ export function bucketSyncAge(ageMs: number): SyncAgeBucket {
   if (safe < 60_000) return { unit: 'just-now' }
   if (safe < 3_600_000) return { unit: 'minutes', value: Math.floor(safe / 60_000) }
   return { unit: 'hours', value: Math.floor(safe / 3_600_000) }
+}
+
+/**
+ * How long the sync button keeps its warning tint after a failed MANUAL fetch.
+ * Bounded so a transient failure does not leave the badge alarmed for the rest
+ * of the session; a new fetch clears it sooner (the spinner takes over).
+ */
+export const SYNC_FAILURE_HINT_MS = 15_000
+
+/** Failure classes a manual fetch reports back (mirrors the main-side classifier). */
+export type SyncFailureKind = 'timeout' | 'auth' | 'no-remote' | 'network' | 'other'
+
+const SYNC_FAILURE_MESSAGE_KEYS: Record<SyncFailureKind, TranslationKey> = {
+  timeout: 'terminalGrid.syncFailed.timeout',
+  network: 'terminalGrid.syncFailed.network',
+  auth: 'terminalGrid.syncFailed.auth',
+  'no-remote': 'terminalGrid.syncFailed.noRemote',
+  other: 'terminalGrid.syncFailed.other'
+}
+
+/** Every i18n key {@link syncFailureMessageKey} can return (for dictionary checks). */
+export const SYNC_FAILURE_MESSAGE_KEY_LIST: readonly TranslationKey[] = Object.values(SYNC_FAILURE_MESSAGE_KEYS)
+
+/** i18n key for the button tooltip after a failed manual fetch. Unknown → `other`. */
+export function syncFailureMessageKey(kind: SyncFailureKind | string | null | undefined): TranslationKey {
+  if (kind && Object.prototype.hasOwnProperty.call(SYNC_FAILURE_MESSAGE_KEYS, kind)) {
+    return SYNC_FAILURE_MESSAGE_KEYS[kind as SyncFailureKind]
+  }
+  return SYNC_FAILURE_MESSAGE_KEYS.other
+}
+
+export interface SyncButtonState {
+  /** Spin + disable. */
+  busy: boolean
+  /** Non-null while the warning tint is shown. */
+  failedKind: SyncFailureKind | null
+  /** i18n key for the button's own tooltip. */
+  titleKey: TranslationKey
+}
+
+/**
+ * Decide what the badge's sync button shows (BUG-0005 follow-up, user decisions
+ * 2026-10-26):
+ *   1. Any fetch in flight — the user's own click OR a background fetch — spins
+ *      the button and disables it (GitHub Desktop's treatment). Busy wins over a
+ *      stale failure: a new attempt is the freshest fact.
+ *   2. Otherwise a manual failure younger than {@link SYNC_FAILURE_HINT_MS}
+ *      tints the button and names the failure class.
+ *   3. Otherwise the idle "click to sync" hint.
+ * Background failures never reach `failure` — the caller only records failures
+ * of fetches the user asked for.
+ */
+export function resolveSyncButtonState(input: {
+  manualSyncing: boolean
+  fetchInFlight: boolean
+  failure: { kind: SyncFailureKind; at: number } | null | undefined
+  now: number
+}): SyncButtonState {
+  if (input.manualSyncing || input.fetchInFlight) {
+    return { busy: true, failedKind: null, titleKey: 'terminalGrid.syncInProgress' }
+  }
+  const failure = input.failure
+  if (failure && Number.isFinite(failure.at)) {
+    const age = input.now - failure.at
+    if (age >= 0 && age < SYNC_FAILURE_HINT_MS) {
+      return { busy: false, failedKind: failure.kind, titleKey: syncFailureMessageKey(failure.kind) }
+    }
+  }
+  return { busy: false, failedKind: null, titleKey: 'terminalGrid.syncClickHint' }
 }

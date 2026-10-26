@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 | Field | Value |
 |---|---|
-| **Status** | **FIXED 2026-08-04** — strategy decisions R1 (A+B), R2 (no change), R3 (A) confirmed by the user against `docs/html/git-autofetch-recovery-strategy-options.html`; all five changes landed with paired unit + autotest coverage. Awaiting a field bundle to confirm WHY the user's two repos time out (§ 8 remains open — that is a data question the fix now makes answerable, not a code question) |
+| **Status** | **REOPENED 2026-10-26** — a field bundle answered § 8 Q1 (the timeouts are payload-bound: a fetch that is still transferring is killed at 20 s, see § 8c) and exposed a new defect: a sync-button click during an in-flight fetch is silently dropped. Click fix (C1–C3) in progress; timeout strategy awaiting the user's decision against `docs/html/git-fetch-timeout-strategy-options.html`. Previous status, kept for the trail: **FIXED 2026-08-04** — strategy decisions R1 (A+B), R2 (no change), R3 (A) confirmed by the user against `docs/html/git-autofetch-recovery-strategy-options.html`; all five changes landed with paired unit + autotest coverage. Awaiting a field bundle to confirm WHY the user's two repos time out (§ 8 remains open — that is a data question the fix now makes answerable, not a code question) |
 | **Reported** | 2026-08-01 (bundle generated 2026-08-01T15:40:17.954Z) |
 | **Analyzed** | 2026-08-03 |
 | **Code baseline** | `5ea30c6` (all `file:line` references below are pinned to this commit) |
@@ -15,6 +15,8 @@ SPDX-License-Identifier: Apache-2.0
 | **Bundle** | `Logs/task 状态栏显示 git 分支跟远端的差异功能的似乎更新有延迟 - onward-diagnostic-2026-08-01_23-40-17.zip` |
 | **Report** | `Logs/reports/…-autofetch-timeout-backoff-freezes-behind.html` |
 | **Affected repos in bundle** | `Project_Books_Translation` (user-identified), `Project_Forward` — both 0/2 fetch success. `BattleProject` 3/5 success, unaffected |
+| **Follow-up bundle (2026-10-26)** | `Logs/onward-diagnostic-2026-10-25_23-39-47.zip` — dev `2.0.1` (`20261022-candidate`, code `4c4580d`), darwin arm64, Electron 43.2.0 |
+| **Follow-up report** | `Logs/reports/onward-diagnostic-2026-10-25_23-39-47-autofetch-fixed-timeout-kills-progressing-fetch.html` |
 
 ---
 
@@ -200,6 +202,16 @@ Run these in order. Steps 1–3 usually settle it in under five minutes.
    succeed, the network is fine and the cause is repo-specific.
 6. **If P0 instrumentation has landed**, read `failed.stderrTail` / `classified` /
    `remoteScheme` directly — that is what this bug file exists to make possible.
+7. **Check the click pairing (added 2026-10-26).** Every `renderer:git-sync.fetch-clicked` must be
+   followed by a `main:git-fetch.user-requested` (with `joined` once C1 lands) and a
+   `renderer:git-sync.fetch-settled`. Clicks without a `user-requested` = the dropped-click defect
+   of § 8c; confirm with a `priority-retry reason:"in-flight"` in the same second.
+8. **Slow-but-progressing vs wedged (added 2026-10-26).** `classified:"other"` + empty stderr +
+   `killedByTimeout` cannot tell them apart in the trace (fetch runs with `--quiet`). Ask for, or
+   look at, `.git/objects/pack/tmp_pack_*` in the affected repo: a leftover whose mtime equals the
+   kill time and whose size is large proves data was still arriving. Then size the pending payload
+   read-only with `git rev-list --objects <local>..<remote-tip> | cut -d' ' -f1 | git cat-file
+   --batch-check='%(objectsize:disk)'` once the user has pulled.
 
 ---
 
@@ -285,6 +297,102 @@ such records and zero useful ones. Both steady-state refusals
   and the new fixture repos use git's own shell (`ext::sleep`) and `path`-built
   paths. It has not been run on a Windows host.
 
+---
+
+## 8c. Field follow-up 2026-10-26 (reopened)
+
+**Symptom (user's words, translated in place):** "Why doesn't the Task title show whether the
+remote has more commits than local? It only shows a clickable refresh button, and clicking it does
+nothing. I'm sure some repos (e.g. `Project_Books_Translation`) have more commits on the remote."
+Two independent facts: (A) no `↓N`; (B) the sync button click has no visible effect.
+
+### Conclusion 1 (Confirmed) — § 8 Q1 answered: the timeouts are payload-bound, not hangs
+
+| Time (UTC) | Event | Key args |
+|---|---|---|
+| 06:37:37.552 | `worker:git-state-mirror.watcher-filtered` (`.git/FETCH_HEAD`) | the user's own terminal `git pull` starts fetching |
+| 06:37:42.829 | `main:git-autofetch.started` | the app's background fetch starts (5.3 s later) |
+| 06:38:02.856 | `main:git-autofetch.failed` | `reason timeout`, `durationMs 20007`, `killedByTimeout true`, `classified other`, `exitCode null`, `remoteScheme https`, stderr empty |
+| 06:38:07.690 | watcher: `refs/remotes/origin/main.lock` deleted | the terminal fetch finishes — **≈30.2 s** of fetching |
+| 06:38:07.852 | `renderer:terminal-title.sync-rendered` | **`behind 4`** — the display pipeline works |
+
+- Pending payload (measured read-only after the user's pull): 4 commits, 362 objects, 308 blobs,
+  **87.9 MiB on disk** (105.8 MiB raw, mostly PDFs); the repo's `size-pack` is 4.70 GiB.
+- **Physical evidence:** `.git/objects/pack/tmp_pack_<rand>`, **28.7 MB**, mtime = the kill minute.
+  The killed fetch was receiving data. git neither resumes nor reuses such a partial pack; `git
+  prune` (via gc) deletes it later. Every retry therefore restarts from zero against a payload
+  that only grows → it can never converge under a fixed 20 s ceiling.
+- Same-window control: `Dark_PDF_Reader` 22/22 and `Project_ASR` 22/22 succeeded (p50 ≈1.6 s)
+  against the same host (`github.com`, https); no proxy variables in the environment.
+- Insensitive to the assumed bandwidth: the combined rate of both overlapping fetches was ≈3.9 MB/s;
+  even with all of it, 87.9 MiB needs ≈23 s > 20 s.
+- Code (baseline `4c4580d`): `git-autofetch-manager.ts:62` `FETCH_TIMEOUT_MS = 20_000`; `:464-467`
+  the `execFile` timeout; `gitSyncDisplay.ts` `showBehind = behind > 0` → no arrow, only the
+  always-present sync button (`TerminalGrid.tsx:3528-3545`).
+
+### Conclusion 2 (Confirmed) — new defect: a click during an in-flight fetch is silently dropped
+
+- 06:37:45.075–46.266: 5 × `renderer:git-sync.fetch-clicked`, **0** × `main:git-fetch.user-requested`
+  (a missing pairing). 06:37:44.576 `priority-retry reason:"in-flight"` independently proves a fetch
+  was running.
+- `git-autofetch-manager.ts:322-326` returns `null` on in-flight with no trace;
+  `ipc-handlers.ts:1311` maps it to `{ ok:false, busy:true }` and its own docstring (`:1298-1301`)
+  says the renderer should keep spinning; `TerminalGrid.tsx:1231` ignores the return value and the
+  `finally` clears the spinner immediately → one frame of spin = "nothing happened".
+- Even an idle-time click hits the same 20 s ceiling, and `classified:'other'` is never surfaced
+  (`git-autofetch-manager.ts:362` surfaces `network` only) → no failure feedback either.
+
+### Conclusion 3 (High-confidence inference) — duplicate concurrent fetch
+
+The background fetch started 5.3 s into the user's terminal `git pull` and overlapped it for 20 s,
+competing for bandwidth, then was killed — pure waste. Not instrumented (only command *completion*
+is visible via OSC 633). Deferred.
+
+### Falsified hypotheses (2026-10-26)
+
+| Hypothesis | Verdict | Disproving evidence |
+|---|---|---|
+| Network down / proxy required | Refuted | Two other repos on the same host 22/22 each in the same window; no proxy env |
+| https auth hang | Refuted | `GIT_TERMINAL_PROMPT=0` makes auth fail in milliseconds with exit 128; 28.7 MB of pack had arrived |
+| Display pipeline broken | Refuted | `behind 4` rendered at 06:38:07.852, same millisecond as `refs-digest-changed` |
+| Hidden-window pause (factor ③) | Refuted | Window visible from 06:37:10; the fetch did start at 06:37:42.829 |
+| Rate limiting dropped fetch events | Refuted | `dropped-summary` lists only `pty.output`, `terminal.task.state`, `watcher-fire` |
+| Click IPC broken | Refuted | The main-side early `return null` is the cause; `priority-retry` saw the same in-flight state |
+
+### User decisions (2026-10-26)
+
+| Question | Decision |
+|---|---|
+| Click while a fetch is in flight | **Join it** — the click waits for that fetch (VS Code `@throttle` semantics), no second spawn |
+| Failure feedback after a manual fetch | **Warning tint + reason tooltip** (timeout / unreachable / auth / no remote / other), manual clicks only; background failures stay silent. **Supersedes the v1.3 "surface `network` only" decision** |
+| Spinner during background fetches | **Yes** — publish `fetchInFlight` on the existing mirror freshness channel; the button spins and is disabled (GitHub Desktop behaviour) |
+| Timeout | **Not changed in this round.** Options S1 (git-native low-speed abort + long ceiling) / S2 (progress-based stall detection) / S3 (larger fixed timeout) / S4 (no timeout) in `docs/html/git-fetch-timeout-strategy-options.html`; awaiting decision |
+
+Peer references: VS Code autofetch has no timeout and queues a repeated fetch behind the running one
+(`extensions/git/src/autofetch.ts`, `decorators.ts`); GitHub Desktop has no timeout and disables +
+spins the button during background fetches (`push-pull-button.tsx`); GitLens applies a 60 s default
+to every git command; git's own `http.lowSpeedLimit/Time` aborts only a transfer that stays below a
+rate. Full citations in the report § 7.
+
+### 8d. The follow-up fix as landed (2026-10-26)
+
+All four user decisions in § 8c were implemented in the same round (code baseline `4c4580d`, uncommitted at the time of writing).
+
+| # | Change | Where |
+|---|---|---|
+| C1 | One fetch per repo. A click, the scheduled loop or the autotest force path that arrives while a fetch runs **joins** it (`InFlightRegistry.runOrJoin`); `fetchNow` no longer returns `null`, the IPC returns `{ ok, joined, failure, fetchId }` | `electron/main/git-fetch-inflight.ts` (new, pure), `git-autofetch-manager.ts::startFetch/fetchNow/forceFetchForAutotest`, `ipc-handlers.ts` `GIT_FETCH_NOW` |
+| C2 | `fetchInFlight` published on the existing freshness channel at spawn and cleared in the settle delta | `git-state-mirror-types.ts`, `git-state-mirror-router.ts::setFetchFreshness/applyFetchFreshness` |
+| C3 | Sync button: busy (spin + disabled) for background fetches too; after a failed MANUAL fetch a warning tint + reason tooltip for 15 s, cleared early on the idle → in-flight edge of a newer fetch (edge, not level: the settle delta and the IPC reply race on different channels) | `gitSyncDisplay.ts::resolveSyncButtonState/syncFailureMessageKey` (pure), `TerminalGrid.tsx`, `TerminalGrid.css`, `src/i18n/core.ts` (en + zh-CN) |
+| S1 | The fixed 20 s kill is gone. curl low-speed abort 1000 B/s × 60 s, SSH `ServerAliveInterval=15` × 4, 10 min wall-clock ceiling (autotest-only override `ONWARD_GIT_FETCH_CEILING_MS`, resolved before the kill switch so manual fetches obey it too). Low-speed / keepalive aborts classify as `timeout` with `killedByTimeout: false` | `electron/main/git-fetch-policy.ts` (new, pure), `git-fetch-failure-classify.ts`, `git-autofetch-manager.ts` |
+
+**Instrumentation:** new `renderer:git-sync.fetch-settled` (closes the click pairing); `user-requested.joined`; `started.source/fetchId/inFlightFanoutCount`; `succeeded/failed.source/fetchId`; `failed.tmpPackCount/tmpPackBytes` on ceiling kills (the on-disk evidence of § 8c, now in the trace); `lifecycle.ceilingMs`; `sync-rendered.fetchInFlight/buttonBusy/buttonFailedKind` (what the button painted, including the tint expiry); `update-received.hasFetchFreshness` counts `fetchInFlight`.
+
+**Two event-order bugs were caught in self-review before any test ran:** `runOrJoin` spawns synchronously, so `started` would have preceded `scheduled` and `user-requested`; both are now recorded before the spawn.
+
+**Verification:** unit — new `git-fetch-inflight` (6) and `git-fetch-policy` (10), extended `git-fetch-failure-classify` (+3) and `git-sync-display` (+10), full suite green. `run-git-autofetch-ahead-behind` — AB-14 (join, N=5, 5/5 same `fetchId`), AB-15 (in-flight published and cleared, N=5), AB-16a/b (manual failure class), AB-17 (an origin delayed 22 s completes in 22,050 ms and flips behind 0 → 1), AB-08 (killed at 30,005 ms against a configured 30,000 ms ceiling, stderr still classified); runner 77 s, `--repeat 3` STABLE 3/3. Windows validated structurally only (`.ps1` parity, `path`-built fixtures, the `ext::` origins rely on Git for Windows' bundled `sh`/`sleep` exactly as the pre-existing `timeout-fetch` fixture does).
+
+**Repro triage update:** in a post-fix bundle, every `fetch-clicked` must be followed by `user-requested` and `fetch-settled`; `sync-rendered.buttonBusy` must flip true/false around every `started`/`failed|succeeded`; a killed fetch with large `tmpPackBytes` means the 10 min ceiling itself was too short for that repo (or the link is pathologically slow but above 1000 B/s), not a wedge.
+
 ## 9. Update history (append-only — never rewrite or delete a row)
 
 | Version | Date | Branch | Summary |
@@ -293,3 +401,5 @@ such records and zero useful ones. Both steady-state refusals
 | v1.1 | 2026-08-04 | master | **Fixed.** Strategy options presented and confirmed by the user (R1=A+B, R2=no change, R3=A) before any strategy code was written. Five changes landed (§ 8b) with five new trace events, three enriched payloads, and paired unit + autotest coverage: unit 148/148, `run-git-autofetch-ahead-behind` 11/11 (new AB-07..AB-10; AB-08 exercises a real 20 s timeout kill and asserts the previously-discarded `classified` + `stderrTail`), `run-git-state-mirror*`/`run-gsm*` 9/9. A rate-control defect in the NEW `priority-retry` event was caught by inspecting a real trace of the fix and corrected before completion. The original root-cause analysis in § 2 is unchanged and was not overturned. § 8's first open question (why those two repos time out) remains open BY DESIGN — R4 is precisely what makes the next bundle able to answer it. |
 | v1.2 | 2026-08-05 | master | **R3 narrowed on user decision.** The stale treatment had TWO triggers: (a) attempted-but-never-succeeded, and (b) the last success aged past 20 min. Trigger (b) is removed. Reason: it fired on every upstream-bearing repo within ~30 s of going offline, and re-fired after any sleep longer than the threshold, so the common case for seeing `↓?` would have been "user is offline" rather than "this repo is broken". **Accepted cost, now pinned by a unit test named `DELIBERATE NARROWING`: a repo that succeeds once and then fails for the rest of the session stays silent.** Re-covering that case needs a consecutive-failure count on the snapshot — it is NOT a matter of re-adding a threshold. Knock-on simplification: staleness became purely event-driven (it only changes when a fetch settles, which already produces a mirror delta), so the renderer's 60 s re-evaluation timer, its tick state, the `syncFreshnessNow` memo, the `now` parameter and the `GIT_SYNC_STALE_AFTER_MS` constant were all deleted, along with the now-unreachable `terminalGrid.syncStaleTitle` copy in both locales. Unit 148/148 after the change. |
 | v1.3 | 2026-08-07 | master | **R3 reworked after peer research; the `↓?` marker is gone.** User feedback: the marker was conceptually confusing and offered no recovery path. Research across 7 products (git itself, GitHub Desktop, GitLens, GitKraken, Fork, Sublime Merge, Tower, VS Code, JetBrains) produced three findings that together condemned it: (a) **no product marks staleness on the ahead/behind count itself** — the two that signal anything put it elsewhere (GitKraken's REMOTES header icon, Fork's Activity Manager); (b) `?` already means something in git (`??` untracked, submodule `?`, git-prompt.sh sparse-checkout), so the confusion was a real symbol collision, not vagueness; (c) the recovery convention is that **the indicator IS the action** (VS Code status bar, Sublime Merge's clickable ahead/behind, GitHub Desktop's button) — and we were the only one of nine with no manual fetch anywhere. Landed: count left untouched; badge single-click → new `git.fetchNow` IPC (first manual fetch in the app; copy-branch moved to a right-click menu to free the click slot); always-present tooltip freshness line (`Last synced just now / N min / N h / date past 24 h` / `Not synced yet`), matching GitHub Desktop + GitLens incl. their relative→absolute switch. Per a follow-up user decision the ONLY failure detail surfaced is `Remote unreachable` (classified `network`) — auth / no-remote / bare-timeout stay in the perf trace because they are not actionable from a tooltip. Removed: `↓?`, the `--stale` styling, `behindUnknownAria`. New events `main:git-fetch.user-requested` + `renderer:git-sync.fetch-clicked`. Also corrected in the decision doc: an earlier claim that peers "generally" show a last-synced timestamp — only 2 of 7 do. Verified: unit 148/148 (incl. an `ipc-handler-symmetry` catch of a missing `removeHandler`), AB-01..13. See `docs/html/git-sync-staleness-ux-options.html`. |
+| v1.4 | 2026-10-26 | 20261022-candidate | **Reopened by a field bundle.** § 8 Q1 answered (§ 8c): the timeouts are payload-bound — `Project_Books_Translation` needed 87.9 MiB, the user's own terminal fetch took ≈30.2 s, and the app's fetch was killed at 20,007 ms while still receiving data (a 28.7 MB `tmp_pack_*` left behind at the kill minute). Same-host control 44/44 rules out network/auth. New confirmed defect: a sync-button click during an in-flight fetch is dropped by `fetchNow`'s early `return null` (5 clicks, 0 `user-requested`), and the renderer ignores the IPC's `busy` result. User decisions recorded in § 8c, including the reversal of v1.3's surface-`network`-only rule for MANUAL fetch failures. Playbook steps 7–8 added. The § 2 root-cause analysis is unchanged and was not overturned; it was refined (factor ① is a slow transfer, not a wedge). |
+| v1.5 | 2026-10-26 | 20261022-candidate | **Follow-up fix landed (uncommitted, § 8d).** C1 join-or-start per repo, C2 `fetchInFlight` publish, C3 sync-button busy/failure states (en + zh-CN), S1 transport-level stall detection replacing the fixed 20 s kill (10 min ceiling). Verified: unit 183/183 files; `run-git-autofetch-ahead-behind` PASS (AB-14 5/5 joins, AB-15 5/5, AB-16a/b, AB-17 22,050 ms success past the old ceiling, AB-08 killed at 30,005 ms vs 30,000 ms configured), `--repeat 3` STABLE 3/3 at 77 s; `run-git-state-mirror*` / `run-gsm*` / `run-trace-infra-self-check` 10/10 PASS. Windows validated structurally only. Side finding recorded for later: on macOS `pkill -x`/`pgrep -x` do not match the dev app's long process name, so the orchestrator's `kill_app` is likely a no-op there. |
