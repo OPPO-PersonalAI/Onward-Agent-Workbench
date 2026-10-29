@@ -80,6 +80,20 @@ section is narrow and literal: get every test case to *execute*
 
 ### Pre-flight env check (fail fast, before the build)
 
+The orchestrator also validates the actual runner shell before building. On
+Windows it resolves a Git for Windows installation (including portable/custom
+installs found through git.exe), rejects WSL Bash, and probes native Node, Python,
+Git, tar, and repository-path access through that Bash. CMD, PowerShell and Git
+Bash callers use the same resolution; macOS/Linux use native Bash. No manual PATH
+override should be needed. `--list` is side-effect-free even with `--build`.
+
+Setup now has persisted phases: preflight, app identity, stop-old-app, strict
+clean-build-outputs, build, and selected-fixture preparation. A locked file that
+survives bounded cleanup retries aborts before pnpm; cleanup errors are never
+ignored. Build/fixture hang deadlines are 600/180 seconds, independent of runner
+budgets. The recursive-submodule fixture is created only if its runner is selected
+and its owned scratch directory is removed on completion or interruption.
+
 `run-full-regression.py` runs a cross-platform **environment pre-flight**
 before `--build` (and before the runner list on a no-build run). It asserts
 the installed `node_modules` matches the committed dependency spec for the
@@ -348,9 +362,18 @@ to get past a failure.
 Outputs land in `test/full-regression-results/<local-timestamp>/`
 (directory name format `YYYYMMDDTHHMMSS`):
 
-- `summary.log` — full streamed output + final pass/fail summary
+- `summary.log` — setup milestones, streamed runner output, and final summary
+- `stages.json` — setup/test phase status and elapsed seconds, saved per phase
+- `traces/build/regression-<timestamp>.log` (relative to the repo root) — complete
+  build stdout/stderr; adjacent `-fixture.log` captures selected-fixture setup
 - `summary.json` — machine-readable per-runner result
 - `logs/<suite>.log` — per-runner stdout/stderr, one file each
+
+The result directory is created before pre-flight/build. Setup failures write a
+`summary.json` with `setup_error`, `errored: 1`, and `stages` (exit 3, or 130 on
+interruption). `BUILD COMPLETE` marks the end of compilation; the command continues
+through fixture preparation and the test suite. Do not describe that remaining
+time as compilation. A normal final summary includes `stages` and `build_log`.
 
 Read `summary.json` and report to the user:
 

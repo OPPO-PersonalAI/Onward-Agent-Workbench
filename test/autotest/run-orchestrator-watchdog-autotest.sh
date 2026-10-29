@@ -35,10 +35,15 @@ fi
 
 echo "OWD orchestrator watchdog self-check (PY=$PY, REPO_ROOT=$REPO_ROOT)" | tee "$LOG_FILE"
 
+# Setup contracts share this infrastructure runner and its timeout/kill scope.
+"$PY" "$REPO_ROOT/test/autotest/check-regression-entry.py" 2>&1 | tee -a "$LOG_FILE"
+entry_rc=${PIPESTATUS[0]}
+
 # The check self-cleans its OS-temp fixtures in `finally`; stream its output to
 # both the orchestrator (live progress) and the per-suite log.
 "$PY" "$REPO_ROOT/test/autotest/check-orchestrator-watchdog.py" 2>&1 | tee -a "$LOG_FILE"
 rc=${PIPESTATUS[0]}
+if [[ "$entry_rc" != "0" ]]; then rc="$entry_rc"; fi
 
 if [[ "$rc" == "0" ]]; then
   echo "OWD orchestrator watchdog self-check: PASS" | tee -a "$LOG_FILE"

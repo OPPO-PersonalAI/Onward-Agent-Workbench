@@ -56,12 +56,14 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
 import platform
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -70,6 +72,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional
+
+# Load by sibling path so importlib-based unit tests need no global sys.path edit.
+_cleanup_spec = importlib.util.spec_from_file_location("onward_dev_app_cleanup", Path(__file__).with_name("dev_app_cleanup.py"))
+_cleanup_module = importlib.util.module_from_spec(_cleanup_spec)
+_cleanup_spec.loader.exec_module(_cleanup_module)
+stop_dev_app = _cleanup_module.stop_dev_app
 
 # Live-progress heartbeat: while a runner produces NO output for this many
 # seconds, the orchestrator emits a "still running" pulse so a hung / silently-
@@ -308,6 +316,12 @@ UPDATE_E2E_SCRIPTS: List["tuple[str, str]"] = [
 ]
 
 PER_SCRIPT_TIMEOUT_SEC = 180
+
+# Setup has its own deadlines; these do not widen any runner's test budget.
+BUILD_TIMEOUT_SEC = 600
+FIXTURE_TIMEOUT_SEC = 180
+TOOL_PROBE_TIMEOUT_SEC = 30
+SUBMODULE_FIXTURE_RUNNER = "test/autotest/run-git-diff-submodules-autotest.sh"
 
 # Orchestrator-side independent-watchdog grace. The inner run-with-timeout.mjs
 # fires at timeout_sec and force-kills its child tree 10s later, so for a normal
@@ -750,6 +764,7 @@ def _read_branch() -> str:
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=str(REPO_ROOT),
             stderr=subprocess.DEVNULL,
+            timeout=TOOL_PROBE_TIMEOUT_SEC,
         ).decode("utf-8", errors="replace").strip()
     except Exception:
         out = "detached"
@@ -772,45 +787,132 @@ def detect_app_name() -> str:
     return f"Under Development {_read_version()}-{_read_branch()}"
 
 
+def app_bin_candidates(app_name: str) -> List[Path]:
+    host = platform.system()
+    machine = platform.machine().lower()
+    arch = {"amd64": "x64", "x86_64": "x64", "x64": "x64", "aarch64": "arm64",
+            "arm64": "arm64", "x86": "ia32", "i386": "ia32", "i686": "ia32",
+            "armv7l": "armv7l"}.get(machine)
+    # Universal macOS builds are compatible with either native architecture.
+    directories = {
+        "Darwin": {"x64": ("mac", "mac-universal"), "arm64": ("mac-arm64", "mac-universal")},
+        "Windows": {"x64": ("win-unpacked",), "arm64": ("win-arm64-unpacked",), "ia32": ("win-ia32-unpacked",)},
+        "Linux": {"x64": ("linux-unpacked",), "arm64": ("linux-arm64-unpacked",),
+                  "ia32": ("linux-ia32-unpacked",), "armv7l": ("linux-armv7l-unpacked",)},
+    }
+    candidates = []
+    for directory in directories.get(host, {}).get(arch, ()):
+        base = REPO_ROOT / "release" / directory
+        if host == "Darwin":
+            candidate = base / f"{app_name}.app" / "Contents" / "MacOS" / app_name
+        else:
+            candidate = base / (f"{app_name}.exe" if host == "Windows" else app_name)
+        candidates.append(candidate)
+    return candidates
+
+
 def resolve_app_bin(app_name: str) -> Optional[Path]:
-    candidates = [
-        REPO_ROOT / "release" / "mac-arm64" / f"{app_name}.app" / "Contents" / "MacOS" / app_name,
-        REPO_ROOT / "release" / "mac" / f"{app_name}.app" / "Contents" / "MacOS" / app_name,
-        REPO_ROOT / "release" / "linux-unpacked" / app_name,
-        REPO_ROOT / "release" / "win-unpacked" / f"{app_name}.exe",
-    ]
-    for c in candidates:
-        if c.exists():
-            if IS_WINDOWS or os.access(str(c), os.X_OK):
-                return c
+    for candidate in app_bin_candidates(app_name):
+        if candidate.is_file() and (platform.system() == "Windows" or os.access(str(candidate), os.X_OK)):
+            return candidate
+    return None
+
+
+def git_bash_root(binary: Path) -> Optional[Path]:
+    """Recognize Git for Windows by its files, never a WSL bash.exe name alone."""
+    for root in list(binary.resolve().parents)[:3]:
+        if all((root / rel).is_file() for rel in (
+            "usr/bin/bash.exe", "usr/bin/cygpath.exe", "usr/bin/find.exe",
+        )) and any((root / rel).is_file() for rel in ("cmd/git.exe", "bin/git.exe")):
+            return root
     return None
 
 
 def find_bash() -> str:
     bash = shutil.which("bash")
-    if bash:
-        return bash
-    if IS_WINDOWS:
-        for candidate in (
-            r"C:\Program Files\Git\bin\bash.exe",
-            r"C:\Program Files (x86)\Git\bin\bash.exe",
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\bin\bash.exe"),
-        ):
-            if Path(candidate).exists():
-                return candidate
-        sys.exit(
-            "ERROR: bash not found. The .sh runners require Git Bash on Windows.\n"
-            "  Install Git for Windows from https://git-scm.com/download/win\n"
-            "  and ensure 'bash' is on PATH (or installed at the default location)."
-        )
-    sys.exit("ERROR: bash not found on PATH.")
+    if not IS_WINDOWS:
+        if bash:
+            return bash
+        raise RuntimeError("bash not found on PATH")
+
+    # Derive portable/custom installs from git.exe before trying standard roots.
+    candidates = []
+    git = shutil.which("git")
+    for binary in (git, bash):
+        if binary:
+            root = git_bash_root(Path(binary))
+            if root:
+                candidates.append(root / "bin" / "bash.exe")
+                candidates.append(root / "usr" / "bin" / "bash.exe")
+    for variable, suffix in (
+        ("ProgramFiles", "Git"), ("ProgramFiles(x86)", "Git"),
+        ("LOCALAPPDATA", "Programs/Git"),
+    ):
+        if os.environ.get(variable):
+            candidates.append(Path(os.environ[variable]) / suffix / "bin" / "bash.exe")
+    for candidate in candidates:
+        if candidate.is_file() and git_bash_root(candidate):
+            return str(candidate)
+    raise RuntimeError(
+        "Git Bash not found. Windows runners require Git for Windows, not WSL. "
+        "Install Git for Windows and put its cmd directory on PATH."
+    )
 
 
 def find_node() -> str:
     node = shutil.which("node")
     if not node:
-        sys.exit("ERROR: node not found on PATH. Install Node.js (>=18) and retry.")
+        raise RuntimeError("node not found on PATH. Install Node.js (>=18) and retry.")
     return node
+
+
+def runner_environment(bash: str) -> dict:
+    env = os.environ.copy()
+    env["PYTHON3"] = sys.executable
+    if IS_WINDOWS:
+        root = git_bash_root(Path(bash))
+        if root is None:
+            raise RuntimeError(f"Not a Git for Windows Bash: {bash}")
+        # GNU find/sort must win over the unrelated System32 executables.
+        prefixes = [root / "usr/bin", root / "mingw64/bin", root / "bin"]
+        env["PATH"] = os.pathsep.join(map(str, prefixes)) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def validate_runner_tools(bash: str, node: str, emit) -> None:
+    """Exercise the actual shell environment before spending time on a build."""
+    probe = '''set -e
+node -p "'ONWARD_NODE=' + process.platform"
+"$PYTHON3" -c 'print("ONWARD_PYTHON_OK")'
+test -f "$1"
+command -v git >/dev/null
+command -v tar >/dev/null
+'''
+    proc = subprocess.run(
+        [bash, "--noprofile", "--norc", "-c", probe, "onward-preflight", str(REPO_ROOT / "package.json")],
+        cwd=str(REPO_ROOT), env=runner_environment(bash),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=TOOL_PROBE_TIMEOUT_SEC,
+    )
+    expected = "win32" if IS_WINDOWS else ("darwin" if sys.platform == "darwin" else "linux")
+    if proc.returncode or f"ONWARD_NODE={expected}" not in proc.stdout or "ONWARD_PYTHON_OK" not in proc.stdout:
+        raise RuntimeError(f"Runner shell pre-flight failed ({bash}):\n{proc.stdout}\n{proc.stderr}")
+    emit(f"Tools verified: Bash={bash}; Node={node}; Python={sys.executable}")
+
+
+def select_scripts(only, skip, include_update_e2e, host_platform):
+    scripts = list(SCRIPTS)
+    skipped = []
+    for script, required in UPDATE_E2E_SCRIPTS:
+        if not include_update_e2e:
+            skipped.append((script, "opt-in via --include-update-e2e"))
+        elif required != host_platform:
+            skipped.append((script, f"{required}-only"))
+        else:
+            scripts.append(script)
+    scripts = [s for s in scripts if (not only or any(o in s for o in only))
+               and not any(k in s for k in skip)]
+    return scripts, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -844,36 +946,11 @@ def sweep_autotest_root_leftovers(emit) -> int:
     return removed
 
 
-def kill_app(app_name: str) -> None:
-    """Kill the dev app by EXACT process name. Wildcards are forbidden."""
-    if IS_WINDOWS:
-        # /IM matches the image (process) name exactly. Add .exe suffix.
-        subprocess.run(
-            ["taskkill", "/F", "/IM", f"{app_name}.exe"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    else:
-        # `pkill -x` requires an exact match against the comm name. SIGTERM
-        # now drives the app's bounded graceful quit (signal handlers in
-        # electron/main/index.ts); the SIGKILL escalation below is
-        # defence-in-depth for a wedged teardown so the next runner always
-        # starts from a clean process table.
-        subprocess.run(
-            ["pkill", "-x", app_name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        for _ in range(16):  # up to ~8s for the graceful teardown
-            alive = subprocess.run(
-                ["pgrep", "-x", app_name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            ).returncode == 0
-            if not alive:
-                return
-            time.sleep(0.5)
-        subprocess.run(
-            ["pkill", "-9", "-x", app_name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+def kill_app(app_name: str, app_bin: Optional[Path] = None) -> None:
+    """Use the same exact-identity cleanup as standalone runners."""
+    candidates = app_bin_candidates(app_name)
+    binary = app_bin or resolve_app_bin(app_name) or (candidates[0] if candidates else None)
+    stop_dev_app(app_name, binary, tool_timeout=TOOL_PROBE_TIMEOUT_SEC)
 
 
 def force_kill_tree(proc: "subprocess.Popen") -> None:
@@ -894,6 +971,7 @@ def force_kill_tree(proc: "subprocess.Popen") -> None:
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=TOOL_PROBE_TIMEOUT_SEC,
         )
     else:
         try:
@@ -1112,50 +1190,113 @@ def preflight_env_check(emit) -> bool:
 # Optional pre-build
 # ---------------------------------------------------------------------------
 
-def run_dev_build(emit) -> int:
-    emit("Running pnpm dist:dev (this may take several minutes) …")
-    out_dir = REPO_ROOT / "out"
-    release_dir = REPO_ROOT / "release"
-    for d in (out_dir, release_dir):
-        if d.exists():
-            shutil.rmtree(str(d), ignore_errors=True)
+def stop_app_for_build(app_name: str) -> None:
+    kill_app(app_name)
+
+
+def remove_tree_strict(directory: Path) -> None:
+    def writable_retry(function, path, _error):
+        # Git metadata and packaged assets can carry read-only bits on Windows.
+        os.chmod(path, os.stat(path).st_mode | stat.S_IWUSR)
+        function(path)
+
+    for attempt in range(3):
+        try:
+            if directory.is_symlink():
+                directory.unlink()
+            elif directory.exists():
+                shutil.rmtree(directory, onerror=writable_retry)
+            if directory.exists():
+                raise OSError(f"Directory still exists: {directory}")
+            return
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(0.5)
+
+
+def clean_build_outputs() -> None:
+    for name in ("out", "release"):
+        remove_tree_strict(REPO_ROOT / name)
+
+
+def run_setup_command(command, *, env, log_path, timeout, emit) -> int:
+    """Wait on the process, not pipe EOF; keep a complete log even on failure."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    emit(f"Command: {command!r}; timeout={timeout}s; log={log_path}")
+    start = time.monotonic()
+    with log_path.open("wb") as log:
+        proc = subprocess.Popen(
+            command, cwd=str(REPO_ROOT), env=env, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=not IS_WINDOWS,
+        )
+        def terminate_tree():
+            if IS_WINDOWS:
+                force_kill_tree(proc)
+            else:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            proc.wait(timeout=10)
+        try:
+            while True:
+                remaining = timeout - (time.monotonic() - start)
+                if remaining <= 0:
+                    emit(f"ERROR: setup command timed out after {timeout}s")
+                    terminate_tree()
+                    return 124
+                try:
+                    return proc.wait(timeout=min(HEARTBEAT_SEC, remaining))
+                except subprocess.TimeoutExpired:
+                    emit(f"Setup command still running: {time.monotonic() - start:.1f}s; log={log_path}")
+        except BaseException:
+            terminate_tree()
+            raise
+
+
+def run_dev_build(emit, *, app_name, pnpm, log_path, stage) -> int:
+    stage("stop-old-app", lambda: stop_app_for_build(app_name))
+    stage("clean-build-outputs", clean_build_outputs)
     env = os.environ.copy()
     env["ONWARD_DIST_DEV_OPEN"] = "0"
-    pnpm = shutil.which("pnpm")
-    if pnpm is None:
-        emit("ERROR: pnpm not found on PATH.")
-        return 127
-    rc = subprocess.call([pnpm, "dist:dev"], cwd=str(REPO_ROOT), env=env)
-    if rc != 0:
-        emit(f"ERROR: pnpm dist:dev exited with {rc}")
-    return rc
+    def build():
+        rc = run_setup_command(
+            [pnpm, "dist:dev"], env=env, log_path=log_path,
+            timeout=BUILD_TIMEOUT_SEC, emit=emit,
+        )
+        if rc:
+            raise RuntimeError(f"pnpm dist:dev exited with {rc}; see {log_path}")
+        return rc
+    return stage("build", build)
 
 
 # ---------------------------------------------------------------------------
 # Fixture for git-diff-submodules
 # ---------------------------------------------------------------------------
 
-def generate_recursive_submodule_fixture(node: str, emit) -> Optional[str]:
+def generate_recursive_submodule_fixture(node: str, emit, log_path: Path) -> "tuple[str, str]":
     emit("Generating recursive-git-submodule fixture …")
-    proc = subprocess.run(
-        [node, "test/autotest/create-recursive-git-submodule-fixture.mjs"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        emit(f"ERROR: fixture generation failed (rc={proc.returncode})")
-        if proc.stderr:
-            emit(proc.stderr.rstrip())
-        return None
+    # Own the enclosing scratch directory even when the child dies before it can
+    # print its JSON. Keep the prefix short for nested Windows Git metadata paths.
+    owner = tempfile.mkdtemp(prefix="ow-rg-")
+    env = dict(os.environ, TMPDIR=owner, TMP=owner, TEMP=owner)
     try:
-        data = json.loads(proc.stdout)
+        rc = run_setup_command(
+            [node, "test/autotest/create-recursive-git-submodule-fixture.mjs"],
+            env=env, log_path=log_path, timeout=FIXTURE_TIMEOUT_SEC, emit=emit,
+        )
+        if rc:
+            raise RuntimeError(f"fixture generation failed (rc={rc}); see {log_path}")
+        data = json.loads(log_path.read_text(encoding="utf-8"))
         repo_root = data["repoRoot"]
-    except Exception as e:  # noqa: BLE001
-        emit(f"ERROR: cannot parse fixture JSON: {e}\nRaw: {proc.stdout!r}")
-        return None
+        if not Path(repo_root).is_dir() or Path(owner).resolve() not in Path(repo_root).resolve().parents:
+            raise RuntimeError("Fixture builder returned a path outside its scratch directory")
+    except BaseException:
+        remove_tree_strict(Path(owner))
+        raise
     emit(f"Submodule fixture repo root: {repo_root}")
-    return repo_root
+    return repo_root, owner
 
 
 # ---------------------------------------------------------------------------
@@ -1180,35 +1321,9 @@ def run_one(
         bash, script, str(app_bin),
     ] + extra_args
 
-    env = os.environ.copy()
+    env = runner_environment(bash)
     env["ONWARD_USER_DATA_DIR"] = user_data_dir
     env["ONWARD_REPO_ROOT"] = str(REPO_ROOT)
-
-    # Inject the orchestrator's own Python as PYTHON3 so .sh runners can use
-    # ${PYTHON3:-python3} portably.  On Windows, 'python3' is not a recognized
-    # command alias, but sys.executable always points to the running interpreter.
-    env["PYTHON3"] = sys.executable
-
-    # On Windows, Python spawns bash with the raw Windows PATH, so POSIX tools
-    # such as find(1) and sort(1) resolve to System32 built-ins (DOS find.exe,
-    # DOS sort.exe) rather than the GNU versions bundled with Git for Windows.
-    # Prepend Git Bash's usr/bin (GNU coreutils) and mingw64/bin so every
-    # runner sees the correct tools regardless of the invoking shell's PATH.
-    if IS_WINDOWS:
-        bash_path = Path(bash).resolve()
-        for candidate_root in [
-            bash_path.parent,
-            bash_path.parent.parent,
-            bash_path.parent.parent.parent,
-        ]:
-            if (candidate_root / "usr" / "bin" / "find.exe").exists():
-                prepend = os.pathsep.join([
-                    str(candidate_root / "usr" / "bin"),
-                    str(candidate_root / "mingw64" / "bin"),
-                    str(candidate_root / "bin"),
-                ])
-                env["PATH"] = prepend + os.pathsep + env.get("PATH", "")
-                break
 
     start = time.monotonic()
     hard_deadline_sec = timeout_sec + ORCHESTRATOR_WATCHDOG_GRACE_SEC
@@ -1299,7 +1414,7 @@ def run_one(
                             summary_fh.write(msg)
                             summary_fh.flush()
                         force_kill_tree(proc)
-                        kill_app(app_name)
+                        kill_app(app_name, app_bin)
                         try:
                             rc = proc.wait(timeout=10)
                         except subprocess.TimeoutExpired:
@@ -1307,7 +1422,7 @@ def run_one(
                         break
         except KeyboardInterrupt:
             force_kill_tree(proc)
-            kill_app(app_name)
+            kill_app(app_name, app_bin)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -1504,63 +1619,10 @@ def main() -> int:
         sys.stderr.write("ERROR: --repeat must be >= 1.\n")
         return 2
 
-    # Environment pre-flight: abort in ~1s if node_modules drifted from the
-    # committed spec, instead of failing 30 min into a build+run cycle. Skipped
-    # for --list (pure inspection) and when explicitly bypassed. Runs once here
-    # for both the single-run and --repeat paths (the latter spawns children
-    # that would re-check anyway, but failing before any spawn is cheaper).
-    if (
-        not args.list
-        and not args.skip_env_check
-        and os.environ.get("ONWARD_SKIP_ENV_PREFLIGHT") != "1"
-    ):
-        if not preflight_env_check(lambda m: print(m, flush=True)):
-            return 3
-
-    if args.repeat > 1:
-        return run_repeated(args)
-
-    bash = find_bash()
-    node = find_node()
-
-    if args.build:
-        # We don't have summary_fh yet — emit goes straight to stdout.
-        rc = run_dev_build(lambda m: print(m, flush=True))
-        if rc != 0:
-            return rc
-
-    app_name = detect_app_name()
-    app_bin = Path(args.app_bin) if args.app_bin else resolve_app_bin(app_name)
-    if app_bin is None:
-        sys.stderr.write(
-            f"ERROR: cannot locate dev app binary for '{app_name}'.\n"
-            f"  Looked under {REPO_ROOT / 'release'}.\n"
-            f"  Build it first: `rm -rf out release && pnpm dist:dev`,\n"
-            f"  or rerun this script with --build.\n"
-        )
-        return 2
-
-    # Classify update-e2e entries: opt-in (default SKIP), or platform-matched
-    # when --include-update-e2e is set. Non-matching entries SKIP with a
-    # "<plat>-only" reason so the summary still records their existence.
-    host_plat = platform.system()
-    update_e2e_to_run: List[str] = []
-    update_e2e_skipped: List["tuple[str, str]"] = []  # (script, reason)
-    for script, required_plat in UPDATE_E2E_SCRIPTS:
-        if not args.include_update_e2e:
-            update_e2e_skipped.append((script, "opt-in via --include-update-e2e"))
-        elif required_plat != host_plat:
-            update_e2e_skipped.append((script, f"{required_plat}-only"))
-        else:
-            update_e2e_to_run.append(script)
-
-    # Apply --only / --skip filters across SCRIPTS + opted-in update-e2e
-    # entries so power users can do e.g. `--include-update-e2e --only auto-update`.
-    scripts = list(SCRIPTS) + update_e2e_to_run
-    if args.only:
-        scripts = [s for s in scripts if any(o in s for o in args.only)]
-    if args.skip:
-        scripts = [s for s in scripts if not any(sk in s for sk in args.skip)]
+    # Inspection and filtering precede every tool probe, cleanup and build.
+    scripts, update_e2e_skipped = select_scripts(
+        args.only, args.skip, args.include_update_e2e, platform.system(),
+    )
 
     if args.list:
         print(f"Planned runners ({len(scripts)}):")
@@ -1571,6 +1633,12 @@ def main() -> int:
             for s, reason in update_e2e_skipped:
                 print(f"  {s} ({reason})")
         return 0
+
+    if not scripts:
+        sys.stderr.write("ERROR: no runners match the requested filters; nothing was built.\n")
+        return 2
+    if args.repeat > 1:
+        return run_repeated(args)
 
     # Output dir sits under test/ next to the runners it drives. It's
     # gitignored — runs stay local; share excerpts back to the user instead
@@ -1585,11 +1653,62 @@ def main() -> int:
     summary_log_path = out_dir / "summary.log"
     summary_json_path = out_dir / "summary.json"
     summary_fh = summary_log_path.open("w", encoding="utf-8")
+    stage_path = out_dir / "stages.json"
+    stages = []
+    build_log_path = REPO_ROOT / "traces" / "build" / f"regression-{ts}.log"
 
     def emit(msg: str) -> None:
         print(msg, flush=True)
         summary_fh.write(msg + "\n")
         summary_fh.flush()
+
+    def stage(name, action):
+        emit(f"[stage:{name}] START")
+        started = time.monotonic()
+        record = {"phase": name, "status": "PASS"}
+        try:
+            return action()
+        except BaseException as error:
+            record.update(status="ERROR", error=str(error))
+            raise
+        finally:
+            record["elapsed_sec"] = round(time.monotonic() - started, 3)
+            stages.append(record)
+            stage_path.write_text(json.dumps(stages, indent=2) + "\n", encoding="utf-8")
+            emit(f"[stage:{name}] {record['status']} ({record['elapsed_sec']:.3f}s)")
+
+    def setup_failed(error):
+        emit(f"ERROR: setup failed: {error}")
+        summary_json_path.write_text(json.dumps({
+            "timestamp_local": ts, "passed": 0, "failed": 0, "skipped": 0,
+            "errored": 1, "results": [], "setup_error": str(error),
+            "stages": stages, "build_log": str(build_log_path) if args.build else None,
+        }, indent=2) + "\n", encoding="utf-8")
+        summary_fh.close()
+        return 130 if isinstance(error, KeyboardInterrupt) else 3
+
+    emit(f"Output dir: {out_dir}")
+    try:
+        def preflight():
+            if not args.skip_env_check and os.environ.get("ONWARD_SKIP_ENV_PREFLIGHT") != "1":
+                if not preflight_env_check(emit):
+                    raise RuntimeError("Dependency pre-flight failed; build was not started")
+            bash, node = find_bash(), find_node()
+            validate_runner_tools(bash, node, emit)
+            pnpm = shutil.which("pnpm") if args.build else None
+            if args.build and pnpm is None:
+                raise RuntimeError("pnpm not found on PATH; build was not started")
+            return bash, node, pnpm
+        bash, node, pnpm = stage("preflight", preflight)
+        app_name = stage("app-identity", detect_app_name)
+        if args.build:
+            run_dev_build(emit, app_name=app_name, pnpm=pnpm, log_path=build_log_path, stage=stage)
+            emit("BUILD COMPLETE — proceeding to test preparation, not another compilation.")
+        app_bin = Path(args.app_bin) if args.app_bin else resolve_app_bin(app_name)
+        if app_bin is None or not app_bin.is_file():
+            raise RuntimeError(f"Cannot locate dev app binary for {app_name}; run with --build")
+    except (Exception, KeyboardInterrupt) as error:
+        return setup_failed(error)
 
     emit(f"Full regression timestamp (local): {ts} ({now_local.strftime('%z %Z').strip()})")
     emit(f"Repo root: {REPO_ROOT}")
@@ -1618,8 +1737,19 @@ def main() -> int:
     emit(f"Node: {node}")
     emit("")
 
-    dsm_repo = generate_recursive_submodule_fixture(node, emit)
-    emit("")
+    dsm_repo = None
+    fixture_owner = None
+    if SUBMODULE_FIXTURE_RUNNER in scripts:
+        try:
+            dsm_repo, fixture_owner = stage("submodule-fixture", lambda: generate_recursive_submodule_fixture(
+                node, emit, REPO_ROOT / "traces" / "build" / f"regression-{ts}-fixture.log",
+            ))
+        except (Exception, KeyboardInterrupt) as error:
+            return setup_failed(error)
+    else:
+        emit("[stage:submodule-fixture] SKIP — not required by selected runners")
+    emit("TEST PREPARATION COMPLETE — starting selected runners.")
+    tests_started = time.monotonic()
 
     results: List[RunResult] = []
 
@@ -1635,10 +1765,16 @@ def main() -> int:
 
     user_data_temp_dirs: List[str] = []
     interrupted = False
+    execution_error = None
+    current_script = None
+    current_phase = "runner-preparation"
+    attempted_scripts = set()
 
     try:
         total = len(scripts)
         for idx, script in enumerate(scripts, 1):
+            current_script = script
+            current_phase = "runner-preparation"
             timeout_sec = PER_SCRIPT_TIMEOUT_OVERRIDES_SEC.get(script, PER_SCRIPT_TIMEOUT_SEC)
             over = "  ⚠ over 5-min budget" if timeout_sec > RUNNER_BUDGET_SEC else ""
             emit("")
@@ -1657,7 +1793,9 @@ def main() -> int:
                 ))
                 continue
 
-            kill_app(app_name)
+            current_phase = "prerun-cleanup"
+            kill_app(app_name, app_bin)
+            current_phase = "runner-preparation"
             time.sleep(INTER_SCRIPT_SLEEP_SEC)
 
             user_data = tempfile.mkdtemp(prefix="onward-regression-userdata.")
@@ -1675,6 +1813,8 @@ def main() -> int:
                 extra_args = [str(runner_internal_log), dsm_repo or ""]
 
             runner_started_epoch = time.time()
+            current_phase = "runner"
+            attempted_scripts.add(script)
             try:
                 rc, elapsed = run_one(
                     script=script,
@@ -1691,22 +1831,32 @@ def main() -> int:
                 emit("")
                 emit("INTERRUPTED — stopping after current runner.")
                 interrupted = True
-                kill_app(app_name)
                 results.append(RunResult(
                     script=script, status="ERROR", exit_code=None,
                     elapsed_sec=0.0,
                     log_file=str(log_path.relative_to(out_dir)),
                     note="interrupted by user (SIGINT)",
                 ))
+                current_phase = "interrupt-cleanup"
+                kill_app(app_name, app_bin)
                 break
 
             over_budget = elapsed > RUNNER_BUDGET_SEC
             status = status_from_rc(rc)
+            # Retain the completed attempt even if cleanup or retry later raises.
+            current_result = RunResult(
+                script=script, status=status, exit_code=rc,
+                elapsed_sec=round(elapsed, 1),
+                log_file=str(log_path.relative_to(out_dir)), over_budget=over_budget,
+            )
+            results.append(current_result)
+            current_phase = "runner-result"
             if status == "PASS":
                 emit(f"PASS {script} ({elapsed:.0f}s)")
             elif status == "TIMEOUT":
                 emit(f"FAIL {script} (timeout after {elapsed:.0f}s)")
-                kill_app(app_name)
+                current_phase = "timeout-cleanup"
+                kill_app(app_name, app_bin)
             else:
                 emit(f"FAIL {script} (exit={rc}, {elapsed:.0f}s)")
 
@@ -1729,6 +1879,7 @@ def main() -> int:
             # green exit code, and skip the flake retry (a retry cannot
             # un-crash a process; FLAKY reclassification is bypassed).
             crash_evidence: List[str] = []
+            current_phase = "crash-evidence"
             crash_evidence += sweep_crash_reports(app_name, runner_started_epoch, script, emit)
             crash_evidence += [f"minidump {d}" for d in sweep_crash_dumps(user_data)]
             crash_evidence += [f"hard-floor token '{t}'" for t in scan_hard_floor_tokens(log_path)]
@@ -1738,6 +1889,8 @@ def main() -> int:
                 if status == "PASS":
                     emit(f"  ✗ {script} reclassified PASS → FAIL (quit-crash gate)")
                 status = "FAIL"
+            current_result.status = status
+            current_result.note = "; ".join(crash_evidence)[:500]
 
             first_status = status
             retried = False
@@ -1745,12 +1898,15 @@ def main() -> int:
             if status in ("FAIL", "TIMEOUT") and not args.no_flake_retry and not crash_evidence:
                 emit(f"  ↻ isolation retry: re-running {Path(script).stem} alone "
                      "to classify flake vs real ...")
-                kill_app(app_name)
+                current_phase = "retry-prerun-cleanup"
+                kill_app(app_name, app_bin)
+                current_phase = "retry-preparation"
                 time.sleep(INTER_SCRIPT_SLEEP_SEC)
                 retry_user_data = tempfile.mkdtemp(prefix="onward-regression-userdata.")
                 user_data_temp_dirs.append(retry_user_data)
                 retry_elapsed = 0.0
                 retry_started_epoch = time.time()
+                current_phase = "retry-runner"
                 try:
                     retry_rc, retry_elapsed = run_one(
                         script=script, bash=bash, node=node, app_bin=app_bin,
@@ -1761,7 +1917,8 @@ def main() -> int:
                     emit("")
                     emit("INTERRUPTED during isolation retry — stopping.")
                     interrupted = True
-                    kill_app(app_name)
+                    current_phase = "retry-interrupt-cleanup"
+                    kill_app(app_name, app_bin)
                     retry_rc = None
                 if retry_rc is not None:
                     retried = True
@@ -1782,31 +1939,64 @@ def main() -> int:
                     else:
                         emit(f"  ✗ CONFIRMED {status} {script}: failed AGAIN on isolation "
                              f"retry (exit={retry_rc}) — a real failure.")
-                    kill_app(app_name)
+                    current_result.status = status
+                    current_result.retried = retried
+                    current_result.first_status = first_status
+                    current_result.retry_exit_code = retry_rc
+                    current_result.note = "; ".join(crash_evidence)[:500]
+                    current_phase = "retry-postrun-cleanup"
+                    kill_app(app_name, app_bin)
 
-            results.append(RunResult(
-                script=script, status=status, exit_code=rc,
-                elapsed_sec=round(elapsed, 1),
-                log_file=str(log_path.relative_to(out_dir)),
-                over_budget=over_budget,
-                retried=retried,
-                first_status=first_status if retried else None,
-                retry_exit_code=retry_rc if retried else None,
-                note=("; ".join(crash_evidence)[:500] if crash_evidence else ""),
-            ))
             if interrupted:
                 break
 
-            kill_app(app_name)
+            current_phase = "postrun-cleanup"
+            kill_app(app_name, app_bin)
             # Defence-in-depth: even with the per-runner EXIT traps, sweep
             # `__autotest_*` from the repo root after each script so a crash
             # before the trap fires (or a missing trap in a future runner)
             # cannot pollute the working tree.
+            current_phase = "postrun-sweep"
             sweep_autotest_root_leftovers(emit)
             time.sleep(INTER_SCRIPT_SLEEP_SEC)
+    except (Exception, KeyboardInterrupt) as error:
+        interrupted = interrupted or isinstance(error, KeyboardInterrupt)
+        execution_error = {
+            "script": current_script, "phase": current_phase,
+            "type": type(error).__name__, "error": str(error),
+        }
+        stages.append(dict(execution_error, status="ERROR"))
+        emit(f"ERROR: aborting regression at {current_script} [{current_phase}]: "
+             f"{type(error).__name__}: {error}")
+        # A separate infrastructure row preserves every completed runner verdict.
+        results.append(RunResult(
+            script=current_script or "orchestrator", status="ERROR", exit_code=None,
+            elapsed_sec=0.0,
+            log_file=str(logs_dir.joinpath(Path(current_script).stem + ".log").relative_to(out_dir))
+            if current_script in attempted_scripts else "",
+            note=f"orchestrator {current_phase}: {type(error).__name__}: {error}",
+        ))
     finally:
         for d in user_data_temp_dirs:
             shutil.rmtree(d, ignore_errors=True)
+        if fixture_owner:
+            try:
+                remove_tree_strict(Path(fixture_owner))
+                emit("[cleanup] removed recursive-submodule fixture")
+            except OSError as error:
+                emit(f"ERROR: fixture cleanup failed: {error}")
+                results.append(RunResult(
+                    script=SUBMODULE_FIXTURE_RUNNER, status="ERROR", exit_code=None,
+                    elapsed_sec=0.0, log_file="", note=f"fixture cleanup failed: {error}",
+                ))
+
+    unrun_scripts = [s for s in scripts if s not in attempted_scripts
+                     and not any(r.script == s and r.status == "SKIP" for r in results)]
+    tests_status = ("ERROR" if any(r.status == "ERROR" for r in results)
+                    else "INTERRUPTED" if interrupted else "COMPLETE")
+    stages.append({"phase": "tests", "status": tests_status,
+                   "elapsed_sec": round(time.monotonic() - tests_started, 3)})
+    stage_path.write_text(json.dumps(stages, indent=2) + "\n", encoding="utf-8")
 
     passed = sum(1 for r in results if r.status == "PASS")
     failed = sum(1 for r in results if r.status in ("FAIL", "TIMEOUT"))
@@ -1815,7 +2005,8 @@ def main() -> int:
     errored = sum(1 for r in results if r.status == "ERROR")
 
     emit("")
-    emit("=== FULL REGRESSION SUMMARY ===")
+    emit("=== ABORTED REGRESSION SUMMARY ===" if tests_status != "COMPLETE"
+         else "=== FULL REGRESSION SUMMARY ===")
     emit(f"Passed:  {passed}")
     emit(f"Failed:  {failed}")
     if flaky:
@@ -1823,6 +2014,9 @@ def main() -> int:
     emit(f"Skipped: {skipped}")
     if errored:
         emit(f"Errored: {errored}")
+    emit(f"Unrun:   {len(unrun_scripts)}")
+    for script in unrun_scripts:
+        emit(f"  UNRUN {script}")
     if failed:
         emit("Failed scripts (failed AGAIN on isolation retry — real):")
         for r in results:
@@ -1869,6 +2063,12 @@ def main() -> int:
         "app_name": app_name,
         "app_bin": str(app_bin),
         "interrupted": interrupted,
+        "status": tests_status,
+        "execution_error": execution_error,
+        "unrun": len(unrun_scripts),
+        "unrun_scripts": unrun_scripts,
+        "stages": stages,
+        "build_log": str(build_log_path) if args.build else None,
         "passed": passed,
         "failed": failed,
         "flaky": flaky,
@@ -1886,7 +2086,7 @@ def main() -> int:
 
     if interrupted:
         return 130
-    return 1 if failed else 0
+    return 1 if failed or errored else 0
 
 
 if __name__ == "__main__":

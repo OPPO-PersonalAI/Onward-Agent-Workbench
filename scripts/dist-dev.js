@@ -5,7 +5,7 @@
  */
 
 const { execSync, spawnSync, spawn } = require('child_process')
-const { existsSync, readFileSync, readdirSync } = require('fs')
+const { existsSync, readFileSync } = require('fs')
 const { join } = require('path')
 
 function run(command, args) {
@@ -72,39 +72,20 @@ function shouldOpenPackagedApp() {
  */
 function getPackagedAppPath(productName) {
   const releaseRoot = join(__dirname, '..', 'release')
-  if (!existsSync(releaseRoot)) return null
-
-  if (process.platform === 'darwin') {
-    let dirNames = []
-    try {
-      dirNames = readdirSync(releaseRoot).filter((n) => n === 'mac' || n.startsWith('mac-'))
-    } catch {
-      return null
-    }
-    for (const dirName of dirNames) {
-      const dir = join(releaseRoot, dirName)
-      const direct = join(dir, `${productName}.app`)
-      if (existsSync(direct)) return direct
-      try {
-        for (const ent of readdirSync(dir)) {
-          if (ent.endsWith('.app')) return join(dir, ent)
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    return null
+  // Match electron-builder's default output names; never launch a foreign target.
+  const directories = {
+    darwin: { x64: ['mac', 'mac-universal'], arm64: ['mac-arm64', 'mac-universal'] },
+    win32: { x64: ['win-unpacked'], arm64: ['win-arm64-unpacked'], ia32: ['win-ia32-unpacked'] },
+    linux: { x64: ['linux-unpacked'], arm64: ['linux-arm64-unpacked'], ia32: ['linux-ia32-unpacked'], arm: ['linux-armv7l-unpacked'] }
   }
-
-  if (process.platform === 'win32') {
-    const dir = join(releaseRoot, 'win-unpacked')
-    const exePath = join(dir, `${productName}.exe`)
-    return existsSync(exePath) ? exePath : null
+  for (const directory of directories[process.platform]?.[process.arch] || []) {
+    const name = process.platform === 'darwin' ? `${productName}.app`
+      : process.platform === 'win32' ? `${productName}.exe` : productName
+    const appPath = join(releaseRoot, directory, name)
+    const binary = process.platform === 'darwin' ? join(appPath, 'Contents', 'MacOS', productName) : appPath
+    if (existsSync(binary)) return appPath
   }
-
-  const dir = join(releaseRoot, 'linux-unpacked')
-  const binPath = join(dir, productName)
-  return existsSync(binPath) ? binPath : null
+  return null
 }
 
 /**
