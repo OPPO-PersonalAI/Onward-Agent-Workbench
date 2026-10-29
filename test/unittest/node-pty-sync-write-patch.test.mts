@@ -10,14 +10,13 @@
  * `fs.writeSync` + EAGAIN requeue.
  *
  * The patched code lives inside node_modules (applied by pnpm from
- * patches/node-pty@1.1.0.patch), where its logic cannot be imported into
+ * the package.json-declared pnpm patch), where its logic cannot be imported into
  * a plain-Node test without loading the native binding. This test locks
  * the two things that CAN silently regress:
  *   1. the installed lib actually carries the sync flush (a node-pty
  *      version bump that drops the patch fails loudly here, not at the
  *      next display-sleep incident);
- *   2. the patch file itself keeps both the Windows conpty hunks and the
- *      posix sync-write hunks.
+ *   2. upstream Windows guards and the POSIX patch both remain installed.
  * Behaviour is locked end-to-end by the terminal autotest suites (every
  * terminal case types through the patched path) and `run-infra-watchdog`.
  *
@@ -32,7 +31,10 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const installedLib = join(repoRoot, 'node_modules', 'node-pty', 'lib', 'unixTerminal.js')
-const patchFile = join(repoRoot, 'patches', 'node-pty@1.1.0.patch')
+const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+const installedRoot = join(repoRoot, 'node_modules', 'node-pty')
+const installedVersion = JSON.parse(readFileSync(join(installedRoot, 'package.json'), 'utf8')).version
+const patchFile = join(repoRoot, manifest.pnpm.patchedDependencies[`node-pty@${installedVersion}`])
 
 test('NPS-U-01 installed node-pty lib flushes the pty write queue synchronously', () => {
   assert.ok(existsSync(installedLib), `missing ${installedLib} — run pnpm install`)
@@ -53,9 +55,21 @@ test('NPS-U-02 installed lib keeps the EAGAIN requeue semantics', () => {
   assert.match(processQueue, /setImmediate/, 'setImmediate requeue missing from sync flush')
 })
 
-test('NPS-U-03 patch file carries both the Windows conpty and the posix sync-write hunks', () => {
+test('NPS-U-03 POSIX patch and upstream Windows console guards are installed together', () => {
   const patch = readFileSync(patchFile, 'utf-8')
-  assert.match(patch, /conpty_console_list_agent/, 'Windows conpty hunk lost from the patch')
   assert.match(patch, /writeSync/, 'posix sync-write hunk lost from the patch')
   assert.match(patch, /unixTerminal/, 'unixTerminal hunk missing from the patch')
+  const agent = readFileSync(join(installedRoot, 'lib', 'conpty_console_list_agent.js'), 'utf8')
+  assert.match(agent, /shellPid > 0/)
+  assert.match(agent, /catch/)
+  const windows = readFileSync(join(installedRoot, 'lib', 'windowsPtyAgent.js'), 'utf8')
+  assert.match(windows, /_innerPid <= 0/)
+})
+
+test('NPS-U-04 Windows native source carries registry synchronization and idempotent handle close', () => {
+  const source = readFileSync(join(installedRoot, 'src', 'win', 'conpty.cc'), 'utf8')
+  assert.match(source, /g_ptyHandlesMutex/)
+  assert.match(source, /std::atomic<int> ptyCounter/)
+  assert.match(source, /lock_guard<std::mutex>/)
+  assert.match(source, /hpc = nullptr/)
 })

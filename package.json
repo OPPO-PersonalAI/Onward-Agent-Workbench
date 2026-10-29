@@ -21,14 +21,14 @@
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "test:unit": "node test/autotest/run-unittest-suite.mjs",
     "preview": "electron-vite preview",
-    "postinstall": "node scripts/ensure-electron-binary.js && electron-rebuild -f -o better-sqlite3 && node scripts/ensure-node-pty-spawn-helper.js && node scripts/ensure-ripgrep-binary.js",
+    "postinstall": "node scripts/ensure-electron-binary.js && electron-rebuild -f -o better-sqlite3 && node scripts/ensure-windows-process-tree.js && node scripts/ensure-node-pty-native.js && node scripts/ensure-node-pty-spawn-helper.js && node scripts/ensure-ripgrep-binary.js",
     "rebuild": "electron-rebuild -f -o better-sqlite3",
     "lint:comments": "node scripts/check-chinese-comments.js",
     "compile:changelog": "node scripts/compile-changelog.js",
     "generate:changelog": "node scripts/generate-changelog.js",
     "generate:icons": "node scripts/generate-icons.js",
-    "pack": "node scripts/ensure-node-pty-spawn-helper.js && electron-vite build && electron-builder --dir",
-    "dist": "node scripts/ensure-node-pty-spawn-helper.js && electron-vite build && electron-builder",
+    "pack": "node scripts/ensure-node-pty-spawn-helper.js && node scripts/ensure-windows-process-tree.js && electron-vite build && electron-builder --dir",
+    "dist": "node scripts/ensure-node-pty-spawn-helper.js && node scripts/ensure-windows-process-tree.js && electron-vite build && electron-builder",
     "dist:dev": "node scripts/dist-dev.js",
     "dist:release": "node scripts/dist-release.js",
     "generate-notices": "license-checker-rseidelsohn --production --plainVertical --out ThirdPartyNotices.txt && node scripts/normalize-notices.js",
@@ -39,6 +39,7 @@
     "productName": "Onward 2",
     "copyright": "Copyright © 2026 OPPO",
     "npmRebuild": false,
+    "beforePack": "./scripts/windows-process-tree-before-pack.js",
     "directories": {
       "output": "release"
     },
@@ -50,7 +51,8 @@
       "node_modules/@parcel/watcher-*/**",
       "node_modules/@vscode/ripgrep/**",
       "node_modules/@vscode/ripgrep-*/**",
-      "node_modules/node-pty/**"
+      "node_modules/node-pty/**",
+      "node_modules/@vscode/windows-process-tree/**"
     ],
     "extraResources": [
       {
@@ -104,6 +106,7 @@
     "@parcel/watcher": "^2.6.0",
     "@pierre/diffs": "^1.0.10",
     "@vscode/ripgrep": "^1.18.0",
+    "@vscode/windows-process-tree": "0.8.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.15.0",
     "@xterm/addon-web-links": "^0.11.0",
@@ -120,7 +123,7 @@
     "marked-katex-extension": "^5.1.7",
     "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
-    "node-pty": "^1.0.0",
+    "node-pty": "1.2.0-beta.18",
     "panzoom": "^9.4.4",
     "posthog-node": "^5.45.2",
     "seti-icons": "0.0.4",
@@ -164,8 +167,9 @@
       "https-proxy-agent": ">=7.0.6"
     },
     "patchedDependencies": {
+      "@vscode/windows-process-tree@0.8.0": "patches/@vscode__windows-process-tree@0.8.0.patch",
       "@xterm/addon-webgl@0.18.0": "patches/@xterm__addon-webgl@0.18.0.patch",
-      "node-pty@1.1.0": "patches/node-pty@1.1.0.patch"
+      "node-pty@1.2.0-beta.18": "patches/node-pty@1.2.0-beta.18.patch"
     },
     "onlyBuiltDependencies": [
       "@parcel/watcher",

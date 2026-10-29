@@ -1,0 +1,196 @@
+diff --git a/lib/unixTerminal.js b/lib/unixTerminal.js
+--- a/lib/unixTerminal.js
++++ b/lib/unixTerminal.js
+@@ -304,42 +304,53 @@ var CustomWriteStream = /** @class */ (function () {
+     CustomWriteStream.prototype._processWriteQueue = function () {
+         var _this = this;
+         this._writeImmediate = undefined;
+-        if (this._writeQueue.length === 0) {
+-            return;
+-        }
+-        var task = this._writeQueue[0];
+-        // Write to the underlying file descriptor and handle it directly, rather
+-        // than using the `net.Socket`/`tty.WriteStream` wrappers which swallow and
+-        // mask errors like EAGAIN and can cause the thread to block indefinitely.
+-        fs.write(this._fd, task.buffer, task.offset, function (err, written) {
+-            if (err) {
+-                if ('code' in err && err.code === 'EAGAIN') {
+-                    // `setImmediate` is used to yield to the event loop and re-attempt
+-                    // the write later.
+-                    _this._writeImmediate = setImmediate(function () { return _this._processWriteQueue(); });
++        // Onward patch (infra-failure resilience): flush the queue with
++        // synchronous writes on the non-blocking pty fd instead of callback
++        // fs.write. fs.write routes through the libuv threadpool; a stalled
++        // threadpool (observed in production after a macOS display-sleep /
++        // remote-desktop disconnect boundary) strands every queued keystroke
++        // forever while the API keeps reporting success. fs.writeSync on an
++        // O_NONBLOCK fd never blocks the thread: it either writes immediately
++        // or throws EAGAIN, which is handled exactly like the async version
++        // did (yield via setImmediate, retry). A per-flush byte budget keeps
++        // large pastes from monopolizing the event loop.
++        // Upstream context on why the tty/net stream wrappers are avoided:
++        // https://github.com/microsoft/node-pty/issues/833 (PR #831).
++        var budget = 65536;
++        while (this._writeQueue.length > 0 && budget > 0) {
++            var task = this._writeQueue[0];
++            var written = void 0;
++            try {
++                written = fs.writeSync(this._fd, task.buffer, task.offset);
++            }
++            catch (err) {
++                if (err && err.code === 'EAGAIN') {
++                    // Kernel pty buffer full: yield to the event loop, retry.
++                    globalThis.__onwardPtyEagainCount = (globalThis.__onwardPtyEagainCount || 0) + 1;
++                    this._writeImmediate = setImmediate(function () { return _this._processWriteQueue(); });
+                 }
+                 else {
+                     // Stop processing immediately on unexpected error and log
+-                    _this._writeQueue.length = 0;
++                    this._writeQueue.length = 0;
++                    globalThis.__onwardPtyWriteErrorCount = (globalThis.__onwardPtyWriteErrorCount || 0) + 1;
+                     console.error('Unhandled pty write error', err);
+                 }
+                 return;
+             }
++            budget -= written;
+             task.offset += written;
+             if (task.offset >= task.buffer.byteLength) {
+-                _this._writeQueue.shift();
++                this._writeQueue.shift();
+             }
+-            // Since there is more room in the kernel buffer, we can continue to write
+-            // until we hit EAGAIN or exhaust the queue.
+-            //
+-            // Note that old versions of bash, like v3.2 which ships in macOS, appears
+-            // to have a bug in its readline implementation that causes data
+-            // corruption when writes to the pty happens too quickly. Instead of
+-            // trying to workaround that we just accept it so that large pastes are as
+-            // fast as possible.
+-            // Context: https://github.com/microsoft/node-pty/issues/833
+-            _this._processWriteQueue();
+-        });
++            else if (written === 0) {
++                // Defensive: no forward progress without EAGAIN — break to the
++                // trailing reschedule instead of spinning.
++                break;
++            }
++        }
++        if (this._writeQueue.length > 0 && this._writeImmediate === undefined) {
++            this._writeImmediate = setImmediate(function () { return _this._processWriteQueue(); });
++        }
+     };
+     return CustomWriteStream;
+ }());
+diff --git a/src/win/conpty.cc b/src/win/conpty.cc
+--- a/src/win/conpty.cc
++++ b/src/win/conpty.cc
+@@ -28,2 +28,3 @@
+ #include "conpty.h"
++#include "onward_exit_callback.h"
+ 
+@@ -74,25 +75,15 @@
+-struct ExitEvent {
+-  int exit_code = 0;
+-};
+-
+ void SetupExitCallback(Napi::Env env, Napi::Function cb, pty_baton* baton) {
+   std::thread *th = new std::thread;
+   // Don't use Napi::AsyncWorker which is limited by UV_THREADPOOL_SIZE.
+-  auto tsfn = Napi::ThreadSafeFunction::New(
+-      env,
+-      cb,                           // JavaScript function called asynchronously
+-      "SetupExitCallback_resource", // Name
+-      0,                            // Unlimited queue
+-      1,                            // Only one thread will use this initially
+-      [th](Napi::Env) {   // Finalizer used to clean threads up
+-        th->join();
+-        delete th;
+-      });
+-  *th = std::thread([tsfn = std::move(tsfn), baton] {
+-    auto callback = [](Napi::Env env, Napi::Function cb, ExitEvent *exit_event) {
+-      cb.Call({Napi::Number::New(env, exit_event->exit_code)});
+-      delete exit_event;
+-    };
+-
+-    ExitEvent *exit_event = new ExitEvent;
++  napi_threadsafe_function tsfn;
++  const auto status = napi_create_threadsafe_function(env, cb, nullptr,
++      Napi::String::New(env, "SetupExitCallback_resource"), 0, 1, th,
++      [](napi_env, void* data, void*) {
++        auto thread = static_cast<std::thread*>(data);
++        thread->join();
++        delete thread;
++      }, nullptr, onward_pty::CallExit, &tsfn);
++  if (status != napi_ok) { delete th; throw Napi::Error::New(env, "Exit callback setup failed"); }
++  *th = std::thread([tsfn, baton] {
++    auto exit_event = std::make_unique<onward_pty::ExitEvent>();
+     // Wait for process to complete.
+@@ -110,18 +101,2 @@
+-    auto status = tsfn.BlockingCall(exit_event, callback); // In main thread
+-    switch (status) {
+-      case napi_closing:
+-        break;
+-
+-      case napi_queue_full:
+-        Napi::Error::Fatal("SetupExitCallback", "Queue was full");
+-
+-      case napi_ok:
+-        if (tsfn.Release() != napi_ok) {
+-          Napi::Error::Fatal("SetupExitCallback", "ThreadSafeFunction.Release() failed");
+-        }
+-        break;
+-
+-      default:
+-        Napi::Error::Fatal("SetupExitCallback", "ThreadSafeFunction.BlockingCall() failed");
+-    }
++    onward_pty::QueueExit(tsfn, std::move(exit_event));
+   });
+@@ -673,1 +648,2 @@
++  exports.Set("onwardSafeExitCallback", Napi::Number::New(env, 1));
+   exports.Set("startProcess", Napi::Function::New(env, PtyStartProcess));
+diff --git a/src/win/onward_exit_callback.h b/src/win/onward_exit_callback.h
+new file mode 100644
+--- /dev/null
++++ b/src/win/onward_exit_callback.h
+@@ -0,0 +1,41 @@
++// SPDX-FileCopyrightText: 2026 OPPO
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++#include <node_api.h>
++#include <cstdio>
++#include <memory>
++
++namespace onward_pty {
++struct ExitEvent { int exit_code = 0; };
++inline void ReportStatus(const char* phase, napi_status status) noexcept {
++  if (status != napi_ok && status != napi_pending_exception && status != napi_cannot_run_js)
++    std::fprintf(stderr, "[node-pty] exit-%s Node-API status=%d\n", phase, static_cast<int>(status));
++}
++inline void CallExit(napi_env env, napi_value callback, void*, void* data) noexcept {
++  std::unique_ptr<ExitEvent> event(static_cast<ExitEvent*>(data));
++  // Raw TSFN dispatch includes null-env queue draining during teardown.
++  if (!event || !env || !callback) return;
++  napi_value receiver = nullptr;
++  napi_value argument = nullptr;
++  auto status = napi_get_undefined(env, &receiver);
++  if (status == napi_ok) status = napi_create_int32(env, event->exit_code, &argument);
++  if (status == napi_ok) status = napi_call_function(env, receiver, callback, 1, &argument, nullptr);
++  // Preserve real pending JS exceptions; shutdown on API <10 can return the
++  // same status without an exception. Neither case may throw a C++ exception.
++  ReportStatus("callback", status);
++}
++inline void QueueExit(napi_threadsafe_function tsfn, std::unique_ptr<ExitEvent> event) noexcept {
++  // Release before enqueue: the consumer may run before enqueue returns.
++  auto* payload = event.release();
++  const auto status = napi_call_threadsafe_function(tsfn, payload, napi_tsfn_blocking);
++  if (status != napi_ok) {
++    event.reset(payload);
++    // Closing consumes the producer's participation. Any further TSFN access
++    // (including release) is forbidden by the Node-API ownership contract.
++    if (status == napi_closing) return;
++    ReportStatus("enqueue", status);
++  }
++  const auto released = napi_release_threadsafe_function(tsfn, napi_tsfn_release);
++  if (released != napi_ok && released != napi_closing) ReportStatus("release", released);
++}
++} // namespace onward_pty

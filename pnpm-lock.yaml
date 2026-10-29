@@ -24,12 +24,15 @@ overrides:
   https-proxy-agent: '>=7.0.6'
 
 patchedDependencies:
+  '@vscode/windows-process-tree@0.8.0':
+    hash: 72ca8e8c982382ddb3cb5995d91b58fe04bb127b9bbdcb53899fbe852f118ffb
+    path: patches/@vscode__windows-process-tree@0.8.0.patch
   '@xterm/addon-webgl@0.18.0':
     hash: 8232d573c37832131107416944343857fab24d7b6575b157238b25deb8fa5721
     path: patches/@xterm__addon-webgl@0.18.0.patch
-  node-pty@1.1.0:
-    hash: bfbe15fbf2d997c78dd171f260da54e143ee945b1820679b39d0561c24bf83fb
-    path: patches/node-pty@1.1.0.patch
+  node-pty@1.2.0-beta.18:
+    hash: 2a23c98e6ced9f394403b64933707c666f74f5d9454604a6f0dd9c9ae845f445
+    path: patches/node-pty@1.2.0-beta.18.patch
 
 importers:
 
@@ -47,6 +50,9 @@ importers:
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
+      '@vscode/windows-process-tree':
+        specifier: 0.8.0
+        version: 0.8.0(patch_hash=72ca8e8c982382ddb3cb5995d91b58fe04bb127b9bbdcb53899fbe852f118ffb)
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
@@ -96,8 +102,8 @@ importers:
         specifier: ^0.55.1
         version: 0.55.1
       node-pty:
-        specifier: ^1.0.0
-        version: 1.1.0(patch_hash=bfbe15fbf2d997c78dd171f260da54e143ee945b1820679b39d0561c24bf83fb)
+        specifier: 1.2.0-beta.18
+        version: 1.2.0-beta.18(patch_hash=2a23c98e6ced9f394403b64933707c666f74f5d9454604a6f0dd9c9ae845f445)
       panzoom:
         specifier: ^9.4.4
         version: 9.4.4
@@ -1122,6 +1128,9 @@ packages:
 
   '@vscode/ripgrep@1.18.0':
     resolution: {integrity: sha512-ns5lWe44tSfbTMbVUsyB+I1819PVSw4AdpgK0RNkzfWfwy6+3IUNSxwSrfTno1/oWaS/hERNz+XLWVyga2aJBQ==}
+
+  '@vscode/windows-process-tree@0.8.0':
+    resolution: {integrity: sha512-TI+h2GRwX+igD/YYJMQQVAFcsCNSg7Te2yYxQpKMzwto5RsJ8d2KKgOeur/p/6sAOQwZvopiTDOClyTHEn9MhQ==}
 
   '@xmldom/xmldom@0.8.12':
     resolution: {integrity: sha512-9k/gHF6n/pAi/9tqr3m3aqkuiNosYTurLLUtc7xQ9sxB/wm7WPygCv8GYa6mS0fLJEHhqMC1ATYhz++U/lRHqg==}
@@ -2593,6 +2602,10 @@ packages:
   node-addon-api@1.7.2:
     resolution: {integrity: sha512-ibPK3iA+vaY1eEjESkQkM0BbCqFOaZMiXRTtdB0u7b4djtY6JnsjvPdUHVMg6xQt3B8fpTTWHI9A+ADjM9frzg==}
 
+  node-addon-api@7.1.0:
+    resolution: {integrity: sha512-mNcltoe1R8o7STTegSOHdnJNN7s5EUvhoS7ShnTHDyOSd+8H+UdWODq6qSv67PjC8Zc5JRT8+oLAMCr0SIXw7g==}
+    engines: {node: ^16 || ^18 || >= 20}
+
   node-addon-api@7.1.1:
     resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
 
@@ -2608,8 +2621,8 @@ packages:
     engines: {node: ^20.17.0 || >=22.9.0}
     hasBin: true
 
-  node-pty@1.1.0:
-    resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
+  node-pty@1.2.0-beta.18:
+    resolution: {integrity: sha512-3Rej3788OnasAwoSmTZhlCeUraJ9CQldtL5b571b9+3Nv47+PaxA5VPIGOOs+16OYQePTrC1Lrs8a9/df5WPRg==}
 
   node-releases@2.0.27:
     resolution: {integrity: sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==}
@@ -4361,6 +4374,10 @@ snapshots:
       '@vscode/ripgrep-win32-arm64': 1.18.0
       '@vscode/ripgrep-win32-ia32': 1.18.0
       '@vscode/ripgrep-win32-x64': 1.18.0
+
+  '@vscode/windows-process-tree@0.8.0(patch_hash=72ca8e8c982382ddb3cb5995d91b58fe04bb127b9bbdcb53899fbe852f118ffb)':
+    dependencies:
+      node-addon-api: 7.1.0
 
   '@xmldom/xmldom@0.8.12': {}
 
@@ -6139,6 +6156,8 @@ snapshots:
   node-addon-api@1.7.2:
     optional: true
 
+  node-addon-api@7.1.0: {}
+
   node-addon-api@7.1.1: {}
 
   node-addon-api@8.9.0: {}
@@ -6160,7 +6179,7 @@ snapshots:
       undici: 6.28.0
       which: 6.0.1
 
-  node-pty@1.1.0(patch_hash=bfbe15fbf2d997c78dd171f260da54e143ee945b1820679b39d0561c24bf83fb):
+  node-pty@1.2.0-beta.18(patch_hash=2a23c98e6ced9f394403b64933707c666f74f5d9454604a6f0dd9c9ae845f445):
     dependencies:
       node-addon-api: 7.1.1
 

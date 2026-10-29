@@ -1,0 +1,105 @@
+diff --git a/src/process.cc b/src/process.cc
+--- a/src/process.cc
++++ b/src/process.cc
+@@ -18,4 +18,7 @@
+   uint32_t process_count = 0;
+   HANDLE snapshot_handle = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
++  if (snapshot_handle == INVALID_HANDLE_VALUE) {
++    return UINT32_MAX;
++  }
+   process_entry.dwSize = sizeof(PROCESSENTRY32);
+   if (Process32First(snapshot_handle, &process_entry)) {
+@@ -39,5 +42,12 @@
+-    } while (process_count < 1024 && Process32Next(snapshot_handle, &process_entry));
++    } while (Process32Next(snapshot_handle, &process_entry));
++    if (GetLastError() != ERROR_NO_MORE_FILES) {
++      CloseHandle(snapshot_handle);
++      return UINT32_MAX;
++    }
++  } else if (GetLastError() != ERROR_NO_MORE_FILES) {
++    CloseHandle(snapshot_handle);
++    return UINT32_MAX;
+   }
+ 
+   CloseHandle(snapshot_handle);
+   return process_count;
+diff --git a/src/process_worker.cc b/src/process_worker.cc
+--- a/src/process_worker.cc
++++ b/src/process_worker.cc
+@@ -6,2 +6,3 @@
+ #include "process_worker.h"
++#include "onward_completion.h"
+ 
+@@ -20,2 +21,3 @@
+ void GetProcessesWorker::OnOK() {
++  onward_process_tree::CompleteSafely(Env(), "process-list", [&] {
+   Napi::HandleScope scope(Env());
+@@ -22,3 +24,7 @@
+   Napi::Env env = Env();
++  if (process_count_ == UINT32_MAX) {
++    Callback().Call({env.Undefined()});
++    return;
++  }
+   // Transfer results into actual result object
+   Napi::Array result = Napi::Array::New(env, process_count_);
+@@ -49,2 +55,3 @@
+   Callback().Call({result});
++  });
+ }
+diff --git a/src/addon.cc b/src/addon.cc
+--- a/src/addon.cc
++++ b/src/addon.cc
+@@ -55,3 +55,4 @@
+ Napi::Object Init(Napi::Env env, Napi::Object exports) {
++  exports.Set("onwardCompleteSnapshot", Napi::Number::New(env, 2));
+   exports.Set("getProcessList", Napi::Function::New(env, GetProcessList));
+   exports.Set("getProcessCpuUsage", Napi::Function::New(env, GetProcessCpuUsage));
+diff --git a/src/cpu_worker.cc b/src/cpu_worker.cc
+--- a/src/cpu_worker.cc
++++ b/src/cpu_worker.cc
+@@ -6,2 +6,3 @@
+ #include "cpu_worker.h"
++#include "onward_completion.h"
+ #include <cmath>
+@@ -45,2 +46,3 @@
+ void GetCPUWorker::OnOK() {
++  onward_process_tree::CompleteSafely(Env(), "cpu-usage", [&] {
+   Napi::HandleScope scope(Env());
+@@ -62,2 +64,3 @@
+   Callback().Call({result});
++  });
+ }
+diff --git a/src/onward_completion.h b/src/onward_completion.h
+new file mode 100644
+--- /dev/null
++++ b/src/onward_completion.h
+@@ -0,0 +1,29 @@
++// SPDX-FileCopyrightText: 2026 OPPO
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++#include <napi.h>
++#include <cstdio>
++namespace onward_process_tree {
++template <typename Callback>
++void CompleteSafely(napi_env env, const char* kind, Callback complete) {
++  try {
++    complete();
++  } catch (const Napi::Error& error) {
++    // Do not call ThrowAsJavaScriptException: Node may have disabled JS while
++    // draining AsyncWorker completions, so its exception translation can throw
++    // a second C++ error. Returning lets AsyncWorker destroy its owned payload.
++    bool pending = false;
++    napi_status status = napi_is_exception_pending(env, &pending);
++    if (status == napi_ok && pending) return;
++    napi_value exception = nullptr;
++    if (status == napi_ok)
++      status = napi_get_reference_value(env, static_cast<napi_ref>(error), &exception);
++    if (status == napi_ok) status = napi_throw(env, exception);
++    // An ordinary JS callback error is rethrown unchanged. During teardown,
++    // retain native-only evidence without entering another JS callback.
++    if (status != napi_ok)
++      std::fprintf(stderr, "[process-tree] completion kind=%s status=%d pending=%d\n",
++        kind, static_cast<int>(status), static_cast<int>(pending));
++  }
++}
++} // namespace onward_process_tree
