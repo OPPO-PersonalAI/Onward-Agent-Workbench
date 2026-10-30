@@ -189,6 +189,26 @@
   margin-bottom: 10px;
 }
 
+.settings-shortcut-group > .settings-group-title { margin: 0; }
+.settings-shortcut-group button.settings-shortcut-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-1);
+  padding: 8px 0;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-shortcut-disclosure > span { flex-shrink: 0; }
+.settings-shortcut-disclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Row style */
 .settings-row {
   display: flex;

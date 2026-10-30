@@ -1095,6 +1095,7 @@ async function exportRoundTrip(h, originalIds) {
 async function visual(h) {
   await boot(h)
   const ids = await grid(h, 6)
+  await settingsVisual(h)
   const expectedContrast = id => ['light-modern', 'solarized-light'].includes(id) ? 4.5 : 1
   const rawPalettes = new Map()
   await h.case('TH-VIS-01-six-palettes-full-working-main-ui', async () => {
@@ -1178,6 +1179,10 @@ async function visual(h) {
     await waitBase(h, 'light-modern', 6)
     assert(await h.page.getByTestId('theme-customize').evaluate(node => node === document.activeElement), 'Cancel returns focus to Customize')
   })
+  await scheduleVisual(h, { setLanguage, resizeSettings })
+}
+
+async function settingsVisual(h) {
   await h.case('TH-UX-03-category-switches-and-manual-keyboard-five-trials', async () => {
     await resizeSettings(h, 600)
     const content = h.page.locator('.settings-content')
@@ -1220,6 +1225,37 @@ async function visual(h) {
     await h.openSettings()
     return { trials: BOOLEAN_TRIALS, breakpoint: 500, pages: SETTINGS_PAGES }
   })
+  await h.case('TH-UX-05-shortcut-disclosures-five-trials', async () => {
+    const targets = ['globalShortcuts', 'prompt-input', 'windowShortcuts', 'terminalActions', 'terminalFocus', 'tabSwitch']
+    for (const language of ['en', 'zh-CN']) {
+      await setLanguage(h, language)
+      await h.openSettings('shortcuts')
+      const groups = h.page.locator('.settings-shortcut-group')
+      assert.deepEqual(await groups.evaluateAll(nodes => nodes.map(node => node.dataset.settingsTarget)), targets)
+      const before = await h.page.evaluate(() => window.__onwardThemeDebug.getState().settings)
+      for (let trial = 0; trial < BOOLEAN_TRIALS; trial++) {
+        for (const target of targets) {
+          const group = h.page.locator(`[data-settings-target="${target}"]`)
+          const button = group.locator('.settings-shortcut-disclosure')
+          assert.equal(await button.getAttribute('aria-expanded'), 'false')
+          await button.focus()
+          await h.page.keyboard.press('Enter')
+          assert.equal(await button.getAttribute('aria-expanded'), 'true')
+          const contentId = await button.getAttribute('aria-controls')
+          assert(await h.page.locator(`[id="${contentId}"]`).isVisible())
+          assert.equal(await groups.locator('.settings-shortcut-disclosure[aria-expanded="true"]').count(), 1)
+          assert(await button.evaluate(node => node === document.activeElement))
+          await h.page.keyboard.press('Space')
+          assert.equal(await button.getAttribute('aria-expanded'), 'false')
+          assert.equal(await h.page.locator(`[id="${contentId}"]`).count(), 0)
+        }
+      }
+      assert.deepEqual(await h.page.evaluate(() => window.__onwardThemeDebug.getState().settings), before, 'Disclosure changes cannot modify saved shortcuts or Prompt actions')
+      await h.openSettings('general')
+    }
+    await setLanguage(h, 'en')
+    return { targets, trials: BOOLEAN_TRIALS, languages: ['en', 'zh-CN'] }
+  })
   await h.case('TH-UX-04-bilingual-search-targets-and-no-results', async () => {
     const entries = [
       ['general', 'language', 'Language', '语言'],
@@ -1230,6 +1266,7 @@ async function visual(h) {
       ['fonts', 'editor-font-size', 'Project Editor font size', 'Project Editor 字体大小'],
       ['fonts', 'font-family', 'Font family', '字体'],
       ['shortcuts', 'globalShortcuts', 'Global Shortcuts', '全局快捷键'],
+      ['shortcuts', 'prompt-input', 'Prompt input actions', 'Prompt'],
       ['shortcuts', 'windowShortcuts', 'Window Shortcuts', '窗口快捷键'],
       ['shortcuts', 'terminalActions', 'Terminal Actions', '终端操作'],
       ['shortcuts', 'terminalFocus', 'Terminal Focus', '终端聚焦'],
@@ -1255,6 +1292,12 @@ async function visual(h) {
         const destination = h.page.locator(`[data-settings-target="${target}"]`)
         assert(await destination.evaluate(node => node === document.activeElement), `Search focuses ${target}`)
         assert(await destination.isVisible())
+        if (page === 'shortcuts') {
+          const disclosure = destination.locator('.settings-shortcut-disclosure')
+          assert.equal(await disclosure.getAttribute('aria-expanded'), 'true', `Search expands ${target}`)
+          await disclosure.click()
+          assert.equal(await disclosure.getAttribute('aria-expanded'), 'false')
+        }
       }
       const previous = await h.page.locator('.settings-content').getAttribute('data-settings-page')
       await search.fill('NO_MATCH_739AF20')
@@ -1338,6 +1381,13 @@ async function visual(h) {
           })
           assert.deepEqual(chrome, [], `Navigation/search/header fit ${width}px/${language}/${page}`)
           screenshots.push(await h.screenshot(`settings-${width}-${language}-${page}`))
+          if (page === 'shortcuts') {
+            for (const button of await panel.locator('.settings-shortcut-disclosure').all()) {
+              if (await button.getAttribute('aria-expanded') === 'false') await button.click()
+            }
+            await assertSettingsFits(language, `${width}/shortcuts-expanded`)
+            screenshots.push(await h.screenshot(`settings-${width}-${language}-shortcuts-expanded`))
+          }
           if (page !== 'appearance') continue
           if (width === 300) captions.push(await h.page.getByTestId('theme-customize').innerText())
           await h.page.getByTestId('theme-mode').selectOption('system')
@@ -1354,7 +1404,7 @@ async function visual(h) {
     assert.notEqual(captions[0], captions[1], 'Customize is translated, not hardcoded English')
     return { widths: [300, 600], pages: SETTINGS_PAGES, languages: ['en', 'zh-CN'], screenshots, horizontalLayouts }
   })
-  await scheduleVisual(h, { setLanguage, resizeSettings })
+  await h.openSettings()
 }
 
 async function latency(h) {

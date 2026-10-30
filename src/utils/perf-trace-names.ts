@@ -69,6 +69,7 @@ export const PERF_TRACE_EVENT = {
   RENDERER_THEME_HISTORY_APPLY: 'renderer:themes.history-applied',
   RENDERER_SETTINGS_FONTS: 'renderer:settings.fonts-changed',
   RENDERER_SETTINGS_NAVIGATION: 'renderer:settings.page-changed',
+  RENDERER_SETTINGS_SHORTCUT_GROUP: 'renderer:settings.shortcut-group-toggled',
   RENDERER_SETTINGS_RESIZE: 'renderer:settings.panel-resized',
   RENDERER_THEME_EXPORT: 'renderer:themes.export-action',
   MAIN_THEME_EXPORT: 'main:themes.export-file',

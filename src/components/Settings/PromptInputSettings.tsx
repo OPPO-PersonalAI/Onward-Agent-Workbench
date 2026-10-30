@@ -261,9 +261,9 @@ export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: num
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-cancel' })
   }
 
-  return <section className="prompt-input-settings settings-group" data-settings-target="prompt-input" data-testid="prompt-input-settings" tabIndex={-1} aria-labelledby={`${id}-title`}>
+  return <section className="prompt-input-settings settings-group settings-shortcut-group" data-settings-target="prompt-input" data-testid="prompt-input-settings" tabIndex={-1} aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`} className="settings-group-title">
-      <button type="button" className="prompt-input-disclosure" ref={headingRef} data-testid="prompt-input-expand"
+      <button type="button" className="prompt-input-disclosure settings-shortcut-disclosure" ref={headingRef} data-testid="prompt-input-expand"
         aria-expanded={expanded} aria-controls={`${id}-editor`} onClick={() => {
           endDrag()
           setExpanded(value => !value)

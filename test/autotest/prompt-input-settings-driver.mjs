@@ -827,6 +827,8 @@ async function bidirectionalConflicts(h, expected) {
   const probes = h.acceptance.conflictBindings
   assert.equal(before.shortcuts.focusPromptEditor, probes.local.action)
   const globalRecorder = h.page.locator('[data-settings-target="globalShortcuts"] .shortcut-input')
+  const globalDisclosure = h.page.locator('[data-settings-target="globalShortcuts"] .settings-shortcut-disclosure')
+  if (await globalDisclosure.getAttribute('aria-expanded') === 'false') await globalDisclosure.click()
   const hidden = structuredClone(expected)
   hidden.actions.find(action => action.id === 'execute').shortcut = probes.hidden.action
   const setGlobal = async binding => {
@@ -855,6 +857,7 @@ async function bidirectionalConflicts(h, expected) {
     await h.save(hidden)
     for (const language of LANGUAGES) {
       await setLanguage(h, language)
+      if (await globalDisclosure.getAttribute('aria-expanded') === 'false') await globalDisclosure.click()
       for (let trial = 0; trial < TRIALS; trial++) {
         await setGlobal(probes.global)
         await h.selectAction('queue')
@@ -890,6 +893,7 @@ async function bidirectionalConflicts(h, expected) {
     }
   } finally {
     await h.openInputSettings()
+    if (await globalDisclosure.getAttribute('aria-expanded') === 'false') await globalDisclosure.click()
     if (await h.page.getByTestId('prompt-input-cancel').isEnabled()) await h.page.getByTestId('prompt-input-cancel').click()
     if (await h.clearButton(globalRecorder).isEnabled()) await h.clearButton(globalRecorder).click()
     await eventually('original global binding restored', () => h.diskSettings(), state => state?.shortcuts.activateAndFocusPrompt === before.shortcuts.activateAndFocusPrompt)
@@ -927,7 +931,8 @@ async function run(h) {
   await h.case('PIS-10-compact-disclosure-drag-color-cancel', async () => {
     assert(h.initialCollapsed, 'The actions section starts collapsed')
     const root = h.page.getByTestId(UI.root)
-    assert(await root.evaluate(node => node === node.parentElement.lastElementChild), 'Prompt actions follow all existing shortcuts')
+    assert.deepEqual(await root.evaluate(node => [...node.parentElement.children].map(group => group.getAttribute('data-settings-target'))),
+      ['globalShortcuts', 'prompt-input', 'windowShortcuts', 'terminalActions', 'terminalFocus', 'tabSwitch'], 'Prompt actions are second in the unified shortcut groups')
     const original = await h.rowIds()
     const rail = h.page.getByTestId('prompt-input-preview')
     const drag = async (sourceId, targetId, after) => {
@@ -991,6 +996,8 @@ async function run(h) {
     const shortcutBefore = (await h.settings()).shortcuts.activateAndFocusPrompt
     const actionRecorder = h.field('queue', 'shortcut')
     const globalRecorder = h.page.locator('[data-settings-target="globalShortcuts"] .shortcut-input')
+    const globalDisclosure = h.page.locator('[data-settings-target="globalShortcuts"] .settings-shortcut-disclosure')
+    if (await globalDisclosure.getAttribute('aria-expanded') === 'false') await globalDisclosure.click()
     for (let trial = 0; trial < TRIALS; trial++) {
       for (const recorder of [actionRecorder, globalRecorder]) {
         await recorder.click()

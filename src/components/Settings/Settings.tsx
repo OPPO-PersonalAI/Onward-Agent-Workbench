@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useId } from 'react'
+import { Fragment, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useId } from 'react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { ShortcutInput } from './ShortcutInput'
 import { PromptInputSettings } from './PromptInputSettings'
@@ -185,6 +185,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const pendingNavigation = useRef<{ target?: string; started: number } | null>(null)
   const [navigationRevision, setNavigationRevision] = useState(0)
   const [promptRevealRequest, setPromptRevealRequest] = useState(0)
+  const [expandedShortcutGroups, setExpandedShortcutGroups] = useState<Record<string, boolean>>({})
   const searchResults = useMemo(() => searchSettings(query, t), [query, t])
   const navigate = useCallback((next: SettingsPage, target?: string) => {
     pendingNavigation.current = { target, started: performance.now() }
@@ -192,6 +193,12 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     setPage(next)
     setQuery('')
     setPromptRevealRequest(value => target === 'prompt-input' ? value + 1 : 0)
+    if (next === 'shortcuts' && target && SHORTCUT_GROUPS.some(group => group.titleKey.split('.').at(-1) === target)) {
+      setExpandedShortcutGroups(current => ({ ...current, [target]: true }))
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_SHORTCUT_GROUP, { group: target, reason: 'expand-search' })
+    } else if (next !== 'shortcuts') {
+      setExpandedShortcutGroups({})
+    }
     setNavigationRevision(value => value + 1)
   }, [])
   useLayoutEffect(() => {
@@ -942,9 +949,20 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         {page === 'shortcuts' && <div className="settings-section">
           <div className="settings-section-title">{t('settings.section.shortcuts')}</div>
           <div className="settings-section-content">
-            {SHORTCUT_GROUPS.map(group => (
-              <div key={group.titleKey} className="settings-group" data-settings-target={group.titleKey.split('.').at(-1)} tabIndex={-1}>
-                <div className="settings-group-title">{t(group.titleKey)}</div>
+            {SHORTCUT_GROUPS.map((group, index) => {
+              const target = group.titleKey.split('.').at(-1)!
+              const expanded = expandedShortcutGroups[target] === true
+              const id = `${navigationId}-${target}`
+              return <Fragment key={group.titleKey}>
+              <section className="settings-group settings-shortcut-group" data-settings-target={target} tabIndex={-1} aria-labelledby={`${id}-title`}>
+                <h3 id={`${id}-title`} className="settings-group-title">
+                  <button type="button" className="settings-shortcut-disclosure" aria-expanded={expanded} aria-controls={`${id}-content`}
+                    onClick={() => {
+                      setExpandedShortcutGroups(current => ({ ...current, [target]: !expanded }))
+                      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_SHORTCUT_GROUP, { group: target, reason: expanded ? 'collapse' : 'expand' })
+                    }}><span aria-hidden="true">{expanded ? '⌄' : '›'}</span>{t(group.titleKey)}</button>
+                </h3>
+                {expanded && <div id={`${id}-content`}>
                 {group.descriptionKey && (
                   <div className="settings-group-description">{t(group.descriptionKey)}</div>
                 )}
@@ -962,9 +980,11 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                     </div>
                   </div>
                 ))}
-              </div>
-            ))}
-            <PromptInputSettings revealRequest={promptRevealRequest} />
+                </div>}
+              </section>
+              {index === 0 && <PromptInputSettings revealRequest={promptRevealRequest} />}
+              </Fragment>
+            })}
           </div>
         </div>}
 
