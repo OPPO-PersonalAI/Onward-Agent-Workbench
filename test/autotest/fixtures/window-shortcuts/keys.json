@@ -1,0 +1,10 @@
+[
+  { "id": "shift-1", "stroke": "Alt+Shift+Digit1", "stored": "Alt+Shift+1", "key": "!", "code": "Digit1", "modifiers": 9, "vk": 49, "native": { "win32": 49, "darwin": 18, "linux": 10 } },
+  { "id": "shift-2", "stroke": "Alt+Shift+Digit2", "stored": "Alt+Shift+2", "key": "@", "code": "Digit2", "modifiers": 9, "vk": 50, "native": { "win32": 50, "darwin": 19, "linux": 11 } },
+  { "id": "shift-3", "stroke": "Alt+Shift+Digit3", "stored": "Alt+Shift+3", "key": "#", "code": "Digit3", "modifiers": 9, "vk": 51, "native": { "win32": 51, "darwin": 20, "linux": 12 } },
+  { "id": "shift-4", "stroke": "Alt+Shift+Digit4", "stored": "Alt+Shift+4", "key": "$", "code": "Digit4", "modifiers": 9, "vk": 52, "native": { "win32": 52, "darwin": 21, "linux": 13 } },
+  { "id": "shift-5", "stroke": "Alt+Shift+Digit5", "stored": "Alt+Shift+5", "key": "%", "code": "Digit5", "modifiers": 9, "vk": 53, "native": { "win32": 53, "darwin": 23, "linux": 14 } },
+  { "id": "shift-6", "stroke": "Alt+Shift+Digit6", "stored": "Alt+Shift+6", "key": "^", "code": "Digit6", "modifiers": 9, "vk": 54, "native": { "win32": 54, "darwin": 22, "linux": 15 } },
+  { "id": "shift-letter", "stroke": "Alt+Shift+KeyA", "stored": "Alt+Shift+A", "key": "A", "code": "KeyA", "modifiers": 9, "vk": 65, "native": { "win32": 65, "darwin": 0, "linux": 38 } },
+  { "id": "plain-digit", "stroke": "Alt+Digit1", "stored": "Alt+1", "key": "1", "code": "Digit1", "modifiers": 1, "vk": 49, "native": { "win32": 49, "darwin": 18, "linux": 10 } }
+]

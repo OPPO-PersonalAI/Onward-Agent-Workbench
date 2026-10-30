@@ -10,6 +10,7 @@ import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { normalizePromptShortcut, promptShortcutFromKey } from '../../utils/prompt-input'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { shortcutKeyFromCode } from '../../utils/shortcut-key'
 
 interface ShortcutInputProps {
   value: string | null
@@ -64,54 +65,7 @@ function keyEventToAccelerator(e: KeyboardEvent): string | null {
   if (e.altKey) keys.push('Alt')
   if (e.shiftKey) keys.push('Shift')
 
-  // Get primary key
-  let mainKey = ''
-  const code = e.code
-
-  // Function keys
-  if (code.startsWith('F') && /^F\d{1,2}$/.test(code)) {
-    mainKey = code
-  }
-  // Numeric keys
-  else if (code.startsWith('Digit')) {
-    mainKey = code.replace('Digit', '')
-  }
-  // letter keys
-  else if (code.startsWith('Key')) {
-    mainKey = code.replace('Key', '')
-  }
-  // Special keys
-  else {
-    const specialKeys: Record<string, string> = {
-      'Space': 'Space',
-      'Enter': 'Enter',
-      'Tab': 'Tab',
-      'Backspace': 'Backspace',
-      'Delete': 'Delete',
-      'Escape': 'Escape',
-      'ArrowUp': 'Up',
-      'ArrowDown': 'Down',
-      'ArrowLeft': 'Left',
-      'ArrowRight': 'Right',
-      'Home': 'Home',
-      'End': 'End',
-      'PageUp': 'PageUp',
-      'PageDown': 'PageDown',
-      'Insert': 'Insert',
-      'Minus': '-',
-      'Equal': '=',
-      'BracketLeft': '[',
-      'BracketRight': ']',
-      'Backslash': '\\',
-      'Semicolon': ';',
-      'Quote': "'",
-      'Comma': ',',
-      'Period': '.',
-      'Slash': '/',
-      'Backquote': '`'
-    }
-    mainKey = specialKeys[code] || ''
-  }
+  const mainKey = shortcutKeyFromCode(e.code)
 
   // If there is no primary key, returns null
   if (!mainKey) return null

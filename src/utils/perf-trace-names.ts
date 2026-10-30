@@ -32,6 +32,8 @@ export const PERF_TRACE_EVENT = {
   // Configurable prompt input: low-frequency action and lifecycle breadcrumbs.
   MAIN_PROMPT_INPUT_SETTINGS: 'main:prompt-input.settings-changed',
   MAIN_PROMPT_SHORTCUT: 'main:prompt-shortcut.state-changed',
+  MAIN_WINDOW_SHORTCUT_DISPATCHED: 'main:window-shortcut.dispatched',
+  RENDERER_WINDOW_SHORTCUT_RECEIVED: 'renderer:window-shortcut.received',
   MAIN_PROMPT_INPUT: 'main:prompt-input.send-sequence',
   RENDERER_PROMPT_INPUT_SETTINGS: 'renderer:prompt-input.settings-changed',
   RENDERER_PROMPT_INPUT_PREVIEW: 'renderer:prompt-input.preview-shortcut',

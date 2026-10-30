@@ -2419,6 +2419,9 @@ function SettingsProviderWithHandler() {
     if (!window.electronAPI?.settings?.onWindowShortcutTriggered) return
 
     const unsubscribe = window.electronAPI.settings.onWindowShortcutTriggered((action) => {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_WINDOW_SHORTCUT_RECEIVED, {
+        action: action.type, index: 'index' in action ? action.index : undefined
+      })
       handleShortcutAction(action)
     })
 

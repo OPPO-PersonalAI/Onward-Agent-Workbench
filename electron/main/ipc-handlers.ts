@@ -5,6 +5,7 @@
 
 import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron'
 import { tMain } from './localization'
+import { windowShortcutKey } from '../../src/utils/shortcut-key'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { existsSync, lstatSync, readFileSync, writeFileSync, statSync } from 'fs'
 import { ptyManager, scanPromptBracketedPasteMode, PtyOptions } from './pty-manager'
@@ -3115,18 +3116,22 @@ export function setupWindowShortcuts(mainWindow: BrowserWindow): void {
     if (input.alt) parts.push('Alt')
     if (input.shift) parts.push('Shift')
 
-    let key = input.key
-    if (key.length === 1) key = key.toUpperCase()
-    parts.push(key)
+    parts.push(windowShortcutKey(input))
 
     const accelerator = parts.join('+')
+    const dispatch = (action: { type: string; index?: number }) => {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_WINDOW_SHORTCUT_DISPATCHED, {
+        action: action.type, index: action.index, physicalKey: Boolean(input.code)
+      })
+      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, action)
+    }
 
     // focusTerminal 1-8
     for (let i = 1; i <= 8; i++) {
       const shortcutKey = `focusTerminal${i}` as keyof typeof shortcuts
       if (shortcuts[shortcutKey] === accelerator) {
         event.preventDefault()
-        mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'focusTerminal', index: i })
+        dispatch({ type: 'focusTerminal', index: i })
         return
       }
     }
@@ -3136,7 +3141,7 @@ export function setupWindowShortcuts(mainWindow: BrowserWindow): void {
       const shortcutKey = `switchTab${i}` as keyof typeof shortcuts
       if (shortcuts[shortcutKey] === accelerator) {
         event.preventDefault()
-        mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'switchTab', index: i })
+        dispatch({ type: 'switchTab', index: i })
         return
       }
     }
@@ -3144,56 +3149,56 @@ export function setupWindowShortcuts(mainWindow: BrowserWindow): void {
     // focusPromptEditor
     if (shortcuts.focusPromptEditor === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'focusPromptEditor' })
+      dispatch({ type: 'focusPromptEditor' })
       return
     }
 
     // addToHistory
     if (shortcuts.addToHistory === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'addToHistory' })
+      dispatch({ type: 'addToHistory' })
       return
     }
 
     // terminalGitDiff
     if (shortcuts.terminalGitDiff === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'terminalGitDiff' })
+      dispatch({ type: 'terminalGitDiff' })
       return
     }
 
     // terminalGitHistory
     if (shortcuts.terminalGitHistory === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'terminalGitHistory' })
+      dispatch({ type: 'terminalGitHistory' })
       return
     }
 
     // terminalChangeWorkDir
     if (shortcuts.terminalChangeWorkDir === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'terminalChangeWorkDir' })
+      dispatch({ type: 'terminalChangeWorkDir' })
       return
     }
 
     // terminalOpenWorkDir
     if (shortcuts.terminalOpenWorkDir === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'terminalOpenWorkDir' })
+      dispatch({ type: 'terminalOpenWorkDir' })
       return
     }
 
     // terminalProjectEditor
     if (shortcuts.terminalProjectEditor === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'terminalProjectEditor' })
+      dispatch({ type: 'terminalProjectEditor' })
       return
     }
 
     // viewGitDiff
     if (shortcuts.viewGitDiff === accelerator) {
       event.preventDefault()
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, { type: 'viewGitDiff' })
+      dispatch({ type: 'viewGitDiff' })
     }
   })
 }
