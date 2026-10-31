@@ -383,6 +383,15 @@ export const TerminalGrid = memo(function TerminalGrid({
   const [mirrorSnapshots, setMirrorSnapshots] = useState<Record<string, GitStateMirrorSnapshot>>({})
   const [mirrorSnapshotAliases, setMirrorSnapshotAliases] = useState<Record<string, string>>({})
   const oscDetectedCwdsRef = useRef<Record<string, string>>({})
+  // terminalId → the OSC cwd this grid last persisted for it. Makes the OSC
+  // persist path EDGE-triggered (persist once per new OSC value) instead of
+  // level-triggered on every `terminals` change. The level-triggered form
+  // fought applyTerminalInfoUpdate (which persists the bridge's REALPATH cwd)
+  // whenever the raw OSC cwd differed from it (symlink / stale OSC value):
+  // lastCwd flip-flopped → `terminals` changed → the git-info subscription
+  // re-ran → the bridge re-emitted → flip again, ~2k loops/s until the
+  // renderer ran out of memory (2026-10-30 field crash, GSY-04/05).
+  const oscPersistedCwdsRef = useRef<Record<string, string>>({})
   const lastRenderedGitSignalRef = useRef<Record<string, {
     cwd: string | null
     branch: string | null
@@ -657,6 +666,7 @@ export const TerminalGrid = memo(function TerminalGrid({
         return { ...prev, [terminalId]: cwd }
       })
       if (terminalIdsRef.current.includes(terminalId)) {
+        oscPersistedCwdsRef.current[terminalId] = cwd
         onPersistTerminalCwd(terminalId, cwd)
       }
       if (previousCwd !== cwd) {
@@ -667,12 +677,26 @@ export const TerminalGrid = memo(function TerminalGrid({
     return () => window.removeEventListener('onward:terminal-cwd-detected', onOscCwd)
   }, [onPersistTerminalCwd])
 
+  // Late persist for an OSC cwd that arrived before its terminal id joined
+  // `terminals` (the listener above skips unknown ids). Edge-triggered via
+  // oscPersistedCwdsRef: each (terminalId, cwd) pair is persisted at most
+  // once, so a later bridge-driven lastCwd write (realpath) is never
+  // overwritten back by an unchanged OSC value — see oscPersistedCwdsRef.
   useEffect(() => {
     const validIds = new Set(terminals.map(term => term.id))
+    const persistedMap = oscPersistedCwdsRef.current
+    for (const terminalId of Object.keys(persistedMap)) {
+      if (!validIds.has(terminalId)) delete persistedMap[terminalId]
+    }
     for (const [terminalId, cwd] of Object.entries(oscDetectedCwds)) {
-      if (validIds.has(terminalId) && cwd) {
-        onPersistTerminalCwd(terminalId, cwd)
-      }
+      if (!validIds.has(terminalId) || !cwd) continue
+      if (persistedMap[terminalId] === cwd) continue
+      persistedMap[terminalId] = cwd
+      perfTrace(PERF_TRACE_EVENT.RENDERER_TERMINAL_OSC_CWD_LATE_PERSIST, {
+        terminalId,
+        cwd: cwd.slice(0, 512)
+      })
+      onPersistTerminalCwd(terminalId, cwd)
     }
   }, [oscDetectedCwds, terminals, onPersistTerminalCwd])
 
@@ -715,17 +739,24 @@ export const TerminalGrid = memo(function TerminalGrid({
       })
       // Roll back the persisted cwd too: the OSC handler called
       // `onPersistTerminalCwd(terminalId, cwd)` synchronously when
-      // it dispatched the local event. Persist null so the bad cwd
+      // it dispatched the local event. Overwrite it so the bad cwd
       // doesn't survive across sessions.
+      delete oscPersistedCwdsRef.current[terminalId]
       const persisted = terminalIdsRef.current.includes(terminalId)
+      // Roll back to the bridge's last VALID cwd (main-validated realpath),
+      // not null: the bridge does not re-emit for a rejected OSC (its cwd
+      // never changed), so persisting null would leave lastCwd empty until
+      // the next unrelated git-info change.
+      const restoredCwd = bridgeTerminalInfosRef.current[terminalId]?.cwd ?? null
       if (persisted) {
-        onPersistTerminalCwd(terminalId, null)
+        onPersistTerminalCwd(terminalId, restoredCwd)
       }
       perfTrace(PERF_TRACE_EVENT.RENDERER_TERMINAL_OSC_CWD_ROLLED_BACK, {
         terminalId,
         rawCwd: rawCwd.slice(0, 512),
         action: 'rolled-back',
-        persisted
+        persisted,
+        restoredCwd: restoredCwd ? restoredCwd.slice(0, 512) : null
       })
     })
     return () => { try { dispose?.() } catch { /* ignore */ } }
@@ -936,6 +967,19 @@ export const TerminalGrid = memo(function TerminalGrid({
   useEffect(() => {
     terminalInfosRef.current = terminalInfos
   }, [terminalInfos])
+  // Last RAW (pre-override) git info the main bridge pushed per terminal.
+  // The bridge only re-emits on a fingerprint change, so once the git-info
+  // subscription stopped re-running on every `terminals` change (2026-10-30
+  // storm fix) this ref is the only way to put the real info back when the
+  // autotest override is cleared (TTM-08 / TTM-32 relied on the old
+  // accidental resubscribe to refill it).
+  const bridgeTerminalInfosRef = useRef<Record<string, TerminalGitInfo>>({})
+  useEffect(() => {
+    const validIds = new Set(terminals.map(term => term.id))
+    for (const terminalId of Object.keys(bridgeTerminalInfosRef.current)) {
+      if (!validIds.has(terminalId)) delete bridgeTerminalInfosRef.current[terminalId]
+    }
+  }, [terminals])
 
   const visibleTerminalsRef = useRef<TerminalInfo[]>([])
 
@@ -1719,9 +1763,25 @@ export const TerminalGrid = memo(function TerminalGrid({
     ids.forEach(id => terminalSessionManager.setVisibility(id, !hidden))
   }, [hidden, terminals])
 
+  // Git-info subscriptions are keyed by the visible terminal IDS only.
+  // `visibleTerminals` gets a new identity whenever any per-terminal field
+  // changes (lastCwd, title, active flag); keying the effect on the array
+  // made every such write unsubscribe + resubscribe all visible terminals,
+  // and each resubscribe makes the main bridge re-emit GIT_TERMINAL_INFO —
+  // a feedback path that amplified a lastCwd flip-flop into ~2k IPC
+  // round-trips/s (2026-10-30 renderer OOM, GSY-04/05). Terminal ids never
+  // contain a newline, so the joined key is collision-free.
+  const visibleTerminalIdsKey = useMemo(
+    () => visibleTerminals.map(term => term.id).join('\n'),
+    [visibleTerminals]
+  )
+
   useEffect(() => {
-    if (hidden || visibleTerminals.length === 0) return
-    const ids = visibleTerminals.map(term => term.id)
+    if (hidden || !visibleTerminalIdsKey) return
+    const ids = visibleTerminalIdsKey.split('\n')
+    perfTrace(PERF_TRACE_EVENT.RENDERER_TERMINAL_GIT_INFO_SUBSCRIPTION_SYNC, {
+      count: ids.length
+    })
     ids.forEach((terminalId) => {
       void window.electronAPI.git.subscribeTerminalInfo(terminalId)
     })
@@ -1730,17 +1790,18 @@ export const TerminalGrid = memo(function TerminalGrid({
         void window.electronAPI.git.unsubscribeTerminalInfo(terminalId)
       })
     }
-  }, [visibleTerminals, hidden])
+  }, [visibleTerminalIdsKey, hidden])
 
   useEffect(() => {
-    if (hidden || !activeTerminalId) return
-    const isVisible = visibleTerminals.some(term => term.id === activeTerminalId)
+    if (hidden || !activeTerminalId || !visibleTerminalIdsKey) return
+    const isVisible = visibleTerminalIdsKey.split('\n').includes(activeTerminalId)
     if (!isVisible) return
     void window.electronAPI.git.notifyTerminalFocus(activeTerminalId)
-  }, [activeTerminalId, hidden, visibleTerminals])
+  }, [activeTerminalId, hidden, visibleTerminalIdsKey])
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.git.onTerminalInfo((terminalId, info) => {
+      if (info) bridgeTerminalInfosRef.current[terminalId] = info
       applyTerminalInfoUpdate(terminalId, info)
 
       // Background diff cache warming: when git state changes and diff panel is not open,
@@ -2523,14 +2584,24 @@ export const TerminalGrid = memo(function TerminalGrid({
         if (!terminalId) return false
         if (override === null) {
           terminalInfoOverridesRef.current.delete(terminalId)
+          // Restore the last real bridge info (silently — no auto-follow /
+          // persist side effects) so the test starts from the true state.
+          const bridgeInfo = bridgeTerminalInfosRef.current[terminalId] ?? null
           setTerminalInfos((prev) => {
             const current = prev[terminalId]
+            if (bridgeInfo) {
+              if (current === bridgeInfo) return prev
+              return { ...prev, [terminalId]: bridgeInfo }
+            }
             if (!current) return prev
             const next = { ...prev }
             delete next[terminalId]
             return next
           })
-          notifyTerminalGitInfo(terminalId, { repoRoot: null, branch: null })
+          notifyTerminalGitInfo(terminalId, {
+            repoRoot: bridgeInfo?.repoRoot ?? null,
+            branch: bridgeInfo?.branch ?? null
+          })
           return true
         }
         const existing = terminalInfoOverridesRef.current.get(terminalId) ?? {}

@@ -781,6 +781,16 @@ export const PERF_TRACE_EVENT = {
   // 'skipped-value-mismatch' so the trace distinguishes "rollback happened"
   // from "rollback was a no-op because speculative was already replaced".
   RENDERER_TERMINAL_OSC_CWD_ROLLED_BACK: 'renderer:terminal.osc-cwd-rolled-back',
+  // TerminalGrid persisted an OSC cwd that arrived before its terminal id
+  // joined `terminals`. Edge-triggered: at most once per (terminalId, cwd);
+  // a steady stream of these for one terminal means the OSC persist path is
+  // fighting another lastCwd writer again (2026-10-30 flip-flop OOM).
+  RENDERER_TERMINAL_OSC_CWD_LATE_PERSIST: 'renderer:terminal.osc-cwd-late-persist',
+  // TerminalGrid (re)subscribed the visible terminals' git-info streams.
+  // Fires only when the visible terminal-id set or `hidden` changes; a high
+  // rate here is the signature of the subscribe/resubscribe storm that
+  // crashed the renderer on 2026-10-30 (GSY-04/05).
+  RENDERER_TERMINAL_GIT_INFO_SUBSCRIPTION_SYNC: 'renderer:terminal.git-info-subscription-sync',
   // Raw→canonical alias registered from a subscribeMirror result. `cold:true`
   // is the load-bearing case: a symlink/junction cwd whose repo was never warm
   // used to skip alias creation entirely, leaving the Task badge empty

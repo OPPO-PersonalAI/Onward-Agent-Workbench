@@ -23,6 +23,12 @@
  *           a symlink-cwd subscriber.
  *   GSY-03  sanity guard: pushing the REAL path also renders (the fix must not
  *           regress the normal non-symlink path). Green before AND after.
+ *   GSY-04  no subscribe storm after the symlink entry (2026-10-30 renderer
+ *           OOM): the raw OSC cwd vs realpath lastCwd flip-flop must not
+ *           drive an unsubscribe/resubscribe loop. RED before the fix
+ *           (~2.4k GIT_TERMINAL_INFO pushes/s), GREEN after.
+ *   GSY-05  same storm guard for a renderer/main cwd desync without a
+ *           symlink (stale renderer OSC value vs main's terminal cwd).
  *
  * Windows note: the fixture uses an NTFS junction (no admin required);
  * realpathSync resolves junctions exactly like POSIX symlinks, so the same
@@ -89,6 +95,33 @@ function probeBadge(terminalId: string): BadgeProbe {
   }
 }
 
+// Storm probe budget: after a settle window, count GIT_TERMINAL_INFO pushes
+// for the terminal over a fixed window. A converged terminal emits ~0; the
+// pre-fix flip-flop loop produced thousands per second.
+const STORM_SETTLE_MS = 1500
+const STORM_WINDOW_MS = 3000
+const STORM_MAX_EVENTS = 6
+
+async function measureInfoStorm(
+  terminalId: string,
+  extra: Record<string, unknown>
+): Promise<[boolean, Record<string, unknown>]> {
+  await new Promise(resolve => setTimeout(resolve, STORM_SETTLE_MS))
+  let infoEvents = 0
+  const off = window.electronAPI.git.onTerminalInfo((id) => {
+    if (id === terminalId) infoEvents += 1
+  })
+  await new Promise(resolve => setTimeout(resolve, STORM_WINDOW_MS))
+  off()
+  return [infoEvents <= STORM_MAX_EVENTS, {
+    infoEvents,
+    windowMs: STORM_WINDOW_MS,
+    ratePerSec: +(infoEvents / (STORM_WINDOW_MS / 1000)).toFixed(1),
+    maxAllowed: STORM_MAX_EVENTS,
+    ...extra
+  }]
+}
+
 export async function testGitStateMirrorSymlink(ctx: AutotestContext): Promise<TestResult[]> {
   const { assert, waitFor, cancelled, log, terminalId } = ctx
   const results: TestResult[] = []
@@ -124,6 +157,19 @@ export async function testGitStateMirrorSymlink(ctx: AutotestContext): Promise<T
     expectedBranch: manifest.branch,
     note: 'RED before fix: cold subscribeMirror returns null and the raw→canonical alias is never created'
   })
+  if (cancelled()) return results
+
+  // ── GSY-04: no subscribe storm after entering through the symlink. ──
+  // 2026-10-30 field crash (renderer OOM, exitCode 5): TerminalGrid persisted
+  // the RAW OSC cwd (symlink path) on every `terminals` change, while
+  // applyTerminalInfoUpdate persists the bridge's REALPATH cwd. The two
+  // writes flipped `lastCwd` forever → `visibleTerminals` got a new identity →
+  // the subscribe effect unsubscribed + resubscribed every visible terminal →
+  // the main bridge re-emitted GIT_TERMINAL_INFO (fresh entry, null
+  // fingerprint) → loop (~2.4k events/s measured before the fix).
+  record('GSY-04-no-subscribe-storm-after-symlink-entry', ...await measureInfoStorm(terminalId, {
+    note: 'RED = lastCwd flip-flop (raw OSC symlink vs realpath) drives an unsubscribe/resubscribe loop'
+  }))
   if (cancelled()) return results
 
   // ── GSY-02: dirty flip propagates through the alias. ──
@@ -165,6 +211,22 @@ export async function testGitStateMirrorSymlink(ctx: AutotestContext): Promise<T
   record('GSY-03-badge-renders-through-real-cwd', realShown, {
     probe: probeBadge(terminalId) as unknown as Record<string, unknown>
   })
+
+  if (cancelled()) return results
+
+  // ── GSY-05: renderer/main cwd desync (no symlink) must not storm either. ──
+  // Field variant of GSY-04: the renderer's OSC map holds a cwd that differs
+  // from main's terminal cwd for a reason other than a symlink (stale OSC
+  // value, main-probe cwd). Simulate by dispatching the renderer-local OSC
+  // event ONLY (main keeps the real repo from GSY-03).
+  window.dispatchEvent(new CustomEvent('onward:terminal-cwd-detected', {
+    detail: { terminalId, cwd: manifest.neutralCwd }
+  }))
+  record('GSY-05-no-subscribe-storm-on-renderer-main-cwd-desync', ...await measureInfoStorm(terminalId, {
+    rendererCwd: manifest.neutralCwd,
+    mainCwd: manifest.realRepo,
+    note: 'RED = renderer OSC cwd vs main cwd desync drives the same lastCwd flip-flop loop'
+  }))
 
   window.electronAPI.git.unsubscribeMirror(manifest.linkToRepo)
   window.electronAPI.git.unsubscribeMirror(manifest.realRepo)
