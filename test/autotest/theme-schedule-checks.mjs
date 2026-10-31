@@ -5,12 +5,16 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { saveSettingsPage } from './themes-ui-driver-support.mjs'
 
 const TRIALS = 5
 const fixture = JSON.parse(await readFile(new URL('./fixtures/themes-ui/schedule.json', import.meta.url), 'utf8'))
 const timelineFixture = JSON.parse(await readFile(new URL('./fixtures/themes-ui/schedule-timeline.json', import.meta.url), 'utf8'))
 export const scheduleTime = (hour, day = fixture.day, minute = 0) => new Date(fixture.year, fixture.month - 1, day, hour, minute).getTime()
-const settled = h => h.page.waitForFunction(() => document.querySelector('[data-testid="themes-root"]')?.getAttribute('aria-busy') === 'false')
+const settled = async h => {
+  await h.page.waitForFunction(() => document.querySelector('[data-testid="themes-root"]')?.getAttribute('aria-busy') === 'false')
+  await saveSettingsPage(h.page)
+}
 export async function scheduleClock(h, now, reason = 'timer') {
   await h.page.evaluate(({ now, reason }) => window.electronAPI.themes.setClockForAutotest(now, reason), { now, reason })
 }
@@ -35,6 +39,7 @@ export async function setupSchedule(h, fallback = fixture.fallback) {
   await h.page.getByTestId('schedule-fallback').selectOption(fallback)
   await settled(h)
   for (const range of fixture.ranges) await addRange(h, range)
+  await saveSettingsPage(h.page)
   await h.persisted((await h.state()).settings)
 }
 
@@ -59,7 +64,7 @@ export async function scheduleCore(h, { waitBase, snapshot }) {
     assert(await h.page.getByTestId('schedule-save').isDisabled())
     await h.page.getByTestId('schedule-end').fill('09:00')
     assert(await h.page.getByTestId('schedule-save').isDisabled(), 'Equal endpoints are invalid')
-    await h.page.keyboard.press('Escape')
+    await h.page.getByTestId('settings-discard').click()
     await h.page.getByTestId('schedule-editor').waitFor({ state: 'detached' })
     assert.deepEqual((await h.state()).settings, saved)
     assert(await h.page.getByTestId('schedule-add').evaluate(node => node === document.activeElement))
@@ -75,7 +80,7 @@ export async function scheduleCore(h, { waitBase, snapshot }) {
       await h.page.getByTestId('schedule-edit').first().click()
       await h.page.getByTestId('schedule-theme').selectOption('dracula')
       await waitBase(h, 'light-modern', 2)
-      await h.page.getByTestId('schedule-cancel').click()
+      await h.page.getByTestId('settings-discard').click()
       assert.deepEqual((await h.state()).settings, saved)
     }
     await addRange(h, { start: '18:00', end: '19:00', days: [1], theme: 'dark-modern' })
@@ -140,9 +145,9 @@ export async function scheduleCore(h, { waitBase, snapshot }) {
       assert(await h.page.getByTestId('schedule-choice-dracula').evaluate(node => node === document.activeElement))
       await h.page.keyboard.press('Enter')
       await h.page.getByTestId('schedule-theme-picker').waitFor({ state: 'detached' })
+      assert(await day.evaluate(node => node === document.activeElement))
       await settled(h)
       await waitBase(h, 'dracula', 2)
-      assert(await day.evaluate(node => node === document.activeElement))
       const after = (await h.state()).settings.schedule
       assert.deepEqual(after.ranges, before.ranges.map((range, index) => index === 0 ? { ...range, themeId: 'dracula' } : range))
       assert.equal(after.fallbackThemeId, 'nord')
@@ -189,20 +194,18 @@ export async function scheduleCore(h, { waitBase, snapshot }) {
     try {
       await mkdir(filename)
       await h.page.getByTestId('schedule-fallback').selectOption('one-dark-pro')
-      await settled(h)
-      assert(await h.page.getByTestId('schedule-error').isVisible())
+      await h.page.getByTestId('settings-save').click()
+      await h.page.locator('[data-testid="settings-save-status"][data-state="error"]').waitFor()
       assert.deepEqual((await h.state()).settings, saved)
       await h.page.getByTestId('schedule-segment').first().click()
       await h.page.getByTestId('schedule-choice-one-dark-pro').click()
-      await settled(h)
-      assert(await h.page.getByTestId('schedule-picker-error').isVisible())
+      await h.page.getByTestId('settings-save').click()
+      await h.page.locator('[data-testid="settings-save-status"][data-state="error"]').waitFor()
       assert.deepEqual((await h.state()).settings, saved, 'Rejected direct choice preserves all stored rules')
     } finally {
       await rm(filename, { recursive: true, force: true })
       await rename(backup, filename)
     }
-    await h.page.getByTestId('schedule-choice-one-dark-pro').click()
-    await h.page.getByTestId('schedule-theme-picker').waitFor({ state: 'detached' })
     await settled(h)
     await h.persisted((await h.state()).settings)
     assert.equal((await h.state()).settings.schedule.fallbackThemeId, 'one-dark-pro')
@@ -222,11 +225,11 @@ export async function scheduleCore(h, { waitBase, snapshot }) {
     }
     for (const [name, reasons] of [
       ['main:themes.schedule-reconciled', ['start', 'startup', 'settings', 'timer', 'resume', 'clock-request', 'dispose']],
-      ['renderer:themes.schedule-action', ['subscribe', 'clock-send', 'clock-received', 'mount', 'edit-open', 'save', 'save-result', 'cancel', 'delete', 'toggle', 'fallback', 'temporary-selection', 'resume']],
+      ['renderer:themes.schedule-action', ['subscribe', 'clock-send', 'clock-received', 'mount', 'edit-open', 'stage', 'save-result', 'page-discard', 'delete', 'toggle', 'fallback', 'temporary-selection', 'resume']],
       ['renderer:themes.schedule-timeline-action', ['mount', 'unmount', 'open', 'choose', 'saved', 'cancel', 'focus-returned', 'target-dismissed', 'save-result']]
     ]) for (const reason of reasons) assert(events.some(event => event.name === name && event.args?.reason === reason), `${name}: ${reason}`)
     assert(events.some(event => event.name === 'main:themes.schedule-reconciled' && event.ph === 'X'))
-    assert(events.some(event => event.name === 'renderer:themes.schedule-timeline-action' && event.ph === 'X' && event.args?.ok === false))
+    assert(events.some(event => event.name === 'main:settings.commit-page' && event.ph === 'X' && event.args?.stage === 'rejected'))
     await writeFile(path.join(h.artifacts, 'schedule-trace.json'), JSON.stringify({ traceEvents: events.filter(event => /themes\./.test(event.name)) }))
     return { files, events: events.length }
   })
@@ -241,7 +244,8 @@ export async function scheduleDraft(h, { waitBase, beginDraft, endDraft, fill })
       await beginDraft(h)
       await fill(h, 'theme-override-terminal.background', '#123456')
       await scheduleClock(h, scheduleTime(18), 'resume')
-      assert.equal((await h.state()).resolvedTheme.id, 'light-modern', 'Preview stays pinned across the clock boundary')
+      assert.equal((await h.state()).resolvedTheme.id, 'nord', 'Saved schedule continues to drive the workspace during local preview')
+      assert.equal(await h.page.getByTestId('theme-override-terminal.background').inputValue(), '#123456')
       await endDraft(h, 'cancel')
       await waitBase(h, 'nord', 2)
       assert.equal((await h.state()).settings.mode, 'schedule')
@@ -271,7 +275,7 @@ export async function scheduleVisual(h, { setLanguage, resizeSettings }) {
         captions.push(await h.page.getByTestId('schedule-editor').innerText())
         await h.page.getByTestId('schedule-editor').scrollIntoViewIfNeeded()
         await h.screenshot(`schedule-${language}-${width}`)
-        await h.page.keyboard.press('Escape')
+        await h.page.getByTestId('schedule-save').click()
       }
     }
     assert.notEqual(captions[0], captions[2])

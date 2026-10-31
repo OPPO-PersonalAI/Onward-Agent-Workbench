@@ -16,6 +16,7 @@ const ALLOWLIST = new Set([
   'src/i18n/prompt-input.ts',
   'src/i18n/prompt-input-runtime.ts',
   'src/i18n/theme-schedule.ts',
+  'src/i18n/settings-save.ts',
   // Generated bilingual Emojibase labels/keywords are dictionary data, not code comments.
   'src/data/prompt-emoji-catalog.json',
   // Test files may contain Chinese strings as test data (not comments)

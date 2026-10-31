@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createWriteStream, closeSync, openSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile, appendFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile, appendFile, rename } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -20,6 +20,25 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 export const FIXTURE_SOURCE = path.join(REPO_ROOT, 'test/autotest/fixtures/themes-ui')
 export const GROUPS = ['core', 'draft', 'tasks', 'imports', 'visual', 'latency', 'persistence', 'migration', 'surfaces']
 export const SETTINGS_PAGES = ['general', 'appearance', 'fonts', 'shortcuts', 'about']
+
+export async function replaceFixtureCommand(source, destination) {
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(source, destination); return }
+    catch (error) {
+      // A Windows receiver can briefly hold a read handle on its command file.
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 9) throw error
+      await delay(10)
+    }
+  }
+}
+
+export async function saveSettingsPage(page) {
+  const button = page.getByTestId('settings-save')
+  if (await button.isEnabled()) {
+    await button.click()
+    await page.waitForFunction(() => document.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'clean')
+  }
+}
 
 export async function openSettingsPage(page, id = 'appearance') {
   assert(SETTINGS_PAGES.includes(id), `Unknown Settings page: ${id}`)

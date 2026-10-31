@@ -44,11 +44,11 @@ interface PromptActionsContextValue {
   focusEditor: () => void
   submitEditor: () => void
   // Close the Settings panel (called when the shortcut is triggered)
-  registerCloseSettings: (callback: (() => void) | null) => void
-  closeSettings: () => void
+  registerCloseSettings: (callback: (() => Promise<boolean>) | null) => void
+  closeSettings: () => Promise<boolean>
   // Conditionally close Settings on Task/Tab switch (keeps Settings open when previous panel was not Prompt)
-  registerTryCloseSettingsOnSwitch: (callback: ((targetTabId?: string, targetActivePanel?: 'prompt' | null) => void) | null) => void
-  tryCloseSettingsOnSwitch: (targetTabId?: string, targetActivePanel?: 'prompt' | null) => void
+  registerTryCloseSettingsOnSwitch: (callback: ((targetTabId?: string, targetActivePanel?: 'prompt' | null) => Promise<boolean>) | null) => void
+  tryCloseSettingsOnSwitch: (targetTabId?: string, targetActivePanel?: 'prompt' | null) => Promise<boolean>
   registerDraftController: (tabId: string, controller: PromptDraftController) => () => void
   getDraftController: (tabId: string) => PromptDraftController | undefined
   registerInputDispatcher: (tabId: string, dispatcher: PromptInputDispatcher) => () => void
@@ -70,8 +70,8 @@ const PromptActionsContext = createContext<PromptActionsContextValue | null>(nul
 export function PromptActionsProvider({ children }: { children: ReactNode }) {
   const focusEditorRef = useRef<(() => void) | null>(null)
   const submitEditorRef = useRef<(() => void) | null>(null)
-  const closeSettingsRef = useRef<(() => void) | null>(null)
-  const tryCloseSettingsOnSwitchRef = useRef<((targetTabId?: string, targetActivePanel?: 'prompt' | null) => void) | null>(null)
+  const closeSettingsRef = useRef<(() => Promise<boolean>) | null>(null)
+  const tryCloseSettingsOnSwitchRef = useRef<((targetTabId?: string, targetActivePanel?: 'prompt' | null) => Promise<boolean>) | null>(null)
   const draftControllersRef = useRef(new Map<string, PromptDraftController>())
   const inputDispatchersRef = useRef(new Map<string, PromptInputDispatcher>())
   const inputStatesRef = useRef(new Map<string, PromptInputTabState>())
@@ -156,11 +156,11 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
     submitEditorRef.current = callback
   }, [])
 
-  const registerCloseSettings = useCallback((callback: (() => void) | null) => {
+  const registerCloseSettings = useCallback((callback: (() => Promise<boolean>) | null) => {
     closeSettingsRef.current = callback
   }, [])
 
-  const registerTryCloseSettingsOnSwitch = useCallback((callback: ((targetTabId?: string, targetActivePanel?: 'prompt' | null) => void) | null) => {
+  const registerTryCloseSettingsOnSwitch = useCallback((callback: ((targetTabId?: string, targetActivePanel?: 'prompt' | null) => Promise<boolean>) | null) => {
     tryCloseSettingsOnSwitchRef.current = callback
   }, [])
 
@@ -173,11 +173,11 @@ export function PromptActionsProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const closeSettings = useCallback(() => {
-    closeSettingsRef.current?.()
+    return closeSettingsRef.current?.() ?? Promise.resolve(true)
   }, [])
 
   const tryCloseSettingsOnSwitch = useCallback((targetTabId?: string, targetActivePanel?: 'prompt' | null) => {
-    tryCloseSettingsOnSwitchRef.current?.(targetTabId, targetActivePanel)
+    return tryCloseSettingsOnSwitchRef.current?.(targetTabId, targetActivePanel) ?? Promise.resolve(true)
   }, [])
 
   const value = useMemo(() => ({

@@ -56,6 +56,8 @@ import { getSettingsStorage, SettingsState, ShortcutConfig } from './settings-st
 import { registerThemeImportHandlers, cleanupThemeImportHandlers } from './theme-import-handlers'
 import { registerThemeExportHandlers, cleanupThemeExportHandlers } from './theme-export-handlers'
 import { getShortcutManager } from './shortcut-manager'
+import { isSettingsPageCommit, mergeSettingsPage, selectSettingsPage, type SettingsPageCommitResult } from '../../src/utils/settings-page'
+import { installSettingsExitGuard } from './settings-exit-guard'
 import { promptInputShortcuts } from './prompt-input-shortcuts'
 import { registerPromptInputHandlers, cleanupPromptInputHandlers } from './prompt-input-handlers'
 import { normalizePromptShortcut, promptTargetSlot } from '../../src/utils/prompt-input'
@@ -1148,8 +1150,30 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
       mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents ||
       event.senderFrame !== mainWindow.webContents.mainFrame || !mainWindow.isFocused()) return false
 
-    mainWindow.blur()
-    return !mainWindow.isFocused()
+    return new Promise<boolean>(resolve => {
+      const blurred = () => !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() &&
+        (process.platform === 'win32'
+          ? mainWindow.isMinimized() && !mainWindow.webContents.isFocused()
+          : !mainWindow.isFocused())
+      const finish = (result: boolean) => {
+        clearTimeout(timer)
+        mainWindow.removeListener('blur', observe)
+        mainWindow.removeListener('minimize', observe)
+        mainWindow.webContents.removeListener('blur', observe)
+        resolve(result)
+      }
+      const observe = () => { if (blurred()) finish(true) }
+      const timer = setTimeout(() => finish(blurred()), 1500)
+      mainWindow.on('blur', observe)
+      mainWindow.on('minimize', observe)
+      mainWindow.webContents.on('blur', observe)
+      // Windows blur() can leave the foreground window active. Minimize only
+      // this autotest-owned window; DEBUG_FOCUS_WINDOW restores it afterwards.
+      // Windows may retain the window focus flag after its contents lose focus.
+      if (process.platform === 'win32') mainWindow.minimize()
+      else mainWindow.blur()
+      observe()
+    })
   })
   ipcMain.handle(IPC.DEBUG_GET_GIT_RUNTIME_METRICS, () => {
     return gitRuntimeManager.getMetrics()
@@ -3030,17 +3054,49 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   const ownsTerminal = (id: string) => !mainWindow.isDestroyed() && terminalOwners.get(id) === mainWindow.webContents.id && ptyManager.hasLiveTerminal(id)
   promptInputShortcuts.init(mainWindow, initialSettings.promptInput, ownsTerminal)
   registerPromptInputHandlers(mainWindow, ownsTerminal, id => terminalBracketedPasteState.get(id) ?? false)
-  const settingsChanged = () => {
+  const settingsChanged = (registerShortcuts = true) => {
     const next = settingsStorage.get()
     windowShortcutSnapshot = next.shortcuts
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_SHORTCUT, { stage: 'shortcut-snapshot-refreshed' })
     promptInputShortcuts.updateSettings(next.promptInput)
-    shortcutManager.registerFromSettings()
+    if (registerShortcuts) shortcutManager.registerFromSettings()
     options.onSettingsChanged?.(next)
   }
 
   // Set main window for shortcut manager
   shortcutManager.setMainWindow(mainWindow)
+  installSettingsExitGuard(mainWindow)
+
+  ipcMain.handle(IPC.SETTINGS_COMMIT_PAGE, (event, request: unknown): SettingsPageCommitResult => {
+    const started = performance.now()
+    const reject = (error: 'invalid' | 'conflict' | 'write-failed' | 'shortcut-unavailable'): SettingsPageCommitResult => {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_COMMIT, { stage: 'rejected', error, durationMs: performance.now() - started })
+      return { success: false, error }
+    }
+    if (event.sender !== mainWindow.webContents || !isSettingsPageCommit(request)) return reject('invalid')
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_COMMIT, { stage: 'received', page: request.page })
+    const current = settingsStorage.get()
+    const merged = mergeSettingsPage(selectSettingsPage(current, request.page), request.baseline, request.draft)
+    if (!merged.success) return reject('conflict')
+    const next = { ...current, ...merged.values }
+    const reservation = request.page === 'shortcuts' ? shortcutManager.reserveGlobalShortcut(next.shortcuts.activateAndFocusPrompt) : null
+    if (request.page === 'shortcuts' && !reservation) return reject('shortcut-unavailable')
+    const success = settingsStorage.save(next, request.page === 'general' ? next.telemetryConsent : undefined)
+    if (!success) {
+      reservation?.rollback()
+      return reject('write-failed')
+    }
+    reservation?.commit()
+    try { settingsChanged(false) }
+    catch { performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_COMMIT, { stage: 'notification-failed', page: request.page }) }
+    const acknowledged = settingsStorage.get()
+    if (current.telemetryConsent !== acknowledged.telemetryConsent) {
+      try { getTelemetryService().onConsentChanged(acknowledged.telemetryConsent === true, acknowledged.telemetryInstanceId) }
+      catch { performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_COMMIT, { stage: 'telemetry-notification-failed' }) }
+    }
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_COMMIT, { stage: 'acknowledged', page: request.page, durationMs: performance.now() - started })
+    return { success: true, settings: acknowledged }
+  })
 
   // Load settings
   ipcMain.handle(IPC.SETTINGS_LOAD, () => {
@@ -3475,6 +3531,7 @@ async function runCleanupIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(IPC.PROJECT_SQLITE_EXECUTE)
   ipcMain.removeHandler(IPC.SETTINGS_LOAD)
   ipcMain.removeHandler(IPC.SETTINGS_SAVE)
+  ipcMain.removeHandler(IPC.SETTINGS_COMMIT_PAGE)
   ipcMain.removeHandler(IPC.SETTINGS_UPDATE)
   ipcMain.removeHandler(IPC.SETTINGS_REGISTER_SHORTCUTS)
   ipcMain.removeHandler(IPC.SETTINGS_CHECK_SHORTCUT_AVAILABLE)

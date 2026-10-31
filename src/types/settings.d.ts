@@ -109,6 +109,10 @@ export type ShortcutAction =
 // Settings API interface
 export interface SettingsAPI {
   load: () => Promise<SettingsState>
+  commitPage: (request: import('../utils/settings-page').SettingsPageCommit) => Promise<import('../utils/settings-page').SettingsPageCommitResult>
+  setDraftPending: (pending: boolean) => void
+  onConfirmExit: (callback: (requestId: string) => void) => () => void
+  confirmExit: (requestId: string, allowed: boolean) => void
   save: (settings: SettingsState) => Promise<boolean>
   update: (partial: Partial<SettingsState>) => Promise<boolean>
   registerShortcuts: () => Promise<boolean>

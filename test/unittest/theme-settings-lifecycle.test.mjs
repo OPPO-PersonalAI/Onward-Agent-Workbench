@@ -28,6 +28,7 @@ function createHarness(t, theme = initialTheme(), options = {}) {
   const layoutEffects = []
   const passiveEffects = []
   const saves = []
+  const pageSaves = []
   const traces = []
   let cursor = 0
   let dirty = true
@@ -89,6 +90,9 @@ function createHarness(t, theme = initialTheme(), options = {}) {
       themes: options.themes,
       debug: { autotest: false },
       settings: {
+        commitPage(request) {
+          return new Promise(resolve => { pageSaves.push({ request: structuredClone(request), reply: resolve }) })
+        },
         onShortcutTriggered: () => () => {},
         save(snapshot) {
           let resolveReply
@@ -150,7 +154,7 @@ function createHarness(t, theme = initialTheme(), options = {}) {
   }
   const { SettingsProvider } = load(resolve(ROOT, 'src/contexts/SettingsContext.tsx'))
   const harness = {
-    get value() { return context }, saves, traces, media, timers, listeners,
+    get value() { return context }, saves, pageSaves, traces, media, timers, listeners,
     render() {
       cursor = 0
       dirty = false
@@ -222,6 +226,56 @@ async function rejectSelection(h, id = 'nord') {
   h.flush()
 }
 const themeForeground = (h, id = 'dracula') => h.value.settings.theme.overrides[id]?.['terminal.foreground']
+
+test('SP-L01: page ACK gates application, debounced snapshots and concurrent Task edits', async t => {
+  const h = createHarness(t)
+  h.flush()
+  h.value.setSettingsPanelWidth(400)
+  h.flush()
+  const before = structuredClone(h.value.settings)
+  const theme = { ...before.theme, themeId: 'nord' }
+  const commit = h.value.commitPage({ page: 'appearance', baseline: { theme: before.theme }, draft: { theme } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.pageSaves.length, 1)
+  assert.equal(h.saves.length, 0, 'No full snapshot precedes the page transaction')
+  assert.deepEqual(h.value.settings.theme, before.theme, 'Draft is invisible before ACK')
+  const debounce = h.runDebounce()
+  h.value.updateTerminalStyle('task-a', { fontSize: 19 })
+  assert.equal(h.saves.length, 0, 'Debounce must wait behind the page transaction')
+  h.pageSaves[0].reply({ success: true, settings: { ...before, theme } })
+  assert.equal((await commit).success, true)
+  await new Promise(resolve => setImmediate(resolve))
+  h.flush()
+  assert.equal(h.value.settings.theme.themeId, 'nord')
+  assert.equal(h.value.settings.terminalStyles['task-a'].fontSize, 19)
+  assert.equal(h.saves[0].snapshot.theme.themeId, 'nord', 'Deferred snapshot reads acknowledged theme')
+  h.saves[0].reply(true)
+  await debounce
+  const next = h.runDebounce()
+  assert.equal(h.saves[1].snapshot.terminalStyles['task-a'].fontSize, 19)
+  h.saves[1].reply(true)
+  await next
+})
+
+for (const failure of ['nack', 'conflict']) test(`SP-L02-${failure}: rejection leaves applied settings intact and allows retry`, async t => {
+  const h = createHarness(t)
+  h.flush()
+  const before = structuredClone(h.value.settings)
+  const request = { page: 'appearance', baseline: { theme: before.theme }, draft: { theme: { ...before.theme, themeId: 'nord' } } }
+  const commit = h.value.commitPage(request)
+  assert.deepEqual(await h.value.commitPage(request), { success: false, error: 'busy' })
+  await new Promise(resolve => setImmediate(resolve))
+  h.pageSaves[0].reply({ success: false, error: failure === 'nack' ? 'write-failed' : 'conflict' })
+  assert.equal((await commit).success, false)
+  h.flush()
+  assert.deepEqual(h.value.settings, before)
+  const retry = h.value.commitPage(request)
+  await new Promise(resolve => setImmediate(resolve))
+  h.pageSaves[1].reply({ success: true, settings: { ...before, theme: request.draft.theme } })
+  assert.equal((await retry).success, true)
+  h.flush()
+  assert.equal(h.value.settings.theme.themeId, 'nord')
+})
 
 test('TSL-SCH01: bootstrap, five ordered clock cycles, pinned previews and rejected schedule writes', async t => {
   const at = hour => new Date(2026, 9, 19, hour).getTime()

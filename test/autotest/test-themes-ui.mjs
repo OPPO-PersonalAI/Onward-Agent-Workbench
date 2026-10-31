@@ -6,8 +6,9 @@
 import assert from 'node:assert/strict'
 import { appendFile, cp, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { ThemeUiHarness, GROUPS, SETTINGS_PAGES, FIXTURE_SOURCE, eventually } from './themes-ui-driver-support.mjs'
+import { ThemeUiHarness, GROUPS, SETTINGS_PAGES, FIXTURE_SOURCE, eventually, saveSettingsPage } from './themes-ui-driver-support.mjs'
 import { scheduleCore, scheduleDraft, scheduleVisual, schedulePersistence, setupSchedule, scheduleClock, scheduleTime } from './theme-schedule-checks.mjs'
+import { settingsSaveChecks } from './settings-save-checks.mjs'
 
 // Product-approved on 2026-10-07: six visible terminals, three trials,
 // all results correct and at least one complete paint within 200 ms.
@@ -136,12 +137,15 @@ async function grid(h, count) {
     const current = window.__themesAcceptanceRead()
     return current.terminals.length === expected && current.terminals.every(item => item.status === 'ready' && item.painted)
   }, count, { timeout: 45000 })
-  const output = await terminalOutputFixture(h)
-  await h.page.evaluate(data => {
-    for (const id of window.__onwardTerminalDebug.getVisibleTerminalIds()) {
-      if (!window.__onwardTerminalDebug.injectPtyData(data, id)) throw new Error(`Output injection rejected: ${id}`)
-    }
-  }, output)
+  const ids = await h.page.evaluate(() => window.__onwardTerminalDebug.getVisibleTerminalIds())
+  for (const id of ids) {
+    const { shellKind } = await h.page.evaluate(id => window.electronAPI.terminal.getInputCapabilities(id), id)
+    const values = [process.execPath, path.join(h.fixture, 'print-terminal-screen.mjs')]
+    const command = shellKind === 'powershell' ? `& ${values.map(value => `'${value.replaceAll("'", "''")}'`).join(' ')}`
+      : shellKind === 'cmd' ? values.map(value => `"${value}"`).join(' ')
+        : values.map(value => `'${value.replaceAll("'", "'\"'\"'")}'`).join(' ')
+    assert.equal(await h.page.evaluate(({ id, command }) => window.electronAPI.terminal.write(id, `${command}\r`), { id, command }), true)
+  }
   await h.page.waitForFunction(marker => window.__themesAcceptanceRead().terminals.every(item => item.output?.includes(marker)), OUTPUT_MARKER)
   return (await snapshot(h)).terminals.map(item => item.id)
 }
@@ -164,6 +168,7 @@ async function waitBase(h, id, count) {
 async function select(h, id, count, checkBase = true) {
   if (FEATURED.includes(id)) await h.page.getByTestId(`theme-card-${id}`).click()
   else await h.page.getByTestId('theme-more').selectOption(id)
+  await saveSettingsPage(h.page)
   await h.page.waitForFunction(id => {
     const { settings, resolvedTheme } = window.__themesAcceptanceState()
     return settings.mode === 'manual' && settings.themeId === id && resolvedTheme.id === id
@@ -182,13 +187,20 @@ async function fill(h, testId, value) {
 
 async function beginDraft(h) {
   await h.page.getByTestId('theme-customize').click()
-  await h.page.waitForFunction(() => window.__onwardThemeDebug.getState().draft === true)
+  await h.page.getByTestId('theme-draft-reset').waitFor({ state: 'visible' })
 }
 
 async function endDraft(h, operation) {
-  if (operation === 'escape') await h.page.keyboard.press('Escape')
-  else await h.page.getByTestId(`theme-draft-${operation}`).click()
-  await h.page.waitForFunction(() => window.__onwardThemeDebug.getState().draft === false)
+  if (operation === 'escape') {
+    await h.page.keyboard.press('Escape')
+    await h.page.getByTestId('settings-leave-discard').click()
+    await h.openSettings()
+  } else if (operation === 'save') {
+    if (await h.page.getByTestId('settings-save').isEnabled()) await saveSettingsPage(h.page)
+    else await h.page.getByTestId('theme-customize').click()
+  }
+  else await h.page.getByTestId('settings-discard').click()
+  await h.page.getByTestId('theme-draft-reset').waitFor({ state: 'detached' })
   await painted(h)
 }
 
@@ -210,6 +222,7 @@ async function setLanguage(h, language) {
   const previous = await h.page.locator('.settings-content').getAttribute('data-settings-page')
   await h.openSettings('general')
   await h.page.getByTestId('settings-language-select').selectOption(language)
+  await saveSettingsPage(h.page)
   await eventually('language persisted', () => h.diskSettings(), state => state?.language === language)
   await h.openSettings(previous)
 }
@@ -238,6 +251,7 @@ async function setTaskFonts(h, id, fonts) {
     await input.press('Tab')
   }
   if (Object.hasOwn(fonts, 'fontFamily')) await h.page.getByTestId('settings-terminal-font-select').selectOption(fonts.fontFamily ?? '')
+  await saveSettingsPage(h.page)
   await eventually('Task fonts persisted', () => h.diskSettings(), state =>
     Object.entries(fonts).every(([key, value]) => state?.terminalStyles?.[id]?.[key] === value))
 }
@@ -318,6 +332,7 @@ async function core(h) {
     await h.page.getByTestId('theme-mode').selectOption('system')
     await h.page.getByTestId('theme-pair-dark').selectOption('dracula')
     await h.page.getByTestId('theme-pair-light').selectOption('solarized-light')
+    await saveSettingsPage(h.page)
     for (let trial = 0; trial < BOOLEAN_TRIALS; trial++) {
       await h.page.emulateMedia({ colorScheme: 'dark' })
       await waitBase(h, 'dracula', 2)
@@ -335,6 +350,7 @@ async function core(h) {
     await waitBase(h, 'dracula', 2)
     const before = appearance(await snapshot(h))
     await h.page.getByTestId('theme-pair-light').selectOption('light-modern')
+    await saveSettingsPage(h.page)
     await painted(h)
     assert.deepEqual(appearance(await snapshot(h)), before)
     assert.equal((await h.state()).settings.mode, 'system')
@@ -349,6 +365,7 @@ async function core(h) {
       assert.equal((await h.state()).settings.mode, 'manual')
     }
     await h.page.getByTestId('theme-mode').selectOption('system')
+    await saveSettingsPage(h.page)
     await waitBase(h, 'dracula', 2)
     assert.equal((await h.state()).settings.lightThemeId, 'light-modern')
   })
@@ -369,7 +386,7 @@ async function core(h) {
     await beginDraft(h)
     await h.page.locator('.theme-classic-controls input[type="checkbox"]').check()
     await fill(h, 'classic-accent', '#c97943')
-    await h.page.waitForFunction(background => window.__themesAcceptanceRead().body.background !== background, beforePaint.body.background)
+    assert.deepEqual(appearance(await snapshot(h)), beforePaint, 'Classic preview is local until Save')
     assert.deepEqual((await h.state()).settings, before)
     await h.screenshot('classic-custom-accent-preview')
     await endDraft(h, 'cancel')
@@ -394,14 +411,13 @@ async function draft(h) {
       }
       await fill(h, 'theme-override-onward.background', '#102030')
       await fill(h, 'theme-override-terminal.background', '#152637')
-      await assertTerminalColors(h, Object.fromEntries(ids.map(id => [id, { background: '#152637' }])))
-      assert.equal((await snapshot(h)).body.background, '#102030')
+      assert.deepEqual(appearance(await snapshot(h)), original, 'Preview stays inside Settings until Save')
       assert.deepEqual((await h.state()).settings, committed, 'Preview must not mutate committed Context settings')
       // This case owns draft/persistence isolation. Drive the real state setter
       // directly; TH-UX-03 independently covers actual pointer drags five times.
       await h.page.evaluate(width => window.__onwardSettingsDebug.setPanelWidth(width), trial % 2 ? 600 : 400)
       await eventually('Settings resize persisted during draft', () => h.diskSettings(), state => state?.settingsPanelWidth === (trial % 2 ? 600 : 400))
-      assert.equal((await h.state()).draft, true, 'Resizing across the navigation breakpoint retains the draft')
+      assert(await h.page.getByTestId('theme-draft-reset').isVisible(), 'Resizing across the navigation breakpoint retains the draft')
       assert.deepEqual((await h.diskSettings()).theme, committed, 'Unrelated width persistence must not save draft')
       await endDraft(h, 'cancel')
       await waitBase(h, 'dracula', 2)
@@ -410,19 +426,27 @@ async function draft(h) {
     }
     return { trials: BOOLEAN_TRIALS }
   })
-  await h.case('TH-DR-08-category-navigation-cancels-preview-five-trials', async () => {
+  await h.case('TH-DR-08-category-navigation-confirms-discard-five-trials', async () => {
     const committed = (await h.state()).settings
     for (let trial = 0; trial < BOOLEAN_TRIALS; trial++) {
       await beginDraft(h)
       await fill(h, 'theme-override-terminal.background', '#152637')
-      await assertTerminalColors(h, Object.fromEntries(ids.map(id => [id, { background: '#152637' }])))
+      await waitBase(h, 'dracula', 2)
+      const compact = h.page.getByTestId('settings-page-select')
+      if (await compact.isVisible()) await compact.selectOption('general')
+      else await h.page.getByTestId('settings-tab-general').click()
+      await h.page.getByTestId('settings-leave-keep').click()
+      assert.equal(await h.page.getByTestId('theme-override-terminal.background').inputValue(), '#152637')
+      if (await compact.isVisible()) await compact.selectOption('general')
+      else await h.page.getByTestId('settings-tab-general').click()
+      await h.page.getByTestId('settings-leave-discard').click()
       await h.openSettings('general')
       await h.page.waitForFunction(() => window.__onwardThemeDebug.getState().draft === false)
       await setLanguage(h, trial % 2 ? 'en' : 'zh-CN')
       await h.openSettings('appearance')
       await waitBase(h, 'dracula', 2)
       assert.equal(await h.page.getByTestId('theme-draft-save').count(), 0)
-      assert.deepEqual((await h.diskSettings()).theme, committed, 'Navigation cancels the preview before unrelated settings save')
+      assert.deepEqual((await h.diskSettings()).theme, committed, 'Explicit discard leaves the saved theme intact')
     }
     await setLanguage(h, 'en')
     return { trials: BOOLEAN_TRIALS }
@@ -431,10 +455,11 @@ async function draft(h) {
     await beginDraft(h)
     for (const [token, value] of Object.entries(IMPORT_ORACLE.colors)) await fill(h, `theme-override-${token}`, value)
     const terminal = Object.fromEntries(Object.entries(TERMINAL_KEYS).map(([key, xtermKey]) => [xtermKey, IMPORT_ORACLE.colors[key]]))
+    await waitBase(h, 'dracula', 2)
+    await endDraft(h, 'save')
     await assertTerminalColors(h, Object.fromEntries(ids.map(id => [id, terminal])))
     assert.equal((await snapshot(h)).body.background, '#102030')
     assert.equal((await snapshot(h)).title.color, '#e1e2e3')
-    await endDraft(h, 'save')
     const saved = (await h.state()).settings
     for (const [key, value] of Object.entries(IMPORT_ORACLE.colors)) assert.equal(saved.overrides.dracula[key], value)
     await h.persisted(saved)
@@ -448,7 +473,7 @@ async function draft(h) {
     const before = appearance(await snapshot(h))
     await fill(h, 'theme-override-terminal.background', 'not-a-color')
     assert.equal(await h.page.getByTestId('theme-override-terminal.background').getAttribute('aria-invalid'), 'true')
-    assert(await h.page.getByTestId('theme-draft-save').isDisabled())
+    assert(await h.page.getByTestId('settings-save').isDisabled())
     const describedBy = await h.page.getByTestId('theme-override-terminal.background').getAttribute('aria-describedby')
     assert(describedBy)
     const description = await h.page.evaluate(id => document.getElementById(id)?.textContent?.trim(), describedBy)
@@ -460,7 +485,7 @@ async function draft(h) {
     const saved = (await h.state()).settings
     await beginDraft(h)
     await h.page.getByTestId('theme-draft-reset').click()
-    await waitBase(h, 'dracula', 2)
+    await assertTerminalColors(h, Object.fromEntries(ids.map(id => [id, { background: '#152637' }])))
     await endDraft(h, 'cancel')
     await assertTerminalColors(h, Object.fromEntries(ids.map(id => [id, { background: '#152637' }])))
     assert.deepEqual((await h.state()).settings, saved)
@@ -475,6 +500,7 @@ async function draft(h) {
     await h.page.getByTestId('theme-mode').selectOption('system')
     await h.page.getByTestId('theme-pair-dark').selectOption('dracula')
     await h.page.getByTestId('theme-pair-light').selectOption('solarized-light')
+    await saveSettingsPage(h.page)
     for (let trial = 0; trial < BOOLEAN_TRIALS; trial++) {
       await h.page.emulateMedia({ colorScheme: 'dark' })
       await waitBase(h, 'dracula', 2)
@@ -484,15 +510,16 @@ async function draft(h) {
       await fill(h, 'theme-override-terminal.background', '#152637')
       await h.page.emulateMedia({ colorScheme: 'light' })
       await h.page.waitForFunction(() => window.__onwardThemeDebug.getState().systemDark === false)
-      assert.equal((await h.state()).resolvedTheme.id, 'dracula', 'Draft target remains pinned through system event')
-      await assertTerminalColors(h, Object.fromEntries(ids.map(id => [id, { background: '#152637' }])))
+      assert.equal((await h.state()).resolvedTheme.id, 'solarized-light', 'Workspace follows saved System mode while the local draft remains open')
+      assert.equal(await h.page.getByTestId('theme-override-terminal.background').inputValue(), '#152637')
       await endDraft(h, 'escape')
       await waitBase(h, 'solarized-light', 2)
-      assert(await h.page.getByTestId('themes-root').isVisible(), 'Escape cancels customization, not all Settings')
+      assert(await h.page.getByTestId('themes-root').isVisible(), 'Settings can reopen after confirmed discard')
     }
     return { trials: BOOLEAN_TRIALS }
   })
   await scheduleDraft(h, { waitBase, beginDraft, endDraft, fill })
+  await settingsSaveChecks(h)
 }
 
 async function tasks(h) {
@@ -517,11 +544,14 @@ async function tasks(h) {
     await h.openSettings('fonts')
     await h.page.getByTestId('settings-terminal-select').selectOption(first)
     await h.page.locator('[data-settings-target="terminal-font-size"] .settings-apply-global-btn').click()
+    await saveSettingsPage(h.page)
     await eventually('Both actual xterm sizes', () => terminalFonts(h), rows => rows.length === 2 && rows.every(row => row.fontSize === custom.fontSize))
     await editorFont(h, second, secondEditorFont)
     await h.page.locator('[data-settings-target="font-family"] .settings-apply-global-btn').click()
+    await saveSettingsPage(h.page)
     await eventually('Both actual xterm families', () => terminalFonts(h), rows => rows.every(row => row.fontFamily === custom.fontFamily))
     await h.page.locator('[data-settings-target="editor-font-size"] .settings-apply-global-btn').click()
+    await saveSettingsPage(h.page)
     await editorFont(h, first, custom.gitDiffFontSize)
     await editorFont(h, second, custom.gitDiffFontSize)
     await eventually('All font defaults persisted', () => h.diskSettings(), state =>
@@ -623,6 +653,7 @@ async function confirmImport(h, names) {
   assert.equal(selectedIds.length, names.length, 'Every requested import candidate has a distinct checkbox')
   await h.page.getByTestId('theme-import-confirm').click()
   await h.page.getByTestId('theme-import-confirm').waitFor({ state: 'hidden' })
+  await saveSettingsPage(h.page)
   const state = await h.state()
   for (const id of selectedIds) assert(state.settings.imported.some(theme => theme.id === id))
   await h.persisted(state.settings)
@@ -666,10 +697,12 @@ async function exportTheme(h, destination, outcome = 'success') {
 
 async function saveDraftWithExportLock(h) {
   await h.page.evaluate(() => {
-    const root = document.querySelector('[data-testid="themes-root"]')
+    const root = document.querySelector('.settings-container')
     const samples = []
     const read = () => {
-      if (root.getAttribute('aria-busy') === 'true') samples.push(root.querySelector('[data-testid="theme-export"]').disabled)
+      if (root.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'saving') {
+        samples.push(root.querySelector('[data-testid="theme-export"]').matches(':disabled'))
+      }
     }
     const observer = new MutationObserver(read)
     observer.observe(root, { attributes: true, subtree: true, childList: true })
@@ -876,7 +909,7 @@ async function imports(h) {
       await startImport(h, vsix)
       await h.page.getByTestId('theme-import-confirm').waitFor({ state: 'visible' })
       assert.equal(await h.page.locator('[data-testid^="theme-import-choice-"]').count(), 2)
-      await h.page.keyboard.press('Escape')
+      await h.page.getByTestId('theme-import-confirm').locator('..').locator('button').first().click()
       await h.page.getByTestId('theme-import-confirm').waitFor({ state: 'hidden' })
       assert.deepEqual((await h.state()).settings, before)
     }
@@ -928,7 +961,7 @@ async function imports(h) {
     const details = h.page.locator('.theme-unsupported')
     await details.locator('summary').click()
     assert((await details.innerText()).includes('terminal.background'), 'Ignored invalid token is explicitly reported')
-    await h.page.keyboard.press('Escape')
+    await h.page.getByTestId('theme-import-confirm').locator('..').locator('button').first().click()
     await h.page.getByTestId('theme-import-confirm').waitFor({ state: 'hidden' })
     assert.deepEqual((await h.state()).settings, before)
     const valid = await importTheme(h, 'acceptance-midnight.json', 'Acceptance Midnight')
@@ -968,7 +1001,7 @@ async function imports(h) {
           assert.equal(await h.page.getByTestId('theme-import-error').count(), 0, 'Cancel/retry must not produce a false busy error')
           await h.page.getByTestId('theme-import-confirm').waitFor({ state: 'visible' })
           assert.equal(await h.page.locator('[data-testid^="theme-import-choice-"]').count(), 1)
-          await h.page.keyboard.press('Escape')
+          await h.page.getByTestId('theme-import-confirm').locator('..').locator('button').first().click()
           await h.page.getByTestId('theme-import-confirm').waitFor({ state: 'hidden' })
           assert.deepEqual((await h.state()).settings, before, 'Cancellation and retry preserve committed settings')
           assert.deepEqual(appearance(await snapshot(h)), beforePaint, 'Cancellation preserves live content and palette')
@@ -1096,6 +1129,7 @@ async function visual(h) {
   await boot(h)
   const ids = await grid(h, 6)
   await settingsVisual(h)
+  await setLanguage(h, 'en')
   const expectedContrast = id => ['light-modern', 'solarized-light'].includes(id) ? 4.5 : 1
   const rawPalettes = new Map()
   await h.case('TH-VIS-01-six-palettes-full-working-main-ui', async () => {
@@ -1167,15 +1201,20 @@ async function visual(h) {
     })
     assert(focus.visible && (focus.outline > 0 || focus.shadow !== 'none'), 'Keyboard focus is visibly indicated')
     await h.page.keyboard.press('Space')
+    await saveSettingsPage(h.page)
     await waitBase(h, 'dark-modern', 6)
     assert.equal((await h.state()).settings.mode, 'manual')
+    await h.page.getByTestId('theme-card-dark-modern').focus()
     await h.page.keyboard.press('Tab')
     assert(await h.page.getByTestId('theme-card-light-modern').evaluate(node => node === document.activeElement))
     await h.page.keyboard.press('Enter')
+    await saveSettingsPage(h.page)
     await waitBase(h, 'light-modern', 6)
     await beginDraft(h)
     await fill(h, 'theme-override-terminal.background', '#e1e2e3')
     await h.page.keyboard.press('Escape')
+    await h.page.getByTestId('settings-leave-keep').click()
+    await h.page.getByTestId('settings-discard').click()
     await waitBase(h, 'light-modern', 6)
     assert(await h.page.getByTestId('theme-customize').evaluate(node => node === document.activeElement), 'Cancel returns focus to Customize')
   })
@@ -1394,7 +1433,7 @@ async function settingsVisual(h) {
           await h.page.getByTestId('theme-pair-dark').selectOption('dracula')
           await beginDraft(h)
           await fill(h, 'theme-override-onward.background', '#102030')
-          await h.page.getByTestId('theme-draft-save').scrollIntoViewIfNeeded()
+          await h.page.getByTestId('theme-draft-reset').scrollIntoViewIfNeeded()
           await assertSettingsFits(language, `${width}/customize`)
           screenshots.push(await h.screenshot(`settings-${width}-${language}-customize`))
           await endDraft(h, 'cancel')
@@ -1454,7 +1493,7 @@ async function latency(h) {
           frame = requestAnimationFrame(sample)
         }
         const clicked = event => {
-          if (!event.target.closest?.(`[data-testid="theme-card-${id}"]`)) return
+          if (!event.target.closest?.('[data-testid="settings-save"]')) return
           start = performance.now()
           if (!event.isTrusted) { finish(false, 'untrusted-input'); return }
           document.removeEventListener('click', clicked, true)
@@ -1464,6 +1503,7 @@ async function latency(h) {
         document.addEventListener('click', clicked, true)
       }, { id, expected: PALETTES[id] })
       await h.page.getByTestId(`theme-card-${id}`).click()
+      await h.page.getByTestId('settings-save').click()
       await h.page.waitForFunction(() => window.__themesAcceptanceTiming.result !== null)
       const trial = await h.page.evaluate(() => window.__themesAcceptanceTiming.result)
       trial.identitiesPreserved = JSON.stringify(trial.snapshot.terminals.map(item => item.id)) === JSON.stringify(terminalIds)
@@ -1481,6 +1521,7 @@ async function latency(h) {
     for (let index = 0; index < 20; index++) {
       await h.page.getByTestId(`theme-card-${index % 2 ? 'solarized-light' : 'nord'}`).click()
     }
+    await saveSettingsPage(h.page)
     await waitBase(h, 'solarized-light', 6)
     const final = await snapshot(h)
     assert.deepEqual(final.terminals.map(item => item.id), terminalIds)
@@ -1513,6 +1554,7 @@ async function promptPressure(h, terminalIds, scheduled = false) {
   await settled()
   await page.getByTestId('theme-pair-light').selectOption('light-modern')
   await settled()
+  await saveSettingsPage(page)
   await page.emulateMedia({ colorScheme: 'dark' })
   await waitBase(h, 'dark-modern', 6)
   if (scheduled) {
@@ -1525,8 +1567,15 @@ async function promptPressure(h, terminalIds, scheduled = false) {
   const title = notebook.locator('.prompt-editor-title')
   await content.waitFor({ state: 'visible' })
   await title.fill(prompt.title)
-  await content.fill(prompt.content)
-  await content.press('End')
+  await page.evaluate(value => window.__onwardPromptNotebookDebug.setEditorContent(value), prompt.content)
+  await content.focus()
+  await page.waitForFunction(value => document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor-content')?.textContent === value, prompt.content)
+  await content.evaluate(node => {
+    const selection = window.getSelection()
+    selection.selectAllChildren(node)
+    selection.collapseToEnd()
+  })
+  assert.equal(await content.innerText(), prompt.content, 'Pressure starts from the exact model-backed fixture')
   let expectedContent = prompt.content
   const trials = []
   try {
@@ -1628,7 +1677,7 @@ async function surfaces(h) {
       h.results.push(recorded)
       await appendFile(path.join(h.artifacts, 'surface-results.jsonl'), `${JSON.stringify(recorded)}\n`)
       await h.log(`PASS ${result.id}`, result)
-    })
+    }, () => h.stop(true))
     assert(results.length > 0, 'The surface helper must complete real scenarios')
     return { scenarios: results.map(result => result.id) }
   })
@@ -1650,11 +1699,12 @@ async function persistence(h) {
     await h.page.getByTestId('theme-mode').selectOption('system')
     await h.page.getByTestId('theme-pair-dark').selectOption('dracula')
     await h.page.getByTestId('theme-pair-light').selectOption('solarized-light')
+    await saveSettingsPage(h.page)
     saved = (await h.state()).settings
     await h.persisted(saved)
     await beginDraft(h)
     await fill(h, 'theme-override-terminal.background', '#913247')
-    await assertTerminalColors(h, { [second]: { background: '#913247' } })
+    await assertTerminalColors(h, { [second]: { background: '#152637' } })
     assert.deepEqual((await h.diskSettings()).theme, saved, 'Unsaved preview never reaches disk')
     await h.screenshot('before-restart-unsaved-preview')
     await h.stop(true)

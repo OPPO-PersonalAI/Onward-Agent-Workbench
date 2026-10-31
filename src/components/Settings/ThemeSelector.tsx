@@ -17,6 +17,8 @@ import { useModalEscape } from '../../hooks/useModalEscape'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import './ThemeSelector.css'
+import { useSettingsDraft, useSettingsDraftEditor } from './SettingsDraft'
+import { settingsValuesEqual } from '../../utils/settings-page'
 
 const COMMON_COLORS: ReadonlyArray<[string, TranslationKey]> = [
   ['onward.background', 'settings.themes.color.appBackground'],
@@ -214,7 +216,10 @@ function ColorField({ token, label, value, effective, overridden, onChange, test
 }
 
 export function ThemeSelector() {
-  const { settings, systemDark, themeClock, previewTheme, updateTheme } = useSettings()
+  const persisted = useSettings()
+  const { systemDark, themeClock } = persisted
+  const session = useSettingsDraft()
+  const settings = session?.settings ?? persisted.settings
   const { t } = useI18n()
   const currentTheme = settings?.theme ?? DEFAULT_THEME_SETTINGS
   const available = useMemo(() => getAvailableThemes(currentTheme), [currentTheme])
@@ -240,13 +245,11 @@ export function ThemeSelector() {
   const savingRef = useRef(false)
   const draftRef = useRef(draft)
   const candidatesRef = useRef(candidates)
-  const previewRef = useRef(previewTheme)
   const importRequest = useRef(0)
   const pendingImportRef = useRef<{ request: number; id: string } | null>(null)
   const idPrefix = useId()
   draftRef.current = draft
   candidatesRef.current = candidates
-  previewRef.current = previewTheme
 
   const pinnedTheme = useMemo<ThemeSettings | null>(() => draft ? {
     ...currentTheme,
@@ -296,7 +299,6 @@ export function ThemeSelector() {
       importRequest.current += 1
       if (draftRef.current) {
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'cancel', source: 'unmount' })
-        previewRef.current(null)
       }
       if (candidatesRef.current || pendingImportRef.current !== null) {
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_UI, {
@@ -307,10 +309,6 @@ export function ThemeSelector() {
       abortPendingExport('unmount')
     }
   }, [])
-
-  useEffect(() => {
-    if (pinnedTheme) previewRef.current(pinnedTheme)
-  }, [pinnedTheme])
 
   useEffect(() => {
     if (draft) draftPanel.current?.focus()
@@ -325,7 +323,6 @@ export function ThemeSelector() {
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'cancel' })
     setDraft(null)
     draftRef.current = null
-    previewRef.current(null)
     setSaveError(false)
     // Focus after React enables the originating button again.
     queueMicrotask(() => customizeButton.current?.focus())
@@ -344,8 +341,7 @@ export function ThemeSelector() {
     queueMicrotask(() => importButton.current?.focus())
   }, [])
 
-  useModalEscape(Boolean(draft), cancelDraft, 'theme-customize')
-  useModalEscape(Boolean(candidates) || importing, cancelImport, 'theme-import')
+  useModalEscape(importing, cancelImport, 'theme-import')
   useModalEscape(exporting, () => { abortPendingExport('escape'); setExporting(false); setExportStatus(null) }, 'theme-export')
 
   const persist = async (next: ThemeSettings): Promise<boolean> => {
@@ -357,7 +353,9 @@ export function ThemeSelector() {
     setSaving(true)
     setSaveError(false)
     try {
-      const success = await updateTheme(next)
+      const success = Boolean(session)
+      session?.update(current => ({ ...current, theme: next }))
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'page-draft-staged' })
       if (mounted.current && !success) setSaveError(true)
       return success
     } catch {
@@ -434,7 +432,6 @@ export function ThemeSelector() {
     if (success) {
       setDraft(null)
       draftRef.current = null
-      previewRef.current(null)
       queueMicrotask(() => customizeButton.current?.focus())
     } else perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'error', operation: 'save' })
   }
@@ -510,7 +507,7 @@ export function ThemeSelector() {
   }
 
   const exportTheme = async () => {
-    if (locked || exportingRef.current) return
+    if (locked || exportingRef.current || session?.dirty) return
     exportingRef.current = true
     const requestId = crypto.randomUUID()
     pendingExportRef.current = requestId
@@ -545,6 +542,44 @@ export function ThemeSelector() {
     overridden={Object.hasOwn(draft.values, token)}
     onChange={value => updateDraftColor(token, value)}
   />
+
+  const prepareTheme = (base: ThemeSettings): ThemeSettings => {
+    let next = base
+    if (draft) {
+      const overrides = { ...next.overrides }
+      if (Object.keys(draft.previewOverrides).length) overrides[draft.id] = draft.previewOverrides
+      else delete overrides[draft.id]
+      next = { ...next, overrides, classic: draft.classic }
+    }
+    if (candidates && choices.size) {
+      const imported = new Map(next.imported.map(theme => [theme.id, theme]))
+      const selected = candidates.filter(theme => choices.has(theme.id))
+      for (const theme of selected) if (!imported.has(theme.id)) imported.set(theme.id, theme)
+      next = { ...next, imported: [...imported.values()],
+        ...(next.mode !== 'schedule' && selected[0] ? { mode: 'manual' as const, themeId: selected[0].id } : {}) }
+    }
+    return next
+  }
+  const preparedTheme = prepareTheme(currentTheme)
+  useSettingsDraftEditor('theme-customize', {
+    dirty: invalidDraft || !settingsValuesEqual(preparedTheme, currentTheme),
+    busy: importing || exporting,
+    error: invalidDraft ? t('settings.themes.invalidColors') : preparedTheme.imported.length > THEME_LIMITS.imported ? t('settings.themes.importError.catalog-full') : null,
+    prepare: current => ({ ...current, theme: prepareTheme(current.theme) }),
+    reset: () => {
+      if (draftRef.current) cancelDraft()
+      if (candidatesRef.current || pendingImportRef.current) cancelImport()
+    },
+    accepted: () => {
+      setDraft(null)
+      draftRef.current = null
+      setCandidates(null)
+      setChoices(new Set())
+      setSaveError(false)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE, { reason: 'page-save-accepted' })
+    },
+    focusError: () => draftPanel.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+  })
 
   return <div className="theme-selector" data-testid="themes-root" aria-busy={saving || importing || exporting}>
     <fieldset className="theme-selection-controls" disabled={locked}>
@@ -611,13 +646,14 @@ export function ThemeSelector() {
 
     <div className="theme-active-bar">
       <span className="theme-active-name">{t('settings.themes.active', { name: displayTheme.name })}</span>
-      <button type="button" ref={customizeButton} data-testid="theme-customize" className="theme-button" disabled={locked} onClick={beginDraft}>{t('settings.themes.customize')}</button>
+      <button type="button" ref={customizeButton} data-testid="theme-customize" className="theme-button" disabled={draft ? saving || invalidDraft : locked}
+        onClick={() => { if (draft) void saveDraft(); else beginDraft() }}>{t(draft ? 'settings.save.done' : 'settings.themes.customize')}</button>
     </div>
     {activeId === 'onward-classic' && !draft && <p className="theme-hint">{t('settings.themes.classicHint')}</p>}
 
     {draft && <section className="theme-inline-panel" ref={draftPanel} tabIndex={-1} aria-labelledby={`${idPrefix}-draft-title`}>
       <div className="theme-inline-header"><h3 id={`${idPrefix}-draft-title`}>{t('settings.themes.customizeTitle', { name: displayTheme.name })}</h3><span className="theme-preview-badge">{t('settings.themes.previewBadge')}</span></div>
-      <p className="theme-hint">{t('settings.themes.previewHint')}</p>
+      <p className="theme-hint">{t('settings.save.preview')}</p>
       <WorkbenchPreview theme={displayTheme} />
       <fieldset className="theme-draft-fields" disabled={saving}>
         {draft.id === 'onward-classic' && <div className="theme-classic-controls">
@@ -658,10 +694,6 @@ export function ThemeSelector() {
       <div className="theme-draft-footer">
         <p className="theme-hint">{t('settings.themes.resetHint')}</p>
         <button type="button" className="theme-button theme-reset-button" data-testid="theme-draft-reset" disabled={saving} onClick={resetDraft}>{t('settings.themes.reset')}</button>
-        <div className="theme-actions">
-          <button type="button" className="theme-button" data-testid="theme-draft-cancel" disabled={saving} onClick={cancelDraft}>{t('common.cancel')}</button>
-          <button type="button" className="theme-button theme-button-primary" data-testid="theme-draft-save" disabled={saving || invalidDraft} onClick={() => void saveDraft()}>{t(saving ? 'settings.themes.saving' : 'common.save')}</button>
-        </div>
       </div>
     </section>}
 
@@ -672,11 +704,11 @@ export function ThemeSelector() {
       </button>
       <p className="theme-hint">{t('settings.themes.importHint')}</p>
       {importError && <p className="theme-error" data-testid="theme-import-error" role="alert">{t(importError)}</p>}
-      <button type="button" className="theme-button theme-import-button" data-testid="theme-export" disabled={locked} onClick={() => void exportTheme()}>
+      <button type="button" className="theme-button theme-import-button" data-testid="theme-export" disabled={locked || session?.dirty} onClick={() => void exportTheme()}>
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M8 11V2m-3 3 3-3 3 3M2 10v4h12v-4" /></svg>
         <span>{t(exporting ? 'settings.themes.exportWorking' : 'settings.themes.export')}</span>
       </button>
-      <p className="theme-hint">{t('settings.themes.exportHint')}</p>
+      <p className="theme-hint">{t('settings.save.exportHint')}</p>
       {exportStatus && <p className={exportStatus === 'error' ? 'theme-error' : 'theme-hint'} data-testid="theme-export-status" role={exportStatus === 'error' ? 'alert' : 'status'}>{t(exportStatus === 'error' ? 'settings.themes.exportError' : 'settings.themes.exportSuccess')}</p>}
     </div>
 
@@ -704,8 +736,8 @@ export function ThemeSelector() {
       </fieldset>
       {saveError && <p className="theme-error" data-testid="theme-import-error" role="alert">{t('settings.themes.saveError')}</p>}
       <div className="theme-actions">
-        <button type="button" className="theme-button" disabled={saving} onClick={cancelImport}>{t('common.cancel')}</button>
-        <button type="button" className="theme-button theme-button-primary" data-testid="theme-import-confirm" disabled={saving || choices.size === 0} onClick={() => void confirmImport()}>{t(saving ? 'settings.themes.saving' : currentTheme.mode === 'schedule' ? 'settings.themes.schedule.importConfirm' : 'settings.themes.importConfirm')}</button>
+        <button type="button" className="theme-button" disabled={saving} onClick={cancelImport}>{t('common.close')}</button>
+        <button type="button" className="theme-button theme-button-primary" data-testid="theme-import-confirm" disabled={saving || choices.size === 0} onClick={() => void confirmImport()}>{t('settings.save.importDraft')}</button>
       </div>
     </section>}
     {saveError && !draft && !candidates && <p className="theme-error" role="alert">{t('settings.themes.saveError')}</p>}

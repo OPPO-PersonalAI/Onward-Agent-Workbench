@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { ThemeUiHarness, REPO_ROOT, eventually } from './themes-ui-driver-support.mjs'
+import { ThemeUiHarness, REPO_ROOT, eventually, saveSettingsPage, replaceFixtureCommand } from './themes-ui-driver-support.mjs'
 import { NativeShortcutKeyboard, physicalShortcutKey } from './native-shortcut-keyboard.mjs'
 
 const SUITE = 'prompt-input-shortcuts'
@@ -126,7 +126,7 @@ class RawReceiver {
     const id = ++this.sequence
     const destination = path.join(this.directory, 'command.json')
     await writeFile(`${destination}.next`, JSON.stringify({ id, operation, ...extra }))
-    await rename(`${destination}.next`, destination)
+    await replaceFixtureCommand(`${destination}.next`, destination)
     return eventually(`${this.id} receiver ${operation} acknowledgement`, () => json(path.join(this.directory, 'status.json')),
       value => value?.commandId === id, timeoutMs)
   }
@@ -475,7 +475,7 @@ class ShortcutHarness extends ThemeUiHarness {
     const selector = this.page.getByTestId('prompt-input-target-modifier')
     if (await selector.inputValue() !== (modifier ?? '')) {
       await selector.selectOption(modifier ?? '')
-      await this.page.getByTestId('prompt-input-save').click()
+      await this.page.getByTestId('settings-save').click()
       await this.page.waitForFunction(() => document.querySelector('[data-testid="prompt-input-status"]')?.dataset.state === 'saved')
     }
     assert.equal((await this.page.evaluate(() => window.electronAPI.settings.load())).promptInput.targetModifier, modifier)
@@ -1674,7 +1674,9 @@ async function additionalBoundaries(h) {
     await h.page.waitForFunction(() => window.__onwardProjectEditorDebug?.isOpen())
     await h.page.evaluate(() => window.__onwardProjectEditorDebug.openFileByPathAsUser('sample.ts'))
     await h.page.waitForFunction(() => window.__onwardProjectEditorDebug.getEditorLineCount() > 0)
-    const edited = `${source}\n// Unsaved preview isolation probe ${trial}\n`
+    // Monaco retains the loaded model's EOL when executeEdits inserts text.
+    const eol = source.includes('\r\n') ? '\r\n' : '\n'
+    const edited = `${source}${eol}// Unsaved preview isolation probe ${trial}${eol}`
     assert.equal(await h.page.evaluate(content => window.__onwardProjectEditorDebug.setEditorContent(content), edited), true)
     await h.page.waitForFunction(content => window.__onwardProjectEditorDebug.getEditorContent() === content, edited)
     await h.openSettings('shortcuts')
@@ -1722,14 +1724,14 @@ async function additionalBoundaries(h) {
     await resumed()
     await h.page.getByTestId('prompt-input-expand').click()
     await focusPreview()
-    await h.openSettings('general')
+    await Promise.all([h.openSettings('general'), h.page.getByTestId('settings-leave-discard').click()])
     await h.page.locator('.settings-close-btn').focus()
     const restored = await h.eventAfter(await h.chord('KeyE'), 'dispatch')
     assert.equal(restored.actionId, 'execute')
     h.expect([TASKS[0]], '\r')
     await h.checkBytes()
     await h.page.getByRole('button', { name: 'Return to Terminal (ESC)', exact: true }).click()
-    await h.page.getByRole('button', { name: 'Discard changes', exact: true }).click()
+    await h.page.locator('.project-editor-dialog').getByRole('button', { name: 'Discard changes', exact: true }).click()
     await h.page.waitForFunction(() => !window.__onwardProjectEditorDebug.isOpen())
     await h.page.getByTestId('sidebar-settings-button').click()
     await h.showPrompt()
@@ -1742,7 +1744,7 @@ async function additionalBoundaries(h) {
     await h.openSettings('shortcuts')
     const section = h.page.getByTestId('prompt-input-settings')
     const timeout = section.getByTestId('prompt-input-timeout')
-    const save = section.getByTestId('prompt-input-save')
+    const save = h.page.getByTestId('settings-save')
     await timeout.fill(String(1600 + trial * 100))
     // Keep pointer ownership on the button. Disabling it during the save may
     // still blur it; either documented cancellation wins, but none may revive.
@@ -2204,6 +2206,7 @@ async function crowdedTabGeometry(h) {
   const setLanguage = async language => {
     await h.openSettings('general')
     await h.page.getByTestId('settings-language-select').selectOption(language)
+    await saveSettingsPage(h.page)
     await eventually('geometry locale is acknowledged', () => h.page.evaluate(() => window.electronAPI.settings.load()), settings => settings.language === language)
     await h.page.getByTestId('sidebar-settings-button').click()
     await h.page.locator('.settings-container').waitFor({ state: 'hidden' })
@@ -2279,7 +2282,9 @@ async function nativeWindowBoundaries(h) {
     try {
       await h.keyboard.down('Alt')
       await h.choosingTargets(await h.taskOrder())
-      assert.equal(await h.page.evaluate(() => window.electronAPI.debug.blurWindow()), true, 'The real owned BrowserWindow must blur')
+      assert.equal(await h.page.evaluate(() => window.electronAPI.debug.blurWindow()), true, 'The owned native input surface must really lose focus')
+      const focus = await h.page.evaluate(() => window.electronAPI.debug.getInputFocus())
+      assert.equal(process.platform === 'win32' ? focus.contentsFocused : focus.windowFocused, false)
       const canceled = await h.eventAfter(mark, 'cancel')
       assert(['blur', 'contents-blur'].includes(canceled.reason), 'Native owner-window blur really canceled the Leader')
       await h.leaderState(false)

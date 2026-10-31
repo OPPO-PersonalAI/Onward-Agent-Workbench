@@ -24,7 +24,14 @@ let outputTick = 0
 function status(extra = {}) {
   const temporary = `${statusPath}.next`
   writeFileSync(temporary, JSON.stringify({ pid: process.pid, ready: true, commandId, length, bracketedPaste, stopped, ...extra }))
-  renameSync(temporary, statusPath)
+  for (let attempt = 0; ; attempt++) {
+    try { renameSync(temporary, statusPath); break }
+    catch (error) {
+      // The Windows driver may briefly hold the previous snapshot open.
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 9) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+    }
+  }
 }
 
 function setBracketedPaste(enabled) {

@@ -5,7 +5,8 @@
 
 import { app } from 'electron'
 import { join } from 'path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'fs'
+import { randomUUID } from 'crypto'
 import { isReservedShortcut, RESERVED_SHORTCUTS } from './reserved-shortcuts'
 import { DEFAULT_LOCALE, isAppLocale, type AppLocale } from '../../src/i18n/core'
 import type { ThemeSettings } from '../../src/types/theme'
@@ -411,13 +412,17 @@ class SettingsStorage {
    * Save settings data to file
    */
   private persist(throwOnError = false): void {
+    const temporary = `${this.storagePath}.pending`
     try {
       const dir = app.getPath('userData')
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true })
       }
-      writeFileSync(this.storagePath, JSON.stringify(this.state, null, 2), 'utf-8')
+      writeFileSync(temporary, JSON.stringify(this.state, null, 2), 'utf-8')
+      renameSync(temporary, this.storagePath)
     } catch (error) {
+      try { rmSync(temporary, { force: true }) }
+      catch { performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'pending-cleanup-failed' }) }
       console.error('Failed to save settings:', error)
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'write-failed', propagated: throwOnError })
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'write-failed', propagated: throwOnError })
@@ -452,11 +457,11 @@ class SettingsStorage {
   /**
    * Save complete settings.
    * Telemetry fields are preserved from the current in-memory state because
-   * they are managed exclusively through setTelemetryConsent(). The renderer's
+   * they are managed through setTelemetryConsent() or a validated General-page commit. The renderer's
    * SettingsContext may hold a stale snapshot, so accepting its telemetry
    * values here would overwrite a newer consent decision.
    */
-  save(settings: SettingsState): boolean {
+  save(settings: SettingsState, consent?: boolean | null): boolean {
     const previous = this.state
     const started = performance.now()
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'save-received' })
@@ -473,9 +478,11 @@ class SettingsStorage {
         return false
       }
       const validated = this.validateState({ ...settings, promptInput })
-      // Preserve telemetry state — only setTelemetryConsent() may modify these
-      validated.telemetryConsent = this.state.telemetryConsent
-      validated.telemetryInstanceId = this.state.telemetryInstanceId
+      // Ordinary snapshots cannot overwrite the separately acknowledged consent decision.
+      validated.telemetryConsent = consent === undefined ? previous.telemetryConsent : consent
+      validated.telemetryInstanceId = consent === undefined || consent === previous.telemetryConsent
+        ? previous.telemetryInstanceId
+        : consent ? randomUUID() : null
       this.state = {
         ...validated,
         updatedAt: Date.now()

@@ -15,6 +15,7 @@ import * as schedule from '../../src/themes/theme-schedule.ts'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names.ts'
 import { handlerHarness, preloadBridge } from './support/theme-import-harness.mjs'
 import { importThemeFile } from '../../electron/main/theme-import-source.ts'
+import { settingsValuesEqual } from '../../src/utils/settings-page.ts'
 
 const filename = fileURLToPath(new URL('../../src/components/Settings/ThemeSelector.tsx', import.meta.url))
 // Export private helpers only in this in-memory copy; tests execute the actual module and JSX callbacks.
@@ -47,6 +48,8 @@ function createHarness(t, theme = initialTheme(), options = {}) {
   const traces = []
   const previews = []
   const saves = []
+  let editor
+  let staged = { theme }
   let cursor = 0
   let tree
   let mounted = true
@@ -93,6 +96,16 @@ function createHarness(t, theme = initialTheme(), options = {}) {
     '../../themes/theme-presets': presets,
     '../../themes/theme-schedule': schedule,
     './ThemeScheduleEditor': { ThemeScheduleEditor: () => null },
+    './SettingsDraft': {
+      useSettingsDraft: () => ({ settings: staged, update: change => {
+        const next = change(staged)
+        saves.push(next.theme)
+        options.save?.(next.theme)
+        staged = next
+      } }),
+      useSettingsDraftEditor: (_id, participant) => { editor = participant }
+    },
+    '../../utils/settings-page': { settingsValuesEqual },
     '../../i18n/useI18n': { useI18n: () => ({ t: key => key }) },
     '../../hooks/useModalEscape': { useModalEscape: (active, callback, name) => escapes.set(name, active ? callback : null) },
     '../../utils/perf-trace': { perfTraceDiagnostic: (name, data) => traces.push({ name, data }) },
@@ -114,6 +127,7 @@ function createHarness(t, theme = initialTheme(), options = {}) {
       assert(mounted)
       cursor = 0
       tree = module.exports.ThemeSelector()
+      if (editor) previews.push(editor.prepare(staged).theme)
       for (const effect of effects.splice(0)) effect.cleanup = effect.create()
       return tree
     },
@@ -126,6 +140,7 @@ function createHarness(t, theme = initialTheme(), options = {}) {
     color(token) { return this.find(node => node.type === module.exports.ColorField && node.props.token === token) },
     escape(name) { assert(escapes.get(name)); escapes.get(name)() },
     event(name, reason) { return traces.filter(event => event.name === name && event.data.reason === reason) },
+    discardPage() { editor.reset() },
     unmount() {
       if (!mounted) return
       mounted = false
@@ -147,6 +162,22 @@ function createHarness(t, theme = initialTheme(), options = {}) {
 const CUSTOMIZE = PERF_TRACE_EVENT.RENDERER_THEME_CUSTOMIZE
 const IMPORT = PERF_TRACE_EVENT.RENDERER_THEME_IMPORT_UI
 
+test('TSD-16: page discard returns focus only to the editor that was open', async t => {
+  const h = createHarness(t)
+  const focused = []
+  h.byId('theme-customize').props.ref.current = { focus: () => focused.push('customize') }
+  h.byId('theme-import').props.ref.current = { focus: () => focused.push('import') }
+  h.byId('theme-customize').props.onClick()
+  h.render()
+  h.color('terminal.background').props.onChange('#123456')
+  h.render()
+  h.discardPage()
+  h.render()
+  await settled()
+  assert.deepEqual(focused, ['customize'])
+  assert.equal(h.event(IMPORT, 'cancel').length, 0, 'An unopened import editor cannot steal focus')
+})
+
 test('TSD-15: importing while scheduled preserves rules and shows the import-only action', async t => {
   const theme = { ...initialTheme('nord'), mode: 'schedule' }
   const h = createHarness(t, theme, { import: async () => ({ success: true, themes: [
@@ -155,7 +186,7 @@ test('TSD-15: importing while scheduled preserves rules and shows the import-onl
   h.byId('theme-import').props.onClick()
   await settled()
   h.render()
-  assert.equal(h.byId('theme-import-confirm').props.children, 'settings.themes.schedule.importConfirm')
+  assert.equal(h.byId('theme-import-confirm').props.children, 'settings.save.importDraft')
   h.byId('theme-import-confirm').props.onClick()
   await settled()
   assert.equal(h.saves.at(-1).mode, 'schedule')
@@ -281,15 +312,12 @@ test('TSD-05: Classic controls identify preset/mode actions while shorthand, inv
   assert.deepEqual(h.event(CUSTOMIZE, 'classic-preset').map(event => event.data.source), ['selection', 'draft'])
 })
 
-test('TSD-06: busy persistence is skipped, unexpected catches are diagnosed and selection identity contains no imported text', async t => {
-  const save = deferred()
-  const h = createHarness(t, initialTheme(), { save: () => save.promise })
+test('TSD-06: unexpected draft staging catches are diagnosed without imported text', async t => {
+  const h = createHarness(t, initialTheme(), { save: () => { throw new Error(secret) } })
   const select = h.byId('theme-more').props.onChange
   select({ target: { value: secret } })
   select({ target: { value: 'nord' } })
-  assert.equal(h.saves.length, 1)
-  assert.deepEqual(h.event(CUSTOMIZE, 'skip').map(event => event.data), [{ reason: 'skip', operation: 'persist', cause: 'busy' }])
-  save.reject(new Error(secret))
+  assert.equal(h.saves.length, 2)
   await settled()
   h.render()
   assert.equal(h.event(CUSTOMIZE, 'select').length, 2)
@@ -297,16 +325,14 @@ test('TSD-06: busy persistence is skipped, unexpected catches are diagnosed and 
   assert.equal(h.find(node => node.props?.role === 'alert').props.children, 'settings.themes.saveError')
 })
 
-test('TSD-07: persistence rejected after unmount emits an error without writing React state', async t => {
-  const save = deferred()
-  const h = createHarness(t, initialTheme(), { save: () => save.promise })
+test('TSD-07: draft staging finishes synchronously and unmount leaves no pending state writes', async t => {
+  const h = createHarness(t, initialTheme())
   h.byId('theme-mode').props.onChange({ target: { value: 'system' } })
   h.unmount()
   const writes = h.stateWrites
-  save.reject(new Error(secret))
   await settled()
   assert.equal(h.stateWrites, writes)
-  assert.equal(h.event(CUSTOMIZE, 'error').at(-1).data.mounted, false)
+  assert.equal(h.event(CUSTOMIZE, 'page-draft-staged').length, 1)
   assert.equal(h.event(CUSTOMIZE, 'mode').at(-1).data.mode, 'system')
 })
 

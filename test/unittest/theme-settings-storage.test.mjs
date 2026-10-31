@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import * as crypto from 'node:crypto'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const LEGACY_FIXTURE = path.join(ROOT, 'test/autotest/fixtures/themes-ui/legacy-settings.json')
@@ -42,16 +43,27 @@ function createStorageHarness(initial) {
       directories.add(filename)
     },
     writeFileSync(filename, contents, encoding) {
-      assert.equal(filename, settingsPath)
+      assert.equal(filename, `${settingsPath}.pending`)
       assert.equal(encoding, 'utf-8')
       writes.push({ filename, contents })
       if (rejectWrites) throw Object.assign(new Error('Injected write rejection'), { code: 'EACCES' })
       files.set(filename, contents)
+    },
+    renameSync(source, destination) {
+      assert.equal(source, `${settingsPath}.pending`)
+      assert.equal(destination, settingsPath)
+      files.set(destination, files.get(source))
+      files.delete(source)
+    },
+    rmSync(filename) {
+      assert.equal(filename, `${settingsPath}.pending`)
+      files.delete(filename)
     }
   }
   const mocks = new Map([
     ['electron', { app: { getPath(name) { assert.equal(name, 'userData'); return userData } } }],
     ['fs', fs],
+    ['crypto', crypto],
     ['path', path],
     [path.join(ROOT, 'electron/main/performance-trace.ts'), {
       performanceTrace: { record: (name, data) => traces.push({ name, data }) }
@@ -91,6 +103,26 @@ function createStorageHarness(initial) {
 function withTheme(state, themeId) {
   return { ...state, theme: { ...state.theme, mode: 'manual', themeId } }
 }
+
+test('SP-B03: General consent and language commit together; failure preserves both and ordinary saves preserve consent', () => {
+  const h = createStorageHarness()
+  const initial = h.storage.get()
+  assert.equal(h.storage.save(initial), true)
+  h.rejectWrites(true)
+  assert.equal(h.storage.save({ ...initial, language: 'zh-CN' }, true), false)
+  assert.equal(h.storage.get().language, initial.language)
+  assert.equal(h.storage.get().telemetryConsent, initial.telemetryConsent)
+  assert.deepEqual(h.disk().telemetryConsent, initial.telemetryConsent)
+  h.rejectWrites(false)
+  assert.equal(h.storage.save({ ...initial, language: 'zh-CN' }, true), true)
+  const acknowledged = h.storage.get()
+  assert.equal(acknowledged.language, 'zh-CN')
+  assert.equal(acknowledged.telemetryConsent, true)
+  assert.match(acknowledged.telemetryInstanceId, /^[a-f0-9-]{36}$/)
+  assert.equal(h.storage.save({ ...acknowledged, telemetryConsent: false, telemetryInstanceId: null }), true)
+  assert.equal(h.storage.get().telemetryInstanceId, acknowledged.telemetryInstanceId)
+  assert.equal(h.storage.get().telemetryConsent, true)
+})
 
 test('TSS-10: export snapshot excludes unrelated catalogs and machine settings', () => {
   const h = createStorageHarness()

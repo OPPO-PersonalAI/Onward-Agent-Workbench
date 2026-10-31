@@ -7,6 +7,8 @@ import { globalShortcut, BrowserWindow, app } from 'electron'
 import { getSettingsStorage, ShortcutConfig } from './settings-storage'
 import { findReservedShortcutKey, normalizeAccelerator } from './reserved-shortcuts'
 import { IPC } from '../shared/ipc-channels'
+import { performanceTrace } from './performance-trace'
+import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 
 /**
  * Shortcut action type
@@ -136,7 +138,9 @@ class ShortcutManager {
 
     try {
       const success = globalShortcut.register(accelerator, () => {
-        this.triggerAction(action)
+        const owned = this.registeredShortcuts.has(accelerator)
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'callback', owned })
+        if (owned) this.triggerAction(action)
       })
 
       if (success) {
@@ -190,6 +194,45 @@ class ShortcutManager {
     }
 
     return allSuccess
+  }
+
+  /** Keep the old binding live until the settings snapshot has been written. */
+  reserveGlobalShortcut(accelerator: string | null): { commit: () => void; rollback: () => void } | null {
+    const previous = [...this.registeredShortcuts]
+    const existing = accelerator && previous.find(key => normalizeAccelerator(key) === normalizeAccelerator(accelerator))
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'reserve', changed: !existing, enabled: Boolean(accelerator) })
+    if (existing) return { commit: () => {}, rollback: () => {} }
+    if (accelerator) {
+      try {
+        const ok = globalShortcut.register(accelerator, () => {
+          const owned = this.registeredShortcuts.has(accelerator)
+          performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'callback', owned })
+          if (owned) this.triggerAction({ type: 'activateAndFocusPrompt' })
+        })
+        if (!ok) {
+          performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'rejected' })
+          return null
+        }
+      } catch {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'rejected' })
+        return null
+      }
+    }
+    return {
+      commit: () => {
+        this.registeredShortcuts = new Set(accelerator ? [accelerator] : [])
+        for (const key of previous) {
+          try { globalShortcut.unregister(key) }
+          catch { performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'release-failed' }) }
+        }
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'committed' })
+      },
+      rollback: () => {
+        try { if (accelerator) globalShortcut.unregister(accelerator) }
+        catch { performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'rollback-release-failed' }) }
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_SHORTCUT, { stage: 'rolled-back' })
+      }
+    }
   }
 
   /**

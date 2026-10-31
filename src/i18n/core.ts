@@ -6,6 +6,7 @@
 import { en as promptInputEn, zhCN as promptInputZhCN } from './prompt-input.ts'
 import { promptInputRuntimeEn, promptInputRuntimeZhCN } from './prompt-input-runtime.ts'
 import { en as themeScheduleEn, zhCN as themeScheduleZhCN } from './theme-schedule.ts'
+import { en as settingsSaveEn, zhCN as settingsSaveZhCN } from './settings-save.ts'
 
 export type AppLocale = 'en' | 'zh-CN'
 
@@ -23,6 +24,7 @@ export const SUPPORTED_LOCALES: ReadonlyArray<{ value: AppLocale; label: string 
 type TranslationDictionary = Record<string, string>
 
 const en = {
+  ...settingsSaveEn,
   ...themeScheduleEn,
   ...promptInputEn,
   ...promptInputRuntimeEn,
@@ -1615,6 +1617,7 @@ type LocaleTranslations = Partial<Record<TranslationKey, string>>
 
 const zhCN: LocaleTranslations = {
   ...themeScheduleZhCN,
+  ...settingsSaveZhCN,
   ...promptInputZhCN,
   ...promptInputRuntimeZhCN,
   'common.add': '添加',

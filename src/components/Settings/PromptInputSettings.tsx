@@ -21,6 +21,7 @@ import { PromptActionButton } from '../PromptNotebook/PromptActionButton'
 import { PromptShortcutPreview } from './PromptShortcutPreview'
 import { PromptActionAppearance } from './PromptActionAppearance'
 import './PromptInputSettings.css'
+import { useSettingsDraft, useSettingsDraftEditor } from './SettingsDraft'
 
 const VALIDATION_KEYS: Record<PromptInputValidationError, TranslationKey> = {
   'invalid-leader': 'promptInput.settings.invalidLeader',
@@ -43,14 +44,16 @@ function Icon({ name }: { name: keyof typeof ICONS }) {
 }
 
 export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: number }) {
-  const { settings, updatePromptInput } = useSettings()
+  const persisted = useSettings()
+  const session = useSettingsDraft()
+  const settings = session?.settings ?? persisted.settings
   const { t } = useI18n()
   const id = useId()
   const saved = useMemo(() => normalizePromptInputSettings(settings?.promptInput), [settings?.promptInput])
   const [draft, setDraft] = useState(saved)
   const [baseline, setBaseline] = useState(saved)
   const [timeout, setTimeoutValue] = useState(String(saved.timeoutMs))
-  const [saving, setSaving] = useState(false)
+  const saving = session?.saving ?? false
   const [recording, setRecording] = useState(false)
   const [status, setStatus] = useState<TranslationKey | null>(null)
   const [saveError, setSaveError] = useState<TranslationKey | null>(null)
@@ -64,6 +67,7 @@ export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: num
   const [orderRevision, setOrderRevision] = useState(0)
   const mounted = useRef(true)
   const savingRef = useRef(false)
+  savingRef.current = saving
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline) || timeout !== String(baseline.timeoutMs)
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
@@ -218,48 +222,36 @@ export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: num
     setDrop(null)
   }
 
-  const save = async () => {
-    if (savingRef.current || recording) return
-    if (validationKey) {
-      setSaveError(validationKey)
-      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-invalid', error: validation ?? 'invalid-timeout' })
-      return
-    }
-    savingRef.current = true
-    setSaving(true)
-    setStatus(null)
-    setSaveError(null)
-    const submitted = normalizePromptInputSettings({ ...draft, timeoutMs })
-    let ok = false
-    try {
-      ok = await updatePromptInput(submitted)
-    } catch {
-      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-save-rejected' })
-    } finally {
-      savingRef.current = false
-      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-save-result', ok, mounted: mounted.current })
-      if (mounted.current) {
-        setSaving(false)
-        if (ok) {
-          setDraft(submitted)
-          setBaseline(submitted)
-          setTimeoutValue(String(submitted.timeoutMs))
-          setStatus('promptInput.settings.saved')
-        } else {
-          setSaveError('promptInput.settings.saveFailed')
-        }
-      }
-    }
-  }
-
   const cancel = () => {
-    setDraft(saved)
-    setBaseline(saved)
-    setTimeoutValue(String(saved.timeoutMs))
+    const latest = normalizePromptInputSettings(persisted.settings?.promptInput)
+    setDraft(latest)
+    setBaseline(latest)
+    setTimeoutValue(String(latest.timeoutMs))
     setSaveError(null)
     setStatus('promptInput.settings.cancelled')
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-cancel' })
   }
+
+  useSettingsDraftEditor('prompt-input', {
+    dirty, busy: recording, error: validationKey ? t(validationKey) : null,
+    prepare: current => ({ ...current, promptInput: normalizePromptInputSettings({ ...draft, timeoutMs }) }),
+    reset: cancel,
+    accepted: () => {
+      const submitted = normalizePromptInputSettings({ ...draft, timeoutMs })
+      setDraft(submitted)
+      setBaseline(submitted)
+      setTimeoutValue(String(submitted.timeoutMs))
+      setStatus('promptInput.settings.saved')
+      setSaveError(null)
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-save-result', ok: true })
+    },
+    focusError: () => {
+      setExpanded(true)
+      setSaveError(validationKey)
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-testid="prompt-input-settings"] [aria-invalid="true"]')?.focus())
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'editor-invalid', error: validation ?? 'invalid-timeout' })
+    }
+  })
 
   return <section className="prompt-input-settings settings-group settings-shortcut-group" data-settings-target="prompt-input" data-testid="prompt-input-settings" tabIndex={-1} aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`} className="settings-group-title">
@@ -388,12 +380,6 @@ export function PromptInputSettings({ revealRequest = 0 }: { revealRequest?: num
         data-state={saving ? 'saving' : saveError ? 'error' : status === 'promptInput.settings.saved' ? 'saved' : dirty ? 'dirty' : 'idle'}>
         {saving ? t('promptInput.settings.saving') : saveError ? t(saveError) : status ? t(status) : dirty ? t('promptInput.settings.unsaved') : ''}
       </p>
-      <div className="prompt-input-save-buttons">
-        <button type="button" onClick={cancel} disabled={saving || (!dirty && !saveError)} data-testid="prompt-input-cancel">{t('promptInput.settings.cancel')}</button>
-        <button type="button" className="prompt-input-save" onClick={() => { void save() }} disabled={saving || recording || !dirty || !settings} data-testid="prompt-input-save">
-          {t(saving ? 'promptInput.settings.saving' : 'promptInput.settings.save')}
-        </button>
-      </div>
     </div>
     </div>}
   </section>

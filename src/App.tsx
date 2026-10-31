@@ -14,6 +14,7 @@ import { PromptNotebook } from './components/PromptNotebook/PromptNotebook'
 import { PromptInputShortcuts } from './components/PromptNotebook/PromptInputShortcuts'
 import { TerminalGrid } from './components/TerminalGrid/TerminalGrid'
 import { Settings } from './components/Settings'
+import { requestSettingsLeave } from './utils/settings-leave-guard'
 import { GitWatcherErrorBanner } from './components/common/GitWatcherErrorBanner'
 import { ChangeLogModal } from './components/ChangeLogModal'
 import { useScheduleEngine } from './hooks/useScheduleEngine'
@@ -1339,7 +1340,7 @@ function AppContent({
   }, [])
 
   // True panel switching handling
-  const handlePanelChangeWithSettings = useCallback((panel: 'prompt' | 'settings' | null) => {
+  const handlePanelChangeWithSettings = useCallback(async (panel: 'prompt' | 'settings' | null) => {
     if (panel === 'settings') {
       const currentTabId = activeTabIdRef.current
       if (currentTabId) {
@@ -1349,6 +1350,7 @@ function AppContent({
       setShowSettings(true)
       updateActiveTab({ activePanel: null })
     } else {
+      if (!await requestSettingsLeave('close')) return
       clearPanelBeforeSettings()
       setShowSettings(false)
       updateActiveTab({ activePanel: panel })
@@ -1356,9 +1358,11 @@ function AppContent({
   }, [clearPanelBeforeSettings, updateActiveTab])
 
   // Close Settings
-  const handleCloseSettings = useCallback(() => {
+  const handleCloseSettings = useCallback(async () => {
+    if (!await requestSettingsLeave('close')) return false
     clearPanelBeforeSettings()
     setShowSettings(false)
+    return true
   }, [clearPanelBeforeSettings])
 
   const handleToggleChangeLog = useCallback(() => {
@@ -1418,16 +1422,18 @@ function AppContent({
   }, [])
   // Conditionally close Settings on Task/Tab switch
   // Only closes if the relevant panel state is 'prompt'; otherwise keeps Settings open
-  const handleTryCloseSettingsOnSwitch = useCallback((targetTabId?: string, targetActivePanel?: 'prompt' | null) => {
-    if (!showSettingsRef.current) return
+  const handleTryCloseSettingsOnSwitch = useCallback(async (targetTabId?: string, targetActivePanel?: 'prompt' | null) => {
+    if (!showSettingsRef.current) return true
     const resolvedTabId = targetTabId ?? activeTabIdRef.current
     // focusTerminal (same tab): use the active tab's saved panel state for this Settings session
     // switchTab: prefer the target tab's saved panel state, otherwise fall back to targetTab.activePanel
     const panelToCheck = getPanelBeforeSettings(resolvedTabId, targetActivePanel ?? null)
     if (panelToCheck === 'prompt') {
+      if (!await requestSettingsLeave('shortcut')) return false
       clearPanelBeforeSettings()
       setShowSettings(false)
     }
+    return true
   }, [clearPanelBeforeSettings, getPanelBeforeSettings])
 
   const handleOpenProjectEditor = useCallback(async (
@@ -2167,28 +2173,28 @@ function SettingsProviderWithHandler() {
           const targetTab = state.tabs[action.index - 1]
           if (targetTab) {
             // Conditionally close Settings based on the target tab's pre-Settings panel context.
-            tryCloseSettingsOnSwitch(targetTab.id, targetTab.activePanel)
-            switchTab(targetTab.id)
-            const terminalId = targetTab.activeTerminalId
-            if (terminalId) {
-              setLastFocusOwner('terminal')
-              setLastFocusedTerminalId(terminalId)
-              requestTerminalFocus(terminalId, 'shortcut-activated')
-            }
+            void tryCloseSettingsOnSwitch(targetTab.id, targetTab.activePanel).then(allowed => {
+              if (!allowed) return
+              switchTab(targetTab.id)
+              const terminalId = targetTab.activeTerminalId
+              if (terminalId) {
+                setLastFocusOwner('terminal')
+                setLastFocusedTerminalId(terminalId)
+                requestTerminalFocus(terminalId, 'shortcut-activated')
+              }
+            })
           }
         }
         break
       }
       case 'activateAndFocusPrompt': {
         // Close Settings first
-        closeSettings()
-        setLastFocusOwner('input')
-        // Open the Prompt panel and focus
-        updateActiveTab({ activePanel: 'prompt' })
-        // Delay focus, wait for panel rendering
-        setTimeout(() => {
-          focusEditor()
-        }, 100)
+        void closeSettings().then(allowed => {
+          if (!allowed) return
+          setLastFocusOwner('input')
+          updateActiveTab({ activePanel: 'prompt' })
+          setTimeout(() => { focusEditor() }, 100)
+        })
         break
       }
       case 'addToHistory': {
@@ -2198,13 +2204,12 @@ function SettingsProviderWithHandler() {
       }
       case 'focusPromptEditor': {
         // Close Settings first
-        closeSettings()
-        setLastFocusOwner('input')
-        // Focus on the Prompt Editor
-        updateActiveTab({ activePanel: 'prompt' })
-        setTimeout(() => {
-          focusEditor()
-        }, 100)
+        void closeSettings().then(allowed => {
+          if (!allowed) return
+          setLastFocusOwner('input')
+          updateActiveTab({ activePanel: 'prompt' })
+          setTimeout(() => { focusEditor() }, 100)
+        })
         break
       }
       case 'terminalGitDiff': {

@@ -24,6 +24,7 @@ import { DEFAULT_LOCALE, type AppLocale } from '../i18n/core'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, validatePromptInputSettings, type PromptInputSettings } from '../utils/prompt-input'
 import { RESERVED_SHORTCUTS } from '../../electron/main/reserved-shortcuts'
+import { selectSettingsPage, type SettingsPageCommit, type SettingsPageCommitResult } from '../utils/settings-page'
 
 /**
  * Save anti-shake time (milliseconds)
@@ -98,6 +99,7 @@ interface SettingsContextValue {
   // state
   settings: SettingsState | null
   isLoaded: boolean
+  commitPage: (request: SettingsPageCommit) => Promise<SettingsPageCommitResult>
 
   // Shortcut operations
   updateShortcut: (key: keyof ShortcutConfig, value: string | null) => void
@@ -150,6 +152,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   })
   const [isLoaded, setIsLoaded] = useState(Boolean(settings))
   const settingsRef = useRef<SettingsState | null>(settings)
+  const pageCommitRef = useRef<Promise<void> | null>(null)
   const savedThemeRef = useRef<ThemeSettings | null>(settings?.theme ?? null)
   const savedPromptInputRef = useRef<PromptInputSettings | null>(settings?.promptInput ?? null)
   const promptInputCommitRevision = useRef(0)
@@ -278,6 +281,10 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
 
   // Both save paths share acknowledgement ordering and retain the snapshot actually sent.
   const persistSettingsSnapshot = useCallback(function persist(snapshot: SettingsState, promptInputCommit = false): Promise<boolean> {
+    if (pageCommitRef.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'snapshot-deferred' })
+      return pageCommitRef.current.then(() => persist(settingsRef.current ?? snapshot, promptInputCommit))
+    }
     const barrier = promptInputCommitBarrier.current
     if (barrier && !promptInputCommit) {
       // A later full snapshot must not accidentally persist an unacknowledged action edit.
@@ -306,6 +313,41 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     return pending
   }, [])
 
+  const commitPage = useCallback(async (request: SettingsPageCommit): Promise<SettingsPageCommitResult> => {
+    if (pageCommitRef.current || promptInputCommitBarrier.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'busy' })
+      return { success: false, error: 'busy' }
+    }
+    if (!settingsRef.current || !window.electronAPI?.settings?.commitPage) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'unavailable' })
+      return { success: false, error: 'unavailable' }
+    }
+    let release!: () => void
+    pageCommitRef.current = new Promise<void>(resolve => { release = resolve })
+    const started = performance.now()
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'send', page: request.page })
+    try {
+      await Promise.allSettled([...pendingSettingsSaves.current.values()])
+      // Keep debounced view-state writes behind the ACK; never send a stale full snapshot first.
+      const result = await window.electronAPI.settings.commitPage(request)
+      if (result.success && settingsRef.current) {
+        const live = settingsRef.current
+        const acknowledged = selectSettingsPage(result.settings, request.page)
+        const next = { ...live, ...acknowledged, telemetryInstanceId: result.settings.telemetryInstanceId }
+        settingsRef.current = next
+        savedThemeRef.current = result.settings.theme
+        savedPromptInputRef.current = result.settings.promptInput
+        setSettings(next)
+      }
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'received', page: request.page, ok: result.success,
+        error: result.success ? undefined : result.error, durationMs: performance.now() - started })
+      return result
+    } catch {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'rejected', page: request.page, durationMs: performance.now() - started })
+      return { success: false, error: 'write-failed' }
+    } finally { pageCommitRef.current = null; release() }
+  }, [])
+
   // Debounced settings save
   const saveSettings = useCallback((newSettings: SettingsState) => {
     if (saveTimeoutRef.current) {
@@ -327,7 +369,12 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   }, [persistSettingsSnapshot])
 
   // Update settings and save
-  const updateSettings = useCallback((updater: (prev: SettingsState) => SettingsState) => {
+  const updateSettings = useCallback(function update(updater: (prev: SettingsState) => SettingsState): void {
+    if (pageCommitRef.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'update-deferred' })
+      void pageCommitRef.current.then(() => update(updater))
+      return
+    }
     const prev = settingsRef.current
     if (!prev) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'update-unavailable' })
@@ -369,6 +416,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   }, [settings])
 
   const updatePromptInput = useCallback(async (promptInput: PromptInputSettings): Promise<boolean> => {
+    if (pageCommitRef.current) await pageCommitRef.current
     const previous = settingsRef.current
     if (!previous || !window.electronAPI?.settings) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'commit-unavailable' })
@@ -456,6 +504,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_SCHEDULE, { reason: 'commit-superseded', selection })
       return false
     }
+    if (pageCommitRef.current) await pageCommitRef.current
     const previous = settingsRef.current
     if (!previous) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'commit-unavailable' })
@@ -635,6 +684,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   const value: SettingsContextValue = useMemo(() => ({
     settings,
     isLoaded,
+    commitPage,
     updateShortcut,
     getShortcut,
     updatePromptInput,
@@ -659,6 +709,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
   }), [
     settings,
     isLoaded,
+    commitPage,
     updateShortcut,
     getShortcut,
     updatePromptInput,

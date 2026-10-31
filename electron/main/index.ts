@@ -34,6 +34,7 @@ import { app, BrowserWindow, nativeImage, nativeTheme, Menu, dialog, ipcMain, cr
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { registerIpcHandlers, cleanupIpcHandlers, abortBackgroundWorkForQuit, floodBackgroundQueuesForQuitTest, setupWindowShortcuts } from './ipc-handlers'
+import { confirmSettingsExit } from './settings-exit-guard'
 import { promptInputShortcuts } from './prompt-input-shortcuts'
 import { getTrayManager } from './tray-manager'
 import { getAppInfo, initializeAppIdentity } from './app-info'
@@ -460,11 +461,12 @@ const quitCoordinator = new QuitCoordinator({
 app.once('quit', () => quitCoordinator.exited())
 
 export async function requestQuit(): Promise<void> {
-  await quitCoordinator.request('quit', confirmQuit)
+  await quitCoordinator.request('quit', async () => await confirmSettingsExit() && await confirmQuit())
 }
 
 export async function requestRestartToApplyUpdate(): Promise<{ success: boolean; error?: string }> {
   if (quitCoordinator.stopping) return { success: false, error: 'Application is already quitting.' }
+  if (!await confirmSettingsExit()) return { success: false }
   const result = getUpdateService().requestRestartToUpdate()
   if (!result.success) return result
   await quitCoordinator.request('restart-to-update')

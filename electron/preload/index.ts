@@ -1002,6 +1002,10 @@ export type ShortcutAction =
 // Settings API
 export interface SettingsAPI {
   load: () => Promise<SettingsState>
+  commitPage: (request: import('../../src/utils/settings-page').SettingsPageCommit) => Promise<import('../../src/utils/settings-page').SettingsPageCommitResult>
+  setDraftPending: (pending: boolean) => void
+  onConfirmExit: (callback: (requestId: string) => void) => () => void
+  confirmExit: (requestId: string, allowed: boolean) => void
   save: (settings: SettingsState) => Promise<boolean>
   update: (partial: Partial<SettingsState>) => Promise<boolean>
   registerShortcuts: () => Promise<boolean>
@@ -2324,6 +2328,14 @@ const themesAPI: ThemesAPI = {
 }
 
 const settingsAPI: SettingsAPI = {
+  commitPage: request => ipcRenderer.invoke(IPC.SETTINGS_COMMIT_PAGE, request),
+  setDraftPending: pending => ipcRenderer.send(IPC.SETTINGS_DRAFT_STATE, pending),
+  onConfirmExit: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, requestId: string) => callback(requestId)
+    ipcRenderer.on(IPC.SETTINGS_CONFIRM_EXIT, listener)
+    return () => { ipcRenderer.removeListener(IPC.SETTINGS_CONFIRM_EXIT, listener) }
+  },
+  confirmExit: (requestId, allowed) => ipcRenderer.send(IPC.SETTINGS_CONFIRM_EXIT_REPLY, requestId, allowed),
   load: () => {
     return ipcRenderer.invoke(IPC.SETTINGS_LOAD)
   },

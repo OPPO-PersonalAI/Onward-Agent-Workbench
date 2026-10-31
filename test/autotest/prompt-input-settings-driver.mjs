@@ -11,7 +11,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ThemeUiHarness, eventually } from './themes-ui-driver-support.mjs'
+import { ThemeUiHarness, eventually, saveSettingsPage, replaceFixtureCommand } from './themes-ui-driver-support.mjs'
 import { NativeShortcutKeyboard } from './native-shortcut-keyboard.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -27,7 +27,7 @@ const INPUT_PAGE = 'shortcuts'
 const EXTERNAL_SUITE = 'prompt-input-settings-external'
 const UI = {
   root: 'prompt-input-settings', leader: 'prompt-input-leader', timeout: 'prompt-input-timeout',
-  add: 'prompt-input-add', save: 'prompt-input-save', status: 'prompt-input-status',
+  add: 'prompt-input-add', save: 'settings-save', status: 'prompt-input-status',
   row: 'prompt-input-action'
 }
 
@@ -193,7 +193,11 @@ class InputSettingsHarness extends ThemeUiHarness {
     if (!modifiers.length && /^[a-z0-9]$/i.test(keyCode)) inputs.push({ type: 'char', keyCode: keyCode.toLowerCase(), modifiers })
     inputs.push({ type: 'keyUp', keyCode, modifiers })
     for (const input of inputs) {
-      assert.equal(await this.page.evaluate(input => window.electronAPI.debug.sendInputEvent(input), input), true,
+      const accepted = await this.page.evaluate(input => window.electronAPI.debug.sendInputEvent(input), input)
+      if (!accepted) await this.log('NATIVE_INPUT_REJECTED', {
+        input, focus: await this.page.evaluate(() => window.electronAPI.debug.getInputFocus())
+      })
+      assert.equal(accepted, true,
         'Preview probes cross the focused native before-input-event boundary')
     }
   }
@@ -310,6 +314,11 @@ class InputSettingsHarness extends ThemeUiHarness {
   }
 
   async status(state, message) {
+    if (state === 'error' && message === this.acceptance.copy[this.language].saveFailed) {
+      await this.page.locator('[data-testid="settings-save-status"][data-state="error"]').waitFor()
+      assert((await this.page.getByTestId('settings-save-status').innerText()).includes(message))
+      return
+    }
     await this.page.waitForFunction(({ id, state, message }) => {
       const status = document.querySelector(`[data-testid="${id}"]`)
       return status?.getAttribute('data-state') === state && status.textContent.trim() === message &&
@@ -437,6 +446,7 @@ async function configureThroughUi(h) {
 async function setLanguage(h, language) {
   await h.openPage('general')
   await h.page.getByTestId('settings-language-select').selectOption(language)
+  await saveSettingsPage(h.page)
   await eventually('language saved', () => h.diskSettings(), data => data?.language === language)
   h.language = language
   await h.openInputSettings()
@@ -580,7 +590,7 @@ async function failureAndRetry(h, trial, expected) {
     assert.deepEqual(unrelated(rejected), unrelated(before), 'Rollback preserves unrelated settings')
     assert.equal(rejected.language, before.language)
     assert.equal(rejected.settingsPanelWidth, before.settingsPanelWidth)
-    assert(await h.page.getByTestId(UI.status).isVisible(), 'Save failure has visible feedback')
+    assert(await h.page.getByTestId('settings-save-status').isVisible(), 'Save failure has visible feedback')
     assert.equal(await h.field('execute', 'terminal-key').inputValue(), nextKey, 'Rejected terminal behavior remains editable')
     assert.equal(await h.field('execute', 'target').inputValue(), nextTarget)
     assert.equal(await h.page.getByTestId('prompt-input-target-modifier').inputValue(), nextModifier)
@@ -684,7 +694,7 @@ async function startEmojiReceivers(h, scope = 'emoji', targetIds) {
       const id = ++sequence
       const destination = path.join(directory, 'command.json')
       await writeFile(`${destination}.next`, JSON.stringify({ id, operation }))
-      await rename(`${destination}.next`, destination)
+      await replaceFixtureCommand(`${destination}.next`, destination)
       await eventually(`${scope} receiver control acknowledgement`, readStatus, status => status?.commandId === id)
       return (await readFile(path.join(directory, 'stdin.bin'))).length
     } })
@@ -803,7 +813,7 @@ async function structuralCancel(h, expected) {
     await h.field(added[0], 'name').fill(h.acceptance.cancelDraftName)
     assert.deepEqual((await h.settings()).promptInput, expected, 'A complete structural draft is not active before Save')
     assert.deepEqual((await h.diskSettings()).promptInput, expected)
-    await h.page.getByTestId('prompt-input-cancel').click()
+    await h.page.getByTestId('settings-discard').click()
     await h.status('idle', h.acceptance.copy[h.language].cancelled)
     assert.deepEqual(await h.rowIds(), originalIds, 'Cancel restores deleted identities and removes the new identity')
     assert(await h.page.getByTestId(UI.save).isDisabled(), 'Cancel removes the entire dirty state')
@@ -833,6 +843,7 @@ async function bidirectionalConflicts(h, expected) {
   hidden.actions.find(action => action.id === 'execute').shortcut = probes.hidden.action
   const setGlobal = async binding => {
     await h.recordStroke(globalRecorder, binding.stroke, binding.display[h.platform])
+    await saveSettingsPage(h.page)
     await eventually('global binding is durable', () => h.diskSettings(), state => state?.shortcuts.activateAndFocusPrompt === binding.stored)
   }
   const reject = async (recorder, stroke, message) => {
@@ -871,11 +882,10 @@ async function bidirectionalConflicts(h, expected) {
         const error = h.page.getByTestId('prompt-input-error')
         await error.waitFor({ state: 'visible' })
         assert.equal(await error.innerText(), h.acceptance.copy[language].selectorConflict)
-        await h.page.getByTestId(UI.save).click()
-        await h.status('error', h.acceptance.copy[language].selectorConflict)
+        assert(await h.page.getByTestId(UI.save).isDisabled())
         assert.deepEqual((await h.settings()).promptInput, hidden, 'A conflicting selector cannot replace the saved configuration')
         assert.deepEqual((await h.diskSettings()).promptInput, hidden)
-        await h.page.getByTestId('prompt-input-cancel').click()
+        await h.page.getByTestId('settings-discard').click()
         assert.equal(await h.page.getByTestId('prompt-input-target-modifier').inputValue(), hidden.targetModifier)
         await h.selectAction('queue')
         await h.recordStroke(h.field('queue', 'shortcut'), probes.local.stroke, probes.local.action)
@@ -887,6 +897,7 @@ async function bidirectionalConflicts(h, expected) {
         await h.recordKey(h.field('queue', 'shortcut'), 'Q')
         await h.save(hidden)
         await h.clearButton(globalRecorder).click()
+        await saveSettingsPage(h.page)
         await eventually('global conflict fixture is cleared', () => h.diskSettings(), state => state?.shortcuts.activateAndFocusPrompt === null)
         trials.push({ language, trial, directions: ['action-to-global', 'global-to-hidden-action', 'selector-to-global'], localReuseSaved: true })
       }
@@ -894,8 +905,9 @@ async function bidirectionalConflicts(h, expected) {
   } finally {
     await h.openInputSettings()
     if (await globalDisclosure.getAttribute('aria-expanded') === 'false') await globalDisclosure.click()
-    if (await h.page.getByTestId('prompt-input-cancel').isEnabled()) await h.page.getByTestId('prompt-input-cancel').click()
+    if (await h.page.getByTestId('settings-discard').isEnabled()) await h.page.getByTestId('settings-discard').click()
     if (await h.clearButton(globalRecorder).isEnabled()) await h.clearButton(globalRecorder).click()
+    await saveSettingsPage(h.page)
     await eventually('original global binding restored', () => h.diskSettings(), state => state?.shortcuts.activateAndFocusPrompt === before.shortcuts.activateAndFocusPrompt)
     await h.selectAction('execute')
     await h.recordKey(h.field('execute', 'shortcut'), 'E')
@@ -956,7 +968,7 @@ async function run(h) {
       await h.page.getByTestId('settings-search-prompt-input').click()
       assert.equal(await h.page.getByTestId('prompt-input-expand').getAttribute('aria-expanded'), 'true')
       assert.equal(await h.field('queue', 'appearance').evaluate(node => node.style.getPropertyValue('--prompt-action-color')), '#a45bc9', 'Collapsing preserves the unsaved draft')
-      await h.page.getByTestId('prompt-input-cancel').click()
+      await h.page.getByTestId('settings-discard').click()
       assert.equal(await h.field('queue', 'appearance').evaluate(node => node.style.getPropertyValue('--prompt-action-color')), '')
       assert.deepEqual((await h.settings()).promptInput, h.acceptance.defaults)
       await h.page.getByTestId('prompt-input-add').focus()
@@ -1049,7 +1061,7 @@ async function run(h) {
     } finally {
       await h.page.evaluate(() => { window.__pisPreviewStop?.(); delete window.__pisPreviewStop; delete window.__pisPreviewEvents })
     }
-    await h.page.getByTestId('prompt-input-cancel').click()
+    await h.page.getByTestId('settings-discard').click()
     return { trials: TRIALS, liveDispatches: 0, unsavedShortcut: 'K' }
   })
   await h.case('PIS-11-bidirectional-global-conflicts-five-trials', () => bidirectionalConflicts(h, expected))
@@ -1167,7 +1179,7 @@ async function run(h) {
         await h.nativePress('E')
         await h.page.keyboard.press('Escape')
         assert.equal(await h.field('queue', 'appearance').evaluate(node => node === document.activeElement), true)
-        await h.page.getByTestId('prompt-input-cancel').click()
+        await h.page.getByTestId('settings-discard').click()
         assert.equal(await h.field('queue', 'appearance').locator('[data-emoji]').getAttribute('data-emoji'), h.acceptance.defaultEmoji.queue)
         await eventually('picker Worker terminated', () => workers.size, size => size === 0)
         for (const receiver of receivers) assert.equal(await receiver.checkpoint(), 0, `No bytes reach Task ${receiver.id}`)
@@ -1245,7 +1257,7 @@ async function run(h) {
       assert.equal(await trigger.getAttribute('aria-label'), h.acceptance.copy[h.language].emojiAppearance)
       await h.selectEmoji('queue', h.acceptance.emojiSamples[0])
       await h.page.waitForFunction(() => document.querySelector('[data-testid="prompt-input-action-queue-appearance"] img')?.naturalWidth > 0)
-      await h.page.getByTestId('prompt-input-cancel').click()
+      await h.page.getByTestId('settings-discard').click()
       await h.page.waitForFunction(() => document.querySelector('[data-testid="prompt-input-action-queue-appearance"] img')?.naturalWidth > 0)
     }
     return { trials: TRIALS, fallbackAccessible: true, nextSelectionRecovers: true }

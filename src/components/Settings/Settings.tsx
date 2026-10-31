@@ -4,7 +4,8 @@
  */
 
 import { Fragment, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useId } from 'react'
-import { useSettings } from '../../contexts/SettingsContext'
+import { SettingsDraftContext, useSettingsDraftController } from './SettingsDraft'
+import { patchTaskFonts, resolveTaskFonts } from '../../themes/task-fonts'
 import { ShortcutInput } from './ShortcutInput'
 import { PromptInputSettings } from './PromptInputSettings'
 import { FontSelector } from './FontSelector'
@@ -168,15 +169,7 @@ function summarizeUpdateError(error: string | null | undefined): string | null {
 }
 
 export function Settings({ terminals, onClose, width, onWidthChange }: SettingsProps) {
-  const {
-    settings,
-    updateShortcut,
-    updateTerminalStyle,
-    getTerminalStyle,
-    applyStyleGlobally,
-    updatePerformanceDiagnosticsEnabled
-  } = useSettings()
-  const { t, locale, locales, updateLanguage } = useI18n()
+  const { t, locale, locales } = useI18n()
   const [page, setPage] = useState<SettingsPage>('general')
   const [query, setQuery] = useState('')
   const navigationId = useId()
@@ -187,7 +180,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const [promptRevealRequest, setPromptRevealRequest] = useState(0)
   const [expandedShortcutGroups, setExpandedShortcutGroups] = useState<Record<string, boolean>>({})
   const searchResults = useMemo(() => searchSettings(query, t), [query, t])
-  const navigate = useCallback((next: SettingsPage, target?: string) => {
+  const navigateNow = useCallback((next: SettingsPage, target?: string) => {
     pendingNavigation.current = { target, started: performance.now() }
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_NAVIGATION, { reason: 'request', page: next, source: target ? 'search' : 'category' })
     setPage(next)
@@ -223,8 +216,25 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     terminals[0]?.id || ''
   )
   const [isDragging, setIsDragging] = useState(false)
-  const [telemetryEnabled, setTelemetryEnabled] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const draftController = useSettingsDraftController(page, containerRef)
+  const { settings, update: updateDraft } = draftController.session
+  const navigate = useCallback((next: SettingsPage, target?: string) => {
+    if (next === page) { navigateNow(next, target); return }
+    void draftController.leave('category').then(allowed => { if (allowed) navigateNow(next, target) })
+  }, [page, navigateNow, draftController.leave])
+  const updateShortcut = useCallback((key: keyof ShortcutConfig, value: string | null) => {
+    updateDraft(current => ({ ...current, shortcuts: { ...current.shortcuts, [key]: value } }))
+  }, [updateDraft])
+  const updateTerminalStyle = useCallback((terminalId: string, style: Partial<TerminalStyleConfig>) => {
+    updateDraft(current => ({ ...current, terminalStyles: { ...current.terminalStyles,
+      [terminalId]: patchTaskFonts(terminalId, current.terminalStyles[terminalId] ?? current.globalTerminalStyle, style) } }))
+  }, [updateDraft])
+  const applyStyleGlobally = useCallback((field: keyof GlobalTerminalStyle, value: string | number | null) => {
+    updateDraft(current => ({ ...current, globalTerminalStyle: { ...current.globalTerminalStyle, [field]: value },
+      terminalStyles: Object.fromEntries(Object.entries(current.terminalStyles).map(([id, style]) => [id, patchTaskFonts(id, style, { [field]: value })])) }))
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_FONTS, { reason: 'draft-apply-all', field })
+  }, [updateDraft])
   const dragStartRef = useRef<{ x: number; width: number; started: number } | null>(null)
   const updateActionButtonRef = useRef<HTMLButtonElement>(null)
   const debugActionCountsRef = useRef({ checkNow: 0, restartToUpdate: 0 })
@@ -282,8 +292,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
 
   // Get the style of the currently selected terminal
   const currentTerminalStyle = useMemo(() => {
-    return getTerminalStyle(selectedTerminalId)
-  }, [selectedTerminalId, getTerminalStyle])
+    return settings ? resolveTaskFonts(settings, selectedTerminalId) : null
+  }, [selectedTerminalId, settings])
 
   useEffect(() => {
     if (!terminals.some(terminal => terminal.id === selectedTerminalId)) {
@@ -327,8 +337,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   }, [applyStyleGlobally, currentTerminalStyle])
 
   const handleLanguageChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    updateLanguage(e.target.value as typeof locale)
-  }, [updateLanguage])
+    const language = e.target.value as typeof locale
+    updateDraft(current => ({ ...current, language }))
+  }, [updateDraft])
 
   const formatUpdateTimestamp = useCallback((value: number) => {
     return new Intl.DateTimeFormat(locale, {
@@ -591,12 +602,6 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     }
   }, [])
 
-  useEffect(() => {
-    window.electronAPI.telemetry.getConsent().then((consent) => {
-      setTelemetryEnabled(consent === true)
-    })
-  }, [])
-
   // Product telemetry: Settings surface mounted (opened) — count once per open.
   useEffect(() => {
     trackFeatureUse('settings-open')
@@ -605,14 +610,12 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   }, [])
 
   const handleTelemetryToggle = useCallback(() => {
-    const newValue = !telemetryEnabled
-    setTelemetryEnabled(newValue)
-    window.electronAPI.telemetry.setConsent(newValue)
-  }, [telemetryEnabled])
+    updateDraft(current => ({ ...current, telemetryConsent: current.telemetryConsent !== true }))
+  }, [updateDraft])
 
   const handlePerformanceDiagnosticsToggle = useCallback(() => {
-    updatePerformanceDiagnosticsEnabled(!(settings?.performanceDiagnosticsEnabled === true))
-  }, [settings?.performanceDiagnosticsEnabled, updatePerformanceDiagnosticsEnabled])
+    updateDraft(current => ({ ...current, performanceDiagnosticsEnabled: !current.performanceDiagnosticsEnabled }))
+  }, [updateDraft])
 
   useEffect(() => {
     if (debugUpdaterStatus || updaterStatus?.phase === 'downloaded') return
@@ -727,6 +730,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   }, [isDragging, onWidthChange])
 
   return (
+    <SettingsDraftContext.Provider value={draftController.session}>
     <div
       ref={containerRef}
       className={`settings-container ${isDragging ? 'is-dragging' : ''}`}
@@ -786,7 +790,9 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
           </select>
         </label>
       <div className="settings-content" ref={contentRef} role="tabpanel" id={`${navigationId}-panel`} aria-label={t(PAGE_LABELS[page])} tabIndex={0} data-settings-page={page}>
+        <fieldset className="settings-page-fields" disabled={draftController.session.saving}>
         <h2 className="settings-page-heading">{t(PAGE_LABELS[page])}</h2>
+        {page !== 'about' && <p className="settings-save-page-hint">{t('settings.save.hint')}</p>}
         {page === 'about' && <>
         {/* Version Info */}
         <div className="settings-version">
@@ -916,7 +922,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   <div className="onward-select-shell">
                     <select
                       className="font-selector onward-select onward-select--control"
-                      value={locale}
+                      value={settings?.language ?? locale}
                       onChange={handleLanguageChange}
                       aria-label={t('settings.language.selectLabel')}
                       data-testid="settings-language-select"
@@ -1020,7 +1026,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                 <>
                   <div className="apply-globally-hint">
                     <ApplyToAllIcon size={12} />
-                    <span>{t('settings.terminal.applyGloballyHint')}</span>
+                    <span>{t('settings.save.applyAllHint')}</span>
                   </div>
 
                   {/* Font Size */}
@@ -1098,6 +1104,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   {t('settings.terminal.createFirst')}
                 </div>
               )}
+              {currentTerminalStyle && <div className="settings-font-preview" data-testid="settings-font-preview">
+                <small>{t('settings.save.preview')}</small>
+                <p style={{ fontFamily: currentTerminalStyle.fontFamily || 'monospace', fontSize: currentTerminalStyle.fontSize ?? DEFAULT_TERMINAL_FONT_SIZE }}>{t('settings.save.fontSample')}</p>
+              </div>}
             </div>
           </div>
         </div>}
@@ -1112,7 +1122,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                   <label className="settings-telemetry-toggle">
                     <input
                       type="checkbox"
-                      checked={telemetryEnabled}
+                      checked={settings?.telemetryConsent === true}
                       onChange={handleTelemetryToggle}
                     />
                     <span>{t('settings.telemetry.toggle')}</span>
@@ -1126,8 +1136,12 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
           </div>
         </div>}
 
+        </fieldset>
       </div>
       </div>
+      {draftController.footer}
     </div>
+    {draftController.modal}
+    </SettingsDraftContext.Provider>
   )
 }

@@ -8,7 +8,8 @@ import type { ThemeDefinition, ThemeSchedule, ThemeSettings, ThemeTimeRange } fr
 import { conflictingTimeRange, MAX_THEME_TIME_RANGES, minuteToTime, resolveThemeSchedule, timeRangeValid, timeToMinute } from '../../themes/theme-schedule'
 import { ThemeScheduleTimeline } from './ThemeScheduleTimeline'
 import { useI18n } from '../../i18n/useI18n'
-import { useModalEscape } from '../../hooks/useModalEscape'
+import { useSettingsDraftEditor } from './SettingsDraft'
+import { settingsValuesEqual } from '../../utils/settings-page'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import './ThemeScheduleEditor.css'
@@ -67,10 +68,15 @@ export function ThemeScheduleEditor({ settings, available, now, disabled, onSave
     onEditing(false)
     queueMicrotask(() => (origin.current?.isConnected ? origin.current : addButton.current)?.focus())
   }
-  useModalEscape(Boolean(draft), () => {
-    if (pending.current) trace('cancel-skipped', { cause: 'saving' })
-    else close('cancel')
-  }, 'theme-schedule')
+  useSettingsDraftEditor('theme-schedule', {
+    dirty: Boolean(draft && !settingsValuesEqual(draft, schedule.ranges.find(range => range.id === draft.id))),
+    error: validation || null,
+    prepare: current => !draft ? current : { ...current, theme: { ...current.theme, schedule: { ...current.theme.schedule,
+      temporary: null, ranges: [...current.theme.schedule.ranges.filter(range => range.id !== draft.id), draft].sort((a, b) => a.start - b.start) } } },
+    reset: () => { if (draft) close('page-discard') },
+    accepted: () => close('page-save-accepted'),
+    focusError: () => panel.current?.focus()
+  })
 
   const save = async (next: ThemeSchedule, reason: string) => {
     if (pending.current || disabled) { trace('save-skipped', { cause: 'busy' }); return }
@@ -171,8 +177,7 @@ export function ThemeScheduleEditor({ settings, available, now, disabled, onSave
         <p className="theme-hint">{t('settings.themes.schedule.editHint')}</p>
         <div className="theme-actions">
           {schedule.ranges.some(range => range.id === draft.id) && <button type="button" className="theme-button" data-testid="schedule-delete" onClick={() => void save({ ...schedule, ranges: schedule.ranges.filter(range => range.id !== draft.id) }, 'delete')}>{t('settings.themes.schedule.remove')}</button>}
-          <button type="button" className="theme-button" data-testid="schedule-cancel" onClick={() => close('cancel')}>{t('common.cancel')}</button>
-          <button type="button" className="theme-button theme-button-primary" data-testid="schedule-save" disabled={Boolean(validation)} onClick={() => void save({ ...schedule, ranges: [...schedule.ranges.filter(range => range.id !== draft.id), draft].sort((a, b) => a.start - b.start) }, 'save')}>{t('common.save')}</button>
+          <button type="button" className="theme-button" data-testid="schedule-save" disabled={Boolean(validation)} onClick={() => void save({ ...schedule, ranges: [...schedule.ranges.filter(range => range.id !== draft.id), draft].sort((a, b) => a.start - b.start) }, 'stage')}>{t('settings.save.done')}</button>
         </div>
       </fieldset>
     </section>}

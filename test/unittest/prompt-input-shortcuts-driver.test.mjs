@@ -13,7 +13,7 @@ import * as support from '../autotest/themes-ui-driver-support.mjs'
 import * as keyboard from '../autotest/native-shortcut-keyboard.mjs'
 
 // Load the actual driver definitions without executing its app-launch entry.
-const source = readFileSync(new URL('../autotest/prompt-input-shortcuts-driver.mjs', import.meta.url), 'utf8')
+const source = readFileSync(new URL('../autotest/prompt-input-shortcuts-driver.mjs', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const entry = '\nconst options = args(process.argv.slice(2))\n'
 assert.equal(source.split(entry).length, 2)
 const compiled = ts.transpileModule(source.split(entry)[0], {

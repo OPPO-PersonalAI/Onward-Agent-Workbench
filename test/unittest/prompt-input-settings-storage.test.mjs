@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import * as crypto from 'node:crypto'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURES = path.join(ROOT, 'test/autotest/fixtures/prompt-input-settings')
@@ -21,6 +22,7 @@ function storageHarness(initialText) {
   const directory = path.join(ROOT, 'test/autotest/results/prompt-input-settings/virtual-profile')
   const filename = path.join(directory, 'settings.json')
   let contents = initialText
+  let temporary
   let writeFailure = false
   const writes = []
   const traces = []
@@ -36,16 +38,27 @@ function storageHarness(initialText) {
     },
     mkdirSync(name) { assert.equal(name, directory) },
     writeFileSync(name, value, encoding) {
-      assert.equal(name, filename)
+      assert.equal(name, `${filename}.pending`)
       assert.equal(encoding, 'utf-8')
       writes.push(value)
       if (writeFailure) throw Object.assign(new Error('Owned settings path is a directory'), { code: 'EISDIR' })
-      contents = value
+      temporary = value
+    },
+    renameSync(source, destination) {
+      assert.equal(source, `${filename}.pending`)
+      assert.equal(destination, filename)
+      contents = temporary
+      temporary = undefined
+    },
+    rmSync(name) {
+      assert.equal(name, `${filename}.pending`)
+      temporary = undefined
     }
   }
   const boundaries = new Map([
     ['electron', { app: { getPath(key) { assert.equal(key, 'userData'); return directory } } }],
     ['fs', fs], ['path', path],
+    ['crypto', crypto],
     [path.join(ROOT, 'electron/main/performance-trace.ts'), {
       performanceTrace: { record(name, data) { traces.push({ name, data }) } }
     }]

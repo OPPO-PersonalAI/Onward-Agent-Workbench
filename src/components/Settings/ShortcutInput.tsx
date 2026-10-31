@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useId } from 'react'
 import { useI18n } from '../../i18n/useI18n'
 import type { TranslationKey } from '../../i18n/core'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
@@ -11,6 +11,8 @@ import { normalizePromptShortcut, promptShortcutFromKey } from '../../utils/prom
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { shortcutKeyFromCode } from '../../utils/shortcut-key'
+import { settingsDraftShortcutConflict } from '../../utils/settings-page'
+import { useSettingsDraft, useSettingsDraftEditor } from './SettingsDraft'
 
 interface ShortcutInputProps {
   value: string | null
@@ -127,6 +129,8 @@ export function ShortcutInput({
   onRecordingChange
 }: ShortcutInputProps) {
   const { t } = useI18n()
+  const draftSession = useSettingsDraft()
+  const recorderId = useId()
   const [isRecording, setIsRecording] = useState(false)
   const [isPreparing, setIsPreparing] = useState(false)
   const [conflict, setConflict] = useState<string | null>(null)
@@ -153,10 +157,21 @@ export function ShortcutInput({
     })
   }, [])
 
+  useSettingsDraftEditor(`recorder-${recorderId}`, {
+    dirty: false, busy: isRecording || isPreparing, prepare: current => current,
+    reset: () => stopRecording('page-discard'), accepted: () => {}
+  })
+
   // Check for shortcut conflicts
   const checkConflict = useCallback(async (accelerator: string) => {
     if (mode === 'action') return null
     const platform = window.electronAPI?.platform ?? 'darwin'
+    const currentDraft = draftSession?.read()
+    if (currentDraft) {
+      const conflict = settingsDraftShortcutConflict(currentDraft, accelerator, platform, excludeKey, mode === 'leader')
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'record-check-draft', mode, conflict: Boolean(conflict) })
+      return conflict
+    }
     if (mode === 'shortcut' && promptLeader && normalizePromptShortcut(accelerator, platform) === normalizePromptShortcut(promptLeader, platform)) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'record-leader-conflict' })
       return 'promptInputLeader'
@@ -168,7 +183,7 @@ export function ShortcutInput({
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'record-check-received', mode, conflict: Boolean(conflictKey) })
     if (mode === 'leader' && conflictKey === 'promptInputLeader') return null
     return conflictKey
-  }, [mode, excludeKey, promptLeader])
+  }, [mode, excludeKey, promptLeader, draftSession])
 
   // Handle keyboard presses
   const handleKeyDown = useCallback(async (e: KeyboardEvent) => {

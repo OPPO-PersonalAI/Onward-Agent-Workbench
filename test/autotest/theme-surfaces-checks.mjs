@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify, isDeepStrictEqual } from 'node:util'
-import { openSettingsPage } from './themes-ui-driver-support.mjs'
+import { openSettingsPage, saveSettingsPage } from './themes-ui-driver-support.mjs'
 
 const exec = promisify(execFile)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -74,9 +74,10 @@ async function makeFixture(parent) {
  * so earlier results survive a later assertion failure or runner deadline.
  * Returns [{ id, trials?, detail? }]; throws on any failed assertion. The caller owns
  * process lifecycle, deadline, result persistence and the final packaged-app smoke test.
- * Example: await testThemeSurfaces(h.page, h.workspace, name => h.screenshot(name)).
+ * The caller supplies result recording and owned-app shutdown before fixture deletion.
  */
-export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = async () => {}) {
+export async function testThemeSurfaces(page, fixtureRoot, capture, onResult, stopOwnedApp) {
+  assert.equal(typeof stopOwnedApp, 'function', 'Fixture deletion requires owned-app shutdown')
   assert.equal(typeof capture, 'function', 'A traces/-scoped Playwright screenshot callback is required')
   assert.equal(typeof onResult, 'function', 'The optional result callback must be a function')
   const parent = await realpath(fixtureRoot)
@@ -98,7 +99,10 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
   }
   let repo
   let scenarioError
-  const settled = () => page.waitForFunction(() => document.querySelector('[data-testid="themes-root"]')?.getAttribute('aria-busy') === 'false')
+  const settled = async () => {
+    await page.waitForFunction(() => document.querySelector('[data-testid="themes-root"]')?.getAttribute('aria-busy') === 'false')
+    await saveSettingsPage(page)
+  }
 
   const settings = async () => {
     await openSettingsPage(page, 'appearance')
@@ -107,6 +111,7 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
   const language = async locale => {
     await openSettingsPage(page, 'general')
     await page.getByTestId('settings-language-select').selectOption(locale)
+    await saveSettingsPage(page)
     await settings()
   }
   const select = async id => {
@@ -116,6 +121,7 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
     } else {
       await page.getByTestId('theme-more').selectOption(id)
     }
+    await saveSettingsPage(page)
     await page.waitForFunction(id => {
       const value = window.__onwardThemeDebug.getState()
       const settings = value.settings.theme ?? value.settings
@@ -185,7 +191,7 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
     await record({ id, trials: TRIALS })
     if (drafts) {
       await page.getByTestId('theme-customize').click()
-      await page.waitForFunction(() => window.__onwardThemeDebug.getState().draft === true)
+      await page.getByTestId('theme-draft-reset').waitFor()
       const field = page.getByTestId('theme-override-onward.foreground')
       const checks = []
       try {
@@ -193,19 +199,24 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
           // Several real input events can overtake an in-flight Mermaid render.
           // Only the final palette is allowed to commit, with the same theme ID.
           for (const value of ['#f2d9b0', '#c1e5ef', '#f3e4ce']) await field.fill(value)
+          assert.notEqual(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--text-1').trim().toLowerCase()), '#f3e4ce')
+          await saveSettingsPage(page)
           await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--text-1').trim().toLowerCase() === '#f3e4ce')
           await ready()
           checks.push({ sameId: await page.evaluate(() => document.documentElement.dataset.theme === 'dark-modern'), preserved: equal(await read(), baseline) })
+          await page.getByTestId('theme-customize').click()
           await field.fill('')
+          await saveSettingsPage(page)
           await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--text-1').trim().toLowerCase() !== '#f3e4ce')
           await ready()
           checks.push({ sameId: await page.evaluate(() => document.documentElement.dataset.theme === 'dark-modern'), preserved: equal(await read(), baseline) })
+          await page.getByTestId('theme-customize').click()
         }
         assert(checks.every(check => check.sameId && check.preserved), `${id}: same-ID draft update/reset preserves state in all five trials: ${JSON.stringify(checks)}`)
         await record({ id: `${id}-DRAFT`, trials: TRIALS })
       } finally {
-        await page.getByTestId('theme-draft-cancel').click()
-        await page.waitForFunction(() => window.__onwardThemeDebug.getState().draft === false)
+        await page.getByTestId('theme-customize').click()
+        await page.getByTestId('theme-draft-reset').waitFor({ state: 'detached' })
         await ready()
       }
     }
@@ -455,7 +466,7 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
         delete window.__themeSurfaceFullscreen
       })
       await settings()
-      if (await page.getByTestId('theme-draft-cancel').isVisible()) await page.getByTestId('theme-draft-cancel').click()
+      if (await page.getByTestId('settings-discard').isEnabled()) await page.getByTestId('settings-discard').click()
       await language(initialLocale)
       await page.getByTestId('theme-mode').selectOption('system')
       await settled()
@@ -478,6 +489,9 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
       cleanupErrors.push(error)
     }
     try {
+      // Retained native consumers can hold the fixture root open on Windows.
+      // The owner must stop the app before removing its workspace on every OS.
+      await stopOwnedApp()
       if (repo) await rm(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
     } catch (error) {
       cleanupErrors.push(error)
@@ -487,7 +501,7 @@ export async function testThemeSurfaces(page, fixtureRoot, capture, onResult = a
         // Preserve the original failing assertion in the caller's persisted log.
         scenarioError.stack += `\nSurface cleanup also failed:\n${cleanupErrors.map(error => error.stack ?? String(error)).join('\n')}`
       } else {
-        throw new AggregateError(cleanupErrors, 'Surface helper cleanup failed')
+        throw new AggregateError(cleanupErrors, `Surface helper cleanup failed: ${cleanupErrors.map(error => error.stack ?? String(error)).join('\n')}`)
       }
     }
   }
