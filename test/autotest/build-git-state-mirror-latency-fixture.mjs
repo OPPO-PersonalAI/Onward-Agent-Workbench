@@ -79,7 +79,7 @@ function writeFile(absRepo, rel, content) {
   writeFileSync(full, content, 'utf8')
 }
 
-function sanitizeTarGzArchive(tarPath) {
+function sanitizeTarGzArchive(tarPath, outPath = tarPath) {
   const compressed = readFileSync(tarPath)
   const tarBuf = zlib.gunzipSync(compressed)
   let offset = 0
@@ -116,7 +116,7 @@ function sanitizeTarGzArchive(tarPath) {
     offset += 512 * (1 + dataBlocks)
   }
   const recompressed = zlib.gzipSync(tarBuf, { mtime: 0 })
-  writeFileSync(tarPath, recompressed)
+  writeFileSync(outPath, recompressed)
 }
 
 function tarball(repoName) {
@@ -130,26 +130,26 @@ function tarball(repoName) {
   // Windows/Linux as an UNTRACKED file, so a "clean" fixture reports `?? ._*`
   // and the badge classifies it `added` — silently breaking the whole 5-state
   // matrix off-macOS. (Same cross-platform class as the core.autocrlf pin above.)
-  const tarPath = join(fixtureRoot, `${repoName}.tar.gz`)
+  const tarPath = join(fixtureRoot, `${repoName}.tar.gz`); const stagedTarName = `${repoName}.tar.gz`
   const tarEnv = { ...process.env, COPYFILE_DISABLE: '1' }
   const result = spawnSync(
     'tar',
-    ['--sort=name', '-czf', tarPath, '-C', stagingRoot, repoName],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: tarEnv }
+    ['--sort=name', '-czf', stagedTarName, repoName],
+    { cwd: stagingRoot, stdio: ['ignore', 'pipe', 'pipe'], env: tarEnv }
   )
   if (result.status !== 0) {
     // Retry without --sort=name for bsd tar on older macOS where the flag
     // triggers an error rather than being silently ignored.
     const fallback = spawnSync(
       'tar',
-      ['-czf', tarPath, '-C', stagingRoot, repoName],
-      { stdio: ['ignore', 'pipe', 'pipe'], env: tarEnv }
+      ['-czf', stagedTarName, repoName],
+      { cwd: stagingRoot, stdio: ['ignore', 'pipe', 'pipe'], env: tarEnv }
     )
     if (fallback.status !== 0) {
       throw new Error(`tar failed for ${repoName}: ${fallback.stderr?.toString()}`)
     }
   }
-  sanitizeTarGzArchive(tarPath)
+  sanitizeTarGzArchive(join(stagingRoot, stagedTarName), tarPath)
   return tarPath
 }
 

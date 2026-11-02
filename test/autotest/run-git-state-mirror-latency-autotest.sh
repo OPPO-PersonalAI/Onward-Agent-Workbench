@@ -52,7 +52,7 @@ fi
 
 for tarball in "$FIXTURE_SRC"/*.tar.gz; do
   if [[ ! -f "$tarball" ]]; then continue; fi
-  tar xzf "$tarball" -C "$FIXTURE_TMP"
+  (cd "$FIXTURE_TMP" && tar xzf - < "$tarball")
 done
 
 if [[ ! -d "$FIXTURE_TMP/repo-A" ]]; then
