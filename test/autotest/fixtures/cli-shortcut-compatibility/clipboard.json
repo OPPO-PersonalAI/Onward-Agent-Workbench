@@ -1,0 +1,8 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "empty": { "text": "", "formats": [] },
+  "plain": { "text": "fixture-text", "formats": ["text/plain"] },
+  "multiline": { "text": "alpha\r\nbeta\nemoji: \ud83d\ude80", "formats": ["text/plain"] },
+  "image": { "text": "", "formats": ["image/png"] },
+  "mixed": { "text": "image-caption", "formats": ["image/png", "text/plain"] }
+}

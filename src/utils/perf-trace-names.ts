@@ -414,6 +414,11 @@ export const PERF_TRACE_EVENT = {
   // to the right-clicked Task. Args carry payload byte count, never content.
   RENDERER_TERMINAL_CTX_PINNED_PROMPT_SEND: 'renderer:terminal.ctx-pinned-prompt-send',
   RENDERER_TERMINAL_SEND_INPUT: 'renderer:terminal.send-input',
+  RENDERER_TERMINAL_KEYBOARD_PROTOCOL: 'renderer:terminal.keyboard-protocol',
+  RENDERER_TERMINAL_KEYBOARD_BATCH: 'renderer:terminal.keyboard-batch',
+  RENDERER_TERMINAL_CLIPBOARD: 'renderer:terminal.clipboard',
+  MAIN_TERMINAL_CLIPBOARD: 'main:terminal.clipboard-read',
+  RENDERER_TERMINAL_KEYBOARD_SETTINGS: 'renderer:terminal.keyboard-settings',
 
   // ───────── Renderer — user input: project editor ─────────
   RENDERER_PROJECT_FILE_OPEN: 'renderer:project.file-open',

@@ -237,7 +237,7 @@ test('TSS-04: rejected partial updates restore theme, existing/new Task styles, 
     terminalStyles: { taskA: { fontSize: 24 }, taskB: { fontSize: 30 } },
     globalTerminalStyle: { fontSize: 20, foregroundColor: '#abcdef' },
     shortcuts: { focusTerminal1: 'Alt+2' },
-    gitDiffFontSize: 23, autoFollowGitBranchForTaskName: false, performanceDiagnosticsEnabled: true
+    gitDiffFontSize: 23, autoFollowGitBranchForTaskName: false, performanceDiagnosticsEnabled: true, terminalMacOptionIsMeta: true
   }
   const inputBefore = structuredClone(patch)
   h.rejectWrites(true)
@@ -260,6 +260,8 @@ test('TSS-04: rejected partial updates restore theme, existing/new Task styles, 
   assert.equal(saved.gitDiffFontSize, 23)
   assert.equal(saved.autoFollowGitBranchForTaskName, false)
   assert.equal(saved.performanceDiagnosticsEnabled, true)
+  assert.equal(saved.terminalMacOptionIsMeta, true)
+  assert.equal(createStorageHarness({ ...legacySettings(), terminalMacOptionIsMeta: 'yes' }).storage.get().terminalMacOptionIsMeta, false)
   assert.deepEqual(createStorageHarness(h.disk()).storage.get(), saved)
 })
 

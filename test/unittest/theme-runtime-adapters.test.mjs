@@ -55,6 +55,7 @@ const terminals = loadRendererModule('../../src/terminal/terminal-session-manage
   '../utils/externalLink': {}, '../utils/perf-monitor': {}, './input-priority-lane': {},
   './terminal-output-scheduler': { TerminalOutputScheduler: class { registerTarget() {} } },
   './terminal-renderer-lifecycle': { createTerminalRendererPolicy: () => ({}), TerminalRendererLifecycle: class {} },
+  './terminal-input-adapter': { TerminalInputAdapter: class {} },
   './terminal-renderer-surface-policy': {}, ...traceDependencies
 }, { window: windowStub, navigator: { userAgent: 'Node unit test' } })
 const definitions = []
@@ -65,7 +66,7 @@ const editorAdapter = loadRendererModule('../../src/themes/editor-theme.ts', {
   '@pierre/diffs': pierre,
   ...traceDependencies
 })
-const options = theme => ({ theme, fontFamily: 'monospace', fontSize: 14 })
+const options = theme => ({ theme, fontFamily: 'monospace', fontSize: 14, macOptionIsMeta: false })
 
 test('Seti rows retain live semantic CSS references across light/dark and same-ID color edits', () => {
   const seti = loadRendererModule('../../src/components/ProjectEditor/setiFileIconTheme.ts', {

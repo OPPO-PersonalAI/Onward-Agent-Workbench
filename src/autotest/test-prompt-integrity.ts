@@ -156,6 +156,14 @@ export async function testPromptIntegrity(ctx: AutotestContext): Promise<TestRes
 
   async function checkpoint(label: string, expected: string, mode: CaptureMode = 'keep', receiver = primaryReceiver): Promise<Observation> {
     if (mode === 'split-on-prefix') {
+      if (window.electronAPI.platform === 'win32') {
+        // ConPTY buffers incomplete CSI output until the suffix arrives. The
+        // durable child checkpoint fences the first write; capability must stay
+        // disabled. Fragmented main-parser input is covered by PIH-U08 in Node.
+        const capture = await captureCheckpoint(label, expected, mode, receiver)
+        await modeReady(false, receiver.terminalId)
+        return { ...capture, detail: { ...capture.detail, outputBoundary: 'conpty-coalesced' } }
+      }
       let outputTail = ''
       let prefixReceived = false
       const unsubscribe = window.electronAPI.terminal.onData((id, data) => {
@@ -271,14 +279,14 @@ export async function testPromptIntegrity(ctx: AutotestContext): Promise<TestRes
     // Duplicating already enabled Save. Wait for the target edit's React commit
     // rather than letting that older enabled button certify a stale save closure.
     await paintTurn()
-    if (!await waitFor('pi-mixed:save-enabled', () => document.querySelector<HTMLButtonElement>('[data-testid="prompt-input-save"]')?.disabled === false, READY_TIMEOUT_MS, 40)) {
+    if (!await waitFor('pi-mixed:save-enabled', () => document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]')?.disabled === false, READY_TIMEOUT_MS, 40)) {
       throw new Error('Mixed-target action could not be saved')
     }
-    document.querySelector<HTMLButtonElement>('[data-testid="prompt-input-save"]')!.click()
+    document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]')!.click()
     const matches = (config: PromptInputSettings | undefined) => config?.actions.some(action =>
       action.id === actionId && action.includePrompt && action.terminalKey === 'Tab' && action.target === 'all' && action.visible)
     if (!await waitFor('pi-mixed:save-ack', () =>
-      document.querySelector('[data-testid="prompt-input-status"]')?.getAttribute('data-state') === 'saved'
+      document.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'clean'
       && matches(runtimeSettings()?.promptInput) === true, READY_TIMEOUT_MS, 40)) {
       throw new Error('Mixed-target Queue did not receive the provider save acknowledgment')
     }
@@ -414,8 +422,8 @@ export async function testPromptIntegrity(ctx: AutotestContext): Promise<TestRes
       const orderedOffCapture = await checkpoint(label('pi13-off'), '')
       observe(12, { ok: orderedOnCapture.ok && orderedOffCapture.ok && accepted(orderedOn, true) && rejected(orderedOff, 'unsafe-multiline-send'), detail: { on: orderedOn, off: orderedOff, onCapture: orderedOnCapture.detail, offCapture: orderedOffCapture.detail } })
 
-      // The first fragment must cross main -> renderer before the second is
-      // emitted. Timers cannot guarantee separate native PTY output chunks.
+      // POSIX observes the first fragment at the renderer before emitting the
+      // suffix. ConPTY instead fences the child write because it coalesces CSI.
       await changeMode(label('pi14-split-prefix'), 'split-on-prefix')
       await changeMode(label('pi14-split-suffix'), 'split-on-suffix')
       const splitResult = await send({ includePrompt: true, content: corpus.mixed, terminalKey: 'Tab' })

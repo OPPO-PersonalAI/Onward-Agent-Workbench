@@ -16,12 +16,14 @@ test('SP-U01: dirty compares values, independent of object key order', () => {
 })
 
 test('SP-U02: page commit rejects missing and unrelated fields', () => {
-  const general = { language: 'en', telemetryConsent: false, performanceDiagnosticsEnabled: false }
+  const general = { language: 'en', telemetryConsent: false, performanceDiagnosticsEnabled: false, terminalMacOptionIsMeta: false }
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: general }), true)
   assert.equal(isSettingsPageCommit({ page: 'about', baseline: {}, draft: {} }), false)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, settingsPanelWidth: 600 } }), false)
   assert.equal(isSettingsPageCommit({ page: 'shortcuts', baseline: {}, draft: {} }), false)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, telemetryConsent: 'yes' } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, terminalMacOptionIsMeta: true } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, terminalMacOptionIsMeta: 'yes' } }), false)
 })
 
 test('SP-U03: unrelated concurrent page fields merge without losing live values', () => {

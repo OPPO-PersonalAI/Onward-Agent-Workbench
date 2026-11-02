@@ -91,6 +91,7 @@ function createDefaultSettings(): SettingsState {
     telemetryInstanceId: null,
     autoFollowGitBranchForTaskName: true,
     performanceDiagnosticsEnabled: false,
+    terminalMacOptionIsMeta: false,
     updatedAt: Date.now()
   }
 }

@@ -79,6 +79,9 @@ const commands = setInterval(() => {
       outputTick += 1
     }, 20) : null
     status()
+  } else if (command.operation === 'output') {
+    process.stdout.write(command.data)
+    status()
   } else if (command.operation === 'snapshot') status({ outputTick })
   else throw new Error(`Unknown receiver command: ${command.operation}`)
 }, 15)

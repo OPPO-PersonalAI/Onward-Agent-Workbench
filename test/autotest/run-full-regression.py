@@ -287,6 +287,7 @@ SCRIPTS: List[str] = [
     "test/autotest/run-git-diff-probe-timeout-autotest.sh",
     "test/autotest/run-terminal-focus-activation-autotest.sh",
     "test/autotest/run-window-shortcuts-autotest.sh",
+    "test/autotest/run-cli-shortcut-compatibility-autotest.sh",
     "test/autotest/run-terminal-perf-autotest.sh",
     "test/autotest/run-terminal-stress-autotest.sh",
     "test/autotest/run-render-corruption-stress-autotest.sh",

@@ -283,6 +283,7 @@ export interface ShellAPI {
 export interface ClipboardAPI {
   writeText: (text: string) => Promise<boolean>
   readText: () => Promise<string>
+  readTerminal: () => Promise<import('../../src/terminal/terminal-clipboard').TerminalClipboard>
 }
 
 export interface CommandPreset {
@@ -1805,6 +1806,7 @@ const shellAPI: ShellAPI = {
 }
 
 const clipboardAPI: ClipboardAPI = {
+  readTerminal: () => ipcRenderer.invoke(IPC.CLIPBOARD_READ_TERMINAL),
   writeText: (text: string) => {
     return ipcRenderer.invoke(IPC.CLIPBOARD_WRITE_TEXT, text)
   },

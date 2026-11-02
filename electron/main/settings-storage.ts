@@ -91,6 +91,7 @@ interface SettingsState {
   autoFollowGitBranchForTaskName: boolean
   /** Global switch for opt-in performance diagnostics panels. Added in v7. */
   performanceDiagnosticsEnabled: boolean
+  terminalMacOptionIsMeta?: boolean
   updatedAt: number
 }
 
@@ -165,6 +166,7 @@ function createDefaultSettingsState(): SettingsState {
     telemetryInstanceId: null,
     autoFollowGitBranchForTaskName: true,
     performanceDiagnosticsEnabled: false,
+    terminalMacOptionIsMeta: false,
     updatedAt: Date.now()
   }
 }
@@ -350,6 +352,7 @@ class SettingsStorage {
       telemetryInstanceId,
       autoFollowGitBranchForTaskName,
       performanceDiagnosticsEnabled,
+      terminalMacOptionIsMeta: state.terminalMacOptionIsMeta === true,
       updatedAt: state.updatedAt ?? Date.now()
     }
   }
@@ -563,9 +566,13 @@ class SettingsStorage {
       if (typeof partial.performanceDiagnosticsEnabled === 'boolean') {
         this.state.performanceDiagnosticsEnabled = partial.performanceDiagnosticsEnabled
       }
+      if (typeof partial.terminalMacOptionIsMeta === 'boolean') {
+        this.state.terminalMacOptionIsMeta = partial.terminalMacOptionIsMeta
+      }
       this.state.updatedAt = Date.now()
       this.persist(true)
-      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'updated', theme: Boolean(partial.theme), mode: this.state.theme.mode, ok: true })
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'updated', theme: Boolean(partial.theme), mode: this.state.theme.mode, ok: true,
+        terminalMacOptionIsMeta: this.state.terminalMacOptionIsMeta })
       if (partial.promptInput !== undefined || partial.shortcuts) {
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'updated', durationMs: performance.now() - started })
       }

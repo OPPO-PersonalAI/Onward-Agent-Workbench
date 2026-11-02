@@ -886,6 +886,28 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
 
         </>}
         {page === 'general' && <>
+        <div className="settings-section" data-settings-target="terminalKeyboard" tabIndex={-1}>
+          <div className="settings-section-title">{t('settings.keyboard.title')}</div>
+          <div className="settings-section-content">
+            <div className="settings-group">
+              <div className="settings-row">
+                <div className="settings-diagnostics-info">
+                  <label className="settings-diagnostics-toggle">
+                    <input type="checkbox" data-testid="settings-terminal-option-meta"
+                      checked={settings?.terminalMacOptionIsMeta === true}
+                      onChange={event => {
+                        const enabled = event.target.checked
+                        updateDraft(current => ({ ...current, terminalMacOptionIsMeta: enabled }))
+                        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_TERMINAL_KEYBOARD_SETTINGS, { reason: 'draft-changed', macOptionIsMeta: enabled })
+                      }} />
+                    <span>{t('settings.keyboard.optionMeta')}</span>
+                  </label>
+                  <p className="settings-diagnostics-description">{t('settings.keyboard.optionMetaDescription')}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         {/* Diagnostics Section */}
         <div className="settings-section" data-settings-target="diagnostics" tabIndex={-1}>
           <div className="settings-section-title">{t('settings.section.diagnostics')}</div>

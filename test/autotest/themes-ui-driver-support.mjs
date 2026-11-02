@@ -167,7 +167,7 @@ export class ThemeUiHarness {
           ONWARD_AUTOTEST_SKIP_CONSENT: '1',
           ONWARD_USER_DATA_DIR: this.userData,
           ONWARD_REPO_ROOT: REPO_ROOT,
-          ONWARD_PERF_TRACE: ['core', 'persistence', 'latency', 'surfaces', 'imports', 'draft', 'tasks', 'visual', 'window-shortcuts'].includes(this.group) ? '1' : '0',
+          ONWARD_PERF_TRACE: ['core', 'persistence', 'latency', 'surfaces', 'imports', 'draft', 'tasks', 'visual', 'window-shortcuts', 'cli-shortcut-compatibility'].includes(this.group) ? '1' : '0',
           ONWARD_AUTOTEST_THEME_NOW: this.themeNow === undefined ? '' : String(this.themeNow),
           ONWARD_DIST_DEV_OPEN: '0'
         },

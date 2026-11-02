@@ -4,6 +4,7 @@
  */
 
 import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron'
+import { terminalClipboardPayload } from '../../src/terminal/terminal-clipboard'
 import { tMain } from './localization'
 import { windowShortcutKey } from '../../src/utils/shortcut-key'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
@@ -2250,6 +2251,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   ipcMain.handle(IPC.CLIPBOARD_READ_TEXT, async () => {
     return clipboard.readText()
   })
+  ipcMain.handle(IPC.CLIPBOARD_READ_TERMINAL, () => {
+    const started = performance.now()
+    try {
+      const payload = terminalClipboardPayload(clipboard.availableFormats(), () => clipboard.readText())
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_TERMINAL_CLIPBOARD, { kind: payload.kind, durationMs: performance.now() - started })
+      return payload
+    } catch {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_TERMINAL_CLIPBOARD, { kind: 'unavailable', durationMs: performance.now() - started })
+      return { kind: 'unavailable' }
+    }
+  })
 
   browserViewManager.init(mainWindow)
 
@@ -3439,6 +3451,7 @@ async function runCleanupIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(IPC.SHELL_OPEN_EXTERNAL)
   ipcMain.removeHandler(IPC.CLIPBOARD_WRITE_TEXT)
   ipcMain.removeHandler(IPC.CLIPBOARD_READ_TEXT)
+  ipcMain.removeHandler(IPC.CLIPBOARD_READ_TERMINAL)
   browserViewManager.destroyAll()
   htmlPreviewProtocolManager.destroyAll()
   ipcMain.removeHandler(IPC.HTML_PREVIEW_CREATE_SESSION)

@@ -1,0 +1,31 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 OPPO; SPDX-License-Identifier: Apache-2.0",
+  "scope": "Explicit repaired transport profiles. keyboardFlags=1 means the application has emitted CSI > 1 u; macOptionIsMeta is an explicit saved preference. Historical legacy-mode gaps remain in contracts.json and are separately checked for unchanged legacy encoding. These profiles never imply that a CLI negotiated when it did not.",
+  "cases": {
+    "newline-shift-enter": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[13;2u" } },
+    "modified-control-enter": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[13;5u" } },
+    "session-next": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[9;5u" } },
+    "session-previous": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[9;6u" } },
+    "session-digit-zero": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[48;5u" } },
+    "session-digit-one": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[49;5u" } },
+    "session-digit-two": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[50;5u" } },
+    "session-digit-three": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[51;5u" } },
+    "session-digit-eight": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[56;5u" } },
+    "session-digit-nine": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[57;5u" } },
+    "alt-up": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[1;3A" } },
+    "alt-down": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[1;3B" } },
+    "enhanced-selection-start": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[97;6u" } },
+    "enhanced-selection-end": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[101;6u" } },
+    "enhanced-delete-line": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[100;6u" } },
+    "enhanced-reopen": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[116;6u" } },
+    "input-undo": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[45;5u" } },
+    "input-redo": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[46;5u" } },
+    "option-word": { "macOptionIsMeta": true, "expect": { "hex": "1b62" } },
+    "altgr-ambiguous-scroll": { "keyboardFlags": 1, "macOptionIsMeta": true, "expect": { "sequence": "\u001b[98;7u" } },
+    "word-delete": { "keyboardFlags": 1, "expect": { "sequence": "\u001b[127;5u" } },
+    "clipboard-image-trigger": { "expect": { "hex": "16" } },
+    "clipboard-mixed-trigger": { "expect": { "hex": "16" } },
+    "context-image": { "expect": { "hex": "16" } },
+    "native-image": { "expect": { "hex": "16" } }
+  }
+}

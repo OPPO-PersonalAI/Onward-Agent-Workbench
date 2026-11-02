@@ -30,6 +30,7 @@ import {
 } from './terminal-renderer-lifecycle'
 import { shouldStickToDomAfterGpuCrash } from './terminal-renderer-surface-policy'
 import { performanceTrace } from '../utils/performance-trace'
+import { TerminalInputAdapter } from './terminal-input-adapter'
 
 export type { TerminalRendererSurfaceEvent } from './terminal-renderer-lifecycle'
 
@@ -42,6 +43,7 @@ export interface TerminalSessionOptions {
   fontSize: number
   fontFamily: string
   terminalStyle?: TerminalStyleConfig | null
+  macOptionIsMeta?: boolean
 }
 
 export interface TerminalFocusSessionDebugSnapshot {
@@ -110,6 +112,7 @@ export interface TerminalSessionDebugState {
 interface TerminalSession {
   id: string
   terminal: XTerm
+  inputAdapter: TerminalInputAdapter
   fitAddon: FitAddon
   searchAddon: SearchAddon
   status: TerminalSessionStatus
@@ -454,6 +457,7 @@ export class TerminalSessionManager {
       const session = this.sessions.get(termId)
       if (!session) return
 
+      session.inputAdapter.reset('pty-exited')
       session.terminal.writeln(`\r\n[Process exited with code ${exitCode}]`)
       session.terminal.writeln('\r\n[Press any key to restart...]')
 
@@ -682,6 +686,11 @@ export class TerminalSessionManager {
   }
 
   private applyOptions(session: TerminalSession, options: TerminalSessionOptions) {
+    const macOptionIsMeta = options.macOptionIsMeta === true
+    if (session.terminal.options.macOptionIsMeta !== macOptionIsMeta) {
+      session.terminal.options.macOptionIsMeta = macOptionIsMeta
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_TERMINAL_KEYBOARD_SETTINGS, { terminalId: session.id, reason: 'applied', macOptionIsMeta })
+    }
     const previousOptions = session.lastOptions
     const previousFontFamily = previousOptions
       ? resolveTerminalFontFamily(previousOptions)
@@ -952,6 +961,7 @@ export class TerminalSessionManager {
       cursorBlink: true,
       cursorStyle: 'block',
       allowProposedApi: true,
+      macOptionIsMeta: options.macOptionIsMeta === true,
       scrollback: 10000,
       tabStopWidth: 4,
       rightClickSelectsWord: true,
@@ -1014,38 +1024,14 @@ export class TerminalSessionManager {
       }
     })
 
-    // Windows / Linux: Ctrl+C copies selected text, otherwise sends interrupt;
-    // Ctrl+V pastes from clipboard. On macOS these shortcuts are handled by
-    // Cmd+C / Cmd+V natively, so we leave Ctrl+C as pure SIGINT.
-    const isMac = /Mac OS X|Macintosh/.test(navigator.userAgent)
-    if (!isMac) {
-      terminal.attachCustomKeyEventHandler((event) => {
-        if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyC') {
-          if (terminal.hasSelection()) {
-            if (event.type === 'keydown') {
-              void navigator.clipboard.writeText(terminal.getSelection())
-              terminal.clearSelection()
-            }
-            return false
-          }
-        }
-
-        if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyV') {
-          if (event.type === 'keydown') {
-            event.preventDefault()
-            void navigator.clipboard.readText().then((text) => {
-              if (text) {
-                // Use xterm.js paste() so bracketed paste mode is applied
-                terminal.paste(text)
-              }
-            })
-          }
-          return false
-        }
-
-        return true
-      })
-    }
+    const inputAdapter = new TerminalInputAdapter(terminal, {
+      platform: window.electronAPI.platform,
+      readClipboard: () => window.electronAPI.clipboard.readTerminal(),
+      copyText: text => navigator.clipboard.writeText(text),
+      trace: (kind, detail) => perfTraceDiagnostic(kind === 'protocol' ? PERF_TRACE_EVENT.RENDERER_TERMINAL_KEYBOARD_PROTOCOL
+        : kind === 'keys' ? PERF_TRACE_EVENT.RENDERER_TERMINAL_KEYBOARD_BATCH : PERF_TRACE_EVENT.RENDERER_TERMINAL_CLIPBOARD,
+      { terminalId: id, ...detail })
+    })
 
     // BUG-0001 breadcrumb: xterm only invokes custom wheel handlers when no
     // mouse protocol claimed the wheel, and on that path a wheel event with
@@ -1084,6 +1070,7 @@ export class TerminalSessionManager {
     const session: TerminalSession = {
       id,
       terminal,
+      inputAdapter,
       fitAddon,
       searchAddon,
       status: 'idle',
@@ -1158,6 +1145,15 @@ export class TerminalSessionManager {
     if (!session) return false
     session.terminal.paste(data)
     return true
+  }
+
+  pasteClipboard(id: string): Promise<void> {
+    const session = this.sessions.get(id)
+    if (!session) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_TERMINAL_CLIPBOARD, { terminalId: id, reason: 'missing-session', entry: 'context' })
+      return Promise.resolve()
+    }
+    return session.inputAdapter.paste('context')
   }
 
   isBracketedPasteEnabled(id: string): boolean | null {
@@ -1362,6 +1358,7 @@ export class TerminalSessionManager {
 
     if (!session.open) {
       session.terminal.open(container)
+      session.inputAdapter.bindElement()
       session.open = true
       this.applyRendererLifecycle(session, 'attach')
     } else if (session.terminal.element && session.terminal.element.parentElement !== container) {
@@ -1897,6 +1894,7 @@ export class TerminalSessionManager {
     session.pendingViewportRestore = null
     session.terminal.clear()
     session.terminal.reset()
+    session.inputAdapter.reset('shell-restarted')
 
     void this.ensureReady(id, session.lastOptions)
   }
@@ -1934,6 +1932,7 @@ export class TerminalSessionManager {
     // Data/exit IPC listeners are global; no per-session cleanup needed
     window.electronAPI.terminal.dispose(id)
     session.renderer.dispose()
+    session.inputAdapter.dispose()
     session.terminal.dispose()
 
     if (this.activeInteractiveTerminalId === id) {

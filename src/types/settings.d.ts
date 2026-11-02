@@ -87,6 +87,8 @@ export interface SettingsState {
   autoFollowGitBranchForTaskName: boolean
   /** Global switch for opt-in performance diagnostics panels. */
   performanceDiagnosticsEnabled: boolean
+  /** Opt-in macOS Option-to-Meta terminal input; absent legacy values mean false. */
+  terminalMacOptionIsMeta?: boolean
   updatedAt: number
 }
 

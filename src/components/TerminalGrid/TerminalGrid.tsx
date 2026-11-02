@@ -210,7 +210,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   perfMonitor.recordReactRender()
 
   const { t } = useI18n()
-  const { getTerminalStyle, getAutoFollowGitBranchForTaskName, setAutoFollowGitBranchForTaskName, resolvedTheme } = useSettings()
+  const { settings: terminalSettings, getTerminalStyle, getAutoFollowGitBranchForTaskName, setAutoFollowGitBranchForTaskName, resolvedTheme } = useSettings()
   const theme = themeOverride ?? resolvedTheme.terminal
   const minimumContrastRatio = resolveTerminalMinimumContrastRatio(resolvedTheme)
   const gridWrapperRef = useRef<HTMLDivElement | null>(null)
@@ -1183,9 +1183,10 @@ export const TerminalGrid = memo(function TerminalGrid({
       minimumContrastRatio,
       fontSize,
       fontFamily,
+      macOptionIsMeta: terminalSettings?.terminalMacOptionIsMeta === true,
       terminalStyle: getTerminalStyle(terminalId)
     }
-  }, [theme, resolvedTheme.id, minimumContrastRatio, fontSize, fontFamily, getTerminalStyle])
+  }, [theme, resolvedTheme.id, minimumContrastRatio, fontSize, fontFamily, getTerminalStyle, terminalSettings?.terminalMacOptionIsMeta])
 
   useEffect(() => {
     if (hidden) return
@@ -1514,12 +1515,7 @@ export const TerminalGrid = memo(function TerminalGrid({
   const handleTermCtxPaste = useCallback(() => {
     if (!termCtxMenu) return
     const termId = termCtxMenu.terminalId
-    void navigator.clipboard.readText().then((text) => {
-      if (text) {
-        // Use xterm.js paste() so bracketed paste mode is applied
-        terminalSessionManager.paste(termId, text)
-      }
-    })
+    void terminalSessionManager.pasteClipboard(termId)
     closeTermCtxMenu()
     terminalSessionManager.focus(termId)
   }, [termCtxMenu, closeTermCtxMenu])

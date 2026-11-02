@@ -64,6 +64,7 @@ export const IPC = {
   // changelog / clipboard
   CHANGELOG_GET_CURRENT: 'changelog:get-current',
   CLIPBOARD_READ_TEXT: 'clipboard:read-text',
+  CLIPBOARD_READ_TERMINAL: 'clipboard:read-terminal',
   CLIPBOARD_WRITE_TEXT: 'clipboard:write-text',
 
   // coding-agent / command-preset

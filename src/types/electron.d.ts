@@ -236,6 +236,7 @@ export interface ShellAPI {
 export interface ClipboardAPI {
   writeText: (text: string) => Promise<boolean>
   readText: () => Promise<string>
+  readTerminal: () => Promise<import('../terminal/terminal-clipboard').TerminalClipboard>
 }
 
 export interface CommandPreset {

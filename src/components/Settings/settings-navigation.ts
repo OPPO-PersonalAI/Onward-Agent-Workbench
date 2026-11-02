@@ -13,6 +13,7 @@ export const PAGE_LABELS: Record<SettingsPage, TranslationKey> = {
 export interface SettingsSearchEntry { page: SettingsPage; target: string; label: TranslationKey; keywords?: TranslationKey[]; keywordIndices?: number[] }
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { page: 'general', target: 'language', label: 'settings.language.label' },
+  { page: 'general', target: 'terminalKeyboard', label: 'settings.keyboard.title', keywords: ['settings.keyboard.optionMeta'] },
   { page: 'general', target: 'diagnostics', label: 'settings.section.diagnostics', keywords: ['settings.diagnostics.performanceToggle'] },
   { page: 'general', target: 'privacy', label: 'settings.section.telemetry', keywords: ['settings.telemetry.toggle'] },
   { page: 'appearance', target: 'themes', label: 'settings.themes.featured', keywords: ['settings.themes.system', 'settings.themes.customize', 'settings.themes.import', 'settings.themes.export'] },
