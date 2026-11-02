@@ -306,6 +306,9 @@ export async function testGitDiffClickLatency(ctx: AutotestContext): Promise<Tes
         50
       )
       if (!updated) return false
+      if (! await waitFor(`gdcl-diagnostics-save-ready-${enabled ? 'on' : 'off'}`, () => Boolean(document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]:not(:disabled)')), 2000, 50)) return false
+      document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]')?.click()
+      if (! await waitFor(`gdcl-diagnostics-saved-${enabled ? 'on' : 'off'}`, () => document.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'clean', 4000, 50)) return false
     }
     settingsButton.click()
     return await waitFor(

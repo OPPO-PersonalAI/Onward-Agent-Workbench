@@ -631,12 +631,12 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
   }
   const waitForSettingsSaveReady = () => waitFor('ps-settings-dirty-before-save', () => {
     const status = document.querySelector('[data-testid="prompt-input-status"][data-state="dirty"]')
-    const button = document.querySelector<HTMLButtonElement>('[data-testid="prompt-input-save"]')
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]')
     return Boolean(status && button && !button.disabled)
   }, 3000, 40)
   const saveInputSettings = async (expected: (settings: PromptInputSettings) => boolean) => {
     // Require a fresh dirty -> saved transition; prior success copy is not an ACK.
-    const clicked = await waitForSettingsSaveReady() && settingsClick('prompt-input-save')
+    const clicked = await waitForSettingsSaveReady() && settingsClick('settings-save')
     const acknowledged = clicked && await waitFor('ps-settings-save-ack', () => {
       const status = document.querySelector('[data-testid="prompt-input-status"][data-state="saved"][role="status"]')?.textContent?.trim()
       return status === translated('promptInput.settings.saved')
@@ -869,16 +869,16 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
           && await editAction(customId, 'include-prompt', false)
       }
       await paintTurn()
-      const clicked = prepared && await waitForSettingsSaveReady() && settingsClick('prompt-input-save')
+      const clicked = prepared && await waitFor('ps-invalid-config-dirty', () => Boolean(document.querySelector('[data-testid="prompt-input-status"][data-state="dirty"]') && document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]')?.disabled), 3000, 40) && !settingsClick('settings-save')
       const errorKey = invalid.startsWith('timeout') ? 'promptInput.settings.invalidTimeout' : 'promptInput.settings.invalidAction'
       const rejected = clicked && await waitFor('ps-invalid-config-alert', () => {
-        const status = document.querySelector('[data-testid="prompt-input-status"][data-state="error"][role="alert"]')
+        const status = document.querySelector('[data-testid="prompt-input-error"][role="alert"], [data-testid="prompt-input-status"][data-state="error"][role="alert"]')
         return status?.textContent?.trim() === translated(errorKey) && translated(errorKey) !== errorKey
       }, 3000, 40)
       const persisted = settingsSignature((await window.electronAPI.settings.load()).promptInput)
       cases.push({ field: invalid, ok: rejected && persisted === before && settingsSignature(inputSettingsSnapshot()) === before,
         prepared, clicked, rejected })
-      settingsClick('prompt-input-cancel')
+      settingsClick('settings-discard')
       await paintTurn()
     }
     await closeSettings()
@@ -913,8 +913,8 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     for (const locale of ['en', 'zh-CN'] as const) {
       await openSettings('general')
       const select = document.querySelector<HTMLSelectElement>('[data-testid="settings-language-select"]')
-      if (select) changeField(select, locale)
-      const localized = await waitFor('ps-language-applied', () => currentLocale() === locale, 3000, 40)
+      if (select && select.value !== locale) { changeField(select, locale); if (await waitFor('ps-language-dirty', () => Boolean(document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]:not(:disabled)')), 3000, 40)) settingsClick('settings-save') }
+      const localized = await waitFor('ps-language-applied', () => currentLocale() === locale && document.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'clean', 3000, 40)
       await openSettings()
       for (const width of [300, 600]) {
         window.__onwardSettingsDebug?.setPanelWidth?.(width)
@@ -970,9 +970,9 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
   // Restore the language/width for adjacent suites that may share this session.
   await openSettings('general')
   const language = document.querySelector<HTMLSelectElement>('[data-testid="settings-language-select"]')
-  if (language) changeField(language, 'en')
+  if (language && language.value !== 'en') { changeField(language, 'en'); if (await waitFor('ps-language-restore-dirty', () => Boolean(document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]:not(:disabled)')), 3000, 40)) settingsClick('settings-save') }
   window.__onwardSettingsDebug?.setPanelWidth?.(400)
-  await waitFor('ps-language-restored', () => currentLocale() === 'en', 3000, 40)
+  await waitFor('ps-language-restored', () => currentLocale() === 'en' && document.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'clean', 3000, 40)
   await closeSettings()
   await clearSelection()
   await setDraft('')

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { ThemeUiHarness, REPO_ROOT, eventually } from './themes-ui-driver-support.mjs'
+import { ThemeUiHarness, REPO_ROOT, eventually, saveSettingsPage } from './themes-ui-driver-support.mjs'
 import { inventoryTraceFiles, selectNewTraceFiles, validateTraceFiles } from './trace-self-check-files.mjs'
 
 const TRIALS = 5
@@ -47,6 +47,7 @@ async function run() {
     await eventually('recorder is ready', () => recorder.getAttribute('data-recording'), value => value === 'ready')
     await h.page.keyboard.press(key.stroke)
     await eventually('recorder accepts the binding', () => recorder.getAttribute('data-recording'), value => value === 'idle')
+    await saveSettingsPage(h.page)
     await eventually('binding is persisted', () => h.diskSettings(), settings => settings?.shortcuts.switchTab1 === key.stored)
     assert.equal((await h.page.evaluate(() => window.electronAPI.settings.load())).shortcuts.switchTab1, key.stored)
     await h.page.locator('.settings-close-btn').click()
