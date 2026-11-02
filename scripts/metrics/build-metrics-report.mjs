@@ -213,7 +213,7 @@ ${weeklyRows || '<tr><td colspan="6">无数据</td></tr>'}
 ${trendRows || '<tr><td colspan="8">无快照</td></tr>'}
 </table>
 
-<div class="meta">生成：scripts/metrics/build-metrics-report.mjs · 指标口径：docs/html/telemetry-metrics-system-redesign.html · 数据源：traces/metrics/snapshots/（本地，不入库）· 本报告为自包含文件，可直接分发</div>
+<div class="meta">生成：scripts/metrics/build-metrics-report.mjs · 数据源：traces/metrics/snapshots/（本地，不入库）· 本报告为自包含文件，可直接分发</div>
 </main>
 <script>
 (function(){var links=[].slice.call(document.querySelectorAll('nav#toc a'));var secs=links.map(function(a){return document.getElementById(a.getAttribute('href').slice(1))});function on(){var p=window.scrollY+90,ai=0;for(var i=0;i<secs.length;i++){if(secs[i]&&secs[i].offsetTop<=p)ai=i}links.forEach(function(a,i){a.classList.toggle('active',i===ai)})}window.addEventListener('scroll',on,{passive:true});on()})();

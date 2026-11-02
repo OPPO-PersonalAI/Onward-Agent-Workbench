@@ -35,7 +35,19 @@ const ALLOWLIST = new Set([
   'test/autotest/fixtures/prompt-input-shortcuts/guest-input.html',
   'test/autotest/fixtures/prompt-input-shortcuts/caret-draft.json',
   'test/autotest/fixtures/prompt-input-shortcuts/crowded-tabs.json',
+  'test/autotest/fixtures/prompt-capture-stdin.cjs',
+  'test/autotest/prompt-input-shortcuts-driver.mjs',
+  'test/autotest/test-git-state-mirror-quit-cdp.mjs',
+  'src/autotest/test-prompt-sender.ts',
+  'src/autotest/test-prompt-list.ts',
+  'src/autotest/test-markdown-latex-preview.ts',
   'test/unittest/prompt-input-shortcuts-main.test.mjs',
+  'test/unittest/git-diff-hunk-actions.test.mts',
+  'test/unittest/prompt-input-transaction.test.mts',
+  'test/unittest/prompt-input-labels.test.mts',
+  'test/unittest/prompt-input-history.test.mts',
+  'test/unittest/prompt-input.test.mts',
+  'test/unittest/sensitive-info-scanner.test.mts',
   // Project instruction files may quote Chinese phrases from user usage.
   'CLAUDE.md',
   'AGENTS.md'
@@ -65,6 +77,29 @@ const EXTRA_TEXT_FILES = new Set([
   '.npmrc',
   'pnpm-lock.yaml'
 ])
+
+function decodeEscapes(input) {
+  return String(input)
+    .replace(/\\u\{([0-9a-fA-F]{1,6})\}/g, (_, hex) => {
+      const cp = parseInt(hex, 16)
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : _
+    })
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#x([0-9a-fA-F]{1,6});/g, (_, hex) => {
+      const cp = parseInt(hex, 16)
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : _
+    })
+    .replace(/&#([0-9]{1,7});/g, (_, dec) => {
+      const cp = parseInt(dec, 10)
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : _
+    })
+}
+
+function containsChinese(text) {
+  if (HAN_RE.test(text)) return true
+  const decoded = decodeEscapes(text)
+  return HAN_RE.test(decoded)
+}
 
 function isAllowlistedPath(relPath) {
   if (ALLOWLIST.has(relPath)) return true
@@ -130,7 +165,7 @@ function scanText(relPath) {
   const hits = []
   const lines = content.split('\n')
   lines.forEach((lineText, index) => {
-    if (!HAN_RE.test(lineText)) return
+    if (!containsChinese(lineText)) return
     hits.push({
       file: relPath,
       line: index + 1,
@@ -156,4 +191,14 @@ function main() {
   process.exit(1)
 }
 
-main()
+if (require.main === module) {
+  main()
+}
+
+module.exports = {
+  decodeEscapes,
+  containsChinese,
+  isAllowlistedPath,
+  scanText
+}
+

@@ -12,7 +12,7 @@
  * the app's fetch was killed at 20,007 ms while STILL RECEIVING data (a 28.7 MB
  * `tmp_pack_*` was left behind at the kill minute). git cannot resume a killed
  * fetch, so every retry restarted from zero against a growing payload and the
- * repo could never sync. See docs/html/git-fetch-timeout-strategy-options.html.
+ * repo could never sync.
  *
  * User decision (2026-10-26, option S1): let the TRANSPORT decide "stalled" vs
  * "slow but alive", and keep only a long wall-clock ceiling as a last resort:

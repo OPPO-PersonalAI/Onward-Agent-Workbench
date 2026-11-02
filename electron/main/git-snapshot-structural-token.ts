@@ -11,8 +11,7 @@
  *   - `<root>/.gitmodules`            — declared submodule set
  *   - `<root>/.git/index`             — gitlink (mode 160000) entries live in
  *                                       the index; `git add` of a nested repo
- *                                       changes it (the no-`.gitmodules`
- *                                       winWatchRTOS class)
+ *                                       changes it
  *   - per known submodule:
  *       `<sub>/.gitmodules`           — nested declarations
  *       `<sub>/<gitdir>/index`        — nested gitlinks

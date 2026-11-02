@@ -5,7 +5,7 @@
  * Usage: node --experimental-strip-types --test test/unittest/git-gitignore-watch-globs.test.mts
  *
  * Locks the .gitignore -> parcel-watcher ignore-glob converter that suppresses
- * the kar-qemu running-emulator watcher storm (build/framebuffer.raw churn).
+ * gitignored-directory watcher storms.
  * The safety contract: directory patterns convert (negation-immune); file /
  * extension patterns and negations do NOT (could over-ignore real changes).
  */
@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 
 import { gitignoreToWatchIgnoreGlobs } from '../../electron/main/git-gitignore-watch-globs.ts'
 
-test('bare directory pattern -> root + any-depth globs (the kar-qemu build/ case)', () => {
+test('bare directory pattern -> root + any-depth globs', () => {
   const globs = gitignoreToWatchIgnoreGlobs('build/\n')
   assert.deepEqual(globs, ['build/**', '**/build/**'])
 })
@@ -67,13 +67,13 @@ test('maxGlobs caps a pathological .gitignore', () => {
   assert.ok(globs.length <= 10, `expected <=10, got ${globs.length}`)
 })
 
-test('realistic kar-qemu .gitignore excerpt: build dirs convert, file patterns do not', () => {
+test('realistic .gitignore excerpt: build dirs convert, file patterns do not', () => {
   const content = [
     'build/',
     'build_*/',
     'build-ut/',
     '*.raw',
-    '# QEMU output',
+    '# comment',
     'serial*.txt',
     'framebuffer.raw',
     'output/',

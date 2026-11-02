@@ -14,8 +14,8 @@ const GENERATED_PATH_SEGMENTS = [
 ]
 
 const PREFERRED_MARKDOWN_PATHS = [
-  'docs/api-reference.md',
-  'docs/architecture.md',
+  'docs/lessons.md',
+  'docs/debug-env-variables.md',
   'test/README.md',
   'test/autotest/fixtures/dl_math_foundations.md',
   'README.md'

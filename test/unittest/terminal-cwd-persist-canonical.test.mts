@@ -18,11 +18,10 @@ const mac = (v: string | null | undefined) => canonicalizeTerminalCwdForPersist(
 const linux = (v: string | null | undefined) => canonicalizeTerminalCwdForPersist(v, 'linux')
 
 test('Windows: forward-slash and backslash forms converge to ONE string', () => {
-  // The exact pair the original production trace showed ping-ponging.
-  assert.equal(win('D:/Users/Documents/Onward'), 'D:/Users/Documents/Onward')
-  assert.equal(win('D:\\Users\\Documents\\Onward'), 'D:/Users/Documents/Onward')
-  assert.equal(win('D:/Users/Documents/Onward'), win('D:\\Users\\Documents\\Onward'))
-  assert.equal(win('E:/RTOS-stablity/x'), win('E:\\RTOS-stablity\\x'))
+  assert.equal(win('D:/workspace/Onward'), 'D:/workspace/Onward')
+  assert.equal(win('D:\\workspace\\Onward'), 'D:/workspace/Onward')
+  assert.equal(win('D:/workspace/Onward'), win('D:\\workspace\\Onward'))
+  assert.equal(win('E:/workspace/sub/x'), win('E:\\workspace\\sub\\x'))
 })
 
 test('Windows: a UNC leading "//" is preserved (not collapsed to "/")', () => {
@@ -70,7 +69,7 @@ test('Linux: the macOS firmlink rule does NOT apply', () => {
 
 test('canonicalization is idempotent (no second-pass drift), all platforms', () => {
   const cases: Array<[(v: string | null | undefined) => string | null, string]> = [
-    [win, 'D:\\Users\\80253146'], [win, 'D:/Users/80253146'], [win, '\\\\srv\\sh\\c'],
+    [win, 'D:\\Users\\example'], [win, 'D:/Users/example'], [win, '\\\\srv\\sh\\c'],
     [mac, '/private/var/folders/31/T//proj'], [mac, '/var/folders/31/T/proj/'],
     [mac, '~/projects/repo'], [linux, '/private/var/x'],
     // '.'-segment inputs must also be idempotent (collapse once, then stable).

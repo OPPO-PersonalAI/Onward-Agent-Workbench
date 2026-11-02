@@ -17,4 +17,6 @@
 # Chinese text is in an allowlisted file; the same lint runs at every
 # `pnpm dist:dev` and will block daily-build CI if violations slip through.
 
+node scripts/check-sensitive-info.js --git-author
+pnpm lint:sensitive
 pnpm lint:comments

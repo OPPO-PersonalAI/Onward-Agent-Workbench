@@ -27,9 +27,8 @@ runtime/
                               # (otherwise the user can't review or unstage it).
     └── uninitialized/root/   # .gitmodules declares submodule, but the path is an
                               # empty non-repo directory (`git submodule deinit -f` +
-                              # rm -rf + mkdir). Project_Forward repro shape used by
-                              # GDS-13 to assert the parent's file list does NOT
-                              # surface a phantom submodule row.
+                              # rm -rf + mkdir). Used by GDS-13 to assert the parent's
+                              # file list does NOT surface a phantom submodule row.
 ```
 
 ## Manifest

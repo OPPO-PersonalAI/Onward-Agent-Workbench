@@ -11,18 +11,17 @@
  * — share one definition and one place to tune flags. Pure (no I/O, no Electron)
  * so it is unit-testable in plain `node --test`.
  *
- * # `--ignore-submodules=dirty` (kar-qemu Git Diff optimization #2)
+ * # `--ignore-submodules=dirty`
  *
  * Without it, a superproject `git status --untracked-files=all` RECURSES into
  * every submodule's working tree and enumerates its untracked content (e.g. a
- * submodule's `node_modules`). On a large nested-submodule repo (kar-qemu) this
- * recursive walk is the dominant cost — measured at up to 12.2s for one mirror
- * status recompute. `--ignore-submodules=dirty` skips the submodule WORKING-TREE
- * walk while STILL reporting a submodule whose recorded commit pointer changed
- * (new commits / staged gitlink update). That preserves the only submodule
- * signal the Git Diff path keeps anyway (`filterMeaninglessSubmoduleEntries`
- * drops m/u-only entries), and the per-submodule diff pass still shows each
- * submodule's own changes in its dedicated section.
+ * submodule's `node_modules`). `--ignore-submodules=dirty` skips the submodule
+ * WORKING-TREE walk while STILL reporting a submodule whose recorded commit
+ * pointer changed (new commits / staged gitlink update). That preserves the
+ * only submodule signal the Git Diff path keeps anyway
+ * (`filterMeaninglessSubmoduleEntries` drops m/u-only entries), and the
+ * per-submodule diff pass still shows each submodule's own changes in its
+ * dedicated section.
  */
 
 export interface GitStatusPorcelainArgsOptions {

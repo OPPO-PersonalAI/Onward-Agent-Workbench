@@ -6,12 +6,11 @@
 /**
  * Nested gitlink (NO .gitmodules) discovery — end-to-end suite.
  *
- * Locks the winWatchRTOS-Build symptom class: a parent repo tracks nested repos
- * as bare gitlinks (mode 160000) it NEVER declared in `.gitmodules`. Before the
- * fix, the snapshot service discovered submodules from `.gitmodules` only, so
- * these nested repos were invisible — Git Diff and Git History showed nothing
- * for them. The fix reads the index's gitlink set (`git ls-files -s`) so they
- * surface as submodule repos.
+ * A parent repo tracks nested repos as bare gitlinks (mode 160000) it NEVER
+ * declared in `.gitmodules`. Before the fix, the snapshot service discovered
+ * submodules from `.gitmodules` only, so these nested repos were invisible —
+ * Git Diff and Git History showed nothing for them. The fix reads the index's
+ * gitlink set (`git ls-files -s`) so they surface as submodule repos.
  *
  * Why a SEPARATE, focused suite rather than amending the (large) Git Diff
  * staleness suite: this owns a distinct fixture (a gitlink-without-.gitmodules
@@ -115,9 +114,8 @@ export async function testGitDiffNestedGitlink(ctx: AutotestContext): Promise<Te
       filenames: diff.files.map((f) => clampPath(f.filename))
     })
 
-    // NGL-02: a SECOND undeclared gitlink is discovered too (the index can carry
-    // many; winWatchRTOS-Build had three). Proves we read the full gitlink set,
-    // not just the first.
+    // NGL-02: a second undeclared gitlink is discovered too, proving we read
+    // the full gitlink set rather than only the first entry.
     const cleanSection = (diff.repos ?? []).find((r) => clampPath(r.root).endsWith(`/${cleanRel}`))
     _assert('NGL-02-multiple-gitlinks-all-discovered', (
       diff.success && Boolean(changedSection) && Boolean(cleanSection)

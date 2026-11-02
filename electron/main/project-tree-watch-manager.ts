@@ -419,8 +419,7 @@ export class ProjectTreeWatchManager {
    * editors, `git checkout`) when the platform delivers native FS events. This
    * path covers the app's OWN edits — which must propagate even when no native
    * FS events arrive at all (unsigned dev builds / restricted hosts can deliver
-   * zero FSEvents to fs.watch AND @parcel/watcher alike; see
-   * docs/html/file-index-watcher-backend-decision.html). It mirrors what the
+   * zero FSEvents to fs.watch AND @parcel/watcher alike). It mirrors what the
    * renderer ProjectEditor UI already does via fileIndexAddFile, extended to the
    * IPC mutation surface, and runs the same ignore filter so `.git` /
    * `node_modules` noise never enters the index.

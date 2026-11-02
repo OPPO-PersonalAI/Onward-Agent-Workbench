@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Windows / PowerShell mirror of run-git-state-mirror-latency-autotest.sh.
-# Extracts the committed fixture tarballs into a per-run temp dir, launches
-# the dev build with autotest env wiring, and surfaces the same pass/fail
-# semantics. Only PowerShell 5.1+ / pwsh 7+ is supported (per CLAUDE.md).
+# Materializes on demand and extracts the fixture tarballs into a per-run temp
+# dir, launches the dev build with autotest env wiring, and surfaces the same
+# pass/fail semantics. Only PowerShell 5.1+ / pwsh 7+ is supported (per CLAUDE.md).
 
 $ErrorActionPreference = 'Stop'
 
@@ -40,7 +40,15 @@ New-Item -ItemType Directory -Path $UserDataRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $FixtureTmp  -Force | Out-Null
 
 try {
-  # Extract every committed fixture tarball into the per-run staging dir.
+  # Materialize the fixture tarballs + manifest.json on demand if not yet built.
+  if (-not (Test-Path (Join-Path $FixtureSrc 'manifest.json')) -or -not (Test-Path (Join-Path $FixtureSrc 'repo-A.tar.gz'))) {
+    & node (Join-Path $RepoRoot 'test\autotest\build-git-state-mirror-latency-fixture.mjs')
+    if ($LASTEXITCODE -ne 0) {
+      throw 'build-git-state-mirror-latency-fixture.mjs failed'
+    }
+  }
+
+  # Extract every fixture tarball into the per-run staging dir.
   Get-ChildItem -Path $FixtureSrc -Filter '*.tar.gz' | ForEach-Object {
     & tar.exe -xzf $_.FullName -C $FixtureTmp
     if ($LASTEXITCODE -ne 0) {

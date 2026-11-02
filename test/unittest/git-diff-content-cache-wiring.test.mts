@@ -655,9 +655,9 @@ test('parseCacheKey round-trips buildCacheKey for every changeType variant', () 
 })
 
 test('parseCacheKey recovers changeType + filename used by revalidation', () => {
-  const parsed = parseCacheKey('unstaged::M::::tools/kar_air_control.py')
+  const parsed = parseCacheKey('unstaged::M::::src/app.py')
   assert.equal(parsed.changeType, 'unstaged')
-  assert.equal(parsed.filename, 'tools/kar_air_control.py')
+  assert.equal(parsed.filename, 'src/app.py')
 })
 
 test('parseCacheKey rejoins a filename that itself contains "::" (defensive)', () => {

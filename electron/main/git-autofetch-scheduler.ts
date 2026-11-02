@@ -12,8 +12,7 @@
  * only as fresh as the last fetch (it is measured against the LOCAL
  * remote-tracking ref), which is the whole reason this scheduler exists.
  *
- * Design (confirmed strategy, 2026-07-15 — see
- * docs/html/git-ahead-behind-fetch-strategy.html):
+ * Design (confirmed strategy, 2026-07-15):
  *   - Period: configurable, default 10 min. Long on purpose — many Task repos
  *     multiply network/process cost, and a 10-min behind latency is fine for
  *     "am I behind?".
@@ -32,7 +31,7 @@
  *     This is what keeps a dead / auth-walled repo from being retried every
  *     period forever.
  *   - Two "user is present" escape hatches (BUG-0005, confirmed strategy
- *     2026-08-04 — see docs/html/git-autofetch-recovery-strategy-options.html).
+ *     2026-08-04).
  *     The 1 h ceiling above is correct for an unattended dead repo, but it used
  *     to be the ONLY rule: a repo whose fetch always times out was pinned at
  *     1 h forever, and NOTHING the user did could shorten it. A user staring at

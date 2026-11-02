@@ -3598,11 +3598,10 @@ export function GitDiffViewer({
       // fast root-only superproject file list IMMEDIATELY instead of suppressing
       // it behind the slowest submodule. Previously, when submodules were still
       // resolving, the root-only files were hidden (empty list) until the full
-      // recursive diff landed — so a nested-submodule repo (kar-qemu: an 8-10 s
-      // submodule walk) blocked the superproject's own changed files from
-      // painting for seconds. Now root-only renders in ~ms and the full pass
-      // merges in-place when ready; the root-only files stay visible/clickable
-      // throughout.
+      // recursive diff landed — so a nested-submodule repo blocked the
+      // superproject's own changed files from painting for seconds. Now
+      // root-only renders in ~ms and the full pass merges in-place when ready;
+      // the root-only files stay visible/clickable throughout.
       applyLoadedDiffResult(initialResult, cwd, previousSelection)
       debugLog('diff:load:done', {
         cwd: initialResult.cwd || cwd,

@@ -165,10 +165,8 @@ export function classifyEventPath(eventPath: string, watchedRoot: string): {
   // sibling temp, fsync'ing it, then renaming it over the target (write-temp-
   // then-rename). The temp churns the watcher even though the meaningful event
   // is the final rename to the REAL file (which fires its own allowed event and
-  // still triggers a recompute). Observed on kar-qemu: a background process
-  // rewriting `tools/kar_air_control.py` produced 11 events from
-  // `kar_air_control.py.tmp.<pid>.<hash>` temps. Dropping these temp artifacts
-  // avoids a redundant recompute per atomic save without losing the real change.
+  // still triggers a recompute). Dropping these temp artifacts avoids a
+  // redundant recompute per atomic save without losing the real change.
   const leaf = rel.slice(rel.lastIndexOf('/') + 1)
   // `.tmp.<pid>.<hash>` (write-file-atomic / similar atomic writers):
   // e.g. foo.py.tmp.7432.3fe8206c1a01. The `.tmp.` infix is an unambiguous temp
@@ -186,15 +184,14 @@ export function classifyEventPath(eventPath: string, watchedRoot: string): {
  * Decide whether a just-completed recompute revealed a non-git → git
  * transition that needs the FS watcher (re)attached.
  *
- * WHY (2026-07-05 diagnostic bundle, "BattleProject not recognized"): a cwd
- * that is not a git repo when a terminal first attaches gets NO watcher
- * (`handleAttachWatch` skips it — there is nothing to watch). If the user then
- * runs `git init` / `git clone` inside that same open directory, the FS watcher
- * never existed to catch the `.git` creation, so the repo stays invisible until
- * a focus-resync recompute happens to re-detect it — and even then the watcher
- * is still missing, so the tab goes stale again on the next edit. A recompute
- * that discovers a repoRoot where the entry has no watcher group must therefore
- * trigger a watcher attach.
+ * WHY: a cwd that is not a git repo when a terminal first attaches gets NO
+ * watcher (`handleAttachWatch` skips it — there is nothing to watch). If the
+ * user then runs `git init` / `git clone` inside that same open directory, the
+ * FS watcher never existed to catch the `.git` creation, so the repo stays
+ * invisible until a focus-resync recompute happens to re-detect it — and even
+ * then the watcher is still missing, so the tab goes stale again on the next
+ * edit. A recompute that discovers a repoRoot where the entry has no watcher
+ * group must therefore trigger a watcher attach.
  *
  * Pure predicate so the transition table is unit-tested without a live worker:
  *   attach a watcher IFF the entry now resolves a repoRoot, has no watcher group

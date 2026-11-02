@@ -52,7 +52,7 @@ test('terminal cwd OSC parsers keep supported cwd dialects intact', () => {
   assert.equal(parseOsc633Cwd('P;Prompt=ready'), null)
   // A command payload must NOT be mistaken for a cwd.
   assert.equal(parseOsc633Cwd('E;git commit'), null)
-  assert.equal(parseOsc7Cwd('file://host/Users/example/Project%20Forward'), '/Users/example/Project Forward')
+  assert.equal(parseOsc7Cwd('file://host/Users/example/My%20Project'), '/Users/example/My Project')
   assert.equal(parseOsc7Cwd('file://host/C:/Users/example/repo'), 'C:/Users/example/repo')
   assert.equal(parseOsc1337Cwd('CurrentDir=/Users/example/repo'), '/Users/example/repo')
   assert.equal(parseTerminalCwdOsc('osc9', '9;/Users/example/repo'), '/Users/example/repo')

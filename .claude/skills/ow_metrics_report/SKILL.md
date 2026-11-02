@@ -8,7 +8,7 @@ description: 拉取 PostHog 使用数据并生成 Onward 数据指标 HTML 报�
 ## 这个 skill 做什么
 
 以数据驱动方式改进产品：从 PostHog（项目 "Onward"，us.posthog.com）拉取全量使用数据，
-按既定指标口径（见 `docs/html/telemetry-metrics-system-redesign.html`）计算七组指标，
+按既定指标口径计算七组指标，
 生成自包含的暗色 HTML 报告，并通过快照序列追踪历史变化。
 
 三个组成部分（都在仓库内，纯 Node、跨平台）：

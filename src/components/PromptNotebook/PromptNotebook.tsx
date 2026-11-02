@@ -1786,8 +1786,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // textarea's IME composition is O(text-before-caret) — ~60ms at the end of a
   // 78KB draft, ~263ms mid-document — because the browser re-lays-out all
   // preceding text to anchor the composition. A contenteditable div avoids that
-  // (~16ms), which is why every large chat composer uses one. See
-  // docs/html/prompt-input-latency-investigation.html.
+  // (~16ms), which is why every large chat composer uses one.
   //
   // The content is UNCONTROLLED: live DOM text is mirrored into a local ref
   // on input so hidden panels retain newlines. Keeping it out of React

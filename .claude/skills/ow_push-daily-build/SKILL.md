@@ -47,6 +47,12 @@ git status --short
 # 3. Check if there are commits to push
 git log origin/{BRANCH}..HEAD --oneline
 # If no commits, inform the user — they may only want to create a tag on HEAD.
+
+# 4. Run sensitive-information, git-author, and comment lint gates
+node scripts/check-sensitive-info.js --git-author
+pnpm lint:sensitive
+pnpm lint:comments
+# If any check fails, stop immediately and report the findings to the user.
 ```
 
 ### Phase 2: Full Regression Test Gate (Daily channel only)

@@ -229,7 +229,7 @@ export class TerminalSessionManager {
   // context is lost can return null in Chromium, which would otherwise
   // strand the test in the lost state forever.
   private reproLoseContextExts: Map<string, { restoreContext?: () => void }> = new Map()
-  // BUG-0001 (docs/bug-tracking/): per-terminal aggregation state for the
+  // Per-terminal aggregation state for the
   // wheel-to-arrows and pending-data-trimmed diagnostic events. Both emit at
   // most ~1-2 events/s per terminal; the hot paths only touch integer fields.
   private wheelToArrowsAgg: Map<string, { up: number; down: number; timerId: number | null }> = new Map()

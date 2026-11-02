@@ -6,9 +6,9 @@
 import type { AutotestContext, TestResult } from './types'
 
 const SAMPLE_MARKDOWN_PATH = 'test/autotest/fixtures/dl_math_foundations.md'
-const HIGHLIGHT_FIXTURE_PATH = 'docs/api-reference.md'
-const OUTLINE_SCROLL_FIXTURE_PATH = 'docs/porting-diff-analysis.md'
-const OUTLINE_SCROLL_FIXTURE_TEXT = 'Porting Diff Analysis'
+const HIGHLIGHT_FIXTURE_PATH = 'test/autotest/fixtures/preview-search-complex.md'
+const OUTLINE_SCROLL_FIXTURE_PATH = 'test/autotest/fixtures/sidebar-autoscroll-long.md'
+const OUTLINE_SCROLL_FIXTURE_TEXT = 'Sidebar Autoscroll Fixture'
 const OUTLINE_SCROLL_MIN_SYMBOLS = 40
 const IMAGE_FIXTURE_PATH = 'test/autotest/fixtures/markdown-image-preview.md'
 const CODE_WRAP_FIXTURE_PATH = 'test/autotest/fixtures/markdown-code-wrap.md'
@@ -207,7 +207,7 @@ export async function testProjectEditorMarkdownNavigation(ctx: AutotestContext):
       if (!current?.isMarkdownPreviewVisible?.()) return false
       if (current?.isMarkdownRenderPending?.()) return false
       const html = current?.getMarkdownRenderedHtml?.() ?? ''
-      return html.includes('API Reference') && html.includes('class="hljs') && /hljs-[^"']+/.test(html)
+      return html.includes('Complex System Architecture Document') && html.includes('class="hljs') && /hljs-[^"']+/.test(html)
     },
     15000,
     120

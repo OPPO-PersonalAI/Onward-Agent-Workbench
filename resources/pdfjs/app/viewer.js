@@ -2,8 +2,8 @@
  * SPDX-FileCopyrightText: 2026 OPPO
  * SPDX-License-Identifier: Apache-2.0
  *
- * Onward PDF viewer. Adapted from the Dark_PDF_Reader Chrome extension reference
- * (ISC-licensed) and stripped of all chrome.* / GitHub Issue / options-page code.
+ * Onward PDF viewer stripped of all chrome.* / GitHub Issue / options-page code.
+ * Loaded inside an <iframe> by the renderer; receives theme + i18n via postMessage.
  * Loaded inside an <iframe> by the renderer; receives theme + i18n via postMessage.
  */
 

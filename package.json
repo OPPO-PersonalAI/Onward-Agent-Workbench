@@ -24,6 +24,7 @@
     "postinstall": "node scripts/ensure-electron-binary.js && electron-rebuild -f -o better-sqlite3 && node scripts/ensure-windows-process-tree.js && node scripts/ensure-node-pty-native.js && node scripts/ensure-node-pty-spawn-helper.js && node scripts/ensure-ripgrep-binary.js",
     "rebuild": "electron-rebuild -f -o better-sqlite3",
     "lint:comments": "node scripts/check-chinese-comments.js",
+    "lint:sensitive": "node scripts/check-sensitive-info.js",
     "compile:changelog": "node scripts/compile-changelog.js",
     "generate:changelog": "node scripts/generate-changelog.js",
     "generate:icons": "node scripts/generate-icons.js",

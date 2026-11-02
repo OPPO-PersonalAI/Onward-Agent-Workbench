@@ -7,7 +7,7 @@
 # Usage:
 #   scripts/sync-pdfjs-assets.sh [SOURCE_DIR]
 #
-# SOURCE_DIR defaults to ../Dark_PDF_Reader/vendor/pdfjs relative to the repo
+# SOURCE_DIR defaults to ../pdfjs-dist relative to the repo
 # root. It must contain the standard pdf.js layout: build/, web/, cmaps/,
 # standard_fonts/, and a LICENSE file.
 #
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_SRC="${REPO_ROOT}/../Dark_PDF_Reader/vendor/pdfjs"
+DEFAULT_SRC="${REPO_ROOT}/../pdfjs-dist"
 SRC_DIR="${1:-$DEFAULT_SRC}"
 DEST_DIR="${REPO_ROOT}/resources/pdfjs"
 

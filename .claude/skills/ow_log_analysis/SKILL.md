@@ -1,6 +1,6 @@
 ---
 name: ow_log_analysis
-description: Analyze an Onward diagnostic bundle (onward-diagnostic-*.zip) exported by the in-app Feedback → "Generate diagnostic bundle" button, root-cause the user's reported problem, and produce a dark-theme HTML report covering the evidence-backed root cause, a reproduction plan, and an "which trace events must be added to confirm this" instrumentation plan. Reads from the project's `Logs/` directory by default; also accepts any absolute path to a .zip or an already-extracted `-bundle/` directory (which is then copied into `Logs/`). Use when the user says "analyze this log / look at this diagnostic bundle / 分析日志 / 看下这个诊断包" or supplies an onward-diagnostic archive path. Read-only analysis — never modifies product code.
+description: Analyze an Onward diagnostic bundle (onward-diagnostic-*.zip) exported by the in-app Feedback → "Generate diagnostic bundle" button, root-cause the user's reported problem, and produce a dark-theme HTML report covering the evidence-backed root cause, a reproduction plan, and an "which trace events must be added to confirm this" instrumentation plan. Reads from the project's `Logs/` directory by default; also accepts any absolute path to a .zip or an already-extracted `-bundle/` directory (which is then copied into `Logs/`). Use when the user says "analyze this log / look at this diagnostic bundle / 分析日志 / 看下这个诊断包" or supplies an onward-diagnostic archive path. Read-only local analysis — never modifies product code, and all analysis artifacts stay strictly in the gitignored `Logs/` directory and must never be committed to Git.
 ---
 
 # ow_log_analysis — Onward diagnostic-bundle analysis
@@ -13,88 +13,120 @@ When a user hits a problem in Onward, they open the Feedback modal and click
 description into the save dialog, so the filename looks like:
 
 ```
-onward-diagnostic-2026-07-21_17-36-04.zip
+<problem-description>-onward-diagnostic-YYYY-MM-DD_HH-MM-SS.zip
 ```
 
 **The leading part of the filename is the user's own first-hand description of
 the problem. It is the single most important input — read it first.**
 
 This skill's job: open the bundle, understand it, argue the root cause from the
-evidence inside it, and write an HTML report.
+evidence inside it, and write a local HTML report.
+
+**Local-only artifact rule:** Every input staged by this skill and every output
+produced by this skill (`Logs/*.zip`, `Logs/*-bundle/`, `Logs/reports/*.html`,
+and `Logs/bug-tracking/**`) exists **solely for local diagnostic analysis** and
+must **never** be committed to the Git repository.
 
 ---
 
-## 0.5 Bug-tracking knowledge base (docs/bug-tracking/ — consult before analyzing, archive after)
+## 0.5 Local bug-tracking knowledge base (Logs/bug-tracking/ — local-only, never committed)
 
-`docs/bug-tracking/` is the committed diagnostic knowledge base: one
+`Logs/bug-tracking/` is the **local, gitignored** diagnostic knowledge base: one
 `BUG-NNNN-<slug>.md` file per root-caused bug plus an `INDEX.md` table
 (columns: ID, status, symptom keywords, root cause, related trace events,
-files involved, link to the bug file). Division of labour with
-`Logs/reports/`: the HTML report is the one-off full evidence statement
-(gitignored); the bug file is the reusable knowledge distillate (committed).
+files involved, link to the bug file). Both `Logs/reports/` and
+`Logs/bug-tracking/` live inside the gitignored `Logs/` directory and are
+**strictly for local analysis — never stage or commit them to Git, and never
+place bug-tracking notes under `docs/`**.
 
 **Before analyzing (mandatory first step):**
 
-1. Read `docs/bug-tracking/INDEX.md` and match the user's symptom against the
-   "symptom keywords" column row by row.
-2. **Known bug hit** → open its bug file and follow its "Repro triage
+1. If `Logs/bug-tracking/INDEX.md` exists locally, read it and match the user's
+   symptom against the "symptom keywords" column row by row. (Because `Logs/`
+   is gitignored, `Logs/bug-tracking/` will not exist on a fresh clone — if it
+   is absent, create `Logs/bug-tracking/` and initialize `INDEX.md` when
+   recording the first bug.)
+2. **Known bug hit** → open its local bug file and follow its "Repro triage
    playbook" section: check the already-landed trace events in the NEW bundle
    first (the file lists the event names and how to interpret them) to
    confirm or refute the recorded conclusion. Do NOT re-derive the analysis
    from scratch — skipping that archaeology is exactly why the previous
-   round archived it.
+   round archived it locally.
 3. **No hit** → this is a new bug; proceed with the normal flow of this skill.
 
 **After analyzing (HTML report written, before delivering):**
 
-4. New bug → create `docs/bug-tracking/BUG-NNNN-<slug>.md` (number = current
-   index maximum + 1; slug in ASCII kebab-case) and **append** one row to the
-   `INDEX.md` table. The bug file must contain: a metadata table (status /
-   dates / code baseline / bundle and report paths), the symptom (user's own
-   words), the root-cause conclusion with its confidence grade, **the full
-   analysis walk as it actually happened** (key observations, falsified
-   hypotheses WITH their disproving evidence — the dead ends are the most
-   reusable part), the table of trace events added or proposed for it, a
-   repro triage playbook (which events to check first on the next same-symptom
-   report, and how to read them), open questions, and an append-only update
-   history.
-5. Follow-up analysis of a known bug → **update its file incrementally**:
+4. New bug → ensure `Logs/bug-tracking/` exists, create
+   `Logs/bug-tracking/BUG-NNNN-<slug>.md` (number = current index maximum + 1;
+   slug in ASCII kebab-case), and **append** one row to
+   `Logs/bug-tracking/INDEX.md`. The bug file must contain: a metadata table
+   (status / dates / code baseline / local report path), the symptom (stripped
+   of any user/tester handles, employee IDs, internal project/repository names,
+   or personal paths),
+   the root-cause conclusion with its confidence grade, **the full analysis
+   walk as it actually happened** (key observations, falsified hypotheses WITH
+   their disproving evidence — the dead ends are the most reusable part), the
+   table of trace events added or proposed for it, a repro triage playbook
+   (which events to check first on the next same-symptom report, and how to
+   read them), open questions, and an append-only update history.
+5. Follow-up analysis of a known bug → **update its local file incrementally**:
    append to the update-history table; when a conclusion is overturned, keep
    the original reasoning chain and state the observation that overturned it
    (same revision rule as § 5.3b). The "status / root cause" columns of
-   `INDEX.md` may be updated, but the revision trail must remain in the bug
-   file.
-6. Bug files and `INDEX.md` are written in English (user-quoted symptom text
-   may stay verbatim in its original language — it is evidence). **Never**
-   copy unredacted bundle content into them (real absolute paths, raw user
-   input, tokens) — the same masking rules as § 1 item 4 apply.
+   `Logs/bug-tracking/INDEX.md` may be updated, but the revision trail must
+   remain in the bug file.
+6. Bug files and `INDEX.md` are written in English. Even though `Logs/bug-tracking/`
+   is local and gitignored, **never** retain raw credentials, tokens, employee
+   IDs, internal project or repository names, or personal paths in them — omit
+   private context completely rather than preserving path tails or masking with
+   pseudonyms (§ 1 item 4).
 
 ---
 
 ## 1. Hard constraints (violating any of these = failure)
 
-1. **Read-only analysis. Never modify product code.** Do not edit anything under
-   `src/**`, `electron/**`, or `test/**`. The only artifacts this skill writes
-   are the copied bundle under `Logs/`, the report under `Logs/reports/`, and
-   the bug-tracking knowledge base under `docs/bug-tracking/` (§ 0.5).
-   If the analysis concludes that a code change is needed, put the proposed
-   change in the report's "Fix recommendations" section and let the user decide
-   whether to open a separate round of work for it.
-2. **Never commit to git.** Do not run `git commit` / `git push` / `git reset` /
-   `git checkout`.
+1. **Read-only local analysis. Never modify product code or tracked files.** Do
+   not edit anything under `src/**`, `electron/**`, `test/**`, `docs/**`, or
+   `infra/**`. The **only** artifacts this skill may write live inside the
+   gitignored `<repoRoot>/Logs/` directory: the staged bundle under `Logs/`,
+   the HTML report under `Logs/reports/`, and the local bug-tracking notes
+   under `Logs/bug-tracking/` (§ 0.5). If the analysis concludes that a code
+   change is needed, put the proposed change in the report's "Fix
+   recommendations" section and let the user decide whether to open a separate
+   round of work for it.
+2. **Never commit analysis artifacts or run git mutations.** Every output of
+   `ow_log_analysis` (`Logs/**`, `onward-diagnostic-*`, HTML reports, and bug
+   notes) is strictly for local analysis and must **never** be committed to the
+   repository. Do not run `git add` / `git commit` / `git push` / `git reset` /
+   `git checkout`, and never copy or move reports into `docs/**`.
 3. **Extract to a temp directory; never pollute the repo working tree.** Use the
    OS temp dir (Windows `$env:TEMP`, macOS/Linux `${TMPDIR:-/tmp}`) with an
    `onward-diag-` prefix, and delete it when the analysis finishes.
-4. **The bundle contains unredacted data.** `app-state.json`, `settings.json`,
-   `feedback.json`, and `telemetry-events.jsonl` have **no redaction at all**,
-   and trace `args` can carry real absolute paths. When quoting any of it in the
-   report, mask it (keep only the last 1–2 path segments; write `[redacted]` for
-   emails / tokens / IDs). **Never upload bundle contents to any external
-   service.**
-5. **Every conclusion must be backed by evidence.** Each root-cause claim must
-   point at a specific `file:line` or a specific trace event name + timestamp. A
-   claim you cannot evidence goes in the report's "unverified hypotheses"
-   section with an explicit confidence label.
+4. **Strict privacy boundary — never retain path tails, and never copy incident repro scenes into code, tests, or committed docs.**
+   - `app-state.json`, `settings.json`, `feedback.json`, and `telemetry-events.jsonl`
+     have **no redaction at all**, and trace `args` can carry real absolute paths,
+     internal repository names, branch names, and employee IDs. **Never upload
+     bundle contents to any external service.**
+   - Never instruct or apply "keep the last 1–2 path segments" when citing paths
+     from a bundle — trailing path segments are precisely where repository directory
+     names, submodule names, and internal source filenames live. Omit user/project
+     paths, repository names, and branch names altogether.
+   - **Downstream implementation rule (critical):** When a later task fixes a bug,
+     adds trace instrumentation, or writes unit/E2E tests based on an
+     `ow_log_analysis` report, **never copy user- or project-specific symptoms,
+     repro scenarios, repository/submodule names, file paths, branch names,
+     diagnostic bundle filenames, or field timing anecdotes** into source code
+     comments (`src/**`, `electron/**`), trace registries
+     (`src/utils/perf-trace-names.ts`, `infra/trace.md`), tests (`test/**`), or
+     committed docs (`docs/**`). Source code and test comments must describe
+     **only** generic Git/OS/terminal/system mechanisms and invariants, completely
+     decoupled from any specific user workspace or incident.
+5. **Every conclusion must be backed by technical evidence.** Each root-cause
+   claim must point at a specific product source `file:line` or a specific trace
+   event name + timestamp / metric. Never require user repository names,
+   relative file paths, or branch names from the bundle as "evidence". A claim
+   you cannot evidence goes in the report's "unverified hypotheses" section with
+   an explicit confidence label.
 
 ---
 
@@ -110,10 +142,11 @@ files involved, link to the bug file). Division of labour with
    - Several → use `AskUserQuestion` to let the user pick; put the filename
      (which carries the problem description) and the timestamp in each option.
 3. `Logs/` is missing or empty → `Logs/` is gitignored in full, so a fresh clone
-   won't have it. **Create `Logs/` and `Logs/reports/` first**, then tell the
-   user the directory is empty and explain how to get a bundle: *open Onward →
-   sidebar "Feedback" → click "Generate diagnostic bundle" → type the problem
-   description into the filename when saving → drop the zip into `Logs/`.*
+   won't have it. **Create `Logs/`, `Logs/reports/`, and `Logs/bug-tracking/`
+   first**, then tell the user the directory is empty and explain how to get a
+   bundle: *open Onward → sidebar "Feedback" → click "Generate diagnostic
+   bundle" → type the problem description into the filename when saving → drop
+   the zip into `Logs/`.*
    Do not guess at an analysis without input.
 
 ### 2.2 Hard rule — stage external inputs into `Logs/`
@@ -213,7 +246,7 @@ it caps how much the conclusions can be trusted.
 | **Schema version** | `grep 'agent-guide.v1' AGENT-GUIDE.md` | Not found → the bundle came from a newer/older app version and this document's field assumptions may not hold. Read `AGENT-GUIDE.md` fully and parse from that; **do not blindly reuse the field names below**. |
 | **Missing files** | Read the `Missing files:` block in `README.txt` | Those files didn't exist at collection time. Missing `traces/*.jsonl` is crippling — with no temporal evidence you can only reason statically. |
 | **Fallback path taken** | Input is a `-bundle/` directory, or the trace contains `main:diagnostic-bundle.sync-fallback-used` | The threadpool was stalled, or zip streaming blew the 15 s timeout. **This is itself a strong signal**: the main process was already unhealthy at the moment the user reported the problem. |
-| **Sensitive-content capture** | `grep 'Sensitive content capture' AGENT-GUIDE.md` | If `ACTIVE`, `ONWARD_PERF_TRACE_CAPTURE_CONTENT=1` was set and raw PTY / prompt text is present. Richer evidence, but mask it when quoting. |
+| **Sensitive-content capture** | `grep 'Sensitive content capture' AGENT-GUIDE.md` | If `ACTIVE`, `ONWARD_PERF_TRACE_CAPTURE_CONTENT=1` was set and raw PTY / prompt text is present. Richer evidence, but omit raw user content and private paths completely. |
 | **Trace tail integrity** | Use the parser in 4.1 and count unparseable lines | By design **at most ONE unparseable line per chunk, and only at the tail** (the in-flight write at SIGKILL). A bad line in the middle means corruption — downgrade the conclusions. |
 | **Rate-limit drops** | Search for `trace-store:dropped-summary` | Present → some event name exceeded 100 events/sec and was dropped. `args.dropped` is the count, `args.originalName` the event. **Heavy dropping is often itself direct evidence that some path is spinning.** Also note which counters become undercounts as a result. |
 
@@ -286,7 +319,7 @@ comparing anything:
 
 | Source | Format | Conversion |
 |---|---|---|
-| Zip filename `onward-diagnostic-2026-07-21_17-36-04` | **local wall-clock** | Apply the machine's UTC offset before comparing with the two below |
+| Zip filename `onward-diagnostic-YYYY-MM-DD_HH-MM-SS` | **local wall-clock** | Apply the machine's UTC offset before comparing with the two below |
 | `README.txt` `Generated` / `system-info.txt` `generatedAt` | ISO-8601 **UTC** | Baseline |
 | Trace `ts` | **microseconds** since epoch | `new Date(ts / 1000).toISOString()` |
 | `telemetry-events.jsonl` `timestamp` | ISO-8601 **UTC** | Compare directly |
@@ -311,7 +344,8 @@ always happened before it**. Use it as the right edge of the window and walk bac
   uploaded events are gone. So **"event X is absent" is NOT evidence that X did
   not happen.**
 - **`app-state.json`** — the app-state snapshot at collection time. Use it for
-  structural questions: how many Tasks were open, which project, what layout.
+  structural questions: how many projects/Tasks were open and what layout was
+  active (do not copy user repository names or personal directory paths).
 - **`feedback.json`** — `records[]` holds past feedback, each with `title` /
   `description` / `createdAt` / `issueUrl`. **If this problem has a record, the
   `description` is the user's full account and beats the filename — read it.**
@@ -464,7 +498,9 @@ Label each conclusion in the report. Never present a guess as a fact.
 
 ### 6.1 Location and naming
 
-Write to `<repoRoot>/Logs/reports/` (gitignored along with `Logs/`).
+Write to `<repoRoot>/Logs/reports/` (gitignored along with `Logs/` — **never**
+write analysis reports to `docs/html/` or any tracked directory, and **never**
+commit them to Git).
 
 **Naming rule — the report name is the log's own filename plus a root-cause
 slug:**
@@ -473,9 +509,12 @@ slug:**
 <original log filename, extension stripped>-<root-cause-slug>.html
 ```
 
-- Keep the original filename **verbatim**, including CJK characters and spaces.
-  It carries the user's problem description, and preserving it makes the report
-  trivially traceable back to its source bundle.
+- Keep the original filename **verbatim** for the local file under
+  `Logs/reports/`. It carries the user's problem description, and preserving it
+  locally makes the report traceable back to its staged source bundle in `Logs/`.
+  Because the filename may contain user-typed handles or project names, never
+  move the file out of `Logs/reports/` and never cite the bundle or report
+  filename in committed code, tests, or `docs/**`.
 - `<root-cause-slug>` is a short ASCII kebab-case identifier for the root cause
   you landed on — e.g. `scrollback-capacity-overflow`,
   `watcher-missed-git-event`, `webgl-context-lost-no-restore`.
@@ -484,7 +523,7 @@ slug:**
 
 Example:
 ```
-onward-diagnostic-2026-07-21_17-36-04-scrollback-capacity-overflow.html
+<problem-description>-onward-diagnostic-YYYY-MM-DD_HH-MM-SS-scrollback-capacity-overflow.html
 ```
 
 After writing it, deliver the report with `SendUserFile` (`display: "render"`).
@@ -505,8 +544,6 @@ After writing it, deliver the report with `SendUserFile` (`display: "render"`).
 - Bottom: **document metadata + an append-only update history** (branch, app
   version, doc version; each revision appends a dated row — **never rewrite or
   delete past rows**)
-- `docs/html/infra-failure-resilience-design.html` is a good style skeleton to
-  crib from.
 - Report prose may be written in Simplified Chinese (matching how the user
   writes); this skill file itself is English.
 
@@ -514,23 +551,26 @@ After writing it, deliver the report with `SendUserFile` (`display: "render"`).
 
 | # | Section | Requirements |
 |---|---|---|
-| 1 | Problem statement | Quote the user verbatim (filename + `feedback.json` description), then restate it as "subsystem + action + expected vs actual". If the user's sentence contains two independent facts, split them — merging them loses information. |
+| 1 | Problem statement | Quote the user's symptom description from the filename and `feedback.json` description (stripping any user/tester handles, employee IDs, internal project/repository names, or personal paths), then restate it as "subsystem + action + expected vs actual". If the user's sentence contains two independent facts, split them — merging them loses information. |
 | 2 | Evidence baseline | Bundle metadata table: app version / platform / branch / generated-at / trace chunk count and bytes / event count / time span. **Plus every result from the § 3.3 integrity gate.** This section sets the ceiling on how much the rest can be trusted; it cannot be skipped. Include an explicit **"absent events"** table — what is missing and why (not instrumented vs. gated off vs. genuinely never happened). |
-| 3 | Timeline | A CSS/SVG timeline of the key events in the problem window, with anomalies marked. Plus a table: timestamp (UTC + relative offset ms) / event name / pid:tid / key args. |
-| 4 | Root-cause analysis | Each conclusion labelled **Confirmed / High-confidence inference / Unverified hypothesis**, with evidence (event name + timestamp + `file:line`). Use a before/after panel for "designed path" vs "path the log shows". **Include a ruled-out-hypotheses table** with the disproving evidence for each. |
+| 3 | Timeline | A CSS/SVG timeline of the key events in the problem window, with anomalies marked. Plus a table: timestamp (UTC + relative offset ms) / event name / pid:tid / key args (strip private paths, repository names, and branch names). |
+| 4 | Root-cause analysis | Each conclusion labelled **Confirmed / High-confidence inference / Unverified hypothesis**, with technical evidence (event name + timestamp + product `file:line`). Use a before/after panel for "designed path" vs "path the log shows". **Include a ruled-out-hypotheses table** with the disproving evidence for each. |
 | 5 | **Reproduction plan** | See 6.4 |
 | 6 | **Instrumentation plan** | See 6.5 |
-| 7 | Fix recommendations | Directions and trade-offs only — **no patches** (this skill does not modify code). Where the change touches cache strategy, watcher semantics, IPC/threading models, or concurrency/scheduling, mark it **"requires user confirmation before implementation"** per the project's hard rule. |
+| 7 | Fix recommendations | Directions and trade-offs only — **no patches** (this skill does not modify code). Where the change touches cache strategy, watcher semantics, IPC/threading models, or concurrency/scheduling, mark it **"requires user confirmation before implementation"** per the project's hard rule. Explicitly remind any future implementer to describe only generic Git/OS/terminal mechanisms in code/test/doc comments and never copy user/project repro details from this report. |
 | 8 | Open questions | What the evidence cannot settle. State it honestly, and list the concrete questions worth asking the user. |
 
 ### 6.4 Writing the "Reproduction plan" section
 
-Not "open the app and try it". Give an executable path:
+Not "open the app and try it". Give an executable, project-agnostic path:
 
-1. **Environment preconditions** — copy them out of the bundle: platform, app
-   version, required `ONWARD_*` switches, window size (`window-state.json`),
-   project/Task count and layout (`app-state.json`).
-2. **Trigger steps** — numbered, each saying "do X → expect trace event Y".
+1. **Environment preconditions** — record only generic structural preconditions
+   from the bundle: platform, app version, required `ONWARD_*` switches, window
+   size (`window-state.json`), and project/Task count and layout
+   (`app-state.json`). Do not copy user repository names, personal directory
+   paths, or branch names.
+2. **Trigger steps** — numbered, each saying "do X → expect trace event Y"
+   using generic repository/terminal constructs.
 3. **Pass/fail criteria** — what counts as reproduced. Prefer
    **automatically assertable signals** (an event appears/doesn't, a `dur`
    exceeds a threshold, a pairing is missing) over "it looks laggy".
@@ -542,11 +582,18 @@ Not "open the app and try it". Give an executable path:
    `test/unittest/`, and which user-visible behaviour belongs in
    `test/autotest/`. If one layer genuinely has nothing to test, say so
    explicitly — silent omission is not allowed.
-   **State plainly whether the case is timing-sensitive.** If it is, the test
-   must aggregate N trials internally (boolean correctness N=5, all must pass;
-   latency N=3, pass if ≥1 of 3 meets budget — and the latency budget must be
-   confirmed with the user, not guessed). If it is deterministic, say that too,
-   so nobody adds pointless repetition.
+   - **Zero-coupling rule for tests and code comments:** Specify that all unit
+     tests, autotest fixtures, and source comments must model **only** the
+     general technical mechanism (e.g. "a submodule with frequent file writes",
+     "an undeclared nested gitlink directory", "an alternate-screen TUI") and
+     must **never** copy user/project repository names, submodule names, file
+     paths, branch names, or incident timing anecdotes from the diagnostic
+     bundle.
+   - **State plainly whether the case is timing-sensitive.** If it is, the test
+     must aggregate N trials internally (boolean correctness N=5, all must pass;
+     latency N=3, pass if ≥1 of 3 meets budget — and the latency budget must be
+     confirmed with the user, not guessed). If it is deterministic, say that too,
+     so nobody adds pointless repetition.
 5. **If it can't be reproduced** — say so and explain why (missing the user's
    specific data, hardware/GPU dependent, depends on state drift after long
    uptime), then push the weight onto § 6.
@@ -584,7 +631,7 @@ have very different fix costs:
 - **State that is never recorded** — the value you'd need to confirm the root
   cause is simply never read for diagnostic purposes.
 
-Also remind the implementer of three project hard rules:
+Also remind the implementer of four project hard rules:
 
 1. Register the new event name in `src/utils/perf-trace-names.ts` **first**, then
    instrument.
@@ -593,15 +640,19 @@ Also remind the implementer of three project hard rules:
 3. **Never put `perfTrace(…)` inside a tight loop body, an unbudgeted rAF body, a
    per-byte `onData` handler, or a per-keystroke handler** — aggregate first,
    then emit once per N or per tick.
+4. **Describe only generic mechanisms in `src/utils/perf-trace-names.ts` and
+   `infra/trace.md`** — never mention user repository names, personal paths,
+   diagnostic bundle dates/filenames, or field incident anecdotes in trace
+   registry comments or documentation.
 
 ---
 
 ## 7. Execution checklist
 
 - [ ] Resolve the input (user-supplied absolute path wins, else scan `Logs/`)
-- [ ] **Read `docs/bug-tracking/INDEX.md` and match the symptom against known
-      bugs (§ 0.5); on a hit, follow that bug file's repro triage playbook
-      first**
+- [ ] **If `Logs/bug-tracking/INDEX.md` exists locally, read it and match the
+      symptom against known bugs (§ 0.5); on a hit, follow that local bug file's
+      repro triage playbook first**
 - [ ] Read the problem description out of the filename
 - [ ] **If the input is outside `Logs/`, copy it into `Logs/` and analyze the copy**
 - [ ] Extract to a temp dir (quote all paths; expect CJK filenames)
@@ -620,9 +671,12 @@ Also remind the implementer of three project hard rules:
 - [ ] Grade conclusions: Confirmed / High-confidence inference / Unverified hypothesis
 - [ ] Write the report to `Logs/reports/<log filename>-<root-cause-slug>.html`
       (dark + fixed left ToC + no-animation jumps + self-contained + SPDX + update history)
-- [ ] **Create or incrementally update the bug archive: new bug →
-      `docs/bug-tracking/BUG-NNNN-<slug>.md` + an appended `INDEX.md` row;
-      known bug → append to its update-history table (§ 0.5)**
+- [ ] **Create or incrementally update the local bug archive under gitignored
+      `Logs/bug-tracking/`: new bug → `Logs/bug-tracking/BUG-NNNN-<slug>.md` +
+      an appended `Logs/bug-tracking/INDEX.md` row; known bug → append to its
+      update-history table (§ 0.5)**
+- [ ] **Verify that all generated/staged files live strictly inside `Logs/` (gitignored)
+      and are NEVER staged or committed to Git**
 - [ ] Deliver it with `SendUserFile` (`display: "render"`)
 - [ ] Delete the temp dir you created (keep the staged copy under `Logs/`)
 - [ ] Give a short summary in chat: one-line root cause + confidence + the single

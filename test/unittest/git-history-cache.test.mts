@@ -13,8 +13,6 @@
  * move — classically `git push` advancing origin/<branch> while HEAD stays put —
  * does not invalidate the entry, and the cached `%D` branch/remote decorations
  * (rendered as the graph's branch labels) go stale for up to the 30-min TTL.
- * Field symptom: kae-0.36 == origin/kae-0.36 == 58feede on disk, yet Git History
- * kept drawing origin/kae-0.36 three commits back on d2b0c86 (its pre-push spot).
  */
 
 import { test } from 'node:test'
@@ -174,7 +172,7 @@ test('buildPrewarmCommitDiffTargets uses the empty-tree hash for a root commit (
 const HISTORY_LIST_TTL_MS = 30 * 60 * 1000
 
 // Build a minimal getGitHistory-shaped success payload, mapping sha → `%D` refs
-// string (e.g. 'HEAD -> kae-0.36, origin/kae-0.36'); `undefined` = no decoration.
+// string (e.g. 'HEAD -> main, origin/main'); `undefined` = no decoration.
 function historyResult(decorations: Record<string, string | undefined>) {
   const commits = Object.entries(decorations).map(([sha, refs]) => ({
     sha,
@@ -208,15 +206,14 @@ function freshHistoryListController() {
   return { controller, advance: (ms: number) => { clock += ms } }
 }
 
-// The captured state: HEAD on 58feede; origin/kae-0.36 still on the older d2b0c86.
 const BEFORE_PUSH = () => historyResult({
-  '58feede': 'HEAD -> kae-0.36',
-  'd2b0c86': 'origin/kae-0.36'
+  'aaaa111': 'HEAD -> main',
+  'bbbb222': 'origin/main'
 })
 // What a FRESH `git log %D` would report after the push: origin advanced onto HEAD.
 const AFTER_PUSH = () => historyResult({
-  '58feede': 'HEAD -> kae-0.36, origin/kae-0.36',
-  'd2b0c86': undefined
+  'aaaa111': 'HEAD -> main, origin/main',
+  'bbbb222': undefined
 })
 
 // Stand-in mirror refsDigests before / after the push (HEAD/branchOid unchanged).
@@ -225,7 +222,7 @@ const REFS_POST = 'refsdigest-post'
 
 test('FIXED: push advances origin/* (HEAD unchanged) → refsDigest re-keys → reload yields fresh decorations', async () => {
   const { controller } = freshHistoryListController()
-  const branchOid = '58feede' // HEAD does NOT move across the push
+  const branchOid = 'aaaa111' // HEAD does NOT move across the push
   const keyBeforePush = buildHistoryListCacheKey('/work/repo', branchOid, REFS_PRE, 50, 0)
   const keyAfterPush = buildHistoryListCacheKey('/work/repo', branchOid, REFS_POST, 50, 0)
 
@@ -233,22 +230,22 @@ test('FIXED: push advances origin/* (HEAD unchanged) → refsDigest re-keys → 
   const load = async () => { loads += 1; return loads === 1 ? BEFORE_PUSH() : AFTER_PUSH() }
 
   const first = await cachedHistoryRequest(controller, keyBeforePush, load)
-  assert.equal(refsOf(first, 'd2b0c86'), 'origin/kae-0.36') // pre-push: correct
+  assert.equal(refsOf(first, 'bbbb222'), 'origin/main') // pre-push: correct
 
-  // --- git push: origin/kae-0.36 → 58feede; HEAD unchanged, but refsDigest moves ---
+  // --- git push: origin/main → aaaa111; HEAD unchanged, but refsDigest moves ---
 
   const second = await cachedHistoryRequest(controller, keyAfterPush, load)
 
   assert.equal(loads, 2, 'a ref-only move re-keys (refsDigest changed) → structural miss → reload')
-  // origin/kae-0.36 now decorates the current HEAD ...
-  assert.equal(refsOf(second, '58feede'), 'HEAD -> kae-0.36, origin/kae-0.36')
+  // origin/main now decorates the current HEAD ...
+  assert.equal(refsOf(second, 'aaaa111'), 'HEAD -> main, origin/main')
   // ... and is gone from the old commit (no phantom fork).
-  assert.equal(refsOf(second, 'd2b0c86'), undefined)
+  assert.equal(refsOf(second, 'bbbb222'), undefined)
 })
 
 test('FIXED: an UNCHANGED refsDigest still HITs within the 30-min TTL (prewarm stays efficient); a ref move misses regardless of age', async () => {
   const { controller, advance } = freshHistoryListController()
-  const keyPre = buildHistoryListCacheKey('/work/repo', '58feede', REFS_PRE, 50, 0)
+  const keyPre = buildHistoryListCacheKey('/work/repo', 'aaaa111', REFS_PRE, 50, 0)
   let loads = 0
   const load = async () => { loads += 1; return loads === 1 ? BEFORE_PUSH() : AFTER_PUSH() }
 
@@ -259,14 +256,14 @@ test('FIXED: an UNCHANGED refsDigest still HITs within the 30-min TTL (prewarm s
   advance(7 * 60 * 1000)
   const at7min = await cachedHistoryRequest(controller, keyPre, load)
   assert.equal(loads, 1, 'unchanged state stays cached within TTL (prewarm efficiency preserved)')
-  assert.equal(refsOf(at7min, 'd2b0c86'), 'origin/kae-0.36')
+  assert.equal(refsOf(at7min, 'bbbb222'), 'origin/main')
 
   // Now a push moves refsDigest → new key → immediate miss, NO waiting for TTL.
-  const keyPost = buildHistoryListCacheKey('/work/repo', '58feede', REFS_POST, 50, 0)
+  const keyPost = buildHistoryListCacheKey('/work/repo', 'aaaa111', REFS_POST, 50, 0)
   const afterPush = await cachedHistoryRequest(controller, keyPost, load)
   assert.equal(loads, 2, 'ref move re-keys immediately — no 30-min staleness window')
-  assert.equal(refsOf(afterPush, '58feede'), 'HEAD -> kae-0.36, origin/kae-0.36')
-  assert.equal(refsOf(afterPush, 'd2b0c86'), undefined)
+  assert.equal(refsOf(afterPush, 'aaaa111'), 'HEAD -> main, origin/main')
+  assert.equal(refsOf(afterPush, 'bbbb222'), undefined)
 })
 
 test('CONTRAST: a new commit (branchOid moves) is also a structural miss → fresh decorations', async () => {
@@ -276,28 +273,25 @@ test('CONTRAST: a new commit (branchOid moves) is also a structural miss → fre
   const load = async () => {
     loads += 1
     return loads === 1
-      ? historyResult({ 'd2b0c86': 'HEAD -> kae-0.36, origin/kae-0.36' })
-      : historyResult({ newhead: 'HEAD -> kae-0.36', 'd2b0c86': 'origin/kae-0.36' })
+      ? historyResult({ 'bbbb222': 'HEAD -> main, origin/main' })
+      : historyResult({ newhead: 'HEAD -> main', 'bbbb222': 'origin/main' })
   }
 
-  await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', 'd2b0c86', REFS_PRE, 50, 0), load)
+  await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', 'bbbb222', REFS_PRE, 50, 0), load)
   const second = await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', 'newhead', REFS_PRE, 50, 0), load)
 
   assert.equal(loads, 2, 'a new branchOid is a structural miss and reloads')
-  assert.equal(refsOf(second, 'newhead'), 'HEAD -> kae-0.36')
+  assert.equal(refsOf(second, 'newhead'), 'HEAD -> main')
 })
 
 test('regression: a ref-only move refreshes decorations even though HEAD (branchOid) is unchanged', async () => {
-  // The originally-pending target (now passing): HEAD pinned at 58feede; once
-  // origin/* moves, the next History read reflects it (origin/kae-0.36 on 58feede,
-  // gone from d2b0c86), driven by the refsDigest difference in the cache key.
   const { controller } = freshHistoryListController()
   let loads = 0
   const load = async () => { loads += 1; return loads === 1 ? BEFORE_PUSH() : AFTER_PUSH() }
 
-  await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', '58feede', REFS_PRE, 50, 0), load)
-  const second = await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', '58feede', REFS_POST, 50, 0), load)
+  await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', 'aaaa111', REFS_PRE, 50, 0), load)
+  const second = await cachedHistoryRequest(controller, buildHistoryListCacheKey('/work/repo', 'aaaa111', REFS_POST, 50, 0), load)
 
-  assert.equal(refsOf(second, '58feede'), 'HEAD -> kae-0.36, origin/kae-0.36')
-  assert.equal(refsOf(second, 'd2b0c86'), undefined)
+  assert.equal(refsOf(second, 'aaaa111'), 'HEAD -> main, origin/main')
+  assert.equal(refsOf(second, 'bbbb222'), undefined)
 })

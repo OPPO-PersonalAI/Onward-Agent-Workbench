@@ -16,14 +16,6 @@
  *   2. `collectSubmodulesFromGitmodules`    — discovers via `.gitmodules`
  *   3. `filterMeaninglessSubmoduleEntries`  — filters parent rows by c/m/u
  *
- * That fragmentation produced two real bugs in this codebase: a deinit-ed
- * submodule (Project_Forward repro — declared in `.gitmodules`, path on
- * disk is empty + not-a-repo) leaked into the file list because (2) only
- * checked `existsSync`; and a staged-but-c=. submodule pointer was hidden
- * because (3) only kept rows whose `<c>` flag was `C`. Each fix patched a
- * different node in the same conceptual graph; nothing forced them to
- * agree on what "is this row a submodule and is it valid?" means.
- *
  * The snapshot service consolidates that decision into one structural
  * model, derived ENTIRELY from the filesystem (zero git process spawns —
  * see `collectSubmoduleSnapshotsFromDisk`):
@@ -356,9 +348,6 @@ export async function captureGitRepositorySnapshot(cwd: string): Promise<GitRepo
   })
   const undeclaredGitlinkCount = submodules.filter((s) => !s.declaredInGitmodules).length
   if (undeclaredGitlinkCount > 0) {
-    // Diagnostic breadcrumb: a bug report's trace shows whether undeclared
-    // gitlinks were found for this repo (the winWatchRTOS-Build symptom class)
-    // and how the index candidate count compares — without re-running the bug.
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_GIT_SNAPSHOT_GITLINK_DISCOVERED, {
       cwd,
       repoRoot,

@@ -101,12 +101,9 @@ function getRecentProjectMissReason(project: string): GitDiffContentCacheMissRea
   return entry.reason
 }
 
-// Project-bucket ceiling. Default 24 — sized above a nested-submodule
-// superproject's per-repoRoot bucket count (kar-qemu routes each of ~20
-// submodules to its own bucket + the superproject) so a single Diff open no
-// longer evicts its own submodule buckets mid-session. Overridable for stress
-// or memory-constrained runs via env ONWARD_DIFF_CACHE_MAX_PROJECTS (read once
-// at module load; see docs/debug-env-variables.md).
+// Project-bucket ceiling (default 24), overridable via env
+// ONWARD_DIFF_CACHE_MAX_PROJECTS (read once at module load; see
+// docs/debug-env-variables.md).
 const DEFAULT_CONTENT_CACHE_MAX_PROJECTS = 24
 function resolveContentCacheMaxProjects(): number {
   const raw = process.env.ONWARD_DIFF_CACHE_MAX_PROJECTS
@@ -350,8 +347,6 @@ export function installContentCacheInvalidatorOnce(): void {
       // FS-watcher-driven churn: re-validate per file instead of wiping the
       // whole bucket, so an unrelated file changing (e.g. a background tool
       // rewriting one source file) does NOT evict every other file's content.
-      // This is the fix for the kar-qemu content-cache thrash (one file's churn
-      // forced a full-list re-fetch every ~20-80s → 160 misses / 6× re-reads).
       void revalidateContentCacheForProject(cwd, mapInvalidationReason(reason))
       return
     }

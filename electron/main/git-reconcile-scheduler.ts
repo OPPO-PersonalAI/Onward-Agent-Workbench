@@ -43,7 +43,7 @@
  * focus / visibility / dirty signals to the worker and fans deltas back out, with
  * no git work and no reconcile timer of its own. The reconcile queue is keyed by
  * repoRoot so a repo runs at most one `git status` per cycle (min 1 s / max 3 s),
- * never back-to-back. See docs/git-status-reconcile-design.md.
+ * never back-to-back.
  *
  * Pure + dependency-free so `test/unittest` loads it with no Electron build.
  * `now` is always injected (the scheduler never reads the clock) so unit tests

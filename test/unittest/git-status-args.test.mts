@@ -5,8 +5,7 @@
  * Usage: node --experimental-strip-types --test test/unittest/git-status-args.test.mts
  *
  * Locks the pure `git status --porcelain=2` argument builder shared by the Git
- * Diff path and the GitStateMirror worker. The critical regression this guards
- * is kar-qemu Git Diff optimization #2: both heavy status callers MUST emit
+ * Diff path and the GitStateMirror worker. Both heavy status callers MUST emit
  * `--ignore-submodules=dirty` so the superproject status no longer recursively
  * walks submodule working trees, WITHOUT losing the commit-pointer signal.
  */

@@ -1,0 +1,6 @@
+# Validate the commit message before finalizing every git commit:
+# 1. Blocks non-English (Simplified/Traditional Chinese) text or Unicode/HTML escapes.
+# 2. Blocks leaked local OS user paths, employee/contractor IDs, internal R&D
+#    project/branch/file names, and corporate IT/EDR vendor names.
+
+node scripts/check-sensitive-info.js --commit-msg "$1"

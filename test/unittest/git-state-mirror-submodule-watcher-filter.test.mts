@@ -5,7 +5,7 @@
  * Usage: node --experimental-strip-types --test test/unittest/git-state-mirror-submodule-watcher-filter.test.mts
  *
  * Regression lock for the Windows Git-Diff invalidation-storm bug (2026-06-03)
- * AND the kar-qemu running-emulator gitignored-churn storm.
+ * AND gitignored-directory churn storms.
  *
  * # Why SYNTHETIC events (not the real @parcel/watcher)
  *
@@ -46,8 +46,7 @@ function keptPaths(events: Array<{ path: string }>, root: string): string[] {
 
 test('classifyEventPath: nested submodule .git churn does NOT survive the filter, a real worktree edit does', () => {
   const root = '/repo/root'
-  // The kar-qemu/KAR shape: a nested submodule with a REAL `.git` directory.
-  const sub = `${root}/src/third_party/KAR`
+  const sub = `${root}/src/third_party/sublib`
   // The synthetic batch @parcel/watcher would deliver for: a submodule
   // `git status`/`git add` (index.lock churn), object gc noise, and a REAL
   // worktree edit (the sentinel that MUST survive).
@@ -62,7 +61,7 @@ test('classifyEventPath: nested submodule .git churn does NOT survive the filter
 
   // The real worktree edit must survive the filter (recompute).
   assert.ok(
-    kept.some((p) => p.endsWith('src/third_party/KAR/lib/widget.c')),
+    kept.some((p) => p.endsWith('src/third_party/sublib/lib/widget.c')),
     `real submodule worktree edit must survive the filter. kept=${JSON.stringify(kept)}`
   )
   // CORE REGRESSION ASSERTION: NOTHING under any `.git/` (the submodule's git
@@ -85,11 +84,10 @@ test('MIRROR_WATCHER_IGNORE does not over-suppress a real source edit (sanity)',
 })
 
 test('gitignoreToWatchIgnoreGlobs: directory patterns convert (negation-immune); file/extension patterns do NOT', () => {
-  // Regression lock for the kar-qemu emulator storm: `build/` (a gitignored dir
-  // whose contents churn) must convert to parcel ignore globs so those writes
-  // produce NO watcher events; `*.raw` (a file/extension pattern) must NOT be
-  // converted (a later `!keep.raw` negation could make blanket suppression drop
-  // a real change).
+  // `build/` (a gitignored dir whose contents churn) must convert to parcel
+  // ignore globs so those writes produce NO watcher events; `*.raw` (a
+  // file/extension pattern) must NOT be converted (a later `!keep.raw` negation
+  // could make blanket suppression drop a real change).
   const globs = gitignoreToWatchIgnoreGlobs('build/\n*.raw\n')
   assert.ok(globs.includes('build/**'), `expected build/** in ${JSON.stringify(globs)}`)
   assert.ok(globs.includes('**/build/**'), `expected **/build/** in ${JSON.stringify(globs)}`)

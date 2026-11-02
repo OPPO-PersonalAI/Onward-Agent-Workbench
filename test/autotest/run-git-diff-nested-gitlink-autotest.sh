@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 OPPO
 # SPDX-License-Identifier: Apache-2.0
 #
-# Nested gitlink (NO .gitmodules) discovery autotest — the winWatchRTOS-Build
-# symptom class. Deliberately a small, fast, FOCUSED runner: one app session
-# drives the main process directly via git.getDiff / git.getHistory IPC over a
-# 1-parent + 2-gitlink fixture, so even on an EDR-throttled host it finishes
-# well under the per-runner budget (no 40-scenario serial diff storm).
+# Nested gitlink (NO .gitmodules) discovery autotest. Deliberately a small,
+# fast, FOCUSED runner: one app session drives the main process directly via
+# git.getDiff / git.getHistory IPC over a 1-parent + 2-gitlink fixture, so even
+# on an EDR-throttled host it finishes well under the per-runner budget (no
+# 40-scenario serial diff storm).
 
 set -euo pipefail
 

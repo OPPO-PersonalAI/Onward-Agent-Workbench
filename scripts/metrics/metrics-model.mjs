@@ -5,8 +5,7 @@
 
 /**
  * Pure metric computations for the Onward analytics report — the single
- * place where indicator definitions live (metric system: docs/html/
- * telemetry-metrics-system-redesign.html, approved 2026-07-18).
+ * place where indicator definitions live (approved 2026-07-18).
  *
  * Input: a snapshot produced by pull-posthog-snapshot.mjs (raw HogQL
  * result arrays). Output: plain objects the report renderer templates

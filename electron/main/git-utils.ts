@@ -1782,12 +1782,12 @@ async function getGitStatusPorcelainV2(
   gitExecutable: string,
   meta?: GitTaskMeta
 ): Promise<string> {
-  // kar-qemu Git Diff optimization #2: `--ignore-submodules=dirty` stops the
-  // superproject status from recursively walking submodule working trees (the
-  // dominant cost on large nested-submodule repos). Submodule commit-pointer
-  // changes are still reported (the only signal filterMeaninglessSubmoduleEntries
-  // keeps), and each submodule's own changes still come from its dedicated
-  // per-submodule getSingleRepoDiff pass — so the diff OUTPUT is unchanged.
+  // `--ignore-submodules=dirty` stops the superproject status from recursively
+  // walking submodule working trees (the dominant cost on large nested-submodule
+  // repos). Submodule commit-pointer changes are still reported (the only signal
+  // filterMeaninglessSubmoduleEntries keeps), and each submodule's own changes
+  // still come from its dedicated per-submodule getSingleRepoDiff pass — so the
+  // diff OUTPUT is unchanged.
   const { stdout } = await execFileAsync(gitExecutable, buildGitStatusPorcelainArgs({
     z: true,
     findRenames: 50,

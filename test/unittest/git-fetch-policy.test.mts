@@ -4,8 +4,7 @@
  *
  * Usage: node --experimental-strip-types --test test/unittest/git-fetch-policy.test.mts
  *
- * Pins the user-decided fetch time policy (2026-10-26, option S1 in
- * docs/html/git-fetch-timeout-strategy-options.html): the transport decides
+ * Pins the user-decided fetch time policy (2026-10-26, option S1): the transport decides
  * "stalled" vs "slow but alive", and only a long ceiling remains.
  *
  * Why it matters: a fixed 20 s kill made a binary-heavy repo un-syncable — the

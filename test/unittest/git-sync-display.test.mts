@@ -145,9 +145,9 @@ test('freshness: never attempted (cold launch) → say nothing', () => {
   assert.equal(r.ageMs, null)
 })
 
-test('freshness: attempted but NEVER succeeded → never-succeeded (the field case)', () => {
-  // Project_Books_Translation: 2 attempts in 98.8 h, both 20 s timeouts, 0
-  // successes. The badge must not present its behind count as authoritative.
+test('freshness: attempted but NEVER succeeded → never-succeeded', () => {
+  // When every background fetch attempt has failed, the badge must not present
+  // its behind count as authoritative.
   const r = freshness({ lastFetchAttemptAt: NOW - 13 * MINUTE })
   assert.equal(r.kind, 'never-succeeded')
   assert.equal(r.ageMs, null)

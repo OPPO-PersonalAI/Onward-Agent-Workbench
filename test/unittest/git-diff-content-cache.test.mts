@@ -62,11 +62,7 @@ test('single-file cap rejects oversized values without disturbing the bucket', (
   assert.equal(cache.get('/p', 'huge.ts'), null)
 })
 
-test('default maxProjects is 24 (P1: sized above kar-qemu submodule bucket count)', () => {
-  // Construct with NO options so the class defaults apply. 24 buckets keeps a
-  // nested-submodule superproject's per-repoRoot buckets resident through one
-  // Diff open instead of thrashing them out. Locking the constant here means a
-  // future "tidy the default back down to 8" regresses the kar-qemu fix loudly.
+test('default maxProjects is 24', () => {
   const cache = new GitDiffContentCache<DummyValue>()
   assert.equal(cache.inspectStats().maxProjects, 24)
 })
@@ -215,7 +211,7 @@ test('overwriting an existing entry replaces, does not double-count bytes', () =
 })
 
 // ---------------------------------------------------------------------------
-// revalidateProject — scoped eviction (kar-qemu content-cache thrash fix #1)
+// revalidateProject — scoped eviction
 // ---------------------------------------------------------------------------
 
 test('revalidateProject evicts ONLY entries the predicate marks stale; keeps the rest', () => {

@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2026 OPPO
 // SPDX-License-Identifier: Apache-2.0
 
-// Builds the "nested gitlink with NO .gitmodules" fixture under one tempRoot —
-// the winWatchRTOS-Build symptom class. The parent repo tracks nested repos as
-// bare gitlinks (mode 160000) it NEVER declared in `.gitmodules`, produced by
-// `git add`-ing a standalone nested repo directly (NOT `git submodule add`).
-// `git submodule status` errors here ("no submodule mapping found in
-// .gitmodules"); only `git ls-files -s` sees the 160000 entries. Layout:
+// Builds the "nested gitlink with NO .gitmodules" fixture under one tempRoot.
+// The parent repo tracks nested repos as bare gitlinks (mode 160000) it NEVER
+// declared in `.gitmodules`, produced by `git add`-ing a standalone nested repo
+// directly (NOT `git submodule add`). `git submodule status` errors here ("no
+// submodule mapping found in .gitmodules"); only `git ls-files -s` sees the
+// 160000 entries. Layout:
 //
 //   gitlink-parent/                  parent repo, NO .gitmodules
 //   ├── .git/

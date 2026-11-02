@@ -12,10 +12,10 @@
 //   later-git/   — a PLAIN directory (NOT a git repo) holding one file. The
 //                  test attaches the mirror (→ non-git, no watcher), then runs
 //                  `git init` in it (via the autotest-only debug IPC, faithfully
-//                  reproducing "a folder becomes a repo mid-session" =
-//                  BattleProject) and revalidates. Because a non-git cwd has NO
-//                  watcher, a fresh detection is uniquely attributable to the
-//                  reconcile/re-attach fix.
+//                  reproducing "a folder becomes a repo mid-session") and
+//                  revalidates. Because a non-git cwd has NO watcher, a fresh
+//                  detection is uniquely attributable to the reconcile/re-attach
+//                  fix.
 //   neutral/     — plain dir used as the app's terminal cwd so TerminalGrid
 //                  never auto-subscribes the fixtures; every subscribe is
 //                  explicit from the test.

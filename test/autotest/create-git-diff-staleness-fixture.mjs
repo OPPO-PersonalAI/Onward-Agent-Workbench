@@ -8,10 +8,10 @@
 //   2. pointer-changed/root  — submodule HEAD diverges from the recorded parent
 //                              index pointer (c flag = C). Used by GDS-04.
 //   3. uninitialized/root    — submodule declared in `.gitmodules` but never
-//                              `--init`-ed (Project_Forward repro). The path
-//                              exists on disk but is NOT a git repository.
-//                              Used by GDS-13 to verify the parent's file list
-//                              does NOT inherit phantom submodule rows.
+//                              `--init`-ed. The path exists on disk but is NOT
+//                              a git repository. Used by GDS-13 to verify the
+//                              parent's file list does NOT inherit phantom
+//                              submodule rows.
 // All three roots live as siblings inside one tempRoot so a single autotest
 // session can address them via ONWARD_AUTOTEST_FIXTURE_EXTRA (a JSON manifest).
 //
@@ -231,10 +231,10 @@ git(stagedInnerSubmodule, ['checkout', '-q', 'HEAD', '--', '.'])
 git(stagedPointerRoot, ['add', 'modules/sub'])
 
 // ------------ uninitialized/root ------------
-// Project_Forward shape: `.gitmodules` declares the submodule, the parent
-// commit references it, but the submodule has been deinit-ed and the working
-// tree is empty. The directory exists on disk (so the simple `access(path)`
-// check passes) but it is NOT a git repository.
+// `.gitmodules` declares the submodule, the parent commit references it, but
+// the submodule has been deinit-ed and the working tree is empty. The directory
+// exists on disk (so the simple `access(path)` check passes) but it is NOT a
+// git repository.
 const uninitializedRoot = join(reposRoot, 'uninitialized', 'root')
 init(uninitializedRoot, {
   'README.md': '# Uninitialized parent\n\nbaseline parent content\n',

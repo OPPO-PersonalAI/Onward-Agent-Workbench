@@ -669,7 +669,7 @@ export const PERF_TRACE_EVENT = {
   // ph='i'. Emitted by captureGitRepositorySnapshot when the index's gitlink
   // set (`git ls-files -s`, mode 160000) yields nested repos the parent tracks
   // but never declared in `.gitmodules` — the no-`.gitmodules` gitlink class
-  // that Diff / History previously could not see (winWatchRTOS-Build symptom).
+  // that Diff / History previously could not see.
   // payload = { cwd, repoRoot, undeclaredGitlinkCount, gitlinkCandidateCount,
   // submoduleCount }. A bug report's trace then shows whether discovery reached
   // and surfaced these repos without re-running the bug. Only fires when the
@@ -854,8 +854,7 @@ export const PERF_TRACE_EVENT = {
   // History cache re-keyed) vs. swallowed it like the original ref-blind bug did.
   WORKER_GIT_STATE_MIRROR_REFS_DIGEST_CHANGED: 'worker:git-state-mirror.refs-digest-changed',
   WORKER_GIT_STATE_MIRROR_RECOMPUTE_DONE: 'worker:git-state-mirror.recompute-status-done',
-  // Always-on reconcile heartbeat (parallel to the watcher; see
-  // docs/git-status-reconcile-design.md). reconcile-tick fires each worker-local
+  // Always-on reconcile heartbeat (parallel to the watcher). reconcile-tick fires each worker-local
   // heartbeat that has due repos; reconcile-found-drift fires when a heartbeat
   // reconcile produced a change while no watcher-fire had occurred recently —
   // i.e. the watcher silently missed it (the failure mode behind the
@@ -877,10 +876,10 @@ export const PERF_TRACE_EVENT = {
    */
   WORKER_GIT_STATE_MIRROR_DURATION_SUSPECT: 'worker:git-state-mirror.duration-suspect',
   // Emitted once per watcher subscribe: how many parcel ignore globs were
-  // derived from the repo's .gitignore directory patterns (kar-qemu emulator
-  // storm suppression). globCount=0 means no .gitignore dirs were converted
-  // (watcher behaves as before); a non-zero count should correlate with a drop
-  // in watcher-fire/recompute-status-done for that repo.
+  // derived from the repo's .gitignore directory patterns. globCount=0 means no
+  // .gitignore dirs were converted (watcher behaves as before); a non-zero
+  // count should correlate with a drop in watcher-fire/recompute-status-done
+  // for that repo.
   WORKER_GIT_STATE_MIRROR_GITIGNORE_GLOBS: 'worker:git-state-mirror.gitignore-globs',
   MAIN_GIT_STATE_MIRROR_FANOUT: 'main:git-state-mirror.fanout',
   MAIN_GIT_STATE_MIRROR_WORKER_SHUTDOWN: 'main:git-state-mirror.worker-shutdown',
@@ -1126,7 +1125,7 @@ export const PERF_TRACE_EVENT = {
   RENDERER_GIT_DIFF_OPEN_PHASE_LIST_APPLIED: 'renderer:git-diff.open-phase.list-applied',
   RENDERER_GIT_DIFF_OPEN_PHASE_FIRST_PAINT: 'renderer:git-diff.open-phase.first-paint',
 
-  // ───────── 2026-07-04 G1-G5 spinner fixes (see docs/html/git-diff-cold-open-edr-spinner-analysis.html) ─────────
+  // ───────── 2026-07-04 G1-G5 spinner fixes ─────────
   // G5 — router purges a renderer's mirror subscriptions when its
   // webContents navigates (reload) or is destroyed. Reload never fires
   // 'destroyed', so pre-reload subscriptions (e.g. Git Diff aux submodule
@@ -1184,7 +1183,7 @@ export const PERF_TRACE_EVENT = {
   // Worker: revalidate recompute ran (no generation bump, delta-gated emit).
   WORKER_GIT_STATE_MIRROR_REVALIDATE: 'worker:git-state-mirror.revalidate',
   // Worker: a recompute detected a non-git → git transition and re-attached the
-  // FS watcher for the newly-created repo (the BattleProject class).
+  // FS watcher for the newly-created repo.
   WORKER_GIT_STATE_MIRROR_WATCHER_REATTACHED: 'worker:git-state-mirror.watcher-reattached',
 
   // ───────── 2026-07-10 per-Task Project Editor view memory (multi-terminal cache-loss fix) ─────────
@@ -1381,7 +1380,7 @@ export const PERF_TRACE_EVENT = {
   // panel kept re-rendering" and for stale-props regressions after reopen.
   RENDERER_TERMINAL_GRID_SUBPAGE_FREEZE: 'renderer:terminal-grid.subpage-subtree-freeze',
 
-  // ───────── 2026-07-22 TUI scrollback diagnostics (BUG-0001, docs/bug-tracking/) ─────────
+  // ───────── TUI scrollback diagnostics ─────────
   // Root cause cluster: a full-screen TUI (codex) repaints the same viewport
   // region for hours, so megabytes of PTY output add ~zero scrollback lines
   // and the user's "scroll up for history" finds nothing. The 2026-07-21

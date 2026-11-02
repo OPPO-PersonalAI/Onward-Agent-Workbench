@@ -40,7 +40,7 @@ interface FixtureManifest {
   // `<c>=.` while X is non-`.`. The filter must surface this row in Git Diff
   // so the user can review or unstage it.
   stagedPointerRoot: string
-  // Project_Forward repro: parent + .gitmodules-declared submodule that has
+  // Parent + .gitmodules-declared submodule that has
   // been deinit-ed; the path exists on disk but is NOT a git repository.
   uninitializedRoot: string
   submoduleRelPath: string
@@ -788,7 +788,7 @@ export async function testGitDiffStalenessAndSubmodule(ctx: AutotestContext): Pr
     })
   }
 
-  // ─────────────── GDS-13: uninitialized submodule (Project_Forward repro) ───────────────
+  // ─────────────── GDS-13: uninitialized submodule ───────────────
   // The fixture's `uninitialized/root` has `.gitmodules` declaring `modules/sub`
   // but the directory has been `git submodule deinit`-ed — it exists on disk
   // but is NOT a git repository. The previous code path's `.gitmodules`

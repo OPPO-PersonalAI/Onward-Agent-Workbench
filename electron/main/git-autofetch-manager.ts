@@ -33,8 +33,7 @@
  * Default OFF-switch: `ONWARD_DISABLE_GIT_AUTOFETCH=1` parks the whole feature.
  * Period override: `ONWARD_GIT_AUTOFETCH_INTERVAL_MS` (>= 60 000 in normal
  * builds; any positive value under `ONWARD_AUTOTEST=1` so a test can drive it
- * fast). See docs/debug-env-variables.md and
- * docs/html/git-ahead-behind-fetch-strategy.html.
+ * fast). See docs/debug-env-variables.md.
  */
 
 import { execFile } from 'child_process'

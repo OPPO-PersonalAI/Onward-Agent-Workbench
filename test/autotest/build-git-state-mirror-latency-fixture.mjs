@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * One-shot fixture builder for the git-state-mirror-latency autotest.
+ * On-demand fixture builder for the git-state-mirror-latency autotest.
  *
- * Run once at fixture-authoring time:
+ * Invoked automatically by `run-git-state-mirror-latency-autotest.{sh,ps1}`
+ * when the fixture tarballs or `manifest.json` are missing, or manually via:
  *   node test/autotest/build-git-state-mirror-latency-fixture.mjs
  *
- * Produces 6 *.tar.gz tarballs under test/autotest/fixtures/git-state-mirror-latency/,
- * which are then committed to the repo. The runner extracts them at every
- * autotest session start, so the runtime cost is a few `tar xzf` calls
- * (no git invocations, no fixture rebuild).
+ * Produces 11 *.tar.gz tarballs + `manifest.json` under
+ * `test/autotest/fixtures/git-state-mirror-latency/` (gitignored). The runner
+ * extracts them at every autotest session start, so subsequent runs pay only
+ * a few `tar xzf` calls (no git invocations, no fixture rebuild).
  *
  * Each repo embodies a distinct (branch, status) tuple so the latency suite
  * can verify both the branch text and the status colour transition at a single
@@ -24,15 +25,14 @@
  *   repo-mixed         M+A+??      branch=dirty-mixed   (add+modify mix → blue)
  *   non-git-dir        n/a         not a git repo
  *
- * Re-running this script wipes and rebuilds; intended only when the fixture
- * shape changes (a new state needs covering, etc.). The committed tarballs
- * remain the source of truth for CI and developers.
+ * Re-running this script wipes and rebuilds the local tarballs and manifest.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import zlib from 'node:zlib'
 import { tmpdir } from 'node:os'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -79,6 +79,46 @@ function writeFile(absRepo, rel, content) {
   writeFileSync(full, content, 'utf8')
 }
 
+function sanitizeTarGzArchive(tarPath) {
+  const compressed = readFileSync(tarPath)
+  const tarBuf = zlib.gunzipSync(compressed)
+  let offset = 0
+  while (offset + 512 <= tarBuf.length) {
+    const block = tarBuf.subarray(offset, offset + 512)
+    let allZero = true
+    for (let i = 0; i < 512; i++) {
+      if (block[i] !== 0) {
+        allZero = false
+        break
+      }
+    }
+    if (allZero) {
+      offset += 512
+      continue
+    }
+    const sizeRaw = block.subarray(124, 136).toString('ascii').replace(/\0.*$/, '').trim()
+    const size = sizeRaw ? parseInt(sizeRaw, 8) : 0
+    // Normalize uid (108..116) and gid (116..124) to 0, and clear uname (265..297) & gname (297..329)
+    // so the host OS username / UID never leaks into committed .tar.gz fixtures.
+    block.write('0000000\0', 108, 8, 'ascii')
+    block.write('0000000\0', 116, 8, 'ascii')
+    block.fill(0, 265, 329)
+    // Recompute POSIX tar header checksum at 148..156
+    block.fill(0x20, 148, 156)
+    let chksum = 0
+    for (let i = 0; i < 512; i++) {
+      chksum += block[i]
+    }
+    const chksumStr = chksum.toString(8).padStart(6, '0') + '\0 '
+    block.write(chksumStr, 148, 8, 'ascii')
+
+    const dataBlocks = Number.isFinite(size) && size > 0 ? Math.ceil(size / 512) : 0
+    offset += 512 * (1 + dataBlocks)
+  }
+  const recompressed = zlib.gzipSync(tarBuf, { mtime: 0 })
+  writeFileSync(tarPath, recompressed)
+}
+
 function tarball(repoName) {
   // GNU tar / bsd tar / Windows tar accept -czf consistently. We tarball
   // the entire `repoName/` directory (including .git/) so extraction
@@ -109,6 +149,7 @@ function tarball(repoName) {
       throw new Error(`tar failed for ${repoName}: ${fallback.stderr?.toString()}`)
     }
   }
+  sanitizeTarGzArchive(tarPath)
   return tarPath
 }
 
@@ -277,7 +318,7 @@ const manifest = {
 }
 writeFileSync(join(fixtureRoot, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8')
 
-// Cleanup the staging dir; tarballs are the committed artefacts.
+// Cleanup the staging dir; tarballs remain in fixtureRoot (gitignored).
 rmSync(stagingRoot, { recursive: true, force: true })
 
 console.log('Built tarballs in:', fixtureRoot)
@@ -285,4 +326,3 @@ for (const repo of manifest.repos) {
   console.log(`  - ${repo.name}.tar.gz   (branch=${repo.branch ?? 'n/a'}, expectedStatus=${repo.expectedStatus})`)
 }
 console.log('  - manifest.json')
-console.log('\nNow `git add` the tarballs + manifest.json and commit.')

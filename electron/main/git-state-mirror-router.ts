@@ -947,7 +947,7 @@ class GitStateMirrorRouter {
    * Tell the worker which repo (by the focused terminal's cwd) is focused, so
    * its always-on reconcile heartbeat polls that repo at 1 s and the rest of
    * the visible repos at 3 s. Forward-only — no git work on main (constraint
-   * H1 in docs/git-status-reconcile-design.md). Pass null to clear focus.
+   * H1). Pass null to clear focus.
    */
   setReconcileFocus(rawCwd: string | null): void {
     const cwd = rawCwd ? canonicalise(rawCwd) : null

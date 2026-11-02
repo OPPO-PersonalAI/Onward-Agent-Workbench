@@ -23,11 +23,7 @@
 //   2. Per-instance project budget (default 24 projects). Project buckets
 //      are kept in a recent-access queue. Any get/put moves that project
 //      to the front; when the 25th project appears, the tail bucket is
-//      dropped. 24 is sized above a nested-submodule superproject's bucket
-//      count (kar-qemu routes each of ~20 submodules to its own repoRoot
-//      bucket + the superproject), so a single Diff open no longer thrashes
-//      its own submodule buckets out of the cache between clicks. Override
-//      with env ONWARD_DIFF_CACHE_MAX_PROJECTS.
+//      dropped. Override with env ONWARD_DIFF_CACHE_MAX_PROJECTS.
 //   3. HEAD-change / project-wide invalidation: callers that detect a
 //      commit / checkout / external mutation invoke
 //      `invalidateProject(project)` to wipe the bucket.
@@ -82,10 +78,6 @@ interface ProjectBucket<T> {
 }
 
 const DEFAULT_PROJECT_BYTE_LIMIT = 100 * 1024 * 1024
-// 24: sized above a nested-submodule superproject's per-repoRoot bucket count
-// (kar-qemu ≈ 20 submodule buckets + the superproject) so one Diff open does
-// not evict its own submodule buckets mid-session. See the eviction-model note
-// at the top of this file. Override with env ONWARD_DIFF_CACHE_MAX_PROJECTS.
 const DEFAULT_MAX_PROJECTS = 24
 const DEFAULT_SINGLE_FILE_BYTE_LIMIT = 10 * 1024 * 1024
 

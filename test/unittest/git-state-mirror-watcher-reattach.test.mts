@@ -4,11 +4,11 @@
  *
  * Usage: node --experimental-strip-types --test test/unittest/git-state-mirror-watcher-reattach.test.mts
  *
- * Locks the non-git → git watcher re-attach decision (2026-07-05 bundle,
- * "BattleProject not recognized"): a cwd attached while NOT a git repo gets no
- * watcher; when a later recompute (focus-resync / revalidate) resolves a
- * repoRoot, the watcher must be attached — but ONLY when the entry has no
- * watcher yet and is not tearing down / mid-attach, so we never double-attach.
+ * Locks the non-git → git watcher re-attach decision: a cwd attached while NOT
+ * a git repo gets no watcher; when a later recompute (focus-resync /
+ * revalidate) resolves a repoRoot, the watcher must be attached — but ONLY when
+ * the entry has no watcher yet and is not tearing down / mid-attach, so we
+ * never double-attach.
  */
 
 import { test } from 'node:test'

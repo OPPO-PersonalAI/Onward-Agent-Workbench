@@ -78,20 +78,19 @@ test('worktree lock files are allowed while git-internal lock files are filtered
   })
 })
 
-test('atomic-save temp files are dropped while the real file is allowed (kar-qemu kar_air_control.py churn)', () => {
-  // `.tmp.<pid>.<hash>` write-temp-then-rename artifacts (observed: a background
-  // process rewriting tools/kar_air_control.py fired 11 events from these temps).
+test('atomic-save temp files are dropped while the real file is allowed', () => {
+  // `.tmp.<pid>.<hash>` write-temp-then-rename artifacts must be dropped.
   assert.deepEqual(
-    classifyEventPath('/repo/tools/kar_air_control.py.tmp.7432.3fe8206c1a01', '/repo'),
+    classifyEventPath('/repo/src/app.py.tmp.7432.3fe8206c1a01', '/repo'),
     { drop: true, reason: 'tmpfile' }
   )
   assert.deepEqual(
-    classifyEventPath('C:\\repo\\tools\\kar_air_control.py.tmp.7432.9ccfbe7edbb5', 'C:\\repo'),
+    classifyEventPath('C:\\repo\\src\\app.py.tmp.7432.9ccfbe7edbb5', 'C:\\repo'),
     { drop: true, reason: 'tmpfile' }
   )
   // The REAL file (the rename target) must still be allowed -> triggers recompute.
   assert.deepEqual(
-    classifyEventPath('/repo/tools/kar_air_control.py', '/repo'),
+    classifyEventPath('/repo/src/app.py', '/repo'),
     { drop: false, reason: 'allowed' }
   )
   // Legitimate files that merely contain "tmp" or digits must NOT be dropped.
@@ -136,11 +135,11 @@ test('classifyEventPath filters NESTED submodule .git churn (Windows invalidatio
   // A submodule with a classic-layout .git directory: its index.lock churn
   // (from the user's git, or our own probes) must NOT fire the parent watcher.
   assert.deepEqual(
-    classifyEventPath('/repo/src/third_party/KAR/.git/index.lock', '/repo'),
+    classifyEventPath('/repo/src/third_party/sublib/.git/index.lock', '/repo'),
     { drop: true, reason: 'lockfile' }
   )
   assert.deepEqual(
-    classifyEventPath('C:\\repo\\src\\third_party\\KAR\\.git\\index.lock', 'C:\\repo'),
+    classifyEventPath('C:\\repo\\src\\third_party\\sublib\\.git\\index.lock', 'C:\\repo'),
     { drop: true, reason: 'lockfile' }
   )
   assert.deepEqual(
@@ -154,7 +153,7 @@ test('classifyEventPath filters NESTED submodule .git churn (Windows invalidatio
   )
   // A submodule WORKING-TREE file change is a real change → must still fire.
   assert.deepEqual(
-    classifyEventPath('/repo/src/third_party/KAR/lib/widget.c', '/repo'),
+    classifyEventPath('/repo/src/third_party/sublib/lib/widget.c', '/repo'),
     { drop: false, reason: 'allowed' }
   )
   // The submodule .git entry node itself is internal noise.

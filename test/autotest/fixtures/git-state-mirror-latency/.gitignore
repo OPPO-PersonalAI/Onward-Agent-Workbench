@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 OPPO
+# SPDX-License-Identifier: Apache-2.0
+
+# Generated fixture archives and manifest (materialized on demand by
+# `build-git-state-mirror-latency-fixture.mjs`).
+*.tar.gz
+manifest.json
+!.gitignore

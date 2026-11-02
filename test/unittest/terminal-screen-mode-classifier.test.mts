@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Unit tests for the pure screen-buffer-mode classifier behind the
- * `main:terminal.screen-mode-changed` diagnostic event (BUG-0001,
- * docs/bug-tracking/BUG-0001-codex-tui-scrollback-invisible.md). Locks the
+ * `main:terminal.screen-mode-changed` diagnostic event. Locks the
  * transition table: alt-screen enter/exit via DECSET/DECRST 1049/1047/47,
  * scrollback wipes via ED3 / RIS, per-chunk aggregation, and the
  * chunk-boundary carry that must never double-emit.

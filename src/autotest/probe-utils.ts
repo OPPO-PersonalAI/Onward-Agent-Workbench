@@ -19,10 +19,10 @@
  *
  * NOTE: `mutate` deliberately does NOT touch the user's home / desktop /
  * system paths — every state-change helper expects a path that already lives
- * inside `manifest.tempRoot`. The runner extracts each fixture tarball into
- * a `mktemp -d` dir per run; tests consume those copies and treat the
- * committed tarballs in `test/autotest/fixtures/git-state-mirror-latency/`
- * as read-only source of truth.
+ * inside `manifest.tempRoot`. The runner materializes the fixture tarballs on
+ * demand in `test/autotest/fixtures/git-state-mirror-latency/` and extracts
+ * them into a `mktemp -d` dir per run; tests consume those copies and treat
+ * the tarballs as read-only source of truth.
  */
 
 // Sentinel error class so test sources can distinguish "deferred — wait for
@@ -64,7 +64,7 @@ function lastSegment(path: string): string {
 
 /**
  * Read the per-run manifest the runner injected into the fixture temp dir.
- * The runner copies the committed manifest, adds `tempRoot`, and writes back
+ * The runner copies the generated manifest, adds `tempRoot`, and writes back
  * to the staging dir. We read THAT version so every repo entry is reachable
  * via `${tempRoot}/${repo.name}/`.
  */

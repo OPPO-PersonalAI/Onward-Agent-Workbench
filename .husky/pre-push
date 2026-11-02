@@ -8,4 +8,7 @@
 # know the code is clean; the CI typecheck in release.yml will block the
 # daily build if types are broken.
 
+node scripts/check-sensitive-info.js --git-author
+pnpm lint:sensitive
+pnpm lint:comments
 pnpm typecheck

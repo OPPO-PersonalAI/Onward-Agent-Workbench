@@ -24,10 +24,10 @@ fi
 
 # ---------------------------------------------------------------------------
 # CLAUDE.md "Test fixture isolation": every runner gets a fresh user-data
-# scratch dir and unpacks its own copy of the committed fixture tarballs into
-# a per-run staging dir under ${TMPDIR:-/tmp}. The fixture tarballs themselves
-# are committed under test/autotest/fixtures/git-state-mirror-latency/ and
-# treated as read-only — we never write back into them.
+# scratch dir and unpacks its own copy of the fixture tarballs into
+# a per-run staging dir under ${TMPDIR:-/tmp}. The fixture tarballs under
+# test/autotest/fixtures/git-state-mirror-latency/ are generated on demand
+# (gitignored) and treated as read-only by each run.
 # ---------------------------------------------------------------------------
 USER_DATA_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/onward-gsm-userdata.XXXXXX")"
 FIXTURE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/onward-gsm-fixture.XXXXXX")"
@@ -43,12 +43,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# Extract every fixture tarball from the committed fixture dir into the
-# per-run staging dir. Tarballs were produced by
-# `node test/autotest/build-git-state-mirror-latency-fixture.mjs` once at
-# fixture-authoring time and are committed verbatim — extraction here is
-# deterministic and side-effect-free.
+# Materialize the fixture tarballs + manifest.json on demand if not yet built,
+# then extract every fixture tarball into the per-run staging dir.
 # ---------------------------------------------------------------------------
+if [[ ! -f "$FIXTURE_SRC/manifest.json" || ! -f "$FIXTURE_SRC/repo-A.tar.gz" ]]; then
+  node "$REPO_ROOT/test/autotest/build-git-state-mirror-latency-fixture.mjs"
+fi
+
 for tarball in "$FIXTURE_SRC"/*.tar.gz; do
   if [[ ! -f "$tarball" ]]; then continue; fi
   tar xzf "$tarball" -C "$FIXTURE_TMP"

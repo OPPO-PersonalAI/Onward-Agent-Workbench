@@ -6,12 +6,12 @@
 /**
  * Pure screen-buffer-mode classifier for the PTY output stream.
  *
- * Motivation (BUG-0001, docs/bug-tracking/): a full-screen TUI (codex) held
- * the terminal for 14 hours and the diagnostic bundle could not answer the
- * single decisive question — "was the alternate screen active, and did the
- * app ever wipe the scrollback?" — because the main process only tracked
- * DECSET 2004 (bracketed paste). This module tracks the two VT state
- * families that decide whether output can ever reach the scrollback:
+ * Motivation: when a full-screen TUI repaints the viewport in place, the
+ * diagnostic trace needs to distinguish whether the alternate screen was
+ * active or whether the application wiped scrollback on the normal buffer,
+ * because the main process previously only tracked DECSET 2004 (bracketed
+ * paste). This module tracks the two VT state families that decide whether
+ * output can ever reach the scrollback:
  *
  *  - alternate screen: DECSET/DECRST 1049 / 1047 / 47  → alt-enter / alt-exit
  *  - scrollback wipes: CSI 3 J (ED3) and ESC c (RIS)   → ed3 / ris

@@ -269,10 +269,7 @@ function makeNestedRepo(root: string, rel: string): void {
   mkdirSync(join(root, rel, '.git'), { recursive: true })
 }
 
-test('extraGitlinkPaths: the real-world case — gitlinks with NO .gitmodules become valid repos', async () => {
-  // Mirrors winWatchRTOS-Build: parent has 3 gitlinks in its index, no
-  // .gitmodules at all. Before this change discovery returned [] and Diff /
-  // History could not see them.
+test('extraGitlinkPaths: gitlinks with NO .gitmodules become valid repos', async () => {
   const root = mkdtempSync(join(tmpdir(), 'onward-gitlink-only-'))
   try {
     makeNestedRepo(root, 'application')

@@ -1256,10 +1256,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   })
   // Autotest-only: `git init` (+ commit the current tree) in a directory, so a
   // test can faithfully reproduce "a plain folder BECOMES a git repo mid-session"
-  // (the 2026-07-05 BattleProject bug) WITHOUT a PTY shell. The mirror still has
-  // to DISCOVER the transition on its own via the revalidate/reconcile path — no
-  // watcher exists on a non-git cwd, so a fresh detection is uniquely
-  // attributable to the fix. Gated strictly on ONWARD_AUTOTEST.
+  // WITHOUT a PTY shell. The mirror still has to DISCOVER the transition on its
+  // own via the revalidate/reconcile path — no watcher exists on a non-git cwd,
+  // so a fresh detection is uniquely attributable to the fix. Gated strictly on
+  // ONWARD_AUTOTEST.
   ipcMain.handle('debug:autotest-git-init', async (
     _event,
     payload?: { dir?: unknown }

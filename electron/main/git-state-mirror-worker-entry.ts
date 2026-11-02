@@ -116,8 +116,7 @@ function admitKindForReason(
 
 // Always-on reconcile heartbeat (parallel to the watcher; constraint H1 — runs
 // in THIS worker thread, never main). The scheduler gates the real cadence
-// (focused 1 s / visible 3 s); this timer just samples it every tick. See
-// docs/git-status-reconcile-design.md.
+// (focused 1 s / visible 3 s); this timer just samples it every tick.
 const RECONCILE_TICK_MS = 500
 // A heartbeat reconcile that finds a change while the watcher has been silent
 // longer than this is treated as a silently-missed watcher event (drift).
@@ -483,13 +482,12 @@ async function computeMirrorState(cwd: string): Promise<MirrorState> {
   })()
 
   try {
-    // kar-qemu Git Diff optimization #2: `--ignore-submodules=dirty` stops this
-    // superproject status from recursively walking each submodule's working tree
-    // (the dominant cost — measured at up to 12.2s for one recompute on
-    // kar-qemu). The parent still reports a submodule whose recorded commit
-    // pointer changed (new commits / staged gitlink), so the terminal git-state
-    // dot still flips for meaningful submodule changes; only submodule
-    // working-tree dirt/untracked no longer forces the recursive enumeration.
+    // `--ignore-submodules=dirty` stops this superproject status from
+    // recursively walking each submodule's working tree. The parent still
+    // reports a submodule whose recorded commit pointer changed (new commits /
+    // staged gitlink), so the terminal git-state dot still flips for meaningful
+    // submodule changes; only submodule working-tree dirt/untracked no longer
+    // forces the recursive enumeration.
     const stdout = await spawnGit(
       buildGitStatusPorcelainArgs({
         branch: true,
@@ -923,7 +921,7 @@ function startDegradedPolling(group: MirrorWatcherGroup, failureKind: MirrorWatc
 // failure (@parcel/watcher can stop delivering events with no error, leaving
 // the badge stale). Runs in this worker thread (constraint H1); gated by
 // GitReconcileScheduler so a repo polls at most once per cycle (focused 1 s /
-// visible 3 s), never back-to-back. See docs/git-status-reconcile-design.md.
+// visible 3 s), never back-to-back.
 // ---------------------------------------------------------------------------
 
 function resolveFocusedRepoRootKey(cwd: string | null): string | null {
@@ -1185,13 +1183,10 @@ async function startWatcherForGroup(group: MirrorWatcherGroup): Promise<() => Pr
     autotestSubscribeFailurePending = false
     throw new Error('autotest subscribe failure')
   }
-  // Suppress churning git-IGNORED directories at the watcher level. kar-qemu (a
-  // running QEMU emulator) continuously rewrites gitignored build artifacts
-  // (build/framebuffer.raw, build/serial_output.txt); without this, every write
-  // fired a watcher event and a debounced `git status` recompute that found
-  // nothing changed but re-walked the huge worktree. We convert ONLY directory
-  // patterns (negation-immune) from the repo's .gitignore into parcel ignore
-  // globs, so those paths never produce an event in the first place.
+  // Suppress churning git-IGNORED directories at the watcher level. We convert
+  // ONLY directory patterns (negation-immune) from the repo's .gitignore into
+  // parcel ignore globs, so those paths never produce an event in the first
+  // place.
   const gitignoreGlobs = await readGitignoreWatchGlobs(group.repoRoot)
   performanceTrace.record(PERF_TRACE_EVENT.WORKER_GIT_STATE_MIRROR_GITIGNORE_GLOBS, {
     repoRoot: group.repoRoot,
@@ -1476,9 +1471,7 @@ async function attachWatcherForEntry(
 /**
  * After a user-driven recompute (focus-resync / revalidate), attach the watcher
  * if the cwd just transitioned non-git → git (see
- * {@link shouldReattachWatcherAfterRecompute}). Backstop for the "BattleProject
- * not recognized" class: `git init` in an already-open dir now becomes watched
- * the moment the next recompute resolves its repoRoot.
+ * {@link shouldReattachWatcherAfterRecompute}).
  */
 async function reattachWatcherIfBecameGit(entry: MirrorWorkerEntryCore): Promise<void> {
   if (!shouldReattachWatcherAfterRecompute(entry, entry.state?.repoRoot ?? null)) return

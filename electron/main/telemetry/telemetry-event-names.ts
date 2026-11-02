@@ -7,8 +7,7 @@
  * Central registry for product-telemetry event names and property
  * allowlists — the telemetry counterpart of `src/utils/perf-trace-names.ts`.
  *
- * Metric-system rules (decision doc:
- * docs/html/telemetry-metrics-system-redesign.html, approved 2026-07-18):
+ * Metric-system rules (approved 2026-07-18):
  * - Names follow the existing `<domain>/<object>.<verb>` house style;
  *   legacy names (session/start, prompt/use, ...) stay unchanged so the
  *   historical series remains continuous.

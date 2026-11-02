@@ -119,6 +119,7 @@ const version = getPackageVersion()
 const productName = `Under Development ${version}-${branch}`
 
 run('node', [join(__dirname, 'check-chinese-comments.js')])
+run('node', [join(__dirname, 'check-sensitive-info.js')])
 run('node', [join(__dirname, 'compile-changelog.js')])
 run('pnpm', ['typecheck'])
 // Generate third-party license notices for binary distribution

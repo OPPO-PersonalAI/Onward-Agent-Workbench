@@ -20,8 +20,7 @@
  *
  *   GCF-01  non-git → git detection via revalidate. A non-git cwd has NO
  *           watcher, so a fresh repoRoot detection after `git init` +
- *           revalidate is UNIQUELY attributable to the reconcile/re-attach fix
- *           (the BattleProject "not recognized" symptom).
+ *           revalidate is UNIQUELY attributable to the reconcile/re-attach fix.
  *   GCF-02  the re-attached watcher is LIVE: an external untracked file written
  *           AFTER the transition surfaces WITHOUT any further revalidate — only
  *           a live watcher could catch it.
