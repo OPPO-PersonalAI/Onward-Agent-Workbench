@@ -199,4 +199,14 @@ test('QAC-U-15: verifyEscalationTargets accepts reparented survivors and rejects
   assert.deepEqual(verifyEscalationTargets(targets, freshTable), [110])
 })
 
+test('QAC-U-16: listProcessTable returns current process row within quit snapshot budget', async () => {
+  const { listProcessTable } = await import('../../electron/main/process-table.ts')
+  const started = performance.now()
+  const rows = await listProcessTable(250)
+  const elapsedMs = performance.now() - started
+  assert.ok(rows.length > 0, 'Expected non-empty process table')
+  assert.ok(rows.some((r) => r.pid === process.pid), 'Expected current process in process table')
+  assert.ok(elapsedMs < 250, `Expected listProcessTable within 250ms budget, took ${elapsedMs.toFixed(1)}ms`)
+})
+
 

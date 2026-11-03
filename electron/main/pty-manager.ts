@@ -17,12 +17,14 @@ import { resolveExistingTerminalCwd } from './terminal-cwd-validation'
 import { buildPowerShellInlineIntegrationCommand } from './powershell-inline-integration'
 import { parseOsc633Cwd, parseOsc7Cwd, parseOsc9Cwd } from '../../src/utils/terminal-cwd-osc'
 import { terminalKeyToSequence, type PromptInputPayload, type PromptInputResult } from '../../src/utils/prompt-input'
-import { listProcessTableDetailed } from './process-table'
+import { listProcessTable, listProcessTableDetailed } from './process-table'
 import {
+  collectAllDescendantPids,
   selectHangupEscalationTargets,
   verifyEscalationTargets,
   type DetailedProcessRow,
-  type HangupEscalationTarget
+  type HangupEscalationTarget,
+  type ProcessTableRow
 } from './quit-activity'
 
 export interface PtyOptions {
@@ -1017,12 +1019,53 @@ export class PtyManager {
       .map(([, record]) => record.pty.pid)
       .filter((pid): pid is number => typeof pid === 'number' && pid > 0)
     let targets: HangupEscalationTarget[] = []
+    let winDescendantTargets: ProcessTableRow[] = []
+    let hasWinProcessSnapshot = false
     if (process.platform !== 'win32' && shellPids.length > 0) {
       const table = await this.snapshotDetailedTable()
       if (table) targets = selectHangupEscalationTargets(table, shellPids)
+    } else if (process.platform === 'win32' && shellPids.length > 0) {
+      const table = await this.snapshotProcessTable()
+      if (table) {
+        hasWinProcessSnapshot = true
+        for (const [, record] of records) {
+          const agent = (record.pty as unknown as {
+            _agent?: {
+              _innerPid?: number
+              _getConsoleProcessList?: () => Promise<number[]>
+              _flushDataAndCleanUp?: () => void
+              _cleanUpProcess?: () => void
+              _conoutSocketWorker?: {
+                _drainDataAndClose?: () => void
+                _destroySocket?: () => Promise<void>
+              }
+            }
+          })._agent
+          if (agent) {
+            if (typeof agent._getConsoleProcessList === 'function') {
+              const shellPid = typeof record.pty.pid === 'number' && record.pty.pid > 0
+                ? record.pty.pid
+                : (typeof agent._innerPid === 'number' && agent._innerPid > 0 ? agent._innerPid : 0)
+              agent._getConsoleProcessList = () => Promise.resolve(shellPid > 0 ? [shellPid] : [])
+            }
+            if (typeof agent._cleanUpProcess === 'function') {
+              agent._flushDataAndCleanUp = () => { agent._cleanUpProcess?.() }
+            }
+            if (agent._conoutSocketWorker && typeof agent._conoutSocketWorker._destroySocket === 'function') {
+              agent._conoutSocketWorker._drainDataAndClose = () => {
+                void agent._conoutSocketWorker?._destroySocket?.()
+              }
+            }
+          }
+        }
+        const byPid = new Map(table.map((row) => [row.pid, row]))
+        for (const pid of collectAllDescendantPids(table, shellPids)) {
+          const row = byPid.get(pid)
+          if (row) winDescendantTargets.push(row)
+        }
+      }
     }
 
-    const graceDeadline = Date.now() + Math.max(0, graceMs)
     for (const [, record] of records) {
       this.killRecord(record)
     }
@@ -1030,17 +1073,23 @@ export class PtyManager {
       try { process.kill(-pgid, 'SIGHUP') } catch { /* group already gone */ }
     }
 
-    const targetPids = targets.map((target) => target.pid)
+    const graceDeadline = Date.now() + Math.max(0, graceMs)
+    const targetPids = process.platform === 'win32'
+      ? winDescendantTargets.map((target) => target.pid)
+      : targets.map((target) => target.pid)
     const firstPass = await Promise.all(
       records.map(([, record]) => this.waitForExit(record, Math.max(0, graceDeadline - Date.now())))
     )
-    await this.waitForPidsExit(targetPids, Math.max(0, graceDeadline - Date.now()))
+    const targetWaitBudgetMs = process.platform === 'win32'
+      ? Math.min(50, Math.max(0, graceDeadline - Date.now()))
+      : Math.max(0, graceDeadline - Date.now())
+    await this.waitForPidsExit(targetPids, targetWaitBudgetMs)
 
     const survivors = records.filter((_, idx) => !firstPass[idx] && !records[idx][1].exited)
     const survivingTargets = targets.filter((target) => this.isPidAlive(target.pid))
+    const survivingWinTargets = winDescendantTargets.filter((target) => this.isPidAlive(target.pid))
     let escalatedPids: number[] = []
-    if (survivors.length > 0 || survivingTargets.length > 0) {
-      const escalateDeadline = Date.now() + Math.max(0, escalateMs)
+    if (survivors.length > 0 || survivingTargets.length > 0 || survivingWinTargets.length > 0) {
       for (const [, record] of survivors) {
         this.killRecord(record, true)
       }
@@ -1050,7 +1099,19 @@ export class PtyManager {
         for (const pid of escalatedPids) {
           try { process.kill(pid, 'SIGKILL') } catch { /* exited after verification */ }
         }
+      } else if (survivingWinTargets.length > 0) {
+        const fresh = await this.snapshotProcessTable()
+        if (fresh) {
+          const freshByPid = new Map(fresh.map((row) => [row.pid, row]))
+          escalatedPids = survivingWinTargets
+            .filter((target) => freshByPid.get(target.pid)?.name === target.name)
+            .map((target) => target.pid)
+        }
+        for (const pid of escalatedPids) {
+          try { process.kill(pid, 'SIGKILL') } catch { /* exited after verification */ }
+        }
       }
+      const escalateDeadline = Date.now() + Math.max(0, escalateMs)
       await Promise.all(
         survivors.map(([, record]) => this.waitForExit(record, Math.max(0, escalateDeadline - Date.now())))
       )
@@ -1059,23 +1120,49 @@ export class PtyManager {
 
     let closed = 0
     for (const [id, record] of records) {
-      if (record.exited) closed += 1
+      const shellDeadOnWin = process.platform === 'win32'
+        && typeof record.pty.pid === 'number'
+        && record.pty.pid > 0
+        && !this.isPidAlive(record.pty.pid)
+      if (record.exited || shellDeadOnWin) {
+        record.exited = true
+        closed += 1
+      }
       record.disposed = true
       record.exitDisposable.dispose()
       this.instances.delete(id)
     }
     this.cwdMap.clear()
 
+    const totalDescendantTargets = process.platform === 'win32' ? winDescendantTargets.length : targets.length
+    const totalSurvivingTargets = process.platform === 'win32' ? survivingWinTargets.length : survivingTargets.length
     const summary = {
       total: records.length,
       closed,
       timedOut: records.length - closed,
-      descendantTargets: targets.length,
+      descendantTargets: totalDescendantTargets,
       descendantEscalated: escalatedPids.length,
-      descendantUnverified: survivingTargets.length - escalatedPids.length
+      descendantUnverified: totalSurvivingTargets - escalatedPids.length
     }
     performanceTrace.recordComplete('pty.shutdown_all', startUs, summary, 'pty')
     return summary
+  }
+
+  private async snapshotProcessTable(budgetMs: number = 250): Promise<ProcessTableRow[] | null> {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      return await Promise.race([
+        listProcessTable(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), budgetMs)
+          timer.unref?.()
+        })
+      ])
+    } catch {
+      return null
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   private async snapshotDetailedTable(budgetMs: number = 250): Promise<DetailedProcessRow[] | null> {
@@ -1132,6 +1219,10 @@ export class PtyManager {
           try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
         }
         try { record.pty.kill('SIGKILL') } catch { /* ignore */ }
+      } else if (escalate) {
+        if (typeof pid === 'number' && pid > 0) {
+          try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+        }
       } else {
         record.pty.kill()
       }

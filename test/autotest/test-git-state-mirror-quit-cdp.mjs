@@ -55,6 +55,21 @@ const log = text => { appendFileSync(LOG, `${text}\n`); console.log(text) }
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
 
+async function removeDirBestEffort(target) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try {
+      rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      return
+    } catch (error) {
+      if (attempt === 29) {
+        console.warn(`[QuitStress] cleanup deferred for locked path ${target}: ${error?.code || error}`)
+        return
+      }
+      await sleep(100)
+    }
+  }
+}
+
 function isolatedEnvironment() {
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(fixtures, 'gitconfig'), GIT_TERMINAL_PROMPT: '0' }
   for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CONFIG', 'GIT_CONFIG_COUNT']) delete env[name]
@@ -86,16 +101,22 @@ async function bounded(promise, ms) {
   } finally { clearTimeout(timer) }
 }
 
+let templateRepo = null
 async function createRepo(path) {
-  const options = { cwd: path, env: isolatedEnvironment() }
-  mkdirSync(path, { recursive: true })
-  cpSync(join(fixtures, 'tracked.txt'), join(path, 'tracked.txt'))
-  await exec('git', ['init'], options)
-  for (const [key, value] of [['core.autocrlf', 'false'], ['core.safecrlf', 'false'], ['user.name', 'Onward Autotest'], ['user.email', 'autotest@example.invalid']]) {
-    await exec('git', ['config', key, value], options)
+  if (!templateRepo) {
+    const seed = join(scratch, '__template-repo')
+    const options = { cwd: seed, env: isolatedEnvironment() }
+    mkdirSync(seed, { recursive: true })
+    cpSync(join(fixtures, 'tracked.txt'), join(seed, 'tracked.txt'))
+    await exec('git', ['init'], options)
+    for (const [key, value] of [['core.autocrlf', 'false'], ['core.safecrlf', 'false'], ['user.name', 'Onward Autotest'], ['user.email', 'autotest@example.invalid']]) {
+      await exec('git', ['config', key, value], options)
+    }
+    await exec('git', ['add', 'tracked.txt'], options)
+    await exec('git', ['commit', '-m', 'Initial quit stress fixture'], options)
+    templateRepo = seed
   }
-  await exec('git', ['add', 'tracked.txt'], options)
-  await exec('git', ['commit', '-m', 'Initial quit stress fixture'], options)
+  cpSync(templateRepo, path, { recursive: true })
 }
 
 async function launch(profile, cwd, scenario) {
@@ -104,7 +125,10 @@ async function launch(profile, cwd, scenario) {
   for (const path of [home, temporary, join(home, '.config'), join(home, '.cache'), join(home, '.local/share'), join(home, 'AppData/Roaming'), join(home, 'AppData/Local')]) {
     mkdirSync(path, { recursive: true })
   }
-  const app = await electron.launch({
+  let app = null
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      app = await electron.launch({
     executablePath: APP_BIN,
     env: {
       ...isolatedEnvironment(), ONWARD_DEBUG: '1', ONWARD_AUTOTEST: '1', ONWARD_AUTOTEST_EXIT: '0',
@@ -121,8 +145,8 @@ async function launch(profile, cwd, scenario) {
       ONWARD_AUTOTEST_WATCHER_HANG_SUBSCRIBE: scenario === 'pending-subscribe' ? '1' : '0',
       ONWARD_AUTOTEST_WATCHER_HANG_UNSUBSCRIBE: ['pending-unsubscribe', 'compound-fault-storm'].includes(scenario) ? '1' : '0',
       ONWARD_AUTOTEST_QUIT_HOLD_STAGE: scenario === 'save-hang' ? 'app-state' : ''
-    }, timeout: 30_000
-  })
+    }, timeout: 15_000 }); break } catch (error) { if (attempt >= 2) throw error; await sleep(250) }
+  }
   const child = app.process()
   owned.add(child)
   const exit = childExit(child)
@@ -130,10 +154,12 @@ async function launch(profile, cwd, scenario) {
   const capture = data => { output += data.toString(); appendFileSync(LOG, data) }
   child.stdout?.on('data', capture)
   child.stderr?.on('data', capture)
+  const mainPid = await app.evaluate(() => process.pid).catch(() => child.pid)
+  child.__onwardMainPid = mainPid
   if (scenario === 'startup') {
     const started = performance.now()
     await app.evaluate(({ app }) => { setImmediate(() => app.quit()) }).catch(() => {})
-    return { app, page: null, child, exit, started, output: () => output }
+    return { app, page: null, child, mainPid, exit, started, output: () => output }
   }
   const page = await app.firstWindow()
   await page.waitForFunction(() => window.electronAPI?.git && window.electronAPI?.appState)
@@ -141,7 +167,7 @@ async function launch(profile, cwd, scenario) {
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
   })
-  return { app, page, child, exit, output: () => output }
+  return { app, page, child, mainPid, exit, output: () => output }
 }
 
 async function menuQuit(app, duplicates = 1) {
@@ -218,11 +244,13 @@ async function trial(scenario, index) {
       servicePid = state.pid
       return Boolean(servicePid) && (scenario === 'pending-subscribe' ? state.pending > 0 : state.subscriptions >= 3 && state.pending === 0)
     })
-    assert.notEqual(servicePid, child.pid, 'Watcher must live outside the main process')
+    assert.notEqual(servicePid, running.mainPid ?? child.pid, 'Watcher must live outside the main process')
     const nativeInMain = await app.evaluate(({ app }) => {
       const require = process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`)
       const modules = Object.keys(require.cache)
-      const libraries = process.report.getReport().sharedObjects
+      const libraries = process.platform === 'win32'
+        ? (process.moduleLoadList ?? [])
+        : process.report.getReport().sharedObjects
       return [...modules, ...libraries].some(path => /[/\\]watcher\.node$/.test(path))
     })
     assert.equal(nativeInMain, false, 'Main process loaded watcher.node')
@@ -399,7 +427,12 @@ async function trial(scenario, index) {
 
     let started = performance.now()
     const quitLogOffset = running.output().length
-    if (scenario === 'parent-death') child.kill('SIGKILL')
+    if (scenario === 'parent-death') {
+      if (running.mainPid && running.mainPid !== child.pid) {
+        try { process.kill(running.mainPid, 'SIGKILL') } catch {}
+      }
+      child.kill('SIGKILL')
+    }
     else if (scenario === 'sigterm' || scenario === 'sigint') child.kill(scenario === 'sigterm' ? 'SIGTERM' : 'SIGINT')
     else if (scenario === 'signal-supersedes-dialog') {
       await app.evaluate(({ dialog }) => {
@@ -444,6 +477,8 @@ async function trial(scenario, index) {
       assert.equal(lateCreate.error, index % 2 === 0 ? '\u5e94\u7528\u6b63\u5728\u9000\u51fa\u3002' : 'The application is closing.')
     }
     const outcome = await bounded(exit, OBSERVER_TIMEOUT_MS)
+    clearInterval(churnTimer)
+    churnTimer = null
     result.mainExitMs = performance.now() - started
     result.exit = outcome
     if (scenario === 'parent-death') {
@@ -503,29 +538,39 @@ async function trial(scenario, index) {
   } finally {
     clearInterval(churnTimer)
     for (const child of owned) {
+      const mainPid = child.__onwardMainPid
+      if (mainPid && mainPid !== child.pid && alive(mainPid)) {
+        try { process.kill(mainPid, 'SIGKILL') } catch {}
+      }
       if (child.exitCode === null && child.signalCode === null) {
         child.kill('SIGKILL')
         await bounded(childExit(child), 5000).catch(() => {})
       }
+      child.stdout?.destroy()
+      child.stderr?.destroy()
       owned.delete(child)
     }
     for (const pid of [...pressurePids, ...nohupPids]) {
       if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch {} }
     }
     if (servicePid && alive(servicePid)) { try { process.kill(servicePid, 'SIGKILL') } catch {} }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }) } catch {}
     results.push(result)
   }
 }
 
 async function cleanup() {
   await Promise.all([...owned].map(async child => {
+    const mainPid = child.__onwardMainPid
+    if (mainPid && mainPid !== child.pid && alive(mainPid)) {
+      try { process.kill(mainPid, 'SIGKILL') } catch {}
+    }
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGKILL')
       await bounded(childExit(child), 5000).catch(() => {})
     }
   }))
-  rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeDirBestEffort(scratch)
 }
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void cleanup().finally(() => process.exit(1)) })
 
@@ -552,4 +597,5 @@ try {
 } finally {
   writeFileSync(RESULT, JSON.stringify({ ok: !process.exitCode && results.every(result => result.ok), group: GROUP, results }, null, 2))
   await cleanup()
+  process.exit(process.exitCode ?? 0)
 }

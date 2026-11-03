@@ -31,8 +31,8 @@ if (process.platform === 'win32') {
 }
 
 import { app, BrowserWindow, nativeImage, nativeTheme, Menu, dialog, ipcMain, crashReporter, powerMonitor } from 'electron'
-import { writeFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, writeFileSync } from 'fs'
+import { delimiter, join } from 'path'
 import { registerIpcHandlers, cleanupIpcHandlers, abortBackgroundWorkForQuit, floodBackgroundQueuesForQuitTest, setupWindowShortcuts } from './ipc-handlers'
 import { confirmSettingsExit } from './settings-exit-guard'
 import { promptInputShortcuts } from './prompt-input-shortcuts'
@@ -986,7 +986,16 @@ app.whenReady().then(async () => {
     const { spawnSync } = await import('node:child_process')
     const probeShell = (cmd: string): boolean => {
       try {
-        const result = spawnSync('where.exe', [cmd], { stdio: ['ignore', 'pipe', 'pipe'] })
+        const pathEnv = process.env.PATH || process.env.Path || ''
+        const sysRoot = process.env.SystemRoot || 'C:\\Windows'
+        const dirs = [
+          join(sysRoot, 'System32', 'WindowsPowerShell', 'v1.0'),
+          ...pathEnv.split(delimiter).filter(Boolean)
+        ]
+        for (const dir of dirs) {
+          if (existsSync(join(dir, cmd))) return true
+        }
+        const result = spawnSync('where.exe', [cmd], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 2000 })
         return result.status === 0 && result.stdout && result.stdout.toString().trim().length > 0
       } catch {
         return false

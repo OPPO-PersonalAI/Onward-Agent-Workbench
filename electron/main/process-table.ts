@@ -14,6 +14,8 @@
  */
 
 import { execFile } from 'child_process'
+import { createRequire } from 'module'
+import { join } from 'path'
 import type { DetailedProcessRow, ProcessTableRow } from './quit-activity'
 
 const QUERY_TIMEOUT_MS = 3000
@@ -89,8 +91,36 @@ export async function listProcessTableDetailed(): Promise<DetailedProcessRow[]> 
  * caller (confirmQuit) treats any failure as "no activity information" and
  * falls back to the plain dialog; detection must never block quitting.
  */
+function listWindowsProcessTableNative(): Promise<ProcessTableRow[] | null> {
+  return new Promise((resolve) => {
+    try {
+      const req = typeof require === 'function' ? require : createRequire(join(process.cwd(), 'package.json'))
+      const wpt = req('@vscode/windows-process-tree') as {
+        getAllProcesses: (callback: (processes: Array<{ pid: number; ppid: number; name: string }> | undefined) => void) => void
+      }
+      wpt.getAllProcesses((processes) => {
+        if (!Array.isArray(processes)) {
+          resolve(null)
+          return
+        }
+        resolve(
+          processes.map((row) => ({
+            pid: Number(row.pid),
+            ppid: Number(row.ppid),
+            name: String(row.name ?? '')
+          }))
+        )
+      })
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
 export async function listProcessTable(): Promise<ProcessTableRow[]> {
   if (process.platform === 'win32') {
+    const nativeRows = await listWindowsProcessTableNative()
+    if (nativeRows) return nativeRows
     const stdout = await run('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
