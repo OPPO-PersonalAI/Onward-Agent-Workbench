@@ -92,7 +92,7 @@ TRACE_DIR="$REPO_ROOT/traces/perf"
 TRACE_BEFORE_FILE="$RUN_TMP_DIR/main-traces-before.txt"
 TRACE_START_MARKER="$RUN_TMP_DIR/trace-start.marker"
 mkdir -p "$TRACE_DIR"
-find "$TRACE_DIR" -maxdepth 1 -type f -name 'perf-*.jsonl' -print | sort > "$TRACE_BEFORE_FILE"
+find "$TRACE_DIR" -maxdepth 1 -type f -name 'perf-*.jsonl' -print | sed 's|.*[/\\]||' | sort > "$TRACE_BEFORE_FILE"
 : > "$TRACE_START_MARKER"
 
 # ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ find "$TRACE_DIR" -maxdepth 1 -type f -name 'perf-*.jsonl' -print | sort > "$TRA
 # dir is gitignored and regenerated on every run, so we don't add it to the
 # cleanup trap; only the per-run user-data scratch dir gets removed below.
 # ---------------------------------------------------------------------------
-FIXTURE_JSON="$(node "$REPO_ROOT/test/autotest/create-git-diff-staleness-fixture.mjs")"
+FIXTURE_JSON="$(GDS_GROUP="$GDS_GROUP" node "$REPO_ROOT/test/autotest/create-git-diff-staleness-fixture.mjs")"
 TEMP_ROOT="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tempRoot)' "$FIXTURE_JSON")"
 CLEAN_ROOT="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).cleanRoot)' "$FIXTURE_JSON")"
 MANIFEST_PATH="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).manifestPath)' "$FIXTURE_JSON")"
@@ -254,17 +254,24 @@ if [[ ! -f "$TRACE_LATEST_PATH" ]]; then
   exit 1
 fi
 
-TRACE_TARGET="$(cat "$TRACE_LATEST_PATH")"
+TRACE_TARGET="$(tr -d '\r' < "$TRACE_LATEST_PATH")"
 TRACE_FILES=()
 if [[ -d "$TRACE_TARGET" ]]; then
-  while IFS= read -r trace_file; do
-    if grep -Fxq "$trace_file" "$TRACE_BEFORE_FILE" && [[ ! "$trace_file" -nt "$TRACE_START_MARKER" ]]; then
-      continue
-    fi
-    TRACE_FILES+=("$trace_file")
-  done < <(find "$TRACE_TARGET" -maxdepth 1 -type f -name 'perf-*.jsonl' -print | sort)
+  TRACE_AFTER_FILE="$RUN_TMP_DIR/main-traces-after.txt"
+  find "$TRACE_TARGET" -maxdepth 1 -type f -name 'perf-*.jsonl' -print | sed 's|.*[/\\]||' | sort > "$TRACE_AFTER_FILE"
+  while IFS= read -r trace_base; do
+    [[ -n "$trace_base" ]] || continue
+    TRACE_FILES+=("$TRACE_TARGET/$trace_base")
+  done < <(
+    {
+      comm -13 "$TRACE_BEFORE_FILE" "$TRACE_AFTER_FILE"
+      find "$TRACE_TARGET" -maxdepth 1 -type f -name 'perf-*.jsonl' -newer "$TRACE_START_MARKER" -print | sed 's|.*[/\\]||'
+    } | sort -u -r
+  )
 elif [[ -f "$TRACE_TARGET" ]]; then
-  if ! grep -Fxq "$TRACE_TARGET" "$TRACE_BEFORE_FILE" || [[ "$TRACE_TARGET" -nt "$TRACE_START_MARKER" ]]; then
+  trace_base="${TRACE_TARGET//\\//}"
+  trace_base="${trace_base##*/}"
+  if ! grep -Fxq "$trace_base" "$TRACE_BEFORE_FILE" || [[ "$TRACE_TARGET" -nt "$TRACE_START_MARKER" ]]; then
     TRACE_FILES+=("$TRACE_TARGET")
   fi
 fi

@@ -23,7 +23,7 @@
 //     output, so we do not normalise inside this script.
 
 import { execFileSync } from 'child_process'
-import { mkdirSync, writeFileSync, rmSync, renameSync, readdirSync } from 'fs'
+import { cpSync, mkdirSync, writeFileSync, rmSync, renameSync, readdirSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
@@ -123,6 +123,8 @@ function commit(repo, message) {
 function init(repo, files, message) {
   mkdirSync(repo, { recursive: true })
   git(repo, ['init', '-b', 'main'])
+  git(repo, ['config', 'core.autocrlf', 'false'])
+  git(repo, ['config', 'core.safecrlf', 'false'])
   for (const [rel, content] of Object.entries(files)) {
     const full = join(repo, rel)
     mkdirSync(join(full, '..'), { recursive: true })
@@ -178,79 +180,45 @@ init(cleanRoot, {
   'src/deep-change-target.txt': `${deepChangeTargetLines}\n`
 }, 'parent baseline')
 addSubmodule(cleanRoot, subSource, 'modules/sub')
+git(join(cleanRoot, 'modules', 'sub'), ['config', 'core.autocrlf', 'false'])
+git(join(cleanRoot, 'modules', 'sub'), ['config', 'core.safecrlf', 'false'])
 commit(cleanRoot, 'add submodule')
-git(cleanRoot, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
 
-// ------------ pointer-changed/root ------------
-// Same structure, but with a SECOND commit advanced inside the submodule and
-// no `git add modules/sub` in the parent — so parent index records commit A
-// while the submodule work tree HEAD is at commit B (c flag = C).
+const gdsGroup = process.env.GDS_GROUP || process.env.ONWARD_AUTOTEST_GDS_GROUP || ''
+const needSubmoduleVariants = gdsGroup === '' || gdsGroup === 'submodule'
+
 const pointerChangedRoot = join(reposRoot, 'pointer-changed', 'root')
-init(pointerChangedRoot, {
-  'README.md': '# Pointer-changed parent\n\nbaseline parent content\n',
-  'src/main.txt': 'parent source line\n'
-}, 'parent baseline')
-addSubmodule(pointerChangedRoot, subSource, 'modules/sub')
-commit(pointerChangedRoot, 'add submodule')
-git(pointerChangedRoot, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
-
-// Advance the inner submodule HEAD beyond what the parent index records.
-const innerSubmodule = join(pointerChangedRoot, 'modules', 'sub')
-writeFileSync(join(innerSubmodule, 'README.md'),
-  '# Submodule\n\nadvanced commit body\n', 'utf8')
-git(innerSubmodule, ['add', 'README.md'])
-commit(innerSubmodule, 'submodule advance')
-// Reset the submodule work tree to a clean state so the m flag stays empty;
-// only the c flag should be set in the parent's view.
-git(innerSubmodule, ['checkout', '-q', 'HEAD', '--', '.'])
-
-// ------------ staged-pointer/root ------------
-// Same starting shape as pointer-changed/root, but the user then ran
-// `git add modules/sub` so the parent's index now records the new submodule
-// HEAD. Porcelain v2 reports `<c>=.` (work tree matches index again) but the
-// parent-side X-status is `M` — the row carries `changeType: 'staged'`. The
-// filter must KEEP this row so users can review or unstage it from Git Diff.
 const stagedPointerRoot = join(reposRoot, 'staged-pointer', 'root')
-init(stagedPointerRoot, {
-  'README.md': '# Staged-pointer parent\n\nbaseline parent content\n',
-  'src/main.txt': 'parent source line\n'
-}, 'parent baseline')
-addSubmodule(stagedPointerRoot, subSource, 'modules/sub')
-commit(stagedPointerRoot, 'add submodule')
-git(stagedPointerRoot, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
-
-const stagedInnerSubmodule = join(stagedPointerRoot, 'modules', 'sub')
-writeFileSync(join(stagedInnerSubmodule, 'README.md'),
-  '# Submodule\n\nstaged-advanced commit body\n', 'utf8')
-git(stagedInnerSubmodule, ['add', 'README.md'])
-commit(stagedInnerSubmodule, 'submodule advance for staged-pointer')
-// Reset submodule work tree to clean — m flag must stay empty.
-git(stagedInnerSubmodule, ['checkout', '-q', 'HEAD', '--', '.'])
-// Stage the submodule pointer change in the parent. After this, parent
-// porcelain v2 should report `1 M. S... ... modules/sub` with `<c>=.`.
-git(stagedPointerRoot, ['add', 'modules/sub'])
-
-// ------------ uninitialized/root ------------
-// `.gitmodules` declares the submodule, the parent commit references it, but
-// the submodule has been deinit-ed and the working tree is empty. The directory
-// exists on disk (so the simple `access(path)` check passes) but it is NOT a
-// git repository.
 const uninitializedRoot = join(reposRoot, 'uninitialized', 'root')
-init(uninitializedRoot, {
-  'README.md': '# Uninitialized parent\n\nbaseline parent content\n',
-  'src/main.txt': 'parent source line\n'
-}, 'parent baseline')
-addSubmodule(uninitializedRoot, subSource, 'modules/sub')
-commit(uninitializedRoot, 'add submodule')
-git(uninitializedRoot, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
-// Now deinit so the submodule directory becomes empty / not-a-repo.
-git(uninitializedRoot, ['submodule', 'deinit', '-f', 'modules/sub'])
-// Belt + suspenders: physically remove the .git pointer file inside the path
-// so the directory truly is "exists but not a repo" (deinit may leave a
-// pointer file depending on git version). `git submodule status` will still
-// report it from `.gitmodules`, but `getGitRepoMeta` must reject it.
-robustRmSync(join(uninitializedRoot, 'modules', 'sub'))
-mkdirSync(join(uninitializedRoot, 'modules', 'sub'), { recursive: true })
+
+if (needSubmoduleVariants) {
+  // ------------ pointer-changed/root ------------
+  // Clone from clean/root via cpSync (relative gitdir/worktree pointers stay valid)
+  // and advance the inner submodule HEAD without staging in parent (c flag = C).
+  mkdirSync(dirname(pointerChangedRoot), { recursive: true })
+  cpSync(cleanRoot, pointerChangedRoot, { recursive: true })
+  const innerSubmodule = join(pointerChangedRoot, 'modules', 'sub')
+  writeFileSync(join(innerSubmodule, 'README.md'),
+    '# Submodule\n\nadvanced commit body\n', 'utf8')
+  git(innerSubmodule, ['add', 'README.md'])
+  commit(innerSubmodule, 'submodule advance')
+  git(innerSubmodule, ['checkout', '-q', 'HEAD', '--', '.'])
+
+  // ------------ staged-pointer/root ------------
+  // Copy pointer-changed/root and stage the submodule pointer in parent.
+  mkdirSync(dirname(stagedPointerRoot), { recursive: true })
+  cpSync(pointerChangedRoot, stagedPointerRoot, { recursive: true })
+  git(stagedPointerRoot, ['add', 'modules/sub'])
+
+  // ------------ uninitialized/root ------------
+  // Copy clean/root and remove the submodule checkout + absorbed gitdir so
+  // modules/sub exists on disk as an empty non-repo directory declared in .gitmodules.
+  mkdirSync(dirname(uninitializedRoot), { recursive: true })
+  cpSync(cleanRoot, uninitializedRoot, { recursive: true })
+  robustRmSync(join(uninitializedRoot, 'modules', 'sub'))
+  robustRmSync(join(uninitializedRoot, '.git', 'modules'))
+  mkdirSync(join(uninitializedRoot, 'modules', 'sub'), { recursive: true })
+}
 
 const manifest = {
   tempRoot,
