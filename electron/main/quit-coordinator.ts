@@ -6,7 +6,7 @@
 // User-approved total deadline, identical in production and autotests.
 export const QUIT_DEADLINE_MS = 10_000
 // Reserve part of the total budget for OS process termination and Electron exit.
-export const QUIT_EXIT_RESERVE_MS = 500
+export const QUIT_EXIT_RESERVE_MS = 1_500
 export interface QuitStage { name: string; required?: boolean; run: () => void | Promise<void> }
 export type QuitOutcome = 'cancelled' | 'ready' | 'forced'
 export interface QuitEffects {

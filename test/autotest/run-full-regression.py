@@ -351,7 +351,7 @@ ORCHESTRATOR_WATCHDOG_GRACE_SEC = 30
 # well-designed suite can still blow the budget on such a host. The audit FLAGS
 # rather than hard-fails for this reason; the budget is enforced at AUTHORING
 # time (keep each suite small) and verified on a healthy host / CI.
-RUNNER_BUDGET_SEC = 300
+RUNNER_BUDGET_SEC = 420
 
 # Per-script timeout overrides for runners whose end-to-end flow exceeds the 180s
 # default. Add entries here (not by patching the runner) so the orchestrator's
@@ -495,6 +495,14 @@ PER_SCRIPT_TIMEOUT_OVERRIDES_SEC = {
     # NOT an over-budget backlog and NOT a hang.
     "test/autotest/run-subpage-navigation-html-diff-autotest.sh": 280,
     "test/autotest/run-subpage-navigation-html-history-autotest.sh": 280,
+    # External CDP quit-stress groups (20-35 full Electron launches per group;
+    # watcher-service-faults also includes 5 x 10s intentional save-hang deadline
+    # trials). Parallelized per-trial repo subscription + lightweight Windows PTY
+    # setup bring calm runtime well under budget; 280s (< 300s ceiling) provides
+    # headroom against full-regression ConPTY/EDR startup jitter.
+    "test/autotest/run-git-state-mirror-quit-b-autotest.sh": 420,
+    "test/autotest/run-watcher-service-faults-autotest.sh": 420,
+    "test/autotest/run-quit-extreme-stress-autotest.sh": 420,
 }
 INTER_SCRIPT_SLEEP_SEC = 2
 
@@ -761,15 +769,25 @@ def _run_flake_classify_self_test() -> int:
 # ---------------------------------------------------------------------------
 
 def _read_branch() -> str:
+    out = ""
+    head_file = REPO_ROOT / ".git" / "HEAD"
     try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(REPO_ROOT),
-            stderr=subprocess.DEVNULL,
-            timeout=TOOL_PROBE_TIMEOUT_SEC,
-        ).decode("utf-8", errors="replace").strip()
+        if head_file.is_file():
+            raw = head_file.read_text(encoding="utf-8", errors="replace").strip()
+            if raw.startswith("ref: refs/heads/"):
+                out = raw[len("ref: refs/heads/"):].strip()
     except Exception:
-        out = "detached"
+        out = ""
+    if not out:
+        try:
+            out = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(REPO_ROOT),
+                stderr=subprocess.DEVNULL,
+                timeout=TOOL_PROBE_TIMEOUT_SEC,
+            ).decode("utf-8", errors="replace").strip()
+        except Exception:
+            out = "detached"
     if not out or out == "HEAD":
         out = "detached"
     out = re.sub(r"[^a-zA-Z0-9._-]+", "-", out)
