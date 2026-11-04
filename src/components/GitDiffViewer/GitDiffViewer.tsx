@@ -72,6 +72,7 @@ import {
   resolveDiffRestoreDecision,
   resolveGitDiffSnapshotScrollTop,
   resolveGitDiffRestoredSelection,
+  shouldSuppressGitDiffSelectionRestoreOnLoad,
   resolveGitDiffSnapshotSelection,
   resolveRevealReconcile,
   shouldCompleteWarmReveal,
@@ -1588,6 +1589,10 @@ export function GitDiffViewer({
     line?: number
     appliedScrollTop: number
     at: number
+  } | null>(null)
+  const pendingRebuildScrollTopRef = useRef<{
+    fileKey: string
+    scrollTop: number
   } | null>(null)
   const diffRevealTimeoutRef = useRef<number | null>(null)
   const gitDiffOpenAtRef = useRef<number | null>(null)
@@ -3319,15 +3324,15 @@ export function GitDiffViewer({
       [...staleFileContentKeysRef.current].filter((key) => nextKeys.has(key))
     )
 
-    const suppressSelectionRestore = suppressSelectionRestoreOnNextLoadRef.current
+    const suppressSelectionRestore = shouldSuppressGitDiffSelectionRestoreOnLoad({
+      suppressOnNextLoad: suppressSelectionRestoreOnNextLoadRef.current,
+      suppressMemoryUntilSelection: suppressMemorySelectionRestoreUntilSelectionRef.current,
+      currentSelection: selectedFileRef.current,
+      previousSelection
+    })
     suppressSelectionRestoreOnNextLoadRef.current = false
-    const suppressMemorySelectionRestore =
-      suppressMemorySelectionRestoreUntilSelectionRef.current &&
-      !selectedFileRef.current &&
-      !previousSelection
     const nextFile = result.success
       && !suppressSelectionRestore
-      && !suppressMemorySelectionRestore
       ? resolveGitDiffRestoredSelection(
           result.files,
           repoRoot,
@@ -4047,6 +4052,7 @@ export function GitDiffViewer({
     warmRevealSettleRunIdRef.current += 1
     pendingFirstChangeRevealRef.current = null
     pendingViewportGoalRef.current = null
+    pendingRebuildScrollTopRef.current = null
   }, [captureDiffView, clearCurrentMemorySelection, getMemoryKey, getMemoryStore, isOpen])
 
   // Scroll capture is now registered via onDidScrollChange in handleEditorDidMount
@@ -4230,7 +4236,9 @@ export function GitDiffViewer({
     if (plan.needsSync) {
       const originalViewState = originalEditor.saveViewState()
       const modifiedViewState = modifiedEditor.saveViewState()
+      const scrollTopBeforeRebuild = modifiedEditor.getScrollTop()
       suppressDraftChangeRef.current = true
+      suppressScrollCaptureRef.current = true
       // Writing into a bound model invalidates whatever diff Monaco already
       // holds — it keeps `_diff` and only debounces the recompute, so anything
       // that consumes the diff between here and the next onDidUpdateDiff would
@@ -4284,12 +4292,8 @@ export function GitDiffViewer({
         // 6900 px document, 1 trial in 24, while the other 23 drifted 29 px).
         // The offset itself is the thing the user cares about, so carry it
         // explicitly rather than inferring it from the restored state.
-        const scrollTopBeforeRebuild = modifiedEditor.getScrollTop()
         try {
           editor.setModel({ original: originalModel, modified: modifiedModel })
-          if (scrollTopBeforeRebuild > 0) {
-            modifiedEditor.setScrollTop(scrollTopBeforeRebuild)
-          }
           // The previous stamp described a diff that no longer exists.
           diffComputedAtRef.current = null
           perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_GIT_DIFF_VIEW_MODEL_REBUILT, {
@@ -4307,6 +4311,16 @@ export function GitDiffViewer({
       }
       if (originalViewState) originalEditor.restoreViewState(originalViewState)
       if (modifiedViewState) modifiedEditor.restoreViewState(modifiedViewState)
+      if (rebuiltViewModel && scrollTopBeforeRebuild > 0) {
+        modifiedEditor.setScrollTop(scrollTopBeforeRebuild)
+        pendingRebuildScrollTopRef.current = {
+          fileKey,
+          scrollTop: scrollTopBeforeRebuild
+        }
+      }
+      window.setTimeout(() => {
+        suppressScrollCaptureRef.current = false
+      }, 50)
       scheduleDiffHunkActionWidgetInstall('model-sync')
     }
 
@@ -4962,6 +4976,7 @@ export function GitDiffViewer({
   })
 
   const handleFileSelect = useCallback((file: GitFileStatus) => {
+    suppressSelectionRestoreOnNextLoadRef.current = false
     suppressMemorySelectionRestoreUntilSelectionRef.current = false
     const nextKey = getFileKey(file)
     // Begin a click→render measurement. Even if the user re-clicks the
@@ -5001,6 +5016,7 @@ export function GitDiffViewer({
       warmRevealSettleRunIdRef.current += 1
       pendingFirstChangeRevealRef.current = null
       pendingViewportGoalRef.current = null
+      pendingRebuildScrollTopRef.current = null
       // A new file: no position applied yet, and no viewport the user owns.
       revealAppliedRef.current = null
       userOwnsViewportRef.current = false
@@ -5404,6 +5420,7 @@ export function GitDiffViewer({
             })
           }
           if (action === 'reconcile-silent') {
+            pendingRebuildScrollTopRef.current = null
             const changes = editor.getLineChanges()
             if (changes && changes.length > 0) {
               const firstChange = changes[0]
@@ -5461,6 +5478,22 @@ export function GitDiffViewer({
               reason: applied.reason,
               at: Date.now()
             }
+          }
+        }
+        const pendingRebuildScroll = pendingRebuildScrollTopRef.current
+        if (pendingRebuildScroll) {
+          pendingRebuildScrollTopRef.current = null
+          if (pendingRebuildScroll.fileKey === liveFileKey && pendingRebuildScroll.scrollTop > 0) {
+            const rebuildModifiedEditor = editor.getModifiedEditor()
+            suppressScrollCaptureRef.current = true
+            rebuildModifiedEditor.setScrollTop(pendingRebuildScroll.scrollTop)
+            window.requestAnimationFrame(() => {
+              const currentFile = selectedFileRef.current
+              if (currentFile && getFileKey(currentFile) === liveFileKey) {
+                rebuildModifiedEditor.setScrollTop(pendingRebuildScroll.scrollTop)
+              }
+              suppressScrollCaptureRef.current = false
+            })
           }
         }
         scheduleCollapseStateProbe()

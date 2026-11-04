@@ -190,9 +190,7 @@ export async function testGitDiffMutationTiming(ctx: AutotestContext): Promise<T
       return Boolean(d && d.at >= since && d.revealTargetLine !== null)
     }, 12_000)
 
-  // Snapshot of everything an assertion may need, taken after the view settles.
-  const settleAndProbe = async () => {
-    await sleep(900)
+  const readProbe = () => {
     const decision = api()?.getLastRestoreDecision?.() ?? null
     const bound = api()?.getBoundModelUris?.() ?? null
     const collapse = api()?.getCollapseState?.() ?? null
@@ -200,7 +198,22 @@ export async function testGitDiffMutationTiming(ctx: AutotestContext): Promise<T
     const revealState = api()?.getRevealStaleState?.() ?? null
     return { decision, bound, collapse, liveModels, revealState }
   }
-  type Probe = Awaited<ReturnType<typeof settleAndProbe>>
+  type Probe = ReturnType<typeof readProbe>
+
+  // Snapshot of everything an assertion may need, taken after the view settles.
+  // Always wait out the initial 900 ms watcher + diff debounce window first; on
+  // EDR-throttled Windows where a git content read can land slightly past 900 ms,
+  // poll up to an additional 1500 ms for the in-flight recompute to settle.
+  const settleAndProbe = async (): Promise<Probe> => {
+    await sleep(900)
+    let probe = readProbe()
+    const deadline = Date.now() + 1500
+    while (!allInvariants(probe) && Date.now() < deadline && !cancelled()) {
+      await sleep(100)
+      probe = readProbe()
+    }
+    return probe
+  }
 
   const invariantsHold = (p: Probe) => ({
     // INV-1
@@ -469,11 +482,14 @@ export async function testGitDiffMutationTiming(ctx: AutotestContext): Promise<T
         await resetTarget(rel)
         await write(rel, scatteredBody(`V1-${t}`))
         await sleep(300)
+        const openMark = Date.now()
         await openDiff(`MT-06-t${t}-open`)
         await listed(`MT-06-t${t}-listed`, rel, 'unstaged')
         await sleep(900)
         const selected = selectBy(rel, 'unstaged')
-        await sleep(1200)
+        await waitForDecision(`MT-06-t${t}-decision`, openMark)
+        await waitFor(`MT-06-t${t}-scrollable`, () => (api()?.getScrollMetrics()?.maxScrollTop ?? 0) > 1000, 10_000)
+        await sleep(400)
         // Genuine input: a real wheel event on the editor DOM, the same path a
         // user's scroll takes. Ownership derived from onDidScrollChange would
         // have been claimed by layout settling long before this point.

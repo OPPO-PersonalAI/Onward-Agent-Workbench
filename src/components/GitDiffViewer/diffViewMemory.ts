@@ -374,3 +374,21 @@ export function resolveGitDiffSnapshotScrollTop(
   }
   return Math.min(scrollTop, Math.max(0, scrollHeight - viewportHeight))
 }
+
+export function shouldSuppressGitDiffSelectionRestoreOnLoad(input: {
+  suppressOnNextLoad: boolean
+  suppressMemoryUntilSelection: boolean
+  currentSelection: GitFileStatus | null
+  previousSelection: GitFileStatus | null
+}): boolean {
+  if (input.currentSelection !== null) {
+    return false
+  }
+  if (input.suppressOnNextLoad) {
+    return true
+  }
+  if (input.suppressMemoryUntilSelection && input.previousSelection === null) {
+    return true
+  }
+  return false
+}

@@ -15,6 +15,7 @@ import {
   resolveDiffRestoreDecision,
   resolveGitDiffSnapshotScrollTop,
   resolveGitDiffRestoredSelection,
+  shouldSuppressGitDiffSelectionRestoreOnLoad,
   resolveGitDiffSnapshotSelection,
   resolveRevealReconcile,
   shouldCompleteWarmReveal,
@@ -570,5 +571,27 @@ describe('reveal reconciliation', () => {
     }
     // All four actions must be reachable, or a row is dead code.
     assert.deepEqual([...actions].sort(), ['none', 'notify', 'reconcile-silent', 'wait'])
+  })
+
+  it('never suppresses selection restore on load after the user has already selected a file', () => {
+    const file = gitFile('selected.ts')
+    assert.equal(
+      shouldSuppressGitDiffSelectionRestoreOnLoad({
+        suppressOnNextLoad: true,
+        suppressMemoryUntilSelection: true,
+        currentSelection: file,
+        previousSelection: null
+      }),
+      false
+    )
+    assert.equal(
+      shouldSuppressGitDiffSelectionRestoreOnLoad({
+        suppressOnNextLoad: true,
+        suppressMemoryUntilSelection: true,
+        currentSelection: null,
+        previousSelection: null
+      }),
+      true
+    )
   })
 })
