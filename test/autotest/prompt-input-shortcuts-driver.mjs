@@ -18,8 +18,8 @@ const FIXTURES = path.join(REPO_ROOT, 'test', 'autotest', 'fixtures', SUITE)
 const TRIALS = 5
 const SEQUENCES_PER_ROUND = 20
 // These are deadlock guards, not product latency acceptance thresholds.
-const RUNNER_CEILING_MS = 180000
-const WORK_DEADLINE_MS = RUNNER_CEILING_MS - 30000
+const WORK_DEADLINE_MS = Number(process.env?.ONWARD_AUTOTEST_WORK_DEADLINE_MS || 300000)
+const RUNNER_CEILING_MS = WORK_DEADLINE_MS + 30000
 const GROUP_CASE_COUNTS = { user: 23, guests: 4, boundaries: 18, readers: 4 }
 const GROUPS = Object.keys(GROUP_CASE_COUNTS)
 const MAIN_TAB = 'pis-main-tab'

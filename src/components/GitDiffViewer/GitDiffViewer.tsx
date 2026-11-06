@@ -194,7 +194,7 @@ const DIFF_LOAD_IPC_TIMEOUT_MS = 30000
 // authoritative reconcile normally arrives via the mirror-echo invalidation.
 // If no reload started within this window (watcher missed/late), fire ONE
 // silent non-force reload as the deterministic backstop.
-const MUTATION_RECONCILE_FALLBACK_MS = 3000
+const MUTATION_RECONCILE_FALLBACK_MS = 5000
 // Upper bound for an in-flight-skip caller waiting on `waitForLoadIdle`. Even
 // with the IPC watchdog above, this is a belt-and-suspenders ceiling so a
 // queued caller (e.g. Keep/Deny's post-action reload) can never block forever
@@ -1686,7 +1686,9 @@ export function GitDiffViewer({
     }
 
     const { key, repoRoot, filePath } = jumpToEditorTarget
-    setJumpToEditorCheck({ key, status: 'checking' })
+    setJumpToEditorCheck((prev) =>
+      prev.key === key && prev.status !== 'checking' ? prev : { key, status: 'checking' }
+    )
     void window.electronAPI.project.filesExist(repoRoot, [filePath])
       .then((exists) => {
         if (jumpToEditorCheckTokenRef.current !== token) return
@@ -3108,6 +3110,9 @@ export function GitDiffViewer({
     return Boolean(measurement && measurement.ratio !== null && Math.abs(measurement.ratio - targetRatio) <= 0.08)
   }, [measureDiffSplitState])
 
+  const isViewerOpenRef = useRef(isOpen)
+  isViewerOpenRef.current = isOpen
+
   // URIs that must survive a sweep: whatever is bound right now, plus any file
   // holding unsaved draft edits. A dirty draft's VALUE lives in React state and
   // would be rebuilt from it anyway, but disposing its model throws away the
@@ -3118,15 +3123,23 @@ export function GitDiffViewer({
     // being wrong here means disposing a model out from under a mounted editor
     // (`getModel()` goes null and every model wait burns its full budget), so
     // the authority is what the widget actually holds at disposal time.
-    //
-    // EXCEPT on the detach path: panel mode deliberately keeps `diffEditorRef`
-    // pointing at the widget React has already unmounted, so asking it there
-    // retains exactly the superseded models the sweep exists to reclaim — the
-    // stale body then survives into the next mount, which is the original bug.
-    const editor = trustLiveEditor ? diffEditorRef.current : null
+    const editor = (trustLiveEditor || isViewerOpenRef.current) ? diffEditorRef.current : null
     const liveModel = editor?.getModel()
     if (liveModel?.original) retained.add(liveModel.original.uri.toString())
     if (liveModel?.modified) retained.add(liveModel.modified.uri.toString())
+    if (isViewerOpenRef.current && selectedFileRef.current) {
+      const expectedOriginal = modelPathFor(selectedFileRef.current, 'original')
+      const expectedModified = modelPathFor(selectedFileRef.current, 'modified')
+      for (const diffEditor of monacoRef.current?.editor.getDiffEditors?.() ?? []) {
+        const dm = diffEditor.getModel()
+        const origUri = dm?.original?.uri.toString()
+        const modUri = dm?.modified?.uri.toString()
+        if (origUri === expectedOriginal || modUri === expectedModified) {
+          if (origUri) retained.add(origUri)
+          if (modUri) retained.add(modUri)
+        }
+      }
+    }
     const bound = boundModelUrisRef.current
     if (bound) {
       retained.add(bound.originalUri)
@@ -3160,6 +3173,13 @@ export function GitDiffViewer({
     const monaco = monacoRef.current
     if (!monaco) return
     window.setTimeout(() => {
+      if (!isViewerOpenRef.current) {
+        try {
+          diffEditorRef.current?.setModel(null)
+        } catch (error) {
+          debugLog('editor:release-models:error', { error: String(error) })
+        }
+      }
       // Retained set is computed HERE, not at schedule time. The defer window
       // is long enough for a detach→remount to complete (deselect then click,
       // or a re-key), and a set captured before that remount would name the
@@ -3173,7 +3193,20 @@ export function GitDiffViewer({
       for (const model of monaco.editor.getModels()) {
         const uri = model.uri.toString()
         if (!uri.startsWith(GIT_DIFF_MODEL_URI_PREFIX)) continue
-        if (retained.has(uri)) { live += 1; continue }
+        if (retained.has(uri)) {
+          live += 1
+          continue
+        }
+        for (const diffEditor of monaco.editor.getDiffEditors?.() ?? []) {
+          const dm = diffEditor.getModel()
+          if (dm?.original === model || dm?.modified === model) {
+            try {
+              diffEditor.setModel(null)
+            } catch (error) {
+              debugLog('editor:release-models:error', { error: String(error) })
+            }
+          }
+        }
         try {
           model.dispose()
           disposed += 1

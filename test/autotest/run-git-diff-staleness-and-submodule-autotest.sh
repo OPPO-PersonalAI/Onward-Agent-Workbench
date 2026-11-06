@@ -108,6 +108,9 @@ MANIFEST_PATH="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).manif
 
 cleanup() {
   rm -rf "$RUN_TMP_DIR" 2>/dev/null || true
+  if [[ -n "${TEMP_ROOT:-}" && -d "$TEMP_ROOT" ]]; then
+    onward_robust_rm "$TEMP_ROOT" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 

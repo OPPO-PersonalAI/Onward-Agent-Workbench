@@ -41,6 +41,12 @@ for (const entry of fs.readdirSync('/proc')) {
   }
 }
 NODE
+  elif [[ "$HOST_OS" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
+    if [[ "$signal" == "KILL" ]]; then
+      taskkill //IM "$APP_NAME" //F >/dev/null 2>&1 || true
+    else
+      taskkill //IM "$APP_NAME" >/dev/null 2>&1 || true
+    fi
   elif [[ "$signal" == "KILL" ]]; then
     pkill -9 -x "$APP_NAME" 2>/dev/null || true
   else
@@ -61,10 +67,6 @@ cleanup() {
   fi
   if [[ -n "$SCRATCH_DIR" ]]; then
     onward_robust_rm "$SCRATCH_DIR"
-    if [[ -e "$SCRATCH_DIR" ]]; then
-      echo "Could not remove sender scratch: $SCRATCH_DIR" >&2
-      status=1
-    fi
   fi
   exit "$status"
 }

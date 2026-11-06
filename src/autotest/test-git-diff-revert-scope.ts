@@ -78,11 +78,14 @@ export async function testGitDiffRevertScope(ctx: AutotestContext): Promise<Test
     (api()?.getFileList?.() ?? []).find((f: { filename: string }) => f.filename === filename) ?? null
 
   const selectAndSettle = async (filename: string, label: string): Promise<boolean> => {
-    const selected = api()?.selectFileByPath?.(filename)
-    if (!selected) return false
+    api()?.selectFileByPath?.(filename)
     return await waitFor(`grs-ready:${label}`, () => {
       const sel = api()?.getSelectedFile?.()
-      return sel?.filename === filename && api()?.isSelectedReady?.() === true
+      if (sel?.filename !== filename) {
+        api()?.selectFileByPath?.(filename)
+        return false
+      }
+      return api()?.isSelectedReady?.() === true
     }, READY_TIMEOUT_MS, 100)
   }
 
@@ -129,29 +132,32 @@ export async function testGitDiffRevertScope(ctx: AutotestContext): Promise<Test
   })
   if (cancelled()) return results
 
-  // Warm beta too, then land selection back on it as the discard target.
-  const betaWarm = await selectAndSettle('beta.txt', 'beta-warm')
-  record('GRS-00d-beta-selected-ready', betaWarm, {})
-  if (!betaWarm || cancelled()) return results
-
-  // Quiesce: wait until no loadDiff has started for ~1.5 s so a straggler
-  // reconcile from GRS-02's external write cannot leak into the discard
-  // window and blur the GRS-04 count.
-  {
+  // Quiesce BEFORE selecting beta: wait until no loadDiff is in flight and none
+  // has started for ~2.5 s so a straggler reconcile from GRS-02's external write
+  // cannot overwrite the beta selection or leak into the GRS-04 count.
+  const quiesceLoadDiff = async (quietWindowMs: number) => {
     const deadline = performance.now() + 15_000
     let lastCount = api()?.getLoadDiffStats?.()?.started ?? 0
     let stableSince = performance.now()
     while (performance.now() < deadline) {
       await sleep(250)
       const now = api()?.getLoadDiffStats?.()?.started ?? 0
-      if (now !== lastCount) {
+      const loading = Boolean(api()?.getLoadState?.()?.inFlight)
+      if (now !== lastCount || loading) {
         lastCount = now
         stableSince = performance.now()
-      } else if (performance.now() - stableSince >= 1_500) {
+      } else if (performance.now() - stableSince >= quietWindowMs) {
         break
       }
     }
   }
+  await quiesceLoadDiff(2_500)
+
+  // Warm beta too, then land selection back on it as the discard target.
+  const betaWarm = await selectAndSettle('beta.txt', 'beta-warm')
+  record('GRS-00d-beta-selected-ready', betaWarm, {})
+  if (!betaWarm || cancelled()) return results
+  await quiesceLoadDiff(1_000)
 
   // Baselines for the discard window.
   const loadsBefore = api()?.getLoadDiffStats?.()?.started ?? -1

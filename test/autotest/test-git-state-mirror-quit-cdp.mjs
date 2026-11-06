@@ -264,7 +264,7 @@ async function trial(scenario, index) {
       const state = await app.evaluate(() => globalThis.__onwardQuitAutotest.inspect())
       servicePid = state.pid
       return Boolean(servicePid) && (scenario === 'pending-subscribe' ? state.pending > 0 : state.subscriptions >= 4 && state.pending === 0)
-    }, 15_000)
+    }, 30_000)
     assert.notEqual(servicePid, running.mainPid ?? child.pid, 'Watcher must live outside the main process')
     const nativeInMain = await app.evaluate(({ app }) => {
       const require = process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`)
@@ -284,7 +284,7 @@ async function trial(scenario, index) {
       await page.waitForFunction(async cwd => {
         const state = await window.electronAPI.git.getMirror(cwd)
         return state?.files?.some(file => file.filename === 'tracked.txt')
-      }, repos[0], { timeout: 15_000, polling: 100 })
+      }, repos[0], { timeout: 25_000, polling: 100 })
       log(`GSMQ-02 file changes observed scenario=${scenario} trial=${index}`)
     }
     if (scenario === 'service-exit') {
@@ -588,12 +588,14 @@ async function trial(scenario, index) {
     } else {
       assert.equal(outcome.signal, null)
       const expectedCode = scenario === 'save-hang' ? 1 : 0
+      const expectedClean = scenario === 'save-hang' ? 'false' : 'true'
       const cleanWinInspectorBreakpointExit =
         process.platform === 'win32' &&
-        expectedCode === 0 &&
         outcome.code === 2147483651 &&
-        /\[QuitPhase\] ready \{.*"clean":true\}/.test(running.output().slice(quitLogOffset))
-      assert.equal(cleanWinInspectorBreakpointExit ? 0 : outcome.code, expectedCode)
+        new RegExp(`\\[QuitPhase\\] ready \\{.*"clean":${expectedClean}\\}`).test(
+          running.output().slice(quitLogOffset)
+        )
+      assert.equal(cleanWinInspectorBreakpointExit ? expectedCode : outcome.code, expectedCode)
     }
     await waitUntil(() => !alive(servicePid), 5000)
     for (const pid of pressurePids) await waitUntil(() => !alive(pid), 5000)

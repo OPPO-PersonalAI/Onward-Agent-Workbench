@@ -163,7 +163,7 @@ export async function testTerminalTitleRename(ctx: AutotestContext): Promise<Tes
 
   // ================= TTM-07: branch present, repoName empty — only branch item enabled =================
   await resetState()
-  api.setTerminalGitInfoOverride(terminalId, { branch: 'only-branch', repoName: null })
+  api.setTerminalGitInfoOverride(terminalId, { branch: 'only-branch', repoName: null, repoRoot: '/repo/snapshot' })
   await sleep(30)
   api.openTitleMenu(terminalId)
   await sleep(30)
@@ -177,13 +177,13 @@ export async function testTerminalTitleRename(ctx: AutotestContext): Promise<Tes
 
   // ================= TTM-08: snapshot survives post-click branch mutation =================
   await resetState()
-  api.setTerminalGitInfoOverride(terminalId, { branch: 'snapshot-original', repoName: 'snapshot-repo' })
+  api.setTerminalGitInfoOverride(terminalId, { branch: 'snapshot-original', repoName: 'snapshot-repo', repoRoot: '/repo/snapshot' })
   await sleep(30)
   api.openTitleMenu(terminalId)
   api.clickTitleMenuItem('use-branch', terminalId)
   await sleep(40)
   const customSnapshot1 = api.getTerminalCustomName(terminalId)
-  api.setTerminalGitInfoOverride(terminalId, { branch: 'snapshot-changed' })
+  api.setTerminalGitInfoOverride(terminalId, { branch: 'snapshot-changed', repoRoot: '/repo/snapshot' })
   await sleep(40)
   const customSnapshot2 = api.getTerminalCustomName(terminalId)
   record(

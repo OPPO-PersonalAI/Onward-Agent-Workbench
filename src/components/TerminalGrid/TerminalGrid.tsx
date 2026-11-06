@@ -2577,50 +2577,60 @@ export const TerminalGrid = memo(function TerminalGrid({
         return true
       },
       setTerminalGitInfoOverride: (terminalId, override) => {
-        if (!terminalId) return false
+        const resolved = resolveTerminalId(terminalId) ?? terminalId
+        if (!resolved) return false
         if (override === null) {
-          terminalInfoOverridesRef.current.delete(terminalId)
+          terminalInfoOverridesRef.current.delete(resolved)
           // Restore the last real bridge info (silently — no auto-follow /
           // persist side effects) so the test starts from the true state.
-          const bridgeInfo = bridgeTerminalInfosRef.current[terminalId] ?? null
+          const bridgeInfo = bridgeTerminalInfosRef.current[resolved] ?? null
+          if (bridgeInfo) {
+            terminalInfosRef.current = { ...terminalInfosRef.current, [resolved]: bridgeInfo }
+          } else if (terminalInfosRef.current[resolved]) {
+            const nextRef = { ...terminalInfosRef.current }
+            delete nextRef[resolved]
+            terminalInfosRef.current = nextRef
+          }
           setTerminalInfos((prev) => {
-            const current = prev[terminalId]
+            const current = prev[resolved]
             if (bridgeInfo) {
               if (current === bridgeInfo) return prev
-              return { ...prev, [terminalId]: bridgeInfo }
+              return { ...prev, [resolved]: bridgeInfo }
             }
             if (!current) return prev
             const next = { ...prev }
-            delete next[terminalId]
+            delete next[resolved]
             return next
           })
-          notifyTerminalGitInfo(terminalId, {
+          notifyTerminalGitInfo(resolved, {
             repoRoot: bridgeInfo?.repoRoot ?? null,
             branch: bridgeInfo?.branch ?? null
           })
           return true
         }
-        const existing = terminalInfoOverridesRef.current.get(terminalId) ?? {}
+        const existing = terminalInfoOverridesRef.current.get(resolved) ?? {}
         const merged: Partial<TerminalGitInfo> = { ...existing }
         if (override.cwd !== undefined) merged.cwd = override.cwd
         if (override.repoRoot !== undefined) merged.repoRoot = override.repoRoot
         if (override.branch !== undefined) merged.branch = override.branch
         if (override.repoName !== undefined) merged.repoName = override.repoName
         if (override.status !== undefined) merged.status = override.status
-        terminalInfoOverridesRef.current.set(terminalId, merged)
+        terminalInfoOverridesRef.current.set(resolved, merged)
         // Drive the same code path a real IPC update would: applyTerminal-
         // InfoUpdate handles setTerminalInfos, the AppState ref via
         // notifyTerminalGitInfo, and — most importantly for TTM-21+ — the
-        // auto-follow rename rule.
-        const previousEffective = terminalInfosRef.current[terminalId]
+        // auto-follow rename rule. Merge unspecified fields from the live
+        // bridge state first so a prior override's repoRoot: null cannot stick.
+        const baseInfo = bridgeTerminalInfosRef.current[resolved] ?? terminalInfosRef.current[resolved]
         const nextEffective: TerminalGitInfo = {
-          cwd: merged.cwd !== undefined ? merged.cwd : previousEffective?.cwd ?? null,
-          repoRoot: merged.repoRoot !== undefined ? merged.repoRoot : previousEffective?.repoRoot ?? null,
-          branch: merged.branch !== undefined ? merged.branch : previousEffective?.branch ?? null,
-          repoName: merged.repoName !== undefined ? merged.repoName : previousEffective?.repoName ?? null,
-          status: merged.status !== undefined ? merged.status : previousEffective?.status ?? null
+          cwd: merged.cwd !== undefined ? merged.cwd : baseInfo?.cwd ?? null,
+          repoRoot: merged.repoRoot !== undefined ? merged.repoRoot : baseInfo?.repoRoot ?? null,
+          branch: merged.branch !== undefined ? merged.branch : baseInfo?.branch ?? null,
+          repoName: merged.repoName !== undefined ? merged.repoName : baseInfo?.repoName ?? null,
+          status: merged.status !== undefined ? merged.status : baseInfo?.status ?? null
         }
-        applyTerminalInfoUpdate(terminalId, nextEffective)
+        terminalInfosRef.current = { ...terminalInfosRef.current, [resolved]: nextEffective }
+        applyTerminalInfoUpdate(resolved, nextEffective)
         return true
       },
       getAutoFollowGitBranchForTaskName: () => autoFollowEnabledRef.current,

@@ -72,7 +72,7 @@ onward_robust_rm() {
   for target in "$@"; do
     [ -n "$target" ] || continue
     [ -e "$target" ] || continue
-    for attempt in 1 2 3 4 5; do
+    for attempt in 1 2 3 4 5 6 7 8; do
       rm -rf "$target" 2>/dev/null && break
       sleep 0.3
     done

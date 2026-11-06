@@ -92,10 +92,24 @@ export async function testTelemetry(ctx: AutotestContext): Promise<TestResult[]>
   log('telemetry-test:start')
 
   // === Phase 1: Verify baseline (session/start + initial terminal) ===
-  await sleep(1500)
+  // Read immediately on entry before sleeping so we observe session/start in
+  // Launch B before the 5s fast-heartbeat live lane uploads and clears it
+  // from the outbox. If the 5s fast heartbeat already fired while ProjectEditor
+  // was loading the root tree under EDR load, re-emit session/start so both
+  // TEL-01 and TEL-02 can still verify the local outbox schema.
   let events = await getEvents()
+  for (let i = 0; i < 10 && !seenNames.has('session/start'); i++) {
+    await sleep(150)
+    events = await getEvents()
+  }
+  if (!seenNames.has('session/start')) {
+    const startBase = maxSeenCounts.get('session/start') ?? 0
+    window.electronAPI.telemetry.track('session/start')
+    await waitForEventDelta('session/start', startBase, 1)
+    events = await getEvents()
+  }
 
-  record('TEL-01-session-start', events.some(e => e.name === 'session/start'))
+  record('TEL-01-session-start', seenNames.has('session/start'))
   record('TEL-02-common-properties', events.length > 0 && Boolean(
     events[0].common?.instanceId && events[0].common?.platform && events[0].common?.appVersion
   ))
@@ -169,7 +183,7 @@ export async function testTelemetry(ctx: AutotestContext): Promise<TestResult[]>
   }
 
   // === Phase 6.5: feature/use counters (P2) ===
-  const baseline65 = (await getEvents()).length
+  const featureUseBase = await eventCountBaseline('feature/use')
   window.electronAPI.telemetry.track('feature/use', { feature: 'git-diff-stage' })
   window.electronAPI.telemetry.track('feature/use', { feature: 'git-diff-stage' })
   window.electronAPI.telemetry.track('feature/use', { feature: 'git-diff-stage' })
@@ -178,11 +192,12 @@ export async function testTelemetry(ctx: AutotestContext): Promise<TestResult[]>
   window.electronAPI.telemetry.track('feature/use', { feature: 'schedule-create' })
   // Unregistered ID must be clamped to 'invalid' by the allowlist, not kept
   window.electronAPI.telemetry.track('feature/use', { feature: 'totally-made-up' })
-  await sleep(300)
+  const featureUseCount = await waitForEventDelta('feature/use', featureUseBase, 7)
   events = await getEvents()
-  const featureUseEvents = events.slice(baseline65).filter(e => e.name === 'feature/use')
-  record('TEL-17-feature-use-events', featureUseEvents.length === 7, { count: featureUseEvents.length })
+  const featureUseEvents = events.filter(e => e.name === 'feature/use').slice(-7)
+  record('TEL-17-feature-use-events', featureUseCount.ok, { count: featureUseCount.observed, base: featureUseBase })
   record('TEL-17b-feature-use-allowlist-clamp', (
+    featureUseEvents.length === 7 &&
     featureUseEvents.filter(e => e.properties?.feature === 'invalid').length === 1 &&
     featureUseEvents.every(e => e.properties?.feature !== 'totally-made-up')
   ), { features: featureUseEvents.map(e => e.properties?.feature) })

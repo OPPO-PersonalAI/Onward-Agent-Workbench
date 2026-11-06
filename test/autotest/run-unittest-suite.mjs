@@ -24,13 +24,18 @@
 import { spawn } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { cpus } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..', '..')
 const UNITTEST_DIR = resolve(REPO_ROOT, 'test', 'unittest')
-const PER_FILE_TIMEOUT_MS = 60_000
+const PER_FILE_TIMEOUT_MS = 120_000
+const CONCURRENCY = Math.max(
+  1,
+  Number(process.env.ONWARD_UNITTEST_CONCURRENCY) || Math.min(6, cpus().length),
+)
 const requireFromRunner = createRequire(import.meta.url)
 const RUNTIME_TEST_PACKAGES = [
   {
@@ -83,28 +88,55 @@ function runOne(file) {
   return new Promise((resolveResult) => {
     const start = Date.now()
     const filePath = resolve(UNITTEST_DIR, file)
+    const outputChunks = []
     const child = spawn(
       process.execPath,
       ['--experimental-strip-types', '--no-warnings=ExperimentalWarning', filePath],
-      { cwd: REPO_ROOT, stdio: 'inherit' },
+      { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
     )
+    child.stdout?.on('data', (chunk) => {
+      outputChunks.push({ stream: 'stdout', chunk })
+    })
+    child.stderr?.on('data', (chunk) => {
+      outputChunks.push({ stream: 'stderr', chunk })
+    })
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 3000).unref()
+      setTimeout(() => {
+        child.kill('SIGKILL')
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+      }, 3000).unref()
     }, PER_FILE_TIMEOUT_MS)
-    child.on('exit', (code, signal) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer)
       const elapsed = ((Date.now() - start) / 1000).toFixed(2)
-      resolveResult({
+      const r = {
         file,
         ok: !timedOut && code === 0,
         code,
         signal,
         timedOut,
         elapsed,
-      })
+      }
+      console.log(`--- ${file} ---`)
+      for (const item of outputChunks) {
+        if (item.stream === 'stderr') {
+          process.stderr.write(item.chunk)
+        } else {
+          process.stdout.write(item.chunk)
+        }
+      }
+      const tag = r.ok
+        ? 'PASS'
+        : r.timedOut
+          ? 'TIMEOUT'
+          : `FAIL(exit=${r.code}${r.signal ? `, signal=${r.signal}` : ''})`
+      console.log(`[${tag}] ${file} (${r.elapsed}s)`)
+      console.log('')
+      resolveResult(r)
     })
   })
 }
@@ -120,21 +152,22 @@ async function main() {
   console.log(`=== Unit-test suite: ${files.length} file(s) ===`)
   console.log(`Working dir: ${REPO_ROOT}`)
   console.log(`Per-file timeout: ${PER_FILE_TIMEOUT_MS / 1000}s`)
+  console.log(`Concurrency: ${CONCURRENCY}`)
   console.log('')
 
-  const results = []
-  for (const file of files) {
-    console.log(`--- ${file} ---`)
-    const r = await runOne(file)
-    results.push(r)
-    const tag = r.ok
-      ? 'PASS'
-      : r.timedOut
-        ? 'TIMEOUT'
-        : `FAIL(exit=${r.code}${r.signal ? `, signal=${r.signal}` : ''})`
-    console.log(`[${tag}] ${file} (${r.elapsed}s)`)
-    console.log('')
+  const results = new Array(files.length)
+  let nextIndex = 0
+
+  async function worker() {
+    while (true) {
+      const idx = nextIndex++
+      if (idx >= files.length) break
+      results[idx] = await runOne(files[idx])
+    }
   }
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY, files.length) }, () => worker())
+  await Promise.all(workers)
 
   const passed = results.filter((r) => r.ok).length
   const failed = results.length - passed

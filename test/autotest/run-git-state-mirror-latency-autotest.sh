@@ -52,8 +52,9 @@ fi
 
 for tarball in "$FIXTURE_SRC"/*.tar.gz; do
   if [[ ! -f "$tarball" ]]; then continue; fi
-  (cd "$FIXTURE_TMP" && tar xzf - < "$tarball")
+  (cd "$FIXTURE_TMP" && tar xzf - < "$tarball") &
 done
+wait
 
 if [[ ! -d "$FIXTURE_TMP/repo-A" ]]; then
   echo "ERROR: fixture extraction failed; expected $FIXTURE_TMP/repo-A to exist" >&2

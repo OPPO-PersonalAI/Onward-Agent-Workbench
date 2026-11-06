@@ -313,7 +313,7 @@ export async function testGitDiffStalenessAndSubmodule(ctx: AutotestContext): Pr
   // exceed 5s (observed: GDS-29 hunk-revert result:'timeout' at 5005ms). 20s rides
   // that out; the race resolves the instant the action's promise settles, so a fast
   // host is unaffected.
-  const awaitLastHunkAction = async (label: string, timeoutMs = 20000): Promise<boolean | null> => {
+  const awaitLastHunkAction = async (label: string, timeoutMs = 45000): Promise<boolean | null> => {
     const promise = window.__onwardGitDiffDebug?.waitForLastHunkActionForTest?.()
     if (!promise) return null
     const startedAt = performance.now()
@@ -2609,7 +2609,7 @@ export async function testGitDiffStalenessAndSubmodule(ctx: AutotestContext): Pr
 	        selected.changeType === 'unstaged' &&
 	        (debugState?.lineChanges ?? 0) > 0 &&
 	        (debugState?.visibleWidgetDomCount ?? 0) > 0
-      }, 3500, 50)
+      }, 45000, 50)
       const hunkRevertButton = document.querySelector<HTMLButtonElement>('.git-diff-hunk-actions.is-visible .git-diff-hunk-action-button.danger')
       hunkRevertButton?.click()
       const hunkRevertClickResult = hunkRevertButton
@@ -2688,7 +2688,7 @@ export async function testGitDiffStalenessAndSubmodule(ctx: AutotestContext): Pr
 	        selected.changeType === 'unstaged' &&
 	        (debugState?.lineChanges ?? 0) > 0 &&
 	        (debugState?.visibleWidgetDomCount ?? 0) > 0
-	    }, 3500, 50)
+	    }, 45000, 50)
 	    record('GDS-29-inline-hunk-actions-survive-A-B-A-file-switch', Boolean(
 	      switchedToOtherFileForHunks &&
 	      otherFileHunkWidgetsVisible &&

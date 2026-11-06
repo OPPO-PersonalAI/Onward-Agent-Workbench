@@ -22,10 +22,13 @@
 //   * Path separators are forced to forward-slash by git's own porcelain v2 -z
 //     output, so we do not normalise inside this script.
 
-import { execFileSync } from 'child_process'
-import { cpSync, mkdirSync, writeFileSync, rmSync, renameSync, readdirSync } from 'fs'
+import { execFile } from 'child_process'
+import { appendFileSync, cpSync, mkdirSync, writeFileSync, rmSync, renameSync, readdirSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 // Windows note: under EDR/AV a freshly-written git tree (or a prior suite's
 // lingering git/electron handle on the shared runtime/ dir) can briefly lock
@@ -39,30 +42,28 @@ function robustRmSync(target, { retries = 10, baseDelayMs = 100 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       rmSync(target, { recursive: true, force: true })
-      return
+      return true
     } catch (err) {
       const code = err && err.code
       const transient =
         code === 'EPERM' || code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EACCES'
       if (!transient) throw err
       if (attempt >= retries) {
-        // Last resort (Windows): under FULL-SUITE EDR pressure a lingering
-        // git/electron/AV handle from a PRIOR group-runner (the three GDS group
-        // suites share this one runtime/ path) can hold the tree open past the
-        // ~5.5 s retry window, so rmSync never wins. We usually cannot DELETE a dir
-        // with a locked file inside, but on NTFS we CAN rename the dir aside (it is
-        // just a directory-entry rename; the stale handles keep pointing at the
-        // renamed inode), freeing the canonical path for a fresh build. The husk is
-        // swept best-effort here and on the next run; the runner EXIT trap + the
-        // orchestrator's __autotest_/runtime sweep are the final backstop.
         const aside = `${target}.stale-${process.pid}-${attempt}`
-        renameSync(target, aside) // if this also throws, let it propagate — genuinely wedged
         try {
-          rmSync(aside, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+          renameSync(target, aside)
+          try {
+            rmSync(aside, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+          } catch {
+            // husk still locked — leave it; sweepStaleHusks() removes it next run
+          }
+          return true
         } catch {
-          // husk still locked — leave it; sweepStaleHusks() removes it next run
+          // On Windows NTFS, renameSync on a directory also throws EPERM when a
+          // lingering handle inside the tree is still open. Return false so the
+          // caller can fall back to an isolated per-PID runtime.stale-* directory.
+          return false
         }
-        return
       }
       // Linear backoff: 100, 200, … up to ~5.5 s total — outlasts a transient scan lock.
       sleepSync(baseDelayMs * (attempt + 1))
@@ -98,12 +99,19 @@ function sweepStaleHusks(parentDir, baseName) {
 // for this layout.
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const fixtureRoot = resolve(__dirname, 'fixtures', 'git-diff-staleness-and-submodule')
-const runtimeRoot = join(fixtureRoot, 'runtime')
+const defaultRuntimeRoot = join(fixtureRoot, 'runtime')
 
-function git(cwd, args) {
-  execFileSync('git', args, {
+const GIT_COMMON_ARGS = [
+  '-c', 'user.name=Onward AutoTest',
+  '-c', 'user.email=autotest@example.com',
+  '-c', 'core.autocrlf=false',
+  '-c', 'core.safecrlf=false',
+  '-c', 'protocol.file.allow=always'
+]
+
+async function git(cwd, args) {
+  await execFileAsync('git', [...GIT_COMMON_ARGS, ...args], {
     cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0'
@@ -111,40 +119,49 @@ function git(cwd, args) {
   })
 }
 
-function commit(repo, message) {
-  git(repo, [
-    '-c', 'user.name=Onward AutoTest',
-    '-c', 'user.email=autotest@example.com',
-    'commit',
-    '-m', message
-  ])
+function pinLineEndingsConfig(gitDir) {
+  try {
+    appendFileSync(
+      join(gitDir, 'config'),
+      '\n[core]\n\tautocrlf = false\n\tsafecrlf = false\n',
+      'utf8'
+    )
+  } catch {
+    // ignore if gitDir is a .git file pointer
+  }
 }
 
-function init(repo, files, message) {
+async function commit(repo, message) {
+  await git(repo, ['commit', '-m', message])
+}
+
+async function init(repo, files, message) {
   mkdirSync(repo, { recursive: true })
-  git(repo, ['init', '-b', 'main'])
-  git(repo, ['config', 'core.autocrlf', 'false'])
-  git(repo, ['config', 'core.safecrlf', 'false'])
+  await git(repo, ['init', '-b', 'main'])
+  pinLineEndingsConfig(join(repo, '.git'))
   for (const [rel, content] of Object.entries(files)) {
     const full = join(repo, rel)
     mkdirSync(join(full, '..'), { recursive: true })
     writeFileSync(full, content, 'utf8')
   }
-  git(repo, ['add', '.'])
-  commit(repo, message)
+  await git(repo, ['add', '.'])
+  await commit(repo, message)
 }
 
-function addSubmodule(parent, source, target) {
-  git(parent, [
-    '-c', 'protocol.file.allow=always',
-    'submodule', 'add', pathToFileURL(source).href, target
-  ])
+async function addSubmodule(parent, source, target) {
+  await git(parent, ['submodule', 'add', pathToFileURL(source).href, target])
 }
 
 // Wipe-and-recreate so test runs don't inherit a half-baked previous state.
 mkdirSync(fixtureRoot, { recursive: true })
 sweepStaleHusks(fixtureRoot, 'runtime') // clear any rename-aside husks from prior locked runs
-robustRmSync(runtimeRoot)
+const cleanedDefault = robustRmSync(defaultRuntimeRoot)
+const runtimeRoot = cleanedDefault
+  ? defaultRuntimeRoot
+  : join(fixtureRoot, `runtime.stale-${process.pid}-active`)
+if (!cleanedDefault) {
+  rmSync(runtimeRoot, { recursive: true, force: true })
+}
 mkdirSync(runtimeRoot, { recursive: true })
 
 const tempRoot = runtimeRoot
@@ -154,10 +171,6 @@ const reposRoot = join(tempRoot, 'repos')
 // One source submodule repo seeded with a stable file list that the test can
 // modify / leave alone in different scenarios.
 const subSource = join(sourcesRoot, 'sub')
-init(subSource, {
-  'README.md': '# Submodule\n\nbaseline content\n',
-  'lib/keep.txt': 'keep this file untouched in clean scenarios\n'
-}, 'submodule baseline')
 
 // ------------ clean/root ------------
 // deep-change-target: a LONG committed file (1200 lines) whose edits land in
@@ -173,16 +186,22 @@ const deepChangeTargetLines = Array.from(
   (_, i) => `deep baseline line ${i + 1}`
 ).join('\n')
 const cleanRoot = join(reposRoot, 'clean', 'root')
-init(cleanRoot, {
-  'README.md': '# Clean parent\n\nbaseline parent content\n',
-  'src/main.txt': 'parent source line\n',
-  'nested/repeated-edit-target.md': '# Repeated edit target\n\nbaseline body\n',
-  'src/deep-change-target.txt': `${deepChangeTargetLines}\n`
-}, 'parent baseline')
-addSubmodule(cleanRoot, subSource, 'modules/sub')
-git(join(cleanRoot, 'modules', 'sub'), ['config', 'core.autocrlf', 'false'])
-git(join(cleanRoot, 'modules', 'sub'), ['config', 'core.safecrlf', 'false'])
-commit(cleanRoot, 'add submodule')
+
+await Promise.all([
+  init(subSource, {
+    'README.md': '# Submodule\n\nbaseline content\n',
+    'lib/keep.txt': 'keep this file untouched in clean scenarios\n'
+  }, 'submodule baseline'),
+  init(cleanRoot, {
+    'README.md': '# Clean parent\n\nbaseline parent content\n',
+    'src/main.txt': 'parent source line\n',
+    'nested/repeated-edit-target.md': '# Repeated edit target\n\nbaseline body\n',
+    'src/deep-change-target.txt': `${deepChangeTargetLines}\n`
+  }, 'parent baseline')
+])
+await addSubmodule(cleanRoot, subSource, 'modules/sub')
+pinLineEndingsConfig(join(cleanRoot, '.git', 'modules', 'modules', 'sub'))
+await commit(cleanRoot, 'add submodule')
 
 const gdsGroup = process.env.GDS_GROUP || process.env.ONWARD_AUTOTEST_GDS_GROUP || ''
 const needSubmoduleVariants = gdsGroup === '' || gdsGroup === 'submodule'
@@ -200,15 +219,15 @@ if (needSubmoduleVariants) {
   const innerSubmodule = join(pointerChangedRoot, 'modules', 'sub')
   writeFileSync(join(innerSubmodule, 'README.md'),
     '# Submodule\n\nadvanced commit body\n', 'utf8')
-  git(innerSubmodule, ['add', 'README.md'])
-  commit(innerSubmodule, 'submodule advance')
-  git(innerSubmodule, ['checkout', '-q', 'HEAD', '--', '.'])
+  await git(innerSubmodule, ['add', 'README.md'])
+  await commit(innerSubmodule, 'submodule advance')
+  await git(innerSubmodule, ['checkout', '-q', 'HEAD', '--', '.'])
 
   // ------------ staged-pointer/root ------------
   // Copy pointer-changed/root and stage the submodule pointer in parent.
   mkdirSync(dirname(stagedPointerRoot), { recursive: true })
   cpSync(pointerChangedRoot, stagedPointerRoot, { recursive: true })
-  git(stagedPointerRoot, ['add', 'modules/sub'])
+  await git(stagedPointerRoot, ['add', 'modules/sub'])
 
   // ------------ uninitialized/root ------------
   // Copy clean/root and remove the submodule checkout + absorbed gitdir so

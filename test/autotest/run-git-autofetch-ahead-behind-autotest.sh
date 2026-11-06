@@ -33,7 +33,7 @@ fi
 # design, and AB-14/15 repeat a ~3 s in-flight window 5 times. Still inside the
 # 300 s per-runner regression ceiling; if this suite ever needs more, split it
 # rather than widening further (test/README.md § 3).
-WATCHDOG_SEC="${WATCHDOG_SEC:-240}"
+WATCHDOG_SEC="${WATCHDOG_SEC:-280}"
 # Must exceed AB-17's 22 s delay (so the slow success is not killed) and stay
 # well under ext::sleep 60 (so AB-08 is killed by the ceiling, not by sleep).
 FETCH_CEILING_MS=30000

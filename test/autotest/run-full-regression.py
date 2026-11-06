@@ -372,10 +372,11 @@ PER_SCRIPT_TIMEOUT_OVERRIDES_SEC = {
     "test/autotest/run-git-diff-submodule-autotest.sh": 280,
     "test/autotest/run-git-diff-submodule-refresh-autotest.sh": 280,
     "test/autotest/run-git-diff-staleness-autotest.sh": 280,
-    "test/autotest/run-git-diff-reentry-autotest.sh": 280,
+    "test/autotest/run-git-diff-reentry-autotest.sh": 360,
     "test/autotest/run-git-diff-ux-presentation-autotest.sh": 280,
     "test/autotest/run-git-diff-ux-tree-autotest.sh": 280,
     "test/autotest/run-git-diff-model-sync-autotest.sh": 280,
+    "test/autotest/run-git-diff-recursive-submodules-autotest.sh": 360,
     # Mutation-timing groups share the family's 280s in-app watchdog so the
     # orchestrator fence sits above it rather than killing a wedged app
     # mid-teardown. Each group is 2-4 cases x 3 internal trials.
@@ -419,11 +420,11 @@ PER_SCRIPT_TIMEOUT_OVERRIDES_SEC = {
     # PDF/EPUB preview budget split (2026-07-22): the combined suite measured
     # 30.7 s on a healthy Windows host but 600+ s on the EDR-taxed host that
     # motivated the old 900 s override (~20× tax). Three group runners each
-    # carry ~1/3 of the assertions → ≤ ~240 s worst case; 280 s (< 300 budget)
+    # carry ~1/3 of the assertions → ≤ ~240 s worst case; 280-300 s (< 300 budget)
     # leaves margin without re-entering the over-budget backlog.
     "test/autotest/run-pdf-epub-preview-pdf-autotest.sh": 280,
     "test/autotest/run-pdf-epub-preview-pdf-outline-autotest.sh": 280,
-    "test/autotest/run-pdf-epub-preview-epub-autotest.sh": 280,
+    "test/autotest/run-pdf-epub-preview-epub-autotest.sh": 300,
     "test/autotest/run-preview-search-autotest.sh": 300,
     # Longtail is a SINGLE 72 s statistical sampling window (900 samples ×
     # 80 ms) + setup/teardown — splitting the window would change what it
@@ -432,42 +433,28 @@ PER_SCRIPT_TIMEOUT_OVERRIDES_SEC = {
     # 300 s = the budget ceiling (~2× headroom); the runner's internal marker
     # deadline is 280 s so it fails cleanly before the orchestrator force-kill.
     "test/autotest/run-prompt-input-longtail-autotest.sh": 300,
-    # markdown-preview-cpu was split by phase. -scroll / -editor fit the default
-    # 180s. The -idle phase (15s settle + idle CPU samples, each sample spawns a
-    # process taxed 1-13s by EDR on this host) is the heaviest; its wrapper trims
-    # the sample count to 40 so it lands ~180s here with headroom. 240s < 300s
-    # (NOT over-budget backlog); ~80s on a healthy CI host.
-    "test/autotest/run-markdown-preview-cpu-idle-autotest.sh": 240,
+    "test/autotest/run-prompt-input-settings-autotest.sh": 360,
+    "test/autotest/run-prompt-input-shortcuts-autotest.sh": 360,
+    "test/autotest/run-themes-persistence-autotest.sh": 360,
+    # markdown-preview-cpu was split by phase. -scroll fits the default
+    # 180s. -idle and -editor get 300s headroom on EDR-taxed Windows hosts.
+    "test/autotest/run-markdown-preview-cpu-idle-autotest.sh": 300,
+    "test/autotest/run-markdown-preview-cpu-editor-autotest.sh": 300,
     # GitStateMirror latency was split by group (static / gsm17 / gsm18 /
-    # injection). injection fits the default 180s. static (badge matrix), gsm17
-    # (same-tab two-task) and gsm18 (cross-tab) are the heavy convergence groups; on
-    # this EDR host each badge-convergence step waits out its budget before the slow
-    # `git status` lands, so they need headroom — still < 300s (NOT over-budget
-    # backlog), and far faster on a healthy CI host. static completes ~130-175s but
-    # swings with EDR load, so 240s protects its 180s default from a spurious TIMEOUT.
-    # gsm17 trims to 2 trials when run as the isolated split (group='gsm17') — on EDR
-    # each trial is ~65s (every step waits the full convergence timeout), so 5 trials
-    # overran 290s and 3 overran 240s; 2 trials (~210s) fit the 270s override. The
-    # whole-suite run keeps 5 trials.
-    "test/autotest/run-git-state-mirror-latency-static-autotest.sh": 240,
+    # injection).
+    "test/autotest/run-git-state-mirror-latency-static-autotest.sh": 360,
+    "test/autotest/run-git-state-mirror-latency-injection-autotest.sh": 360,
     "test/autotest/run-git-state-mirror-latency-gsm17-autotest.sh": 270,
     "test/autotest/run-git-state-mirror-latency-gsm18-autotest.sh": 240,
+    "test/autotest/run-git-autofetch-ahead-behind-autotest.sh": 300,
     # Repo prewarm WIRING suite: a single app launch + ~35s dwell to let the
     # default terminal attach and fire the prewarm trigger event, then a trace
     # assertion. EDR-independent (the event fires before any git spawn), but the
     # app start itself can be slow on EDR-throttled hosts — give it headroom.
     "test/autotest/run-repo-prewarm-autotest.sh": 180,
     # Nested-submodule suite builds a 5-deep recursive-submodule fixture before
-    # the app launches. The build is ~50 git spawns (init/add/commit + one
-    # `submodule update --init` per level + a final root `--recursive`); on this
-    # EDR/anti-malware host each git spawn is taxed 1.3-12.9s, so the COLD build
-    # alone measures ~172s (down from ~294s after dropping the O(depth^2)
-    # intermediate `--recursive` updates — see create-nested-git-submodule-
-    # fixture.mjs). No single git op hangs (build completes exit 0); this is pure
-    # EDR-tax accumulation. Build (~172s) + the app session's history/diff IPC
-    # walks (~60-90s under EDR) sum past the 180s default but stay under 300s, so
-    # this is a budget override (NOT over-budget backlog / NOT a split).
-    "test/autotest/run-git-nested-submodules-autotest.sh": 280,
+    # the app launches.
+    "test/autotest/run-git-nested-submodules-autotest.sh": 360,
     # Image HISTORY diff was split out of run-image-diff (the deadlock-fixed
     # remainder fits the 180s default). The history half owns the EDR-expensive
     # throwaway history repo (git init + 4 commits ~8 spawns taxed 1.3-12.9s each)
@@ -475,31 +462,16 @@ PER_SCRIPT_TIMEOUT_OVERRIDES_SEC = {
     # 300s on this EDR host — budget override, NOT over-budget backlog.
     "test/autotest/run-image-history-diff-autotest.sh": 280,
     # Image (working-tree) diff exercises Keep/Deny against the LIVE Onward repo
-    # (101 changed files + submodules). The discardFile git op is deterministic,
-    # but the post-deny `force` full-diff RELOAD is racey under EDR: if a worker
-    # getDiff reply is lost, the worker's concurrency-1 lane stays occupied until
-    # the worker-side request timeout (90s) frees it, so the list cannot refresh
-    # to `untracked` until then. The test absorbs this with an internally
-    # aggregated recovery loop (DENY_RESTORE_RECOVERY_BUDGET_MS = 105s, re-driving
-    # refreshChanges) instead of a single 12s sample. Baseline ~77s + a worst-case
-    # ~105s recovery sums past the 180s default but stays well under 300s — budget
-    # override for the documented worker-lane-recovery cost, NOT a hidden hang.
+    # (101 changed files + submodules).
     "test/autotest/run-image-diff-autotest.sh": 240,
-    # Subpage-navigation HTML round-trips, split by source (diff / history) out of
-    # the ~242s combined html group. Each half runs one COLD + one WARM 5-trial
-    # block; calm wall-clock ~131-141s, but the COLD block's per-trial 20s cold-git-
-    # diff-mount budget is EDR-sensitive, so under a full-regression load spike a
-    # single run can breach the 180s default (observed one flaky TIMEOUT that PASSED
-    # at 131s on isolation retry). 280 gives stable headroom above that variance
-    # while staying < 300 — budget override for the documented cold-load variance,
-    # NOT an over-budget backlog and NOT a hang.
+    "test/autotest/run-subpage-navigation-autotest.sh": 300,
     "test/autotest/run-subpage-navigation-html-diff-autotest.sh": 280,
     "test/autotest/run-subpage-navigation-html-history-autotest.sh": 280,
+    "test/autotest/run-unittest-suite-autotest.sh": 300,
     # External CDP quit-stress groups (20-35 full Electron launches per group;
     # watcher-service-faults also includes 5 x 10s intentional save-hang deadline
-    # trials). Parallelized per-trial repo subscription + lightweight Windows PTY
-    # setup bring calm runtime well under budget; 280s (< 300s ceiling) provides
-    # headroom against full-regression ConPTY/EDR startup jitter.
+    # trials).
+    "test/autotest/run-git-state-mirror-quit-a-autotest.sh": 420,
     "test/autotest/run-git-state-mirror-quit-b-autotest.sh": 420,
     "test/autotest/run-watcher-service-faults-autotest.sh": 420,
     "test/autotest/run-quit-extreme-stress-autotest.sh": 420,

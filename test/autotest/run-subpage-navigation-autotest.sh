@@ -59,11 +59,23 @@ cleanup() {
   if command -v pgrep >/dev/null 2>&1 && pgrep -lx "$APP_NAME" >/dev/null 2>&1; then
     pkill -x "$APP_NAME" 2>/dev/null || true
   fi
-  if [[ -n "$USER_DATA_DIR" ]] && ! rm -rf "$USER_DATA_DIR" 2>/dev/null; then
-    echo "WARNING: failed to remove user data directory: $USER_DATA_DIR" >&2
+  if [[ -n "$USER_DATA_DIR" ]]; then
+    for _ in 1 2 3 4 5; do
+      rm -rf "$USER_DATA_DIR" 2>/dev/null && break
+      sleep 0.2
+    done
+    if [[ -e "$USER_DATA_DIR" ]]; then
+      echo "WARNING: failed to remove user data directory: $USER_DATA_DIR" >&2
+    fi
   fi
-  if [[ -n "$FIXTURE_BASE" ]] && ! rm -rf "$FIXTURE_BASE" 2>/dev/null; then
-    echo "WARNING: failed to remove fixture directory: $FIXTURE_BASE" >&2
+  if [[ -n "$FIXTURE_BASE" ]]; then
+    for _ in 1 2 3 4 5; do
+      rm -rf "$FIXTURE_BASE" 2>/dev/null && break
+      sleep 0.2
+    done
+    if [[ -e "$FIXTURE_BASE" ]]; then
+      echo "WARNING: failed to remove fixture directory: $FIXTURE_BASE" >&2
+    fi
   fi
 }
 on_exit() {

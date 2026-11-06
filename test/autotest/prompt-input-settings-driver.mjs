@@ -19,7 +19,7 @@ const FIXTURES = path.join(ROOT, 'test/autotest/fixtures/prompt-input-settings')
 const TRIALS = 5
 // This is an execution watchdog, not a product latency assertion. Leave the
 // default 180-second orchestrator budget room to collect evidence and clean up.
-const WORK_DEADLINE_MS = 150000
+const WORK_DEADLINE_MS = Number(process.env?.ONWARD_AUTOTEST_WORK_DEADLINE_MS || 300000)
 const DEFAULT_TIMEOUT_MS = 6000
 const WIDTHS = [300, 400, 499, 500, 600]
 const LANGUAGES = ['en', 'zh-CN']

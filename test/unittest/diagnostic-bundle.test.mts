@@ -27,10 +27,10 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { inflateRawSync } from 'node:zlib'
 
 import { createDiagnosticBundle } from '../../electron/main/diagnostic-bundle.ts'
 
@@ -103,21 +103,79 @@ function makeFixture(opts?: {
   }
 }
 
-function listZipEntries(zipPath: string): string[] {
-  // unzip -Z1 prints one entry per line, no header. Falls through to
-  // unzip -l on systems without -Z1 (rare; macOS / Linux unzip both
-  // support -Z1 as of v6.0).
-  let stdout: string
-  try {
-    stdout = execSync(`unzip -Z1 "${zipPath}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  } catch (error) {
-    throw new Error(`unzip -Z1 failed (is unzip installed?): ${String(error)}`)
+interface ZipCentralDirEntry {
+  name: string
+  compressionMethod: number
+  compressedSize: number
+  uncompressedSize: number
+  localHeaderOffset: number
+}
+
+function parseZipCentralDirectory(buf: Buffer): ZipCentralDirEntry[] {
+  const minEocdOffset = Math.max(0, buf.length - 65557)
+  let eocdOffset = -1
+  for (let i = buf.length - 22; i >= minEocdOffset; i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocdOffset = i
+      break
+    }
   }
-  return stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+  if (eocdOffset < 0) {
+    throw new Error('Invalid ZIP archive: End of Central Directory signature not found')
+  }
+  const totalEntries = buf.readUInt16LE(eocdOffset + 10)
+  let offset = buf.readUInt32LE(eocdOffset + 16)
+  const entries: ZipCentralDirEntry[] = []
+  for (let i = 0; i < totalEntries; i += 1) {
+    if (offset + 46 > buf.length || buf.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error(`Invalid Central Directory header at offset ${offset}`)
+    }
+    const compressionMethod = buf.readUInt16LE(offset + 10)
+    const compressedSize = buf.readUInt32LE(offset + 20)
+    const uncompressedSize = buf.readUInt32LE(offset + 24)
+    const fileNameLen = buf.readUInt16LE(offset + 28)
+    const extraLen = buf.readUInt16LE(offset + 30)
+    const commentLen = buf.readUInt16LE(offset + 32)
+    const localHeaderOffset = buf.readUInt32LE(offset + 42)
+    const name = buf.toString('utf8', offset + 46, offset + 46 + fileNameLen)
+    entries.push({
+      name,
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      localHeaderOffset
+    })
+    offset += 46 + fileNameLen + extraLen + commentLen
+  }
+  return entries
+}
+
+function listZipEntries(zipPath: string): string[] {
+  const buf = readFileSync(zipPath)
+  return parseZipCentralDirectory(buf).map((entry) => entry.name)
 }
 
 function readZipEntry(zipPath: string, entryName: string): string {
-  return execSync(`unzip -p "${zipPath}" "${entryName}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const buf = readFileSync(zipPath)
+  const entry = parseZipCentralDirectory(buf).find((item) => item.name === entryName)
+  if (!entry) {
+    throw new Error(`ZIP entry not found: ${entryName}`)
+  }
+  const { localHeaderOffset, compressedSize, compressionMethod } = entry
+  if (localHeaderOffset + 30 > buf.length || buf.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+    throw new Error(`Invalid Local File Header for ${entryName} at offset ${localHeaderOffset}`)
+  }
+  const localNameLen = buf.readUInt16LE(localHeaderOffset + 26)
+  const localExtraLen = buf.readUInt16LE(localHeaderOffset + 28)
+  const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen
+  const raw = buf.subarray(dataStart, dataStart + compressedSize)
+  if (compressionMethod === 0) {
+    return raw.toString('utf8')
+  }
+  if (compressionMethod === 8) {
+    return inflateRawSync(raw).toString('utf8')
+  }
+  throw new Error(`Unsupported ZIP compression method ${compressionMethod} for ${entryName}`)
 }
 
 const APP_INFO = {

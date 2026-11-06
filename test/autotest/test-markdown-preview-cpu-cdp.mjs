@@ -197,43 +197,83 @@ async function collectPosixCpuSample(phase) {
   return buildCpuSample(phase, processes)
 }
 
-async function collectWindowsCpuSample(phase) {
+async function collectWindowsCpuSamples(phase, count) {
+  const sampleCount = Math.max(1, Number(count) || 1)
+  const intervalMs = Math.max(50, Number(SAMPLE_INTERVAL_MS) || 250)
   const command = [
     '$ErrorActionPreference = "Stop";',
     '$appName = $env:APP_NAME;',
+    `$sampleCount = ${sampleCount};`,
+    `$intervalMs = ${intervalMs};`,
     'if (-not $appName) { "[]" ; exit 0 }',
     '$exactNames = @($appName, "$appName Helper", "$appName Helper (Renderer)", "$appName Helper (GPU)", "$appName Helper (Plugin)")',
     '| ForEach-Object { "$_.exe" };',
-    '$processRows = Get-CimInstance Win32_Process | Where-Object { $exactNames -contains $_.Name };',
+    '$processRows = @(Get-CimInstance Win32_Process | Where-Object { $exactNames -contains $_.Name });',
     '$byPid = @{};',
     'foreach ($processRow in $processRows) { $byPid[[int]$processRow.ProcessId] = $processRow }',
     'if ($byPid.Count -eq 0) { "[]" ; exit 0 }',
-    '$items = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process',
-    '| Where-Object { $byPid.ContainsKey([int]$_.IDProcess) }',
-    '| ForEach-Object {',
-    '  $processRow = $byPid[[int]$_.IDProcess];',
-    '  [pscustomobject]@{',
-    '    IDProcess = [int]$_.IDProcess;',
-    '    ParentProcessId = [int]$processRow.ParentProcessId;',
-    '    Name = [string]$processRow.Name;',
-    '    PercentProcessorTime = [double]$_.PercentProcessorTime;',
-    '    CommandLine = [string]$processRow.CommandLine',
+    '$pids = [int[]]@($byPid.Keys);',
+    'function Read-CpuMap {',
+    '  $map = @{};',
+    '  foreach ($p in @(Get-Process -Id $pids -ErrorAction SilentlyContinue)) {',
+    '    try { $map[[int]$p.Id] = [double]$p.TotalProcessorTime.TotalMilliseconds } catch {}',
     '  }',
+    '  return $map',
     '}',
-    '| ConvertTo-Json -Compress;',
-    'if ($items) { $items } else { "[]" }'
+    '$prevMap = Read-CpuMap;',
+    '$prevWall = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();',
+    '$windows = @();',
+    'for ($i = 0; $i -lt $sampleCount; $i++) {',
+    '  Start-Sleep -Milliseconds $intervalMs;',
+    '  $nowWall = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();',
+    '  $dtMs = [Math]::Max(1.0, [double]($nowWall - $prevWall));',
+    '  $currMap = Read-CpuMap;',
+    '  $rows = @();',
+    '  foreach ($pidKey in $pids) {',
+    '    if (-not $currMap.ContainsKey($pidKey)) { continue }',
+    '    $processRow = $byPid[$pidKey];',
+    '    $prevCpu = if ($prevMap.ContainsKey($pidKey)) { [double]$prevMap[$pidKey] } else { [double]$currMap[$pidKey] };',
+    '    $deltaCpu = [Math]::Max(0.0, [double]$currMap[$pidKey] - $prevCpu);',
+    '    $pct = [Math]::Round(($deltaCpu / $dtMs) * 100.0, 2);',
+    '    $rows += [pscustomobject]@{',
+    '      IDProcess = [int]$pidKey;',
+    '      ParentProcessId = [int]$processRow.ParentProcessId;',
+    '      Name = [string]$processRow.Name;',
+    '      PercentProcessorTime = [double]$pct;',
+    '      CommandLine = [string]$processRow.CommandLine',
+    '    }',
+    '  }',
+    '  $windows += [pscustomobject]@{ wallTimeMs = $nowWall; processes = $rows };',
+    '  $prevMap = $currMap;',
+    '  $prevWall = $nowWall;',
+    '}',
+    '$json = $windows | ConvertTo-Json -Compress -Depth 5;',
+    'if ($json) { $json } else { "[]" }'
   ].join(' ')
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', command], { maxBuffer: 4 * 1024 * 1024 })
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', command], { maxBuffer: 16 * 1024 * 1024 })
   const raw = stdout.trim() ? JSON.parse(stdout) : []
-  const items = Array.isArray(raw) ? raw : [raw]
-  const processes = items.map((item) => ({
-    pid: Number(item.IDProcess),
-    ppid: Number(item.ParentProcessId || 0),
-    cpu: Number(item.PercentProcessorTime || 0),
-    executableName: String(item.Name || '').replace(/\.exe$/i, ''),
-    kind: helperKind(String(item.Name || '').replace(/\.exe$/i, ''), String(item.CommandLine || ''))
-  }))
-  return buildCpuSample(phase, processes)
+  const windows = Array.isArray(raw) ? raw : [raw]
+  if (windows.length === 0) {
+    return Array.from({ length: sampleCount }, () => buildCpuSample(phase, []))
+  }
+  return windows.map((win) => {
+    const rawProcs = Array.isArray(win.processes) ? win.processes : (win.processes ? [win.processes] : [])
+    const processes = rawProcs.map((item) => ({
+      pid: Number(item.IDProcess),
+      ppid: Number(item.ParentProcessId || 0),
+      cpu: Number(item.PercentProcessorTime || 0),
+      executableName: String(item.Name || '').replace(/\.exe$/i, ''),
+      kind: helperKind(String(item.Name || '').replace(/\.exe$/i, ''), String(item.CommandLine || ''))
+    }))
+    const sample = buildCpuSample(phase, processes)
+    if (win.wallTimeMs) sample.wallTimeMs = Number(win.wallTimeMs)
+    return sample
+  })
+}
+
+async function collectWindowsCpuSample(phase) {
+  const samples = await collectWindowsCpuSamples(phase, 1)
+  return samples[0]
 }
 
 function buildCpuSample(phase, processes) {
@@ -273,6 +313,9 @@ async function collectCpuSample(phase) {
 }
 
 async function collectCpuSamples(phase, count) {
+  if (process.platform === 'win32') {
+    return collectWindowsCpuSamples(phase, count)
+  }
   const samples = []
   for (let index = 0; index < count; index += 1) {
     samples.push(await collectCpuSample(phase))

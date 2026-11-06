@@ -2,16 +2,26 @@
 // SPDX-FileCopyrightText: 2026 OPPO
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from 'fs'
+import { execFile } from 'child_process'
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { pathToFileURL } from 'url'
+import { promisify } from 'util'
 
-function git(cwd, args) {
-  execFileSync('git', args, {
+const execFileAsync = promisify(execFile)
+
+const GIT_SHARED_CONFIG = [
+  '-c', 'user.name=Onward AutoTest',
+  '-c', 'user.email=autotest@onward.local',
+  '-c', 'core.autocrlf=false',
+  '-c', 'core.safecrlf=false',
+  '-c', 'protocol.file.allow=always'
+]
+
+async function git(cwd, args) {
+  await execFileAsync('git', [...GIT_SHARED_CONFIG, ...args], {
     cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0'
@@ -19,28 +29,28 @@ function git(cwd, args) {
   })
 }
 
-function initRepo(repoRoot, files, commitMessage) {
+function pinRepoConfig(repoRoot) {
+  const gitConfigPath = join(repoRoot, '.git', 'config')
+  if (existsSync(gitConfigPath)) {
+    appendFileSync(gitConfigPath, '\n[core]\n\tautocrlf = false\n\tsafecrlf = false\n', 'utf8')
+  }
+}
+
+async function initRepo(repoRoot, files, commitMessage) {
   mkdirSync(repoRoot, { recursive: true })
-  git(repoRoot, ['init'])
+  await git(repoRoot, ['init'])
+  pinRepoConfig(repoRoot)
   for (const [relativePath, content] of Object.entries(files)) {
     const filePath = join(repoRoot, relativePath)
     mkdirSync(join(filePath, '..'), { recursive: true })
     writeFileSync(filePath, content, 'utf8')
   }
-  git(repoRoot, ['add', '.'])
-  git(repoRoot, [
-    '-c', 'user.name=Onward AutoTest',
-    '-c', 'user.email=autotest@example.com',
-    'commit',
-    '-m',
-    commitMessage
-  ])
+  await git(repoRoot, ['add', '.'])
+  await git(repoRoot, ['commit', '-m', commitMessage])
 }
 
-function addSubmodule(repoRoot, sourceRepoRoot, targetPath) {
-  git(repoRoot, [
-    '-c',
-    'protocol.file.allow=always',
+async function addSubmodule(repoRoot, sourceRepoRoot, targetPath) {
+  await git(repoRoot, [
     'submodule',
     'add',
     pathToFileURL(sourceRepoRoot).href,
@@ -48,15 +58,9 @@ function addSubmodule(repoRoot, sourceRepoRoot, targetPath) {
   ])
 }
 
-function commitAll(repoRoot, commitMessage) {
-  git(repoRoot, ['add', '.'])
-  git(repoRoot, [
-    '-c', 'user.name=Onward AutoTest',
-    '-c', 'user.email=autotest@example.com',
-    'commit',
-    '-m',
-    commitMessage
-  ])
+async function commitAll(repoRoot, commitMessage) {
+  await git(repoRoot, ['add', '.'])
+  await git(repoRoot, ['commit', '-m', commitMessage])
 }
 
 function appendLine(filePath, line) {
@@ -69,55 +73,60 @@ function appendLine(filePath, line) {
 // the caller (typically a `.sh` / `.ps1` runner that traps cleanup itself).
 const tempRoot = mkdtempSync(join(tmpdir(), 'onward-git-recursive-submodules-'))
 
-try {
-  const sourcesRoot = join(tempRoot, 'sources')
-  const workspaceRoot = join(tempRoot, 'workspace')
+async function main() {
+  try {
+    const sourcesRoot = join(tempRoot, 'sources')
+    const workspaceRoot = join(tempRoot, 'workspace')
 
-  const betaRepo = join(sourcesRoot, 'beta')
-  const alphaRepo = join(sourcesRoot, 'alpha')
-  const gammaRepo = join(sourcesRoot, 'gamma')
-  const rootRepo = join(workspaceRoot, 'root')
+    const betaRepo = join(sourcesRoot, 'beta')
+    const alphaRepo = join(sourcesRoot, 'alpha')
+    const gammaRepo = join(sourcesRoot, 'gamma')
+    const rootRepo = join(workspaceRoot, 'root')
 
-  initRepo(betaRepo, {
-    'BETA.md': '# Beta\n\nBase fixture file.\n'
-  }, 'init beta')
+    await Promise.all([
+      initRepo(betaRepo, {
+        'BETA.md': '# Beta\n\nBase fixture file.\n'
+      }, 'init beta'),
+      initRepo(alphaRepo, {
+        'ALPHA.md': '# Alpha\n\nBase fixture file.\n'
+      }, 'init alpha'),
+      initRepo(gammaRepo, {
+        'GAMMA.md': '# Gamma\n\nBase fixture file.\n'
+      }, 'init gamma'),
+      initRepo(rootRepo, {
+        'README.md': '# Recursive Submodule Fixture\n'
+      }, 'init root')
+    ])
 
-  initRepo(alphaRepo, {
-    'ALPHA.md': '# Alpha\n\nBase fixture file.\n'
-  }, 'init alpha')
-  addSubmodule(alphaRepo, betaRepo, 'deps/beta')
-  commitAll(alphaRepo, 'add beta submodule')
+    await addSubmodule(alphaRepo, betaRepo, 'deps/beta')
+    await commitAll(alphaRepo, 'add beta submodule')
 
-  initRepo(gammaRepo, {
-    'GAMMA.md': '# Gamma\n\nBase fixture file.\n'
-  }, 'init gamma')
+    await addSubmodule(rootRepo, alphaRepo, 'modules/alpha')
+    await addSubmodule(rootRepo, gammaRepo, 'modules/gamma')
+    await commitAll(rootRepo, 'add nested submodules')
+    await git(rootRepo, ['submodule', 'update', '--init', '--recursive'])
 
-  initRepo(rootRepo, {
-    'README.md': '# Recursive Submodule Fixture\n'
-  }, 'init root')
-  addSubmodule(rootRepo, alphaRepo, 'modules/alpha')
-  addSubmodule(rootRepo, gammaRepo, 'modules/gamma')
-  commitAll(rootRepo, 'add nested submodules')
-  git(rootRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+    appendLine(join(rootRepo, 'README.md'), 'root dirty change')
+    appendLine(join(rootRepo, 'modules', 'alpha', 'ALPHA.md'), 'alpha dirty change')
+    appendLine(join(rootRepo, 'modules', 'alpha', 'deps', 'beta', 'BETA.md'), 'beta nested dirty change')
+    appendLine(join(rootRepo, 'modules', 'gamma', 'GAMMA.md'), 'gamma dirty change')
 
-  appendLine(join(rootRepo, 'README.md'), 'root dirty change')
-  appendLine(join(rootRepo, 'modules', 'alpha', 'ALPHA.md'), 'alpha dirty change')
-  appendLine(join(rootRepo, 'modules', 'alpha', 'deps', 'beta', 'BETA.md'), 'beta nested dirty change')
-  appendLine(join(rootRepo, 'modules', 'gamma', 'GAMMA.md'), 'gamma dirty change')
-
-  process.stdout.write(JSON.stringify({
-    tempRoot,
-    repoRoot: rootRepo
-  }))
-} catch (err) {
-  if (process.env.ONWARD_AUTOTEST_KEEP_TMP === '1') {
-    console.error(`[autotest] retained tmp for debugging: ${tempRoot}`)
-  } else {
-    try {
-      rmSync(tempRoot, { recursive: true, force: true })
-    } catch {
-      // Best-effort: do not mask the original error with a cleanup error.
+    process.stdout.write(JSON.stringify({
+      tempRoot,
+      repoRoot: rootRepo
+    }))
+  } catch (err) {
+    if (process.env.ONWARD_AUTOTEST_KEEP_TMP === '1') {
+      console.error(`[autotest] retained tmp for debugging: ${tempRoot}`)
+    } else {
+      try {
+        rmSync(tempRoot, { recursive: true, force: true })
+      } catch {
+        // Best-effort: do not mask the original error with a cleanup error.
+      }
     }
+    throw err
   }
-  throw err
 }
+
+await main()

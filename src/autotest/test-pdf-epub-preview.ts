@@ -75,10 +75,27 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
 
   const getApi = () => window.__onwardProjectEditorDebug
 
-  const termExec = async (command: string, label: string, waitMs = 1200) => {
+  const termExec = async (command: string, label: string, waitMs = 400) => {
     await window.electronAPI.terminal.write(terminalId, `${command}\r`)
     await sleep(waitMs)
     log(`exec:${label}`, { command: command.length > 120 ? `${command.slice(0, 120)}…` : command })
+  }
+
+  const waitForFileReady = async (filename: string, label: string, timeoutMs = 15000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline && !cancelled()) {
+      try {
+        const res = await window.electronAPI.project.readFileChunk(rootPath, filename, 0, 16, 'binary')
+        if (res?.success && (res.sizeBytes ?? 0) > 0 && (res.bytesRead ?? 0) > 0) {
+          return true
+        }
+      } catch {
+        // Ignore transient read errors while the terminal copy is still in progress
+      }
+      await sleep(150)
+    }
+    log(`wait-file-ready:timeout:${label}`, { filename, timeoutMs })
+    return false
   }
 
   // Budget split (5-min gate): three group runners partition the suite;
@@ -97,6 +114,7 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     platformBuildWriteMarkerCommand(TEST_MARKER_FILENAME, 'onward-autotest-marker'),
     'marker:create'
   )
+  await waitForFileReady(TEST_MARKER_FILENAME, 'marker:create')
 
   // Copy PDF + EPUB fixtures from the on-disk test fixture directory into the
   // project's root so the Files panel can pick them up. Each group copies only
@@ -106,15 +124,17 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
     await termExec(
       platformBuildCopyCommand(`${FIXTURE_REL_DIR}/${PDF_FIXTURE_SRC}`, TEST_PDF_FILENAME, rootPath),
       'pdf:copy',
-      1200
+      400
     )
+    await waitForFileReady(TEST_PDF_FILENAME, 'pdf:copy')
   }
   if (runEpub) {
     await termExec(
       platformBuildCopyCommand(`${FIXTURE_REL_DIR}/${EPUB_FIXTURE_SRC}`, TEST_EPUB_FILENAME, rootPath),
       'epub:copy',
-      1200
+      400
     )
+    await waitForFileReady(TEST_EPUB_FILENAME, 'epub:copy')
   }
 
   const pdfPath = joinPath(rootPath, TEST_PDF_FILENAME)
@@ -1015,8 +1035,9 @@ export async function testPdfEpubPreview(ctx: AutotestContext): Promise<TestResu
   await termExec(
     platformBuildCopyCommand(`${FIXTURE_REL_DIR}/${PDF_OUTLINE_FIXTURE_SRC}`, TEST_PDF_OUTLINE_FILENAME, rootPath),
     'outlined-pdf:copy',
-    1200
+    400
   )
+  await waitForFileReady(TEST_PDF_OUTLINE_FILENAME, 'outlined-pdf:copy')
   await getApi()?.openFileByPathAsUser?.(outlinedPdfPath)
   await waitFor(
     'pdf-outlined-reader-visible',

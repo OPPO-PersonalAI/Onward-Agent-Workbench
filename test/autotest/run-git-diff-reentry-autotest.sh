@@ -17,5 +17,5 @@
 # run-git-diff-staleness-and-submodule-autotest.sh (runnable WHOLE via GDS_GROUP='').
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
-GDS_SUITE=git-diff-reentry GDS_GROUP=reentry \
+GDS_SUITE=git-diff-reentry GDS_GROUP=reentry GDS_WATCHDOG_SEC="${GDS_WATCHDOG_SEC:-340}" \
   exec "$DIR/run-git-diff-staleness-and-submodule-autotest.sh" "$@"

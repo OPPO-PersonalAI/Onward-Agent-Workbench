@@ -17,7 +17,8 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-APP_BIN="${1:-}"
+source "$ROOT_DIR/test/autotest/resolve-dev-app-bin.sh"
+APP_BIN="${1:-$(resolve_dev_app_bin "$ROOT_DIR" || true)}"
 LOG_FILE="${2:-$REPO_ROOT/traces/test-logs/telemetry-autotest.log}"
 LOG_FILE_B="${LOG_FILE%.log}-remediation-ack.log"
 LOG_FILE_C="${LOG_FILE%.log}-remediation-nack.log"
@@ -47,7 +48,7 @@ cleanup() {
   if [[ "${ONWARD_AUTOTEST_KEEP_TMP:-0}" == "1" ]]; then
     echo "ONWARD_AUTOTEST_KEEP_TMP=1 — keeping scratch dir: $SCRATCH"
   else
-    rm -rf "$SCRATCH"
+    onward_robust_rm "$SCRATCH"
   fi
 }
 trap cleanup EXIT

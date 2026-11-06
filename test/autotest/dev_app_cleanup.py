@@ -3,6 +3,8 @@
 """Exact-identity development-app cleanup shared by runners and orchestration."""
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import csv
 import os
 from pathlib import Path
@@ -16,6 +18,23 @@ import time
 TOOL_TIMEOUT_SEC = 30.0
 GRACE_SEC = 8.0
 SHUTDOWN_TIMEOUT_SEC = 60.0
+TH32CS_SNAPPROCESS = 0x00000002
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ('dwSize', wintypes.DWORD),
+        ('cntUsage', wintypes.DWORD),
+        ('th32ProcessID', wintypes.DWORD),
+        ('th32DefaultHeapID', ctypes.c_size_t),
+        ('th32ModuleID', wintypes.DWORD),
+        ('cntThreads', wintypes.DWORD),
+        ('th32ParentProcessID', wintypes.DWORD),
+        ('pcPriClassBase', wintypes.LONG),
+        ('dwFlags', wintypes.DWORD),
+        ('szExeFile', wintypes.WCHAR * 260),
+    ]
 
 
 class CleanupError(RuntimeError):
@@ -72,6 +91,36 @@ class AppCleanup:
                 return None
             raise CleanupError(f'Cannot inspect process identity at {entry}: {error}') from error
 
+    def win32_toolhelp_snapshot(self):
+        if not hasattr(ctypes, 'windll'):
+            return None
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+        kernel32.Process32FirstW.restype = wintypes.BOOL
+        kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+        kernel32.Process32NextW.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap is None or snap == INVALID_HANDLE_VALUE:
+            raise CleanupError('CreateToolhelp32Snapshot failed')
+        try:
+            entry = _PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+            found = {}
+            target = self.image.casefold()
+            ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                if entry.szExeFile.casefold() == target:
+                    found[int(entry.th32ProcessID)] = target
+                ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+            return found
+        finally:
+            kernel32.CloseHandle(snap)
+
     def snapshot(self):
         if self.platform.startswith('linux'):
             found = {}
@@ -82,7 +131,15 @@ class AppCleanup:
                         found[int(entry.name)] = identity
             return found
         if self.platform == 'win32':
-            result = self.run(['tasklist', '/FI', f'IMAGENAME eq {self.image}', '/FO', 'CSV', '/NH'])
+            try:
+                result = self.run(['tasklist', '/FI', f'IMAGENAME eq {self.image}', '/FO', 'CSV', '/NH'])
+            except subprocess.TimeoutExpired as error:
+                fallback = self.win32_toolhelp_snapshot()
+                if fallback is not None:
+                    self.deadline = max(self.deadline, time.monotonic() + self.tool_timeout)
+                    print('[cleanup] tasklist timed out; Toolhelp32 snapshot succeeded')
+                    return fallback
+                raise CleanupError('tasklist timed out') from error
             if result.returncode:
                 raise CleanupError(f'tasklist failed ({result.returncode}): {result.stderr.strip()}')
             found = {}

@@ -39,6 +39,9 @@ class CleanupTests(unittest.TestCase):
                                       side_effect=AssertionError('Real /proc access forbidden')))
         self.enterContext(patch.object(cleanup.os, 'readlink',
                                       side_effect=AssertionError('Real /proc access forbidden')))
+        self.toolhelp = self.enterContext(
+            patch.object(cleanup.AppCleanup, 'win32_toolhelp_snapshot',
+                         side_effect=AssertionError('Real Toolhelp32 access forbidden')))
         self.enterContext(patch.object(cleanup.time, 'monotonic', side_effect=lambda: self.now))
         self.enterContext(patch.object(cleanup.time, 'sleep', side_effect=self.sleep))
 
@@ -103,6 +106,16 @@ class CleanupTests(unittest.TestCase):
         self.run.return_value = result(1, stderr='denied')
         with self.assertRaisesRegex(cleanup.CleanupError, 'tasklist failed'):
             self.app().stop()
+
+    def test_tasklist_timeout_falls_back_to_toolhelp_snapshot(self):
+        app = self.app()
+        self.run.side_effect = [subprocess.TimeoutExpired('tasklist', 30)]
+        self.toolhelp.side_effect = [{}]
+        with patch('sys.stdout') as diagnostic:
+            app.stop()
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.toolhelp.call_count, 1)
+        self.assertTrue(diagnostic.write.called)
 
     def test_failed_kill_with_survivor_propagates(self):
         app = self.app()

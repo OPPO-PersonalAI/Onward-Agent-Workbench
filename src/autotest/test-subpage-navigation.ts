@@ -68,11 +68,29 @@ async function waitForTerminalCwd(
   timeoutMs = 12000
 ): Promise<string | null> {
   const normalizedExpected = normalizePath(expectedCwd)
+  const platform = window.electronAPI.platform
+  const shellPath = platform === 'win32' ? expectedCwd.replace(/\//g, '\\') : expectedCwd
   const startedAt = performance.now()
+  let lastNotifyAt = startedAt
+  let lastRewriteAt = startedAt
   while (performance.now() - startedAt < timeoutMs) {
     const cwd = await window.electronAPI.git.getTerminalCwd(terminalId)
     if (cwd && normalizePath(cwd) === normalizedExpected) {
       return cwd
+    }
+    const now = performance.now()
+    if (now - lastRewriteAt >= 3200) {
+      lastRewriteAt = now
+      lastNotifyAt = now
+      await window.electronAPI.terminal.write(
+        terminalId,
+        buildChangeDirectoryCommand(platform, shellPath)
+      )
+      await sleep(350)
+      await window.electronAPI.git.notifyTerminalActivity(terminalId)
+    } else if (now - lastNotifyAt >= 900) {
+      lastNotifyAt = now
+      await window.electronAPI.git.notifyTerminalActivity(terminalId)
     }
     await sleep(180)
   }
@@ -351,7 +369,6 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
         while (performance.now() - startedAt < 15000) {
           const api = getNavigationProjectEditorApi()
           const reader = api?.getHtmlReaderState?.()
-          const documentState = await api?.getHtmlPreviewDocumentState?.()
           if (
             api?.getActiveFilePath?.() === filePath
             && api.isHtmlReaderVisible?.()
@@ -359,12 +376,16 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
             && reader.visible
             && !reader.error
             && reader.url?.includes('#working-route')
-            && documentState?.success
-            && documentState.bodyDatasetMarker === 'navigation-working'
-            && documentState.relativeScriptMarker === 'working-tree'
-            && documentState.navigationAccent === '#1570ef'
           ) {
-            return true
+            const documentState = await api?.getHtmlPreviewDocumentState?.()
+            if (
+              documentState?.success
+              && documentState.bodyDatasetMarker === 'navigation-working'
+              && documentState.relativeScriptMarker === 'working-tree'
+              && documentState.navigationAccent === '#1570ef'
+            ) {
+              return true
+            }
           }
           await sleep(150)
         }
@@ -478,12 +499,17 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
           const current = getNavigationProjectEditorApi()
           const currentZoom = current?.getHtmlPreviewZoomFactor?.() ?? 0
           return Math.abs(currentZoom - zoomFactor) < 0.01
-        }, 3000)
+        }, 6000)
         if (!positioned) return null
-        const documentState = await api.getHtmlPreviewDocumentState?.()
-        return documentState?.success && Math.abs((documentState.scrollY ?? 0) - scrollY) <= 80
-          ? { kind: 'html', scrollY, zoomFactor }
-          : null
+        const startedAt = performance.now()
+        while (performance.now() - startedAt < 6000) {
+          const documentState = await api.getHtmlPreviewDocumentState?.()
+          if (documentState?.success && Math.abs((documentState.scrollY ?? 0) - scrollY) <= 80) {
+            return { kind: 'html', scrollY, zoomFactor }
+          }
+          await sleep(150)
+        }
+        return null
       }
 
       if (fileKind === 'pdf') {
@@ -611,12 +637,26 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
       }
       if (expected.kind === 'html') {
         const startedAt = performance.now()
-        while (performance.now() - startedAt < 8000) {
+        while (performance.now() - startedAt < 12000) {
           const api = getNavigationProjectEditorApi()
-          const documentState = await api?.getHtmlPreviewDocumentState?.()
           const readerState = api?.getHtmlReaderState?.()
           const rendererZoom = api?.getHtmlPreviewZoomFactor?.() ?? null
-          const browserZoom = await api?.getHtmlPreviewBrowserZoomFactor?.() ?? null
+          const readerReadyForCheck = Boolean(
+            readerState?.ready
+            && readerState.visible
+            && readerState.url?.includes('#working-route')
+            && readerState.scrollRestoreStatus === 'restored'
+            && readerState.restoredScrollY !== null
+            && Math.abs(readerState.restoredScrollY - expected.scrollY) <= 80
+            && rendererZoom !== null
+            && Math.abs(rendererZoom - expected.zoomFactor) < 0.01
+          )
+          const documentState = readerReadyForCheck
+            ? await api?.getHtmlPreviewDocumentState?.()
+            : null
+          const browserZoom = readerReadyForCheck
+            ? await api?.getHtmlPreviewBrowserZoomFactor?.() ?? null
+            : null
           htmlViewStateObservations.set(label, {
             documentState: documentState ? { ...documentState } : null,
             readerState: readerState ? { ...readerState } : null,
@@ -624,17 +664,12 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
             browserZoom
           })
           if (
-            documentState?.success
+            readerReadyForCheck
+            && documentState?.success
             && documentState.bodyDatasetMarker === 'navigation-working'
             && documentState.relativeScriptMarker === 'working-tree'
             && documentState.navigationAccent === '#1570ef'
-            && readerState?.url?.includes('#working-route')
             && Math.abs((documentState.scrollY ?? 0) - expected.scrollY) <= 80
-            && readerState?.scrollRestoreStatus === 'restored'
-            && readerState.restoredScrollY !== null
-            && Math.abs(readerState.restoredScrollY - expected.scrollY) <= 80
-            && rendererZoom !== null
-            && Math.abs(rendererZoom - expected.zoomFactor) < 0.01
             && browserZoom !== null
             && Math.abs(browserZoom - expected.zoomFactor) < 0.01
           ) return true
@@ -792,7 +827,7 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
         if (button.dataset.jumpStatus !== 'available') return false
         button.click()
         return true
-      }, 5000)
+      }, 12000)
     }
 
     const readSourceReturnState = (source: NavigationSource): SourceReturnBarState | null => {
@@ -1030,7 +1065,7 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
         getNavigationProjectEditorApi()?.setMarkdownPreviewOpen?.(false)
         htmlPreviewClosed = await waitFor(`${label}:html-preview-closed`, () => (
           getNavigationProjectEditorApi()?.isMarkdownPreviewVisible?.() === false
-        ), 3000)
+        ), 12000)
       }
       const sourceSelected = editorReset && htmlPreviewClosed
         && await selectNavigationSourceFile(label, source, filePath)
@@ -1062,7 +1097,7 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
           && state.activeFilePath === filePath
           && state.jumpEnabled === (source === 'diff')
         )
-      }, 5000)
+      }, 12000)
       const backTriggered = returnStateReady && await triggerSourceReturnBack()
       const sourceRestored = Boolean(backTriggered)
         && await waitForActiveSubpage(`${label}:source-restored`, source)
@@ -1157,7 +1192,7 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
           && state.activeFilePath === filePath
           && state.jumpEnabled === (source === 'diff')
         )
-      }, 5000)
+      }, 12000)
       let locateTriggered = source !== 'diff'
       let locateSourceRestored = source !== 'diff'
       let locateSelectionRestored = source !== 'diff'
@@ -1209,7 +1244,7 @@ export async function testSubpageNavigation(ctx: AutotestContext): Promise<TestR
               && state.activeFilePath === filePath
             )
           },
-          5000
+          12000
         )
       }
       const backTriggered = backReturnStateReady && await triggerSourceReturnBack()

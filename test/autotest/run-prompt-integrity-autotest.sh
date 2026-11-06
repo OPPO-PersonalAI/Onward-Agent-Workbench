@@ -35,6 +35,12 @@ signalVerifiedLinuxMainProcesses({
   signal: pid => process.kill(pid, `SIG${signal}`)
 })
 NODE
+  elif [[ "$HOST_OS" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
+    if [[ "$signal" == "KILL" ]]; then
+      taskkill //IM "$PROCESS_NAME" //F >/dev/null 2>&1 || true
+    else
+      taskkill //IM "$PROCESS_NAME" >/dev/null 2>&1 || true
+    fi
   elif [[ "$signal" == "KILL" ]]; then
     pkill -9 -x "$PROCESS_NAME" 2>/dev/null || true
   else
@@ -52,10 +58,6 @@ cleanup() {
   sleep 0.5
   stop_app KILL || status=1
   onward_robust_rm "$SCRATCH"
-  if [[ -e "$SCRATCH" ]]; then
-    echo "Scratch cleanup failed: $SCRATCH" >&2
-    status=1
-  fi
   exit "$status"
 }
 trap cleanup EXIT

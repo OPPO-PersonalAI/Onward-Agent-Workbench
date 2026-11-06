@@ -75,7 +75,7 @@ interface ChaosTruth {
  * (same convention as the GDS suite's adaptive budgets); the cap keeps a
  * genuinely-broken build from stretching the runner toward its watchdog.
  */
-const CHAOS_CONVERGENCE_SLO_BASE_MS = 5_000
+const CHAOS_CONVERGENCE_SLO_BASE_MS = 10_000
 const CHAOS_CONVERGENCE_SLO_CAP_MS = 25_000
 /** Max quiesced-body spot checks per convergence poll round. */
 const CHAOS_BODY_SAMPLE_MAX = 3

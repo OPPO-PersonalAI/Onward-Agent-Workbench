@@ -135,7 +135,10 @@ export async function testInfraWatchdog(ctx: AutotestContext): Promise<TestResul
   // IWD-09: Ctrl-C returns the scan to idle.
   await window.electronAPI.terminal.write(terminalId, '\u0003')
   let idleAgain = await quitActivity()
-  for (let i = 0; i < 20 && (idleAgain.summary?.activeCount ?? 0) !== 0; i++) {
+  for (let i = 0; i < 60 && (idleAgain.summary?.activeCount ?? 0) !== 0; i++) {
+    if (i === 12) {
+      await window.electronAPI.terminal.write(terminalId, '\u0003\r')
+    }
     await sleep(250)
     idleAgain = await quitActivity()
   }

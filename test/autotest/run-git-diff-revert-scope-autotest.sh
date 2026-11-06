@@ -73,7 +73,7 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   echo "Git Diff revert-scope autotest failed" >&2
   echo ""
   echo "=== Failure details ==="
-  grep "\[AutoTest\] FAIL" "$LOG_FILE" >&2
+  grep -A 12 "\[AutoTest\] FAIL" "$LOG_FILE" >&2
   exit 1
 fi
 
