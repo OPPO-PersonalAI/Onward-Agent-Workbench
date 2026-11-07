@@ -597,7 +597,227 @@ async function runRearrangeAssertions(
     3000,
     80
   )
+  await runFileDropAssertions(ctx, record)
   record('TLM-13-escape-exits-rearrange', exited, {
     state: debug.getTaskRearrangeState()
+  })
+}
+
+
+function createSyntheticFileDragEvent(
+  type: 'dragenter' | 'dragover' | 'dragleave' | 'drop',
+  filePaths: string[],
+  options?: { internalMime?: string; relatedTarget?: EventTarget | null }
+): DragEvent {
+  const files = filePaths.map((filePath) => {
+    const baseName = filePath.split(/[\\/]/).pop() || 'file.txt'
+    const file = new File(['fixture'], baseName, { type: 'text/plain' })
+    Object.defineProperty(file, 'path', {
+      value: filePath,
+      configurable: true,
+      enumerable: true
+    })
+    return file
+  })
+  const types: string[] = []
+  if (options?.internalMime) types.push(options.internalMime)
+  if (files.length > 0) types.push('Files')
+  const mockDataTransfer = {
+    types,
+    files,
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    getData: () => '',
+    setData: () => {}
+  }
+  const event = new DragEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    relatedTarget: options?.relatedTarget ?? null
+  })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: mockDataTransfer,
+    configurable: true,
+    enumerable: true
+  })
+  return event
+}
+
+async function runFileDropAssertions(
+  ctx: AutotestContext,
+  record: (name: string, ok: boolean, detail?: Record<string, unknown>) => void
+): Promise<void> {
+  const { sleep, waitFor, rootPath } = ctx
+  const debug = window.__onwardTerminalDebug
+  if (!debug) return
+
+  const cells = gridCells()
+  const order = domTerminalOrder()
+  if (cells.length < 2 || order.length < 2) {
+    record('TLM-16-file-dragover-highlights-target-cell', false, {
+      reason: 'need-two-cells',
+      cells: cells.length,
+      order
+    })
+    return
+  }
+
+  const [cell0, cell1] = cells
+  const [id0, id1] = order
+  const sep = window.electronAPI.platform === 'win32' ? '\\' : '/'
+  const normRoot = rootPath.replace(/[\\/]+$/, '').replace(/[\\/]/g, sep)
+  const fixtureDir = `${normRoot}${sep}src`
+  const cleanFixturePath = `${fixtureDir}${sep}sample-clean.txt`
+
+  // ── TLM-16: external file dragover highlights hovered cell; internal drag ignored (N=5) ──
+  let highlightTrialsPassed = 0
+  for (let trial = 0; trial < 5; trial += 1) {
+    // Internal drag must be ignored
+    cell0.dispatchEvent(
+      createSyntheticFileDragEvent('dragover', [cleanFixturePath], {
+        internalMime: 'application/x-onward-quick-file'
+      })
+    )
+    await sleep(30)
+    const internalIgnored = !cell0.classList.contains('is-file-drop-target')
+      && debug.getFileDropState?.().targetTerminalId === null
+
+    // External drag onto cell 0 highlights cell 0
+    cell0.dispatchEvent(createSyntheticFileDragEvent('dragover', [cleanFixturePath]))
+    const cell0Highlighted = await waitFor(
+      `tlm16-cell0-highlight-${trial}`,
+      () => cell0.classList.contains('is-file-drop-target')
+        && !cell1.classList.contains('is-file-drop-target')
+        && debug.getFileDropState?.().targetTerminalId === id0,
+      1500,
+      30
+    )
+
+    // Moving dragover to cell 1 switches highlight to cell 1
+    cell0.dispatchEvent(createSyntheticFileDragEvent('dragleave', [cleanFixturePath], { relatedTarget: cell1 }))
+    cell1.dispatchEvent(createSyntheticFileDragEvent('dragover', [cleanFixturePath]))
+    const cell1Highlighted = await waitFor(
+      `tlm16-cell1-highlight-${trial}`,
+      () => cell1.classList.contains('is-file-drop-target')
+        && !cell0.classList.contains('is-file-drop-target')
+        && debug.getFileDropState?.().targetTerminalId === id1,
+      1500,
+      30
+    )
+
+    // Leaving cell 1 to outside clears highlight
+    cell1.dispatchEvent(createSyntheticFileDragEvent('dragleave', [cleanFixturePath], { relatedTarget: document.body }))
+    const cleared = await waitFor(
+      `tlm16-clear-highlight-${trial}`,
+      () => !cell0.classList.contains('is-file-drop-target')
+        && !cell1.classList.contains('is-file-drop-target')
+        && debug.getFileDropState?.().targetTerminalId === null,
+      1500,
+      30
+    )
+
+    if (internalIgnored && cell0Highlighted && cell1Highlighted && cleared) {
+      highlightTrialsPassed += 1
+    }
+  }
+  record('TLM-16-file-dragover-highlights-target-cell', highlightTrialsPassed === 5, {
+    trials: 5,
+    passed: highlightTrialsPassed
+  })
+
+  // ── TLM-17: file dragover/drop is blocked while rearrange mode is active (N=5) ──
+  let blockedDuringRearrange = 0
+  for (let trial = 0; trial < 5; trial += 1) {
+    const triggerBtn = gridCells()[0]?.querySelector<HTMLButtonElement>('[data-terminal-dropdown-trigger]')
+    triggerBtn?.click()
+    await sleep(80)
+    document.querySelector<HTMLButtonElement>('[data-terminal-dropdown-action="rearrange"]')?.click()
+    const armed = await waitFor(
+      `tlm17-arm-${trial}`,
+      () => debug.getTaskRearrangeState().active,
+      2000,
+      40
+    )
+    const droppedAtBefore = debug.getFileDropState?.().lastDrop?.droppedAt ?? 0
+    cell1.dispatchEvent(createSyntheticFileDragEvent('dragover', [cleanFixturePath]))
+    await sleep(30)
+    const noHighlight = !cell1.classList.contains('is-file-drop-target')
+      && debug.getFileDropState?.().targetTerminalId === null
+    cell1.dispatchEvent(createSyntheticFileDragEvent('drop', [cleanFixturePath]))
+    await sleep(40)
+    const noDrop = (debug.getFileDropState?.().lastDrop?.droppedAt ?? 0) === droppedAtBefore
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await waitFor(`tlm17-exit-${trial}`, () => !debug.getTaskRearrangeState().active, 2000, 40)
+
+    if (armed && noHighlight && noDrop) {
+      blockedDuringRearrange += 1
+    }
+  }
+  record('TLM-17-file-drop-blocked-during-rearrange', blockedDuringRearrange === 5, {
+    trials: 5,
+    blocked: blockedDuringRearrange
+  })
+
+  // ── TLM-18: dropping files & folder on unfocused cell focuses it and pastes shell-escaped paths (N=5) ──
+  let dropTrialsPassed = 0
+  for (let trial = 0; trial < 5; trial += 1) {
+    // Focus cell 0 first so cell 1 starts unfocused
+    cell0.click()
+    await waitFor(`tlm18-focus-cell0-${trial}`, () => cell0.classList.contains('active'), 2000, 40)
+
+    const trialMarker = `fdrop${trial}_${Date.now() % 100000}`
+    const trialCleanPath = `${fixtureDir}${sep}${trialMarker}_clean.txt`
+    const trialSpacedPath = `${fixtureDir}${sep}${trialMarker} with space (1).txt`
+    const trialFolderPath = `${fixtureDir}${sep}${trialMarker} folder`
+
+    cell1.dispatchEvent(createSyntheticFileDragEvent('dragover', [trialCleanPath, trialSpacedPath, trialFolderPath]))
+    await sleep(25)
+    cell1.dispatchEvent(createSyntheticFileDragEvent('drop', [trialCleanPath, trialSpacedPath, trialFolderPath]))
+
+    const dropCompleted = await waitFor(
+      `tlm18-drop-complete-${trial}`,
+      () => {
+        const state = debug.getFileDropState?.()
+        return Boolean(
+          cell1.classList.contains('active') &&
+          !cell1.classList.contains('is-file-drop-target') &&
+          state?.targetTerminalId === null &&
+          state?.lastDrop?.terminalId === id1 &&
+          state?.lastDrop?.formattedText?.includes(trialCleanPath) &&
+          state?.lastDrop?.formattedText?.endsWith(' ')
+        )
+      },
+      3000,
+      40
+    )
+
+    const ptyReceived = await waitFor(
+      `tlm18-pty-echo-${trial}`,
+      () => (debug.getTailText(id1, 30) ?? '').includes(trialMarker),
+      4000,
+      60
+    )
+
+    const lastDrop = debug.getFileDropState?.().lastDrop
+    // Clean path stays unquoted; spaced file and spaced folder paths are quoted
+    const formatted = lastDrop?.formattedText ?? ''
+    const quotesSpaced = formatted.includes(`'${trialSpacedPath}'`) || formatted.includes(`"${trialSpacedPath}"`)
+    const quotesFolder = formatted.includes(`'${trialFolderPath}'`) || formatted.includes(`"${trialFolderPath}"`)
+
+    if (dropCompleted && ptyReceived && quotesSpaced && quotesFolder) {
+      dropTrialsPassed += 1
+    }
+
+    // Send Ctrl+C to discard the pending input line before the next trial
+    await window.electronAPI.terminal.write(id1, '\x03')
+    await sleep(80)
+  }
+  record('TLM-18-file-drop-focuses-and-pastes-escaped-paths', dropTrialsPassed === 5, {
+    trials: 5,
+    passed: dropTrialsPassed,
+    lastDrop: debug.getFileDropState?.().lastDrop ?? null
   })
 }

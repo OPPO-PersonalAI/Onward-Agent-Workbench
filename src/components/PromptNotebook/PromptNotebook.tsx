@@ -2021,16 +2021,15 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   const isMac = platform === 'darwin'
   const saveShortcutLabel = isMac ? '⌘S' : 'Ctrl+S'
   const saveAsShortcutLabel = isMac ? '⌘⇧S' : 'Ctrl+Shift+S'
-  const cancelShortcutLabel = 'Esc'
+
   const saveShortcut = 'CommandOrControl+S'
   const saveAsShortcut = 'CommandOrControl+Shift+S'
-  const cancelShortcut = 'Escape'
 
   const matchesAccelerator = useCallback((accelerator: string, expected: string) => {
     if (!accelerator) return false
     const normalize = (value: string) => value
       .split('+')
-      .map(part => (part === 'Ctrl' ? 'Control' : part))
+      .map(part => (part === 'Ctrl' || part === 'Control' || part === 'Cmd' || part === 'Command' || part === 'CmdOrCtrl' ? 'CommandOrControl' : part))
       .join('+')
     return normalize(accelerator) === normalize(expected)
   }, [])
@@ -2339,7 +2338,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     if (editingPrompt) {
       const isSaveShortcut = matchesAccelerator(accelerator, saveShortcut)
       const isSaveAsShortcut = matchesAccelerator(accelerator, saveAsShortcut)
-      const isCancelShortcut = matchesAccelerator(accelerator, cancelShortcut) || e.key === 'Escape'
+      // Escape deliberately does NOT cancel editing so an accidental Esc never discards modified text.
 
       if (isSaveShortcut) {
         e.preventDefault()
@@ -2350,12 +2349,6 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       if (isSaveAsShortcut) {
         e.preventDefault()
         handleSave(true)
-        return
-      }
-
-      if (isCancelShortcut) {
-        e.preventDefault()
-        handleCancel()
         return
       }
 
@@ -2373,7 +2366,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       return
     }
 
-  }, [handleSubmit, handleSave, handleCancel, editingPrompt, addToHistoryShortcut, matchesAccelerator, saveShortcut, saveAsShortcut, cancelShortcut])
+  }, [handleSubmit, handleSave, editingPrompt, addToHistoryShortcut, matchesAccelerator, saveShortcut, saveAsShortcut])
 
   // Register callback to Context (only visible instance registration).
   // Keyboard-shortcut focus lands the caret at offset 0 — the predictable
@@ -2484,7 +2477,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
             <button
               className="prompt-editor-btn prompt-editor-btn-cancel"
               onClick={handleCancel}
-              title={t('promptNotebook.shortcutTitle', { shortcut: cancelShortcutLabel })}
+              title={t('common.cancel')}
             >
               {t('common.cancel')}
             </button>

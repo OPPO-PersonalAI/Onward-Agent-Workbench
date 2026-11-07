@@ -19,7 +19,7 @@ export function useSubpageEscape({ isOpen, onEscape }: UseSubpageEscapeOptions) 
       if (event.key !== 'Escape') return
       // If the focus is in the Prompt editor being edited, let PromptNotebook handle it.
       const active = document.activeElement
-      if (active?.closest('[data-prompt-editing="true"]')) return
+      if (active?.closest('.prompt-editor')) return
       // An app-level modal is open (open-modal registry): ESC belongs to
       // the modal, not the subpage. This capture-phase listener would
       // otherwise both close the subpage AND stop propagation before the

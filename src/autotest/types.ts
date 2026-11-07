@@ -1035,6 +1035,16 @@ export interface TerminalDebugApi {
     } | null
   ) => boolean
   closeAllSubpages: () => boolean
+  getFileDropState?: () => {
+    targetTerminalId: string | null
+    lastDrop: {
+      terminalId: string
+      paths: string[]
+      formattedText: string
+      shellKind: string | null
+      droppedAt: number
+    } | null
+  }
 }
 
 export interface SettingsDebugApi {
