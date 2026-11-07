@@ -17,7 +17,7 @@ const fixtures = fileURLToPath(new URL('../autotest/fixtures/trace-self-check/',
 const helper = fileURLToPath(new URL('../autotest/trace-self-check-files.mjs', import.meta.url))
 
 function setup(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onward-trace-selection-'))
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'onward-trace-selection-')))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const traceDir = path.join(root, 'trace directory with spaces')
   fs.mkdirSync(traceDir)

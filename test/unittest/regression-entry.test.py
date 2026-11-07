@@ -28,7 +28,7 @@ fixture_spec.loader.exec_module(fixture)
 class EntryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ow-entry-unit-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.addCleanup(self.temp.cleanup)
 
     def fake_git(self):

@@ -31,7 +31,7 @@ async function run() {
   const active = () => h.page.locator('.tab-item').evaluateAll(tabs => tabs.findIndex(tab => tab.classList.contains('active')))
   const events = () => h.page.evaluate(() => window.__windowShortcutProbeEvents)
   const send = async (key, modifiers = key.modifiers) => {
-    assert(Number.isInteger(key.native[process.platform]), `Native key map missing for ${process.platform}`)
+    assert(Number.isInteger(key.native[process.platform]) && key.native[process.platform] > 0, `Positive native key code required for ${process.platform} (Chromium CDP treats 0 as unset)`)
     const payload = { key: key.key, code: key.code, modifiers, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.native[process.platform] }
     // Raw keydown crosses Electron's real before-input-event boundary.
     await cdp.send('Input.dispatchKeyEvent', { ...payload, type: 'rawKeyDown' })
