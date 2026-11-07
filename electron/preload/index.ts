@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { installThemeBootstrap } from './theme-bootstrap'
 import { IPC } from '../shared/ipc-channels'
 import type { AutotestInputFocusResult } from '../shared/autotest-input-focus'
@@ -272,6 +272,7 @@ export interface DialogAPI {
 export interface ShellAPI {
   openPath: (path: string) => Promise<{ success: boolean; error?: string }>
   showItemInFolder: (path: string) => Promise<{ success: boolean; error?: string }>
+  getPathForFile: (file: File) => string
   openExternal: (url: string) => Promise<{
     success: boolean
     canceled?: boolean
@@ -1802,6 +1803,18 @@ const shellAPI: ShellAPI = {
   },
   openExternal: (url: string) => {
     return ipcRenderer.invoke(IPC.SHELL_OPEN_EXTERNAL, url)
+  },
+  getPathForFile: (file: File): string => {
+    try {
+      const resolved = webUtils.getPathForFile(file)
+      if (typeof resolved === 'string' && resolved.length > 0) {
+        return resolved
+      }
+    } catch {
+      // Fallback for synthetic File objects in automated tests
+    }
+    const fallback = (file as unknown as { path?: unknown })?.path
+    return typeof fallback === 'string' ? fallback : ''
   }
 }
 

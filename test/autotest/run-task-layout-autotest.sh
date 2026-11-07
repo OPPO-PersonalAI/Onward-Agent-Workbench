@@ -97,4 +97,10 @@ if ! grep -q "TLM-13-escape-exits-rearrange" "$LOG_FILE"; then
   exit 1
 fi
 
+if ! grep -q "TLM-18-file-drop-focuses-and-pastes-escaped-paths" "$LOG_FILE"; then
+  echo "Task layout autotest never reached the terminal file-drop block (TLM-18). Log: $LOG_FILE" >&2
+  tail -n 120 "$LOG_FILE" >&2
+  exit 1
+fi
+
 echo "Task layout autotest passed. Log: $LOG_FILE"

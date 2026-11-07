@@ -76,6 +76,12 @@ import '@xterm/xterm/css/xterm.css'
 import './TerminalGrid.css'
 import { PromptTaskTargetBadge, PromptTargetMap } from '../PromptNotebook/PromptLeaderIndicator'
 import '../../styles/path-copy-toast.css'
+import type { TerminalShellKind } from '../../utils/terminal-command'
+import {
+  extractDroppedFilePaths,
+  formatDroppedFilePathsForShell,
+  hasExternalFilesInDataTransfer
+} from '../../utils/terminal-file-drop'
 
 const DEBUG_TERMINAL_GRID = Boolean(window.electronAPI?.debug?.enabled)
 
@@ -1152,6 +1158,66 @@ export const TerminalGrid = memo(function TerminalGrid({
   useEffect(() => { rearrangeStateRef.current = rearrange.state }, [rearrange.state])
   const handleRearrangeEscape = useCallback(() => rearrangeExit('esc'), [rearrangeExit])
   useModalEscape(rearrangeActive, handleRearrangeEscape, 'task-rearrange')
+
+  // ───────── External OS file drag-and-drop into terminal panes ─────────
+  const [fileDropTargetTerminalId, setFileDropTargetTerminalId] = useState<string | null>(null)
+  const fileDropTargetTerminalIdRef = useRef<string | null>(null)
+  const lastFileDropResultRef = useRef<{
+    terminalId: string
+    paths: string[]
+    formattedText: string
+    shellKind: string | null
+    droppedAt: number
+  } | null>(null)
+
+  const updateFileDropTargetTerminalId = useCallback((nextId: string | null) => {
+    if (fileDropTargetTerminalIdRef.current === nextId) return
+    fileDropTargetTerminalIdRef.current = nextId
+    setFileDropTargetTerminalId(nextId)
+  }, [])
+
+  useEffect(() => {
+    if (hidden || globalOverlayActive || rearrangeActive) {
+      updateFileDropTargetTerminalId(null)
+    }
+  }, [hidden, globalOverlayActive, rearrangeActive, updateFileDropTargetTerminalId])
+
+  useEffect(() => {
+    if (hidden) return
+    const handleWindowDragOver = (event: DragEvent) => {
+      if (!hasExternalFilesInDataTransfer(event.dataTransfer)) return
+      event.preventDefault()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+      updateFileDropTargetTerminalId(null)
+    }
+    const handleWindowDrop = (event: DragEvent) => {
+      if (!hasExternalFilesInDataTransfer(event.dataTransfer)) return
+      event.preventDefault()
+      updateFileDropTargetTerminalId(null)
+    }
+    const handleWindowDragLeave = (event: DragEvent) => {
+      if (event.relatedTarget === null) {
+        updateFileDropTargetTerminalId(null)
+      }
+    }
+    const handleWindowReset = () => {
+      updateFileDropTargetTerminalId(null)
+    }
+    window.addEventListener('dragover', handleWindowDragOver)
+    window.addEventListener('drop', handleWindowDrop)
+    window.addEventListener('dragleave', handleWindowDragLeave)
+    window.addEventListener('dragend', handleWindowReset)
+    window.addEventListener('blur', handleWindowReset)
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver)
+      window.removeEventListener('drop', handleWindowDrop)
+      window.removeEventListener('dragleave', handleWindowDragLeave)
+      window.removeEventListener('dragend', handleWindowReset)
+      window.removeEventListener('blur', handleWindowReset)
+    }
+  }, [hidden, updateFileDropTargetTerminalId])
 
   // While rearranging, every Task cell is masked and the whole cell becomes
   // the drag handle. The mask swallows pointer events, but a terminal that
@@ -2570,6 +2636,10 @@ export const TerminalGrid = memo(function TerminalGrid({
         overlayActive: rearrangeEnabledRef.current.overlayActive,
         slotCount: rearrangeEnabledRef.current.slotCount
       }),
+      getFileDropState: () => ({
+        targetTerminalId: fileDropTargetTerminalIdRef.current,
+        lastDrop: lastFileDropResultRef.current
+      }),
       closeAllSubpages: () => {
         closeGitDiffPanelRef.current?.(false)
         closeGitHistoryPanelRef.current?.(false)
@@ -3332,6 +3402,90 @@ export const TerminalGrid = memo(function TerminalGrid({
     terminalSessionManager.focusIfNeeded(terminalId)
   }, [onTerminalFocus])
 
+
+  const canAcceptTerminalFileDrop = useCallback((
+    terminalId: string,
+    dataTransfer: DataTransfer | null | undefined
+  ): boolean => {
+    if (hidden || globalOverlayActive || rearrangeActive) return false
+    if (browserOpenTerminals.has(terminalId)) return false
+    const status = terminalStatuses[terminalId] ?? 'idle'
+    if (status === 'initializing' || status === 'error') return false
+    return hasExternalFilesInDataTransfer(dataTransfer)
+  }, [browserOpenTerminals, globalOverlayActive, hidden, rearrangeActive, terminalStatuses])
+
+  const handleCellFileDragOver = useCallback((terminalId: string, event: React.DragEvent<HTMLDivElement>) => {
+    if (!canAcceptTerminalFileDrop(terminalId, event.dataTransfer)) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    updateFileDropTargetTerminalId(terminalId)
+  }, [canAcceptTerminalFileDrop, updateFileDropTargetTerminalId])
+
+  const handleCellFileDragLeave = useCallback((terminalId: string, event: React.DragEvent<HTMLDivElement>) => {
+    if (fileDropTargetTerminalIdRef.current !== terminalId) return
+    const related = event.relatedTarget as Node | null
+    if (related && event.currentTarget.contains(related)) {
+      return
+    }
+    updateFileDropTargetTerminalId(null)
+  }, [updateFileDropTargetTerminalId])
+
+  const handleCellFileDrop = useCallback((terminalId: string, event: React.DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFilesInDataTransfer(event.dataTransfer)) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    updateFileDropTargetTerminalId(null)
+
+    if (!canAcceptTerminalFileDrop(terminalId, event.dataTransfer)) {
+      return
+    }
+
+    const filePaths = extractDroppedFilePaths(
+      event.dataTransfer?.files,
+      (file) => window.electronAPI?.shell?.getPathForFile?.(file) ?? '',
+      {
+        uriListText: event.dataTransfer?.getData?.('text/uri-list') ?? '',
+        platform: window.electronAPI.platform
+      }
+    )
+    if (filePaths.length === 0) return
+
+    handleTerminalFocus(terminalId)
+
+    const platform = window.electronAPI.platform
+    void (async () => {
+      let shellKind: TerminalShellKind | undefined
+      try {
+        const capabilities = await window.electronAPI.terminal.getInputCapabilities(terminalId)
+        shellKind = capabilities?.shellKind
+      } catch {
+        shellKind = undefined
+      }
+      const formatted = formatDroppedFilePathsForShell(filePaths, platform, shellKind)
+      if (!formatted) return
+      lastFileDropResultRef.current = {
+        terminalId,
+        paths: filePaths,
+        formattedText: formatted,
+        shellKind: shellKind ?? null,
+        droppedAt: Date.now()
+      }
+      const pasted = terminalSessionManager.paste(terminalId, formatted)
+      if (!pasted) {
+        await window.electronAPI.terminal.write(terminalId, formatted)
+      }
+      terminalSessionManager.focusIfNeeded(terminalId)
+    })()
+  }, [canAcceptTerminalFileDrop, handleTerminalFocus, updateFileDropTargetTerminalId])
+
+
   // Single click on the title opens the dropdown menu immediately. Double-click
   // is no longer a rename gesture; the only entry to inline edit is the
   // "Rename" item inside this menu (or PromptSender's task-card double-click,
@@ -3555,7 +3709,8 @@ export const TerminalGrid = memo(function TerminalGrid({
               rearrangeActive ? 'is-rearrangeable' : '',
               isDragSource ? 'is-drag-source' : '',
               isDropTarget ? 'is-drop-target' : '',
-              isDropSettled ? 'is-drop-settled' : ''
+              isDropSettled ? 'is-drop-settled' : '',
+              fileDropTargetTerminalId === termInfo.id ? 'is-file-drop-target' : ''
             ].filter(Boolean).join(' ')
 
             return (
@@ -3570,6 +3725,10 @@ export const TerminalGrid = memo(function TerminalGrid({
                 // a press that does not turn into a drag must not quietly
                 // focus a terminal the user cannot even see behind the mask.
                 onClick={(e) => { if (!rearrangeActive) handleTerminalFocus(termInfo.id, e) }}
+                onDragEnter={(e) => handleCellFileDragOver(termInfo.id, e)}
+                onDragOver={(e) => handleCellFileDragOver(termInfo.id, e)}
+                onDragLeave={(e) => handleCellFileDragLeave(termInfo.id, e)}
+                onDrop={(e) => handleCellFileDrop(termInfo.id, e)}
               >
                 <div className="terminal-grid-header">
 	                  <TerminalDropdown

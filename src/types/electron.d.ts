@@ -225,6 +225,7 @@ export interface DialogAPI {
 export interface ShellAPI {
   openPath: (path: string) => Promise<{ success: boolean; error?: string }>
   showItemInFolder: (path: string) => Promise<{ success: boolean; error?: string }>
+  getPathForFile: (file: File) => string
   openExternal: (url: string) => Promise<{
     success: boolean
     canceled?: boolean

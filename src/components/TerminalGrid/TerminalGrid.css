@@ -153,6 +153,20 @@
   border-bottom-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+.terminal-grid-cell.is-file-drop-target::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  z-index: 5;
+}
+
+.terminal-grid-cell.is-file-drop-target .terminal-grid-header {
+  background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 /* Terminal title bar */
 .terminal-grid-header {
   height: 24px;
