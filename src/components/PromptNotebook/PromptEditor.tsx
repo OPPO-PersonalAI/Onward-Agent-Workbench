@@ -90,11 +90,7 @@ export function PromptEditor({ onSubmit, editingPrompt, onCancelEdit }: PromptEd
       e.preventDefault()
       handleSubmit()
     }
-    if (e.key === 'Escape' && editingPrompt) {
-      e.preventDefault()
-      handleCancel()
-    }
-  }, [handleSubmit, handleCancel, editingPrompt])
+  }, [handleSubmit])
 
   return (
     <div

@@ -198,14 +198,55 @@ export async function testPromptList(ctx: AutotestContext): Promise<TestResult[]
     record('PL-11-save-as-new-button-label', Boolean(promptElement && saveAsNewLabelReady), {
       buttonLabels: editButtonLabels
     })
-    const cancelButton = Array.from(document.querySelectorAll(
-      '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
-    )).find((button) => {
-      const label = button.textContent?.trim()
-      return label === 'Cancel' || label === '\u53d6\u6d88'
-    }) as HTMLButtonElement | undefined
-    cancelButton?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
-    await sleep(120)
+    const activeEditorContent = document.querySelector<HTMLElement>(
+      '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-content'
+    )
+    let escPreservedTrials = 0
+    for (let trial = 0; trial < 5; trial += 1) {
+      activeEditorContent?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      )
+      await sleep(40)
+      const stillEditing = document.querySelector(
+        '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"]'
+      ) !== null
+      const liveText = activeEditorContent?.innerText ?? notebookApi()!.getEditorContent()
+      if (stillEditing && liveText === promptContent) {
+        escPreservedTrials += 1
+      }
+    }
+    record('PL-11b-escape-does-not-cancel-edit', escPreservedTrials === 5, {
+      trials: 5,
+      preserved: escPreservedTrials
+    })
+    const isMac = window.electronAPI.platform === 'darwin'
+    activeEditorContent?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 's',
+        ctrlKey: !isMac,
+        metaKey: isMac,
+        bubbles: true,
+        cancelable: true
+      })
+    )
+    const savedViaShortcut = await waitFor('pl-11c-ctrl-s-save', () => {
+      return document.querySelector(
+        '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"]'
+      ) === null
+    }, 3000, 60)
+    record('PL-11c-ctrl-s-saves-edited-prompt', savedViaShortcut, {
+      savedViaShortcut
+    })
+    if (!savedViaShortcut) {
+      const cancelBtnFallback = Array.from(document.querySelectorAll(
+        '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
+      )).find((button) => {
+        const label = button.textContent?.trim()
+        return label === 'Cancel' || label === '\u53d6\u6d88'
+      }) as HTMLButtonElement | undefined
+      cancelBtnFallback?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+      await sleep(120)
+    }
 
     const selectPrompt = notebookApi()!.selectPrompt
     if (cards.length > 1 && selectPrompt) {

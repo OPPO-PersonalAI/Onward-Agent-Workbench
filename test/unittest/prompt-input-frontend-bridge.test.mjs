@@ -143,7 +143,7 @@ function harness(t, autotest = true, traceEnabled = false) {
     [resolve(ROOT, 'src/contexts/SettingsContext.tsx'), { useSettings: () => ({ settings: {} }) }],
     [resolve(ROOT, 'src/i18n/useI18n.ts'), { useI18n: () => ({ t: translate, locale: 'en' }) }],
     [resolve(ROOT, 'src/utils/perf-trace.ts'), { perfTraceDiagnostic: (name, data) => traces.push({ name, data }) }],
-    [resolve(ROOT, 'src/utils/keyboard.ts'), { buildAccelerator: () => '' }],
+    [resolve(ROOT, 'src/utils/perf-trace.ts'), { perfTraceDiagnostic: (name, data) => traces.push({ name, data }) }],
     [resolve(ROOT, 'src/utils/modal-dismiss.ts'), { isAnyModalOpen: () => false,
       subscribeOpenModals: callback => { modalListeners.add(callback); return () => modalListeners.delete(callback) } }],
     [resolve(ROOT, 'src/hooks/useModalEscape.ts'), { useModalEscape: noop, useModalOpenRegistration: noop }]
@@ -1105,4 +1105,79 @@ test('PIFB-18: disabled legacy tracing allocates no flow or terminal correlation
   assert.equal(view.sends.length, 2)
   assert.equal(view.history.length, 1)
   assert.deepEqual(h.legacyTraces, [])
+})
+
+test('PIFB-27: editing an existing history prompt saves on Ctrl+S and does not cancel on Escape', t => {
+  const h = harness(t)
+  const updates = []
+  let cancelCount = 0
+  const sourcePrompt = {
+    id: 'prompt-edit-1',
+    title: 'Original Title',
+    content: 'Original Content',
+    pinned: false,
+    createdAt: 1000,
+    updatedAt: 1000,
+    lastUsedAt: 1000
+  }
+  const { notebook } = mountNotebook(h, {
+    prompts: [sourcePrompt],
+    onUpdatePrompt: (updated, preserveTimestamp) => updates.push({ updated, preserveTimestamp })
+  })
+  const child = findNode(notebook.tree, node => node.type?.name === 'PromptEditorWithAppend')
+  const editor = h.mount('PromptEditorWithAppend', {
+    ...child.props,
+    editingPrompt: sourcePrompt,
+    onCancelEdit: () => { cancelCount += 1 }
+  })
+  h.flush()
+
+  // Modify content & title while editing the history prompt
+  h.window.__onwardPromptNotebookDebug.setEditorTitle('Modified Title')
+  h.window.__onwardPromptNotebookDebug.setEditorContent('Modified Content')
+  h.flush()
+
+  const editorRoot = findNode(editor.tree, node => node.props?.className === 'prompt-editor')
+  assert(editorRoot)
+  const cancelBtn = findNode(editor.tree, node => String(node.props?.className ?? '').includes('prompt-editor-btn-cancel'))
+  assert(cancelBtn)
+  assert.equal(String(cancelBtn.props.title ?? '').includes('Esc'), false, 'Cancel button tooltip must not advertise Esc')
+
+  // Pressing Escape must NOT cancel editing or wipe modified content
+  let escPrevented = false
+  editorRoot.props.onKeyDown({
+    key: 'Escape',
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault: () => { escPrevented = true },
+    nativeEvent: { key: 'Escape', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, isComposing: false }
+  })
+  h.flush()
+  assert.equal(escPrevented, false)
+  assert.equal(cancelCount, 0)
+  assert.equal(updates.length, 0)
+  assert.equal(h.controllers.get('tab-a').snapshot().content, 'Modified Content')
+  assert.equal(h.controllers.get('tab-a').snapshot().title, 'Modified Title')
+
+  // Pressing Ctrl+S (or Cmd+S on darwin) directly triggers Save on the existing prompt
+  let savePrevented = false
+  editorRoot.props.onKeyDown({
+    key: 's',
+    ctrlKey: false,
+    metaKey: true,
+    shiftKey: false,
+    altKey: false,
+    preventDefault: () => { savePrevented = true },
+    nativeEvent: { key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, isComposing: false }
+  })
+  h.flush()
+  assert.equal(savePrevented, true)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].preserveTimestamp, true)
+  assert.equal(updates[0].updated.id, 'prompt-edit-1')
+  assert.equal(updates[0].updated.title, 'Modified Title')
+  assert.equal(updates[0].updated.content, 'Modified Content')
+  assert.equal(cancelCount, 1, 'Save exits edit mode after updating the prompt')
 })
