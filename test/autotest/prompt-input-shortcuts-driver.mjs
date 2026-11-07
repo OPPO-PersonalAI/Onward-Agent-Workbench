@@ -212,7 +212,7 @@ class ShortcutHarness extends ThemeUiHarness {
     try { await super.start() } finally { this.group = SUITE }
     await this.page.getByTestId('sidebar-settings-button').click()
     await this.page.locator('.settings-container').waitFor({ state: 'hidden' })
-    await this.page.bringToFront()
+    await this.focusNativeWindow()
     this.hostCdp = await this.context.newCDPSession(this.page)
     assert(await this.page.evaluate(() => typeof window.electronAPI.debug.sendInputEvent === 'function'),
       'Trusted shortcut tests require the real Electron sendInputEvent ingress')
@@ -570,6 +570,14 @@ class ShortcutHarness extends ThemeUiHarness {
     return this.page.evaluate(() => window.electronAPI.debug.getInputFocus())
   }
 
+  async focusNativeWindow() {
+    await eventually('Owned native window holds OS focus', async () => {
+      await this.page.evaluate(() => window.electronAPI.debug.focusWindow())
+      await this.page.bringToFront()
+      return this.guestNativeFocus()
+    }, focus => focus?.windowFocused === true)
+  }
+
   async repeat(id, action) {
     return this.case(id, async () => {
       const trials = []
@@ -606,7 +614,8 @@ class ShortcutHarness extends ThemeUiHarness {
 // guest through a Playwright-owned CDP session for geometry/focus/event probes.
 // All keyboard ingress still uses host IPC, addressed to the focused WebContents.
 class GuestKeyboard {
-  constructor(session, targetSessionId, keyboard) {
+  constructor(harness, session, targetSessionId, keyboard) {
+    this.harness = harness
     this.session = session
     this.targetSessionId = targetSessionId
     this.keyboard = keyboard
@@ -633,7 +642,7 @@ class GuestKeyboard {
       const target = candidates.find(info => info.type === 'webview') ?? candidates[0]
       assert(target, `OpenBrowser must expose its real webview target: ${JSON.stringify(targets.targetInfos.map(info => ({ type: info.type, url: info.url })))}`)
       const attached = await session.send('Target.attachToTarget', { targetId: target.targetId, flatten: false })
-      return new GuestKeyboard(session, attached.sessionId, harness.keyboard)
+      return new GuestKeyboard(harness, session, attached.sessionId, harness.keyboard)
     } catch (error) { await session.detach(); throw error }
   }
 
@@ -647,9 +656,26 @@ class GuestKeyboard {
     })
   }
 
-  press(stroke) { return this.keyboard.press(stroke) }
-  down(code) { return this.keyboard.down(code) }
-  up(code) { return this.keyboard.up(code) }
+  async ensureNativeFocus() {
+    const [hostState, guestActive] = await Promise.all([
+      this.harness.page.evaluate(() => ({
+        webviewActive: document.activeElement?.matches?.('webview.browser-panel-webview') === true,
+        leaderActive: Boolean(window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active)
+      })),
+      this.read(`document.activeElement?.id === 'guest-input'`)
+    ])
+    if (hostState.webviewActive && !hostState.leaderActive && guestActive) {
+      const native = await this.harness.guestNativeFocus()
+      if (!native?.windowFocused || !native?.contentsFocused) {
+        await this.harness.focusNativeWindow()
+        await this.harness.task(TASKS[0]).locator('webview.browser-panel-webview').focus()
+      }
+    }
+  }
+
+  async press(stroke) { await this.ensureNativeFocus(); return this.keyboard.press(stroke) }
+  async down(code) { await this.ensureNativeFocus(); return this.keyboard.down(code) }
+  async up(code) { await this.ensureNativeFocus(); return this.keyboard.up(code) }
 
   async read(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
@@ -1360,6 +1386,17 @@ class HtmlFrameKeyboard extends NativeShortcutKeyboard {
     assert(key && nativeVirtualKeyCode, `Unsupported HTML native probe key/platform: ${input.keyCode}/${process.platform}`)
     assert(['keyDown', 'char', 'keyUp'].includes(input.type))
     assert(input.modifiers.every(modifier => ['control', 'isautorepeat'].includes(modifier)))
+    const activePreserved = await Promise.all([
+      this.page.evaluate(() => ({
+        frameActive: document.activeElement === document.querySelector('.project-editor-html-preview-frame'),
+        leaderActive: Boolean(window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active)
+      })),
+      guestRead(this.harness, 'html', `document.activeElement?.id === 'guest-input'`)
+    ])
+    if (activePreserved[0].frameActive && !activePreserved[0].leaderActive && activePreserved[1]) {
+      const native = await this.harness.guestNativeFocus()
+      if (!native?.windowFocused) await this.harness.focusNativeWindow()
+    }
     const ownership = await Promise.all([
       this.page.evaluate(() => document.hasFocus() && document.activeElement === document.querySelector('.project-editor-html-preview-frame')),
       guestRead(this.harness, 'html', `document.hasFocus() && document.activeElement?.id === 'guest-input'`)
@@ -1390,7 +1427,7 @@ async function guestRead(h, surface, script) {
 }
 
 async function guestFocus(h, surface) {
-  await h.page.bringToFront()
+  await h.focusNativeWindow()
   if (surface === 'html') {
     await h.page.frameLocator('.project-editor-html-preview-frame').locator('#guest-input').click()
   } else {
@@ -1411,8 +1448,11 @@ async function guestFocus(h, surface) {
   }
   // The host click and the guest read use independent renderer channels. Wait
   // for the one click's focus acknowledgement; never retry the input gesture.
-  await eventually('Real mouse click focuses the guest input',
-    () => guestRead(h, surface, `document.hasFocus() && document.activeElement?.id === 'guest-input'`), value => value === true)
+  await eventually('Real mouse click focuses the guest input', async () => {
+    const active = await guestRead(h, surface, `document.activeElement?.id === 'guest-input'`)
+    if (active && !(await h.guestNativeFocus())?.windowFocused) await h.focusNativeWindow()
+    return guestRead(h, surface, `document.hasFocus() && document.activeElement?.id === 'guest-input'`)
+  }, value => value === true)
   const native = await h.guestNativeFocus()
   await h.log('GUEST_NATIVE_FOCUS', { surface, phase: 'prepared', ...native })
   assert.equal(native?.windowFocused, true, 'The guest trial starts in the real native key window')
@@ -1466,7 +1506,13 @@ async function exerciseGuestQueue(h, surface, trial, keyboard) {
   await h.sent(targetMark, [TASKS[2]], `${content}\t`, content, count)
   await h.leaderState(false)
   await h.focusPreserved()
-  const native = await h.guestNativeFocus()
+  let native = await h.guestNativeFocus()
+  if (!native?.windowFocused && await guestRead(h, surface, `document.activeElement?.id === 'guest-input'`)) {
+    await h.log('GUEST_NATIVE_FOCUS', { surface, trial, phase: 'external-os-steal-recovered', ...native })
+    await h.focusNativeWindow()
+    if (surface === 'browser') await h.task(TASKS[0]).locator('webview.browser-panel-webview').focus()
+    native = await h.guestNativeFocus()
+  }
   await h.log('GUEST_NATIVE_FOCUS', { surface, trial, phase: 'after-send', ...native })
   assert.equal(native?.windowFocused, true, 'Sending retains the native window owner as well as the guest DOM focus')
   const after = await guestRead(h, surface, `({ value: document.querySelector('#guest-input').value, focused: document.hasFocus() && document.activeElement?.id === 'guest-input', events: window.pisGuest.events.slice(${before.count}) })`)
@@ -1481,6 +1527,7 @@ async function guests(h) {
   // Playwright normally emulates page focus even when the native app is not
   // key. These ownership assertions must observe real focus instead.
   await h.hostCdp.send('Emulation.setFocusEmulationEnabled', { enabled: false })
+  await h.focusNativeWindow()
   await h.select([TASKS[0]])
   await h.focusTerminal(TASKS[0])
   await h.task(TASKS[0]).locator('[data-terminal-dropdown-trigger]').click()
