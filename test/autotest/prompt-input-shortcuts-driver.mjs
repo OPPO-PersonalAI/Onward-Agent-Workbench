@@ -571,11 +571,12 @@ class ShortcutHarness extends ThemeUiHarness {
   }
 
   async focusNativeWindow() {
-    await eventually('Owned native window holds OS focus', async () => {
-      await this.page.evaluate(() => window.electronAPI.debug.focusWindow())
-      await this.page.bringToFront()
-      return this.guestNativeFocus()
-    }, focus => focus?.windowFocused === true)
+    await this.page.bringToFront()
+    await eventually('Owned native window holds OS focus',
+      () => this.page.evaluate(() => typeof window.electronAPI?.debug?.focusWindow === 'function'
+        ? window.electronAPI.debug.focusWindow()
+        : true),
+      value => value === true)
   }
 
   async repeat(id, action) {
@@ -657,19 +658,25 @@ class GuestKeyboard {
   }
 
   async ensureNativeFocus() {
-    const [hostState, guestActive] = await Promise.all([
+    const [hostState, guestState, native] = await Promise.all([
       this.harness.page.evaluate(() => ({
         webviewActive: document.activeElement?.matches?.('webview.browser-panel-webview') === true,
         leaderActive: Boolean(window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active)
       })),
-      this.read(`document.activeElement?.id === 'guest-input'`)
+      this.read(`({ hasFocus: document.hasFocus(), inputActive: document.activeElement?.id === 'guest-input' })`),
+      this.harness.guestNativeFocus()
     ])
-    if (hostState.webviewActive && !hostState.leaderActive && guestActive) {
-      const native = await this.harness.guestNativeFocus()
-      if (!native?.windowFocused || !native?.contentsFocused) {
+    if (hostState.webviewActive && !hostState.leaderActive && guestState?.inputActive &&
+      (!native?.windowFocused || !native?.contentsFocused || !native?.focusedContentsId || !guestState.hasFocus)) {
+      await eventually('Owned browser guest regains OS focus', async () => {
         await this.harness.focusNativeWindow()
         await this.harness.task(TASKS[0]).locator('webview.browser-panel-webview').focus()
-      }
+        const [restoredNative, restoredGuest] = await Promise.all([
+          this.harness.guestNativeFocus(),
+          this.read(`document.hasFocus() && document.activeElement?.id === 'guest-input'`)
+        ])
+        return Boolean(restoredNative?.windowFocused && restoredNative?.contentsFocused && restoredNative?.focusedContentsId && restoredGuest)
+      }, value => value === true)
     }
   }
 
@@ -1386,21 +1393,26 @@ class HtmlFrameKeyboard extends NativeShortcutKeyboard {
     assert(key && nativeVirtualKeyCode, `Unsupported HTML native probe key/platform: ${input.keyCode}/${process.platform}`)
     assert(['keyDown', 'char', 'keyUp'].includes(input.type))
     assert(input.modifiers.every(modifier => ['control', 'isautorepeat'].includes(modifier)))
-    const activePreserved = await Promise.all([
-      this.page.evaluate(() => ({
-        frameActive: document.activeElement === document.querySelector('.project-editor-html-preview-frame'),
-        leaderActive: Boolean(window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active)
-      })),
-      guestRead(this.harness, 'html', `document.activeElement?.id === 'guest-input'`)
-    ])
-    if (activePreserved[0].frameActive && !activePreserved[0].leaderActive && activePreserved[1]) {
-      const native = await this.harness.guestNativeFocus()
-      if (!native?.windowFocused) await this.harness.focusNativeWindow()
-    }
-    const ownership = await Promise.all([
+    let ownership = await Promise.all([
       this.page.evaluate(() => document.hasFocus() && document.activeElement === document.querySelector('.project-editor-html-preview-frame')),
       guestRead(this.harness, 'html', `document.hasFocus() && document.activeElement?.id === 'guest-input'`)
     ])
+    if (ownership.some(value => !value)) {
+      const activePreserved = await Promise.all([
+        this.page.evaluate(() => document.activeElement === document.querySelector('.project-editor-html-preview-frame') &&
+          !window.__onwardPromptInputShortcutsDebug?.getLeaderState()?.active),
+        guestRead(this.harness, 'html', `document.activeElement?.id === 'guest-input'`)
+      ])
+      if (activePreserved[0] && activePreserved[1]) {
+        ownership = await eventually('Owned HTML guest regains OS focus', async () => {
+          await this.harness.focusNativeWindow()
+          return Promise.all([
+            this.page.evaluate(() => document.hasFocus() && document.activeElement === document.querySelector('.project-editor-html-preview-frame')),
+            guestRead(this.harness, 'html', `document.hasFocus() && document.activeElement?.id === 'guest-input'`)
+          ])
+        }, value => value[0] === true && value[1] === true)
+      }
+    }
     assert.deepEqual(ownership, [true, true], 'Native CDP may only address the already-focused owned HTML input')
     await this.harness.hostCdp.send('Input.dispatchKeyEvent', {
       ...key, nativeVirtualKeyCode,
@@ -1449,9 +1461,21 @@ async function guestFocus(h, surface) {
   // The host click and the guest read use independent renderer channels. Wait
   // for the one click's focus acknowledgement; never retry the input gesture.
   await eventually('Real mouse click focuses the guest input', async () => {
-    const active = await guestRead(h, surface, `document.activeElement?.id === 'guest-input'`)
-    if (active && !(await h.guestNativeFocus())?.windowFocused) await h.focusNativeWindow()
-    return guestRead(h, surface, `document.hasFocus() && document.activeElement?.id === 'guest-input'`)
+    const focused = await guestRead(h, surface, `document.hasFocus() && document.activeElement?.id === 'guest-input'`)
+    if (surface === 'html') {
+      if (focused) return true
+      if (await guestRead(h, surface, `document.activeElement?.id === 'guest-input'`)) {
+        await h.focusNativeWindow()
+      }
+      return false
+    }
+    const native = await h.guestNativeFocus()
+    if (focused && native?.windowFocused && native?.contentsFocused && native?.focusedContentsId) return true
+    if (await guestRead(h, surface, `document.activeElement?.id === 'guest-input'`)) {
+      await h.focusNativeWindow()
+      await h.task(TASKS[0]).locator('webview.browser-panel-webview').focus()
+    }
+    return false
   }, value => value === true)
   const native = await h.guestNativeFocus()
   await h.log('GUEST_NATIVE_FOCUS', { surface, phase: 'prepared', ...native })
@@ -1509,9 +1533,11 @@ async function exerciseGuestQueue(h, surface, trial, keyboard) {
   let native = await h.guestNativeFocus()
   if (!native?.windowFocused && await guestRead(h, surface, `document.activeElement?.id === 'guest-input'`)) {
     await h.log('GUEST_NATIVE_FOCUS', { surface, trial, phase: 'external-os-steal-recovered', ...native })
-    await h.focusNativeWindow()
-    if (surface === 'browser') await h.task(TASKS[0]).locator('webview.browser-panel-webview').focus()
-    native = await h.guestNativeFocus()
+    native = await eventually('Owned native window regains OS focus after external steal', async () => {
+      await h.focusNativeWindow()
+      if (surface === 'browser') await h.task(TASKS[0]).locator('webview.browser-panel-webview').focus()
+      return h.guestNativeFocus()
+    }, focus => focus?.windowFocused === true)
   }
   await h.log('GUEST_NATIVE_FOCUS', { surface, trial, phase: 'after-send', ...native })
   assert.equal(native?.windowFocused, true, 'Sending retains the native window owner as well as the guest DOM focus')

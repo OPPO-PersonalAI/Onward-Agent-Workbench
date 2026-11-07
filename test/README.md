@@ -575,6 +575,20 @@ into the gate.
    collide with an existing one in § 2. Use `<PREFIX>-NN-short-name`
    so traces and `grep` jumps cleanly to the assertion.
 
+### Cross-platform native focus, `<webview>` guests, and CDP keycodes (macOS vs Windows)
+
+Tests that drive native keyboard input (`sendInputEvent`, CDP
+`Input.dispatchKeyEvent`) or disable Playwright focus emulation
+(`Emulation.setFocusEmulationEnabled({ enabled: false })`) must account
+for three platform divergences between macOS (`darwin`) and Windows
+(`win32`):
+
+| Area | Windows (`win32`) | macOS (`darwin`) | Required test design |
+|---|---|---|---|
+| **Window focus acquisition** | Single-level (`HWND`). CDP `page.bringToFront()` synchronously promotes the window to foreground (`window.isFocused() === true`). | Two-level (`NSApp.isActive` + `NSWindow.isKeyWindow`). `page.bringToFront()` only orders the window inside the process without activating the app in `WindowServer`. | Use a closed-loop barrier polling `window.electronAPI.debug.focusWindow()` (which calls `app.focus({ steal: true })` and returns `mainWindow.isFocused()`) until it resolves `true`. |
+| **Repeated `focusWindow()` / `<webview>` focus** | Calling `focusWindow()` on an already-focused `HWND` is a synchronous no-op; no `blur` event fires. | Calling `focusWindow()` runs `app.dock.show()` + `app.focus({ steal: true })`, causing an asynchronous 25–95 ms `blur → focus` bounce in `WindowServer`. Also, focusing a `<webview>` (separate guest `WebContents`) blurs the host document (`document.hasFocus() === false` in host, `true` in guest), and calling `page.bringToFront()` on the host steals `WebContents` focus from the `<webview>`. | Never judge `<webview>` focus via host `document.hasFocus()`, and never call `focusWindow()` / `page.bringToFront()` unconditionally before every keystroke. Gate recovery on actual focus loss (`!windowFocused \|\| !contentsFocused \|\| !focusedContentsId \|\| !guestHasFocus`) and wait for both native and guest focus to settle before sending input. |
+| **CDP `Input.dispatchKeyEvent` (`KeyA`)** | `VK_A` is `0x41` (non-zero). | Apple Carbon `kVK_ANSI_A` is `0x00` (`0`). Chromium treats `nativeVirtualKeyCode: 0` as unspecified and skips `before-input-event` on `rawKeyDown` probes that omit `text`. | Avoid `KeyA` in `rawKeyDown`-only CDP shortcut fixtures, or include character metadata when testing `KeyA`. |
+
 ### Verifying
 
 Run the trace self-check
