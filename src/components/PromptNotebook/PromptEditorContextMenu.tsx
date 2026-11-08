@@ -69,6 +69,7 @@ export interface PromptEditorContextMenuProps {
   currentTaskTitle: string | null
   terminals: TerminalInfo[]
   onSendToTask: (content: string, terminalId: string) => void
+  onPasteClipboard?: (snapshot: ContextMenuSnapshot) => Promise<void>
 }
 
 export function PromptEditorContextMenu({
@@ -87,7 +88,8 @@ export function PromptEditorContextMenu({
   currentBranch,
   currentTaskTitle,
   terminals,
-  onSendToTask
+  onSendToTask,
+  onPasteClipboard
 }: PromptEditorContextMenuProps) {
   const { t } = useI18n()
   const [submenu, setSubmenu] = useState<SubmenuKey>(null)
@@ -349,14 +351,18 @@ export function PromptEditorContextMenu({
 
   const handlePaste = useCallback(async () => {
     try {
-      const text = await readClipboard()
-      insertAtCursor(text)
+      if (onPasteClipboard) {
+        await onPasteClipboard(snapshot)
+      } else {
+        const text = await readClipboard()
+        insertAtCursor(text)
+      }
     } catch (err) {
       console.error('Prompt editor paste failed:', err)
     }
     onClose()
     focusBack()
-  }, [insertAtCursor, onClose, focusBack, readClipboard])
+  }, [insertAtCursor, onClose, focusBack, onPasteClipboard, readClipboard, snapshot])
 
 
   const handleClearContent = useCallback(() => {

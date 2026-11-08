@@ -343,6 +343,225 @@ export async function testPromptList(ctx: AutotestContext): Promise<TestResult[]
     record('PL-15-empty-editor-adds-nothing', dblClickedEmpty && targetReloaded && countAfterEmpty === countBeforeEmpty, {
       dblClickedEmpty, targetReloaded, countBeforeEmpty, countAfterEmpty
     })
+
+    // Exit edit mode before testing fresh editor drop & image paste
+    const cancelBtnAfter15 = Array.from(document.querySelectorAll(
+      '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
+    )).find((button) => {
+      const label = button.textContent?.trim()
+      return label === 'Cancel' || label === '\u53d6\u6d88'
+    }) as HTMLButtonElement | undefined
+    cancelBtnAfter15?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    await sleep(120)
+  }
+
+  // ---- PL-16..20: Prompt Editor file/folder drop & top image grid ----
+  if (!cancelled()) {
+    notebookApi()!.setEditorContent('Check files: ')
+    await waitFor('pl16-seed', () => notebookApi()!.getEditorContent() === 'Check files: ', 3000, 60)
+    const sampleDropPaths = window.electronAPI.platform === 'win32'
+      ? ['C:\\repo\\src\\index.ts', 'C:\\repo\\my folder\\README.md']
+      : ['/repo/src/index.ts', '/repo/my folder/README.md']
+    const dropResult = notebookApi()!.dropFilesIntoEditor?.(sampleDropPaths) ?? null
+    const droppedContentReady = await waitFor('pl16-dropped-content', () => {
+      const text = notebookApi()!.getEditorContent()
+      return text.includes('index.ts') && text.includes('README.md')
+    }, 3000, 60)
+    record('PL-16-editor-file-drop', Boolean(
+      dropResult &&
+      dropResult.rawPaths.length === 2 &&
+      dropResult.formattedText.length > 0 &&
+      droppedContentReady
+    ), {
+      dropResult,
+      editorContent: notebookApi()!.getEditorContent()
+    })
+
+    // Clear editor and paste 3 images of different aspect ratios
+    notebookApi()!.setEditorContent('')
+    await waitFor('pl17-clear', () => notebookApi()!.getEditorContent() === '', 3000, 60)
+    await notebookApi()!.pasteClipboardIntoEditor?.({ autotestImage: { width: 800, height: 600 } })
+    await notebookApi()!.pasteClipboardIntoEditor?.({ autotestImage: { width: 400, height: 900 } })
+    await notebookApi()!.pasteClipboardIntoEditor?.({ autotestImage: { width: 1200, height: 500 } })
+
+    const threeImagesMounted = await waitFor('pl17-three-images', () => {
+      const domCards = document.querySelectorAll(
+        '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor .prompt-editor-images-strip .prompt-editor-image-card'
+      )
+      return domCards.length === 3 && (notebookApi()!.getEditorImages?.().length ?? 0) === 3
+    }, 4000, 80)
+
+    const editorImages17 = notebookApi()!.getEditorImages?.() ?? []
+    const stripEl = document.querySelector<HTMLElement>(
+      '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor .prompt-editor-images-strip'
+    )
+    const inputsEl = document.querySelector<HTMLElement>(
+      '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor .prompt-editor-inputs'
+    )
+    const stripIsAboveInputs = Boolean(
+      stripEl &&
+      inputsEl &&
+      stripEl.getBoundingClientRect().top <= inputsEl.getBoundingClientRect().top
+    )
+    record('PL-17-editor-paste-images-top-grid', Boolean(
+      threeImagesMounted &&
+      stripIsAboveInputs &&
+      editorImages17[0]?.index === 1 &&
+      editorImages17[0]?.path.endsWith('item-1.png') &&
+      editorImages17[1]?.index === 2 &&
+      editorImages17[1]?.path.endsWith('item-2.png') &&
+      editorImages17[2]?.index === 3 &&
+      editorImages17[2]?.path.endsWith('item-3.png')
+    ), {
+      threeImagesMounted,
+      stripIsAboveInputs,
+      images: editorImages17
+    })
+
+    // PL-18: Typing @ pops up .prompt-editor-mention-menu with candidates (@1..@3),
+    // selecting @1 inserts @1, badge insert inserts @2, and Lightbox preview opens/closes.
+    notebookApi()!.setEditorContent('看以下 @')
+    const mentionPopupReady = await waitFor('pl18-mention-popup', () => {
+      const cands = notebookApi()!.getEditorMentionCandidates?.() ?? []
+      const menuDom = document.querySelector('.prompt-editor-mention-menu')
+      return cands.length === 3 && menuDom !== null
+    }, 3000, 60)
+    const inserted1 = notebookApi()!.selectEditorMentionCandidate?.(1) ?? false
+    await waitFor('pl18-token-1', () => notebookApi()!.getEditorContent().includes('@1'), 3000, 60)
+    const mentionPopupClosed = document.querySelector('.prompt-editor-mention-menu') === null
+    notebookApi()!.setEditorContent(`${notebookApi()!.getEditorContent()}对比 `)
+    await waitFor('pl18-with', () => notebookApi()!.getEditorContent().includes('@1 对比 '), 3000, 60)
+    const inserted2 = notebookApi()!.insertEditorImageToken?.(2) ?? false
+    const tokensReady = await waitFor('pl18-tokens', () => {
+      const text = notebookApi()!.getEditorContent()
+      return text.includes('@1') && text.includes('@2')
+    }, 3000, 60)
+
+    const previewOpened = notebookApi()!.openEditorImagePreview?.(2) ?? false
+    const lightboxVisible = await waitFor('pl18-lightbox-open', () => {
+      return document.querySelector('.prompt-image-lightbox-overlay') !== null &&
+        notebookApi()!.getEditorImagePreviewIndex?.() === 2
+    }, 3000, 60)
+    notebookApi()!.closeEditorImagePreview?.()
+    const lightboxClosed = await waitFor('pl18-lightbox-close', () => {
+      return document.querySelector('.prompt-image-lightbox-overlay') === null &&
+        notebookApi()!.getEditorImagePreviewIndex?.() === null
+    }, 3000, 60)
+    record('PL-18-editor-insert-image-token-and-lightbox', Boolean(
+      mentionPopupReady &&
+      inserted1 &&
+      mentionPopupClosed &&
+      inserted2 &&
+      tokensReady &&
+      previewOpened &&
+      lightboxVisible &&
+      lightboxClosed
+    ), {
+      mentionPopupReady,
+      inserted1,
+      mentionPopupClosed,
+      inserted2,
+      editorContent: notebookApi()!.getEditorContent(),
+      previewOpened,
+      lightboxVisible,
+      lightboxClosed
+    })
+
+    // PL-19: Remove item #1 -> remaining items renumber to #1 (400x900) and #2 (1200x500),
+    // and @2 in text renumbers to @1.
+    const removed1 = await (notebookApi()!.removeEditorImage?.(1) ?? Promise.resolve(false))
+    const renumberedReady = await waitFor('pl19-renumbered', () => {
+      const imgs = notebookApi()!.getEditorImages?.() ?? []
+      const text = notebookApi()!.getEditorContent()
+      return (
+        imgs.length === 2 &&
+        imgs[0]?.index === 1 &&
+        imgs[0]?.width === 400 &&
+        imgs[0]?.path.endsWith('item-1.png') &&
+        imgs[1]?.index === 2 &&
+        imgs[1]?.width === 1200 &&
+        imgs[1]?.path.endsWith('item-2.png') &&
+        text.includes('@1') &&
+        !text.includes('@2')
+      )
+    }, 4000, 80)
+    record('PL-19-editor-remove-image-renumbers-files-and-tokens', Boolean(removed1 && renumberedReady), {
+      removed1,
+      renumberedReady,
+      images: notebookApi()!.getEditorImages?.(),
+      editorContent: notebookApi()!.getEditorContent()
+    })
+
+    // PL-20: Send prompt with images -> history records images, badge shows in PromptList, and editor clears images
+    const beforeImageSendIds = new Set(notebookApi()!.getPrompts().map(p => p.id))
+    senderApi()!.deselectAllTerminals()
+    await sleep(80)
+    senderApi()!.selectTerminal(cards[0].id)
+    await sleep(80)
+    const clickedImageSend = await senderApi()!.clickAction('send')
+    const imageSendIdle = await waitFor('pl20-send-idle', () => !senderApi()!.isSubmitting(), 5000, 80)
+    const imagePromptRecorded = await waitFor('pl20-prompt-recorded', () => {
+      return notebookApi()!.getPrompts().some(p => !beforeImageSendIds.has(p.id) && (p.images?.length ?? 0) === 2)
+    }, 5000, 80)
+    const recordedImagePrompt = notebookApi()!.getPrompts().find(p => !beforeImageSendIds.has(p.id)) ?? null
+    const hasBadgeDom = await waitFor('pl20-badge-dom', () => {
+      if (!recordedImagePrompt) return false
+      return document.querySelector(`[data-prompt-id="${CSS.escape(recordedImagePrompt.id)}"] .prompt-item-image-badge`) !== null
+    }, 3000, 60)
+    const editorClearedImages = (notebookApi()!.getEditorImages?.().length ?? 0) === 0
+    record('PL-20-send-prompt-with-images-and-history-badge', Boolean(
+      clickedImageSend &&
+      imageSendIdle &&
+      imagePromptRecorded &&
+      recordedImagePrompt &&
+      (recordedImagePrompt.images?.length ?? 0) === 2 &&
+      hasBadgeDom &&
+      editorClearedImages
+    ), {
+      clickedImageSend,
+      imageSendIdle,
+      imagePromptRecorded,
+      recordedImagePrompt,
+      hasBadgeDom,
+      editorClearedImages
+    })
+
+    // PL-21: Ctrl+V pasting a non-image file (e.g. markdown) + a folder:
+    // the file enters the top #1 strip as item-1.md and previews in Lightbox,
+    // while the folder path is inserted into the editor text.
+    const cwd = window.electronAPI.debug?.autotestCwd
+    if (cwd) {
+      const sep = window.electronAPI.platform === 'win32' ? '\\' : '/'
+      const mdFixturePath = `${cwd}${sep}test${sep}autotest${sep}fixtures${sep}markdown-code-wrap.md`
+      const folderFixturePath = `${cwd}${sep}test${sep}autotest${sep}fixtures`
+      notebookApi()!.setEditorContent('')
+      await waitFor('pl21-clear', () => notebookApi()!.getEditorContent() === '', 3000, 60)
+      await notebookApi()!.pasteClipboardIntoEditor?.({
+        filePaths: [mdFixturePath, folderFixturePath]
+      })
+      const pastedMixedReady = await waitFor('pl21-mixed-ready', () => {
+        const imgs = notebookApi()!.getEditorImages?.() ?? []
+        const text = notebookApi()!.getEditorContent()
+        return imgs.length === 1 && imgs[0]?.path.endsWith('item-1.md') && text.includes('fixtures')
+      }, 4000, 80)
+      const openedMdPreview = notebookApi()!.openEditorImagePreview?.(1) ?? false
+      const mdCodePreviewReady = await waitFor('pl21-md-preview', () => {
+        const codeEl = document.querySelector('.prompt-image-lightbox-body[data-preview-kind="markdown"] .prompt-image-lightbox-code')
+        return Boolean(codeEl && (codeEl.textContent?.trim().length ?? 0) > 0)
+      }, 4000, 80)
+      notebookApi()!.closeEditorImagePreview?.()
+      await notebookApi()!.removeEditorImage?.(1)
+      notebookApi()!.setEditorContent('')
+      record('PL-21-editor-paste-files-and-folders', Boolean(
+        pastedMixedReady &&
+        openedMdPreview &&
+        mdCodePreviewReady
+      ), {
+        pastedMixedReady,
+        openedMdPreview,
+        mdCodePreviewReady
+      })
+    }
   }
 
   notebookApi()!.setTargetsEnabled?.(false)

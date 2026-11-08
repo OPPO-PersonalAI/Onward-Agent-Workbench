@@ -185,6 +185,7 @@ export interface Prompt {
   updatedAt: number
   lastUsedAt: number
   sendHistory?: PromptSendRecord[]
+  images?: import('../utils/prompt-images').PromptImageAttachment[]
 }
 
 export interface PromptAPI {
@@ -238,6 +239,37 @@ export interface ClipboardAPI {
   writeText: (text: string) => Promise<boolean>
   readText: () => Promise<string>
   readTerminal: () => Promise<import('../terminal/terminal-clipboard').TerminalClipboard>
+  pastePrompt: (
+    batchId: string,
+    nextIndex: number,
+    options?: {
+      filePaths?: string[]
+      autotestImage?: { width: number; height: number }
+    }
+  ) => Promise<{
+    ok: boolean
+    kind: 'files' | 'image' | 'text' | 'empty' | 'error'
+    text?: string
+    attachment?: import('../utils/prompt-images').PromptImageAttachment
+    attachments?: import('../utils/prompt-images').PromptImageAttachment[]
+    directoryPaths?: string[]
+    error?: string
+  }>
+  removePromptImage: (
+    batchId: string,
+    removedIndex: number,
+    currentAttachments: import('../utils/prompt-images').PromptImageAttachment[]
+  ) => Promise<import('../utils/prompt-images').PromptImageAttachment[]>
+  clonePromptImageBatch: (
+    sourceBatchId: string,
+    targetBatchId: string,
+    sourceAttachments: import('../utils/prompt-images').PromptImageAttachment[]
+  ) => Promise<import('../utils/prompt-images').PromptImageAttachment[]>
+  gcPromptImages: (options?: { gracePeriodMs?: number }) => Promise<{ deletedBatchIds: string[]; keptBatchIds: string[] }>
+  readPromptAttachmentTextPreview: (
+    filePath: string,
+    maxBytes?: number
+  ) => Promise<{ ok: boolean; content?: string; truncated?: boolean; error?: string }>
 }
 
 export interface CommandPreset {

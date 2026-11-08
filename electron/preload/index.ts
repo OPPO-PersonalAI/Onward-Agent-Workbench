@@ -285,6 +285,26 @@ export interface ClipboardAPI {
   writeText: (text: string) => Promise<boolean>
   readText: () => Promise<string>
   readTerminal: () => Promise<import('../../src/terminal/terminal-clipboard').TerminalClipboard>
+  pastePrompt: (
+    batchId: string,
+    nextIndex: number,
+    options?: import('../main/prompt-image-storage').PastePromptClipboardOptions
+  ) => Promise<import('../main/prompt-image-storage').PastePromptClipboardResult>
+  removePromptImage: (
+    batchId: string,
+    removedIndex: number,
+    currentAttachments: import('../../src/utils/prompt-images').PromptImageAttachment[]
+  ) => Promise<import('../../src/utils/prompt-images').PromptImageAttachment[]>
+  clonePromptImageBatch: (
+    sourceBatchId: string,
+    targetBatchId: string,
+    sourceAttachments: import('../../src/utils/prompt-images').PromptImageAttachment[]
+  ) => Promise<import('../../src/utils/prompt-images').PromptImageAttachment[]>
+  gcPromptImages: (options?: { gracePeriodMs?: number }) => Promise<{ deletedBatchIds: string[]; keptBatchIds: string[] }>
+  readPromptAttachmentTextPreview: (
+    filePath: string,
+    maxBytes?: number
+  ) => Promise<{ ok: boolean; content?: string; truncated?: boolean; error?: string }>
 }
 
 export interface CommandPreset {
@@ -309,6 +329,7 @@ export interface LocalPrompt {
   createdAt: number
   updatedAt: number
   lastUsedAt: number
+  images?: import('../../src/utils/prompt-images').PromptImageAttachment[]
 }
 
 export interface GlobalPrompt {
@@ -320,6 +341,7 @@ export interface GlobalPrompt {
   createdAt: number
   updatedAt: number
   lastUsedAt: number
+  images?: import('../../src/utils/prompt-images').PromptImageAttachment[]
 }
 
 export interface PromptCleanupConfig {
@@ -334,6 +356,8 @@ export interface EditorDraft {
   content: string
   height: number
   savedAt: number
+  batchId?: string
+  images?: import('../../src/utils/prompt-images').PromptImageAttachment[]
 }
 
 export interface PersistedTerminalState {
@@ -1825,6 +1849,25 @@ const clipboardAPI: ClipboardAPI = {
   },
   readText: () => {
     return ipcRenderer.invoke(IPC.CLIPBOARD_READ_TEXT)
+  },
+  pastePrompt: (
+    batchId: string,
+    nextIndex: number,
+    options?: import('../main/prompt-image-storage').PastePromptClipboardOptions
+  ) => {
+    return ipcRenderer.invoke(IPC.CLIPBOARD_PASTE_PROMPT, batchId, nextIndex, options)
+  },
+  removePromptImage: (batchId: string, removedIndex: number, currentAttachments) => {
+    return ipcRenderer.invoke(IPC.PROMPT_IMAGE_REMOVE, batchId, removedIndex, currentAttachments)
+  },
+  clonePromptImageBatch: (sourceBatchId: string, targetBatchId: string, sourceAttachments) => {
+    return ipcRenderer.invoke(IPC.PROMPT_IMAGE_CLONE_BATCH, sourceBatchId, targetBatchId, sourceAttachments)
+  },
+  gcPromptImages: (options?: { gracePeriodMs?: number }) => {
+    return ipcRenderer.invoke(IPC.PROMPT_IMAGE_GC, options)
+  },
+  readPromptAttachmentTextPreview: (filePath: string, maxBytes?: number) => {
+    return ipcRenderer.invoke(IPC.PROMPT_IMAGE_READ_TEXT_PREVIEW, filePath, maxBytes)
   }
 }
 

@@ -29,6 +29,30 @@ import { ScheduleConfigModal } from './ScheduleConfigModal'
 import { ScheduleNotificationBar } from './ScheduleNotification'
 import { useI18n } from '../../i18n/useI18n'
 import { transformVirtualPaddingForSend, type ImportPrepareResult } from '../../utils/prompt-io'
+import {
+  extractDroppedFilePaths,
+  formatDroppedFilePathsForShell,
+  hasExternalFilesInDataTransfer
+} from '../../utils/terminal-file-drop'
+import {
+  applyPromptMentionCandidate,
+  buildPromptContentWithImagesForSend,
+  computePromptEditorTextInsertion,
+  createPromptImageBatchId,
+  decidePromptEditorPasteAction,
+  detectPromptMentionTrigger,
+  formatPromptImageToken,
+  normalizePromptImageAttachments,
+  renumberPromptImageAttachmentsAfterRemove,
+  renumberPromptTextAfterImageRemove,
+  type PromptImageAttachment
+} from '../../utils/prompt-images'
+import {
+  PromptAttachmentLightbox,
+  PromptAttachmentMentionMenu,
+  PromptAttachmentStrip,
+  type PromptAttachmentMentionMenuState
+} from './PromptAttachmentWidgets'
 
 import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
 import { buildPromptTaskHistorySummary } from './promptTaskHistory'
@@ -293,13 +317,19 @@ export const PromptNotebook = memo(function PromptNotebook({
   const [appendContent, setAppendContent] = useState('')
   const [editorContent, setEditorContent] = useState('')
   const [editorTitle, setEditorTitle] = useState('')
+  const [editorImages, setEditorImages] = useState<PromptImageAttachment[]>(() =>
+    normalizePromptImageAttachments(editorDraft?.images)
+  )
   // Refs that track the latest editor values so the debug API effect
   // does not need editorContent / editorTitle in its dependency array.
   const editorContentRef = useRef(editorContent)
   const editorTitleRef = useRef(editorTitle)
+  const editorImagesRef = useRef(editorImages)
   const lastEditorSendToTaskRef = useRef<{ content: string; terminalId: string } | null>(null)
   editorContentRef.current = editorContent
   editorTitleRef.current = editorTitle
+  editorImagesRef.current = editorImages
+  const platform = window.electronAPI?.platform ?? 'darwin'
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
     isOpen: false,
     promptId: '',
@@ -345,7 +375,11 @@ export const PromptNotebook = memo(function PromptNotebook({
     const snapshotStartedAt = performance.now()
     const snapshot: PromptDraftSnapshot = controller.snapshot()
     if (snapshot.composing) return reject('composing', t('promptInput.runtime.blocked'))
-    const content = action.includePrompt ? transformVirtualPaddingForSend(snapshot.content) : ''
+    const rawContent = action.includePrompt ? transformVirtualPaddingForSend(snapshot.content) : ''
+    const snapshotImages = action.includePrompt ? normalizePromptImageAttachments(snapshot.images) : []
+    const content = action.includePrompt
+      ? buildPromptContentWithImagesForSend(rawContent, snapshotImages, platform)
+      : ''
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
       phase: 'snapshot', tabId, revision: snapshot.revision, contentLen: content.length,
       durationMs: performance.now() - snapshotStartedAt
@@ -429,7 +463,14 @@ export const PromptNotebook = memo(function PromptNotebook({
           inputTerminalKey: action.terminalKey,
           inputResult: result
         }))
-        onAddPrompt({ title: snapshot.title.trim(), content, color: snapshot.color, pinned: false, sendHistory }, tabId)
+        onAddPrompt({
+          title: snapshot.title.trim(),
+          content: snapshotImages.length > 0 ? rawContent : content,
+          color: snapshot.color,
+          pinned: false,
+          sendHistory,
+          ...(snapshotImages.length > 0 ? { images: snapshotImages } : {})
+        }, tabId)
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
           phase: 'history-recorded', tabId, revision: snapshot.revision, targets: targets.ids.length, contentLen: content.length
         })
@@ -491,6 +532,10 @@ export const PromptNotebook = memo(function PromptNotebook({
     setEditorTitle(nextTitle)
     recordPromptEdit('title', nextTitle)
   }, [recordPromptEdit])
+
+  const handleEditorImagesChange = useCallback((nextImages: PromptImageAttachment[]) => {
+    setEditorImages(nextImages)
+  }, [])
 
   const promptTaskHistory = useMemo(
     () => buildPromptTaskHistorySummary(prompts, terminals.length),
@@ -601,7 +646,8 @@ export const PromptNotebook = memo(function PromptNotebook({
         lastUsedAt: p.lastUsedAt,
         taskNumbers: promptTaskHistory.promptTaskNumbers.get(p.id) ?? [],
         sendHistoryCount: p.sendHistory?.length ?? 0,
-        sendHistory: p.sendHistory ?? []
+        sendHistory: p.sendHistory ?? [],
+        images: p.images ?? []
       })),
       getVisiblePromptItems: () => filteredPrompts.map(p => ({
         id: p.id,
@@ -727,13 +773,111 @@ export const PromptNotebook = memo(function PromptNotebook({
         control?.setTitle(value)
       },
       submitEditor: () => {
-        if (!editorContentRef.current.trim()) return
+        const snapshot = getDraftController(tabId)?.snapshot()
+        const snapImages = normalizePromptImageAttachments(snapshot?.images ?? editorImagesRef.current)
+        if (!editorContentRef.current.trim() && snapImages.length === 0) return
         onAddPrompt({
           title: editorTitleRef.current.trim(),
           content: editorContentRef.current.trim(),
           pinned: false,
-          color: undefined
+          color: undefined,
+          ...(snapImages.length > 0 ? { images: snapImages } : {})
         })
+      },
+      // Prompt Editor file-drop + image attachment Debug API
+      dropFilesIntoEditor: (filePaths: string[]) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            dropFiles: (paths: string[]) => { rawPaths: string[]; formattedText: string } | null
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.dropFiles(filePaths) ?? null
+      },
+      getLastEditorFileDrop: () => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            getLastFileDrop: () => { rawPaths: string[]; formattedText: string } | null
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.getLastFileDrop() ?? null
+      },
+      getEditorImages: () => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            getImages: () => PromptImageAttachment[]
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.getImages() ?? []
+      },
+      pasteClipboardIntoEditor: async (options?: {
+        filePaths?: string[]
+        autotestImage?: { width: number; height: number }
+      }) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            pasteClipboard: (opts?: {
+              filePaths?: string[]
+              autotestImage?: { width: number; height: number }
+            }) => Promise<unknown>
+          }
+        }).__onwardPromptEditorContentControl
+        return (await control?.pasteClipboard(options)) ?? null
+      },
+      removeEditorImage: async (index: number) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            removeImage: (index: number) => Promise<boolean>
+          }
+        }).__onwardPromptEditorContentControl
+        return (await control?.removeImage(index)) ?? false
+      },
+      insertEditorImageToken: (index: number) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            insertImageToken: (index: number) => boolean
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.insertImageToken(index) ?? false
+      },
+      openEditorImagePreview: (index: number) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            openImagePreview: (index: number) => boolean
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.openImagePreview(index) ?? false
+      },
+      closeEditorImagePreview: () => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            closeImagePreview: () => void
+          }
+        }).__onwardPromptEditorContentControl
+        control?.closeImagePreview()
+      },
+      getEditorImagePreviewIndex: () => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            getImagePreviewIndex: () => number | null
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.getImagePreviewIndex() ?? null
+      },
+      getEditorMentionCandidates: () => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            getMentionCandidates: () => PromptImageAttachment[]
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.getMentionCandidates() ?? []
+      },
+      selectEditorMentionCandidate: (index: number) => {
+        const control = (window as unknown as {
+          __onwardPromptEditorContentControl?: {
+            selectMentionCandidate: (index: number) => boolean
+          }
+        }).__onwardPromptEditorContentControl
+        return control?.selectMentionCandidate(index) ?? false
       },
       // Scheduled task Debug API
       getSchedules: () => [...scheduleMap.values()].map(mapScheduleToDebug),
@@ -846,16 +990,24 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   // Debounced preview only; dispatch reads the editor-local live snapshot.
   const editorContentForSend = useMemo(() => {
-    return transformVirtualPaddingForSend(editorContent)
-  }, [editorContent])
+    const rawText = transformVirtualPaddingForSend(editorContent)
+    return buildPromptContentWithImagesForSend(rawText, editorImages, platform)
+  }, [editorContent, editorImages, platform])
 
   // Create new Prompt (commit)
-  const handleSubmit = useCallback((title: string, content: string, color?: 'red' | 'yellow' | 'green' | null) => {
+  const handleSubmit = useCallback((
+    title: string,
+    content: string,
+    color?: 'red' | 'yellow' | 'green' | null,
+    images?: PromptImageAttachment[]
+  ) => {
+    const normalizedImages = normalizePromptImageAttachments(images)
     onAddPrompt({
       title,
       content,
       pinned: false,
-      color: color || undefined
+      color: color || undefined,
+      ...(normalizedImages.length > 0 ? { images: normalizedImages } : {})
     })
     setEditingPrompt(null)
   }, [onAddPrompt])
@@ -1028,23 +1180,38 @@ export const PromptNotebook = memo(function PromptNotebook({
     const snapshot = getDraftController(tabId)?.snapshot()
     const normalizedContent = transformVirtualPaddingForSend(snapshot?.content ?? editorContentRef.current)
     const draftTitle = snapshot?.title ?? editorTitleRef.current
+    const draftImages = normalizePromptImageAttachments(snapshot?.images ?? editorImagesRef.current)
     const decision = decideDraftPreservation({
       normalizedContent,
       title: draftTitle,
+      imagePaths: draftImages.map(img => img.path),
       editingOriginal: editingPrompt
         ? {
             normalizedContent: transformVirtualPaddingForSend(editingPrompt.content),
-            title: editingPrompt.title
+            title: editingPrompt.title,
+            imagePaths: editingPrompt.images?.map(img => img.path)
           }
         : null
     })
     if (decision.preserve) {
-      onAddPrompt({
-        title: draftTitle.trim(),
-        content: normalizedContent,
-        pinned: false,
-        color: editingPrompt?.color ?? undefined
-      })
+      const savePreserved = async () => {
+        let preservedImages = draftImages
+        const sourceBatchId = editingPrompt?.images?.[0]?.batchId
+        const draftBatchId = draftImages[0]?.batchId
+        if (sourceBatchId && draftBatchId && sourceBatchId === draftBatchId && window.electronAPI?.clipboard?.clonePromptImageBatch) {
+          const clonedBatchId = createPromptImageBatchId()
+          const cloned = await window.electronAPI.clipboard.clonePromptImageBatch(sourceBatchId, clonedBatchId, draftImages)
+          if (cloned.length > 0) preservedImages = cloned
+        }
+        onAddPrompt({
+          title: draftTitle.trim(),
+          content: normalizedContent,
+          pinned: false,
+          color: editingPrompt?.color ?? undefined,
+          ...(preservedImages.length > 0 ? { images: preservedImages } : {})
+        })
+      }
+      void savePreserved()
       showDraftToast(t('promptNotebook.draftPreserved'))
     }
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT_AUTO_PRESERVED, {
@@ -1199,7 +1366,12 @@ export const PromptNotebook = memo(function PromptNotebook({
   const runContextMenuSendAndExecute = useCallback(async (prompt: Prompt, terminalIds: string[]) => {
     if (terminalIds.length === 0) return
     try {
-      const rawResult = await onSendAndExecute(terminalIds, prompt.content)
+      const resolvedContent = buildPromptContentWithImagesForSend(
+        prompt.content,
+        normalizePromptImageAttachments(prompt.images),
+        platform
+      )
+      const rawResult = await onSendAndExecute(terminalIds, resolvedContent)
       if (!hasDeliveredTerminals(rawResult)) return
       const sendRecords = [
         ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
@@ -1245,15 +1417,30 @@ export const PromptNotebook = memo(function PromptNotebook({
     const startedAt = performance.now()
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'editor-menu-send', tabId, targets: terminalIds.length })
     try {
-      const rawResult = await onSendAndExecute(terminalIds, content)
+      const sentWholeDraft = content === transformVirtualPaddingForSend(snapshot.content)
+      const snapshotImages = normalizePromptImageAttachments(snapshot.images)
+      const resolvedContent = buildPromptContentWithImagesForSend(
+        content,
+        snapshotImages,
+        platform,
+        undefined,
+        { appendUnreferenced: sentWholeDraft }
+      )
+      const rawResult = await onSendAndExecute(terminalIds, resolvedContent)
       const sendRecords = [
         ...buildSendRecords(rawResult.successIds, 'sendAndExecute', 'executed'),
         ...buildSendRecords(rawResult.sentOnlyIds, 'sendAndExecute', 'sent-only')
       ]
       if (hasDeliveredTerminals(rawResult) && snapshot) {
-        onAddPrompt({ title: snapshot.title.trim(), content, color: snapshot.color, pinned: false, sendHistory: sendRecords }, tabId)
+        onAddPrompt({
+          title: snapshot.title.trim(),
+          content: sentWholeDraft && snapshotImages.length > 0 ? content : resolvedContent,
+          color: snapshot.color,
+          pinned: false,
+          sendHistory: sendRecords,
+          ...(sentWholeDraft && snapshotImages.length > 0 ? { images: snapshotImages } : {})
+        }, tabId)
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, { phase: 'history-recorded', tabId, revision: snapshot.revision, origin: 'editor-menu' })
-        const sentWholeDraft = content === transformVirtualPaddingForSend(snapshot.content)
         if (inputMountedRef.current && sentWholeDraft && !rawResult.failedIds.length && !rawResult.sentOnlyIds.length) {
           if (controller?.clearIfRevision(snapshot.revision)) setSelectedId(null)
         } else {
@@ -1274,7 +1461,7 @@ export const PromptNotebook = memo(function PromptNotebook({
       if (inputMountedRef.current) setInputBusy(false)
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_ACTION, { phase: 'editor-menu-complete', tabId, durationMs: performance.now() - startedAt })
     }
-  }, [onSendAndExecute, buildSendRecords, getDraftController, tabId, onAddPrompt])
+  }, [onSendAndExecute, buildSendRecords, getDraftController, tabId, onAddPrompt, platform])
 
   // Save the editor's right-click selection as a brand-new pinned prompt.
   // Derive a sensible title from the first non-empty line, capped to 40
@@ -1498,6 +1685,7 @@ export const PromptNotebook = memo(function PromptNotebook({
           onAppendContentUsed={handleAppendContentUsed}
           onContentChange={handleEditorContentChange}
           onTitleChange={handleEditorTitleChange}
+          onImagesChange={handleEditorImagesChange}
           promptEditorHeight={promptEditorHeight}
           onPromptEditorHeightChange={onPromptEditorHeightChange}
           promptInputMode={promptInputMode}
@@ -1735,6 +1923,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onAppendContentUsed,
   onContentChange,
   onTitleChange,
+  onImagesChange,
   promptEditorHeight,
   onPromptEditorHeightChange,
   editorDraft,
@@ -1754,7 +1943,12 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   tabId: string
   activeTab: boolean
   draftToast: string | null
-  onSubmit: (title: string, content: string, color?: 'red' | 'yellow' | 'green' | null) => void
+  onSubmit: (
+    title: string,
+    content: string,
+    color?: 'red' | 'yellow' | 'green' | null,
+    images?: PromptImageAttachment[]
+  ) => void
   onUpdatePrompt: (prompt: Prompt, preserveTimestamp?: boolean) => void
   editingPrompt: Prompt | null
   onCancelEdit: () => void
@@ -1762,6 +1956,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   onAppendContentUsed: () => void
   onContentChange: (content: string) => void
   onTitleChange: (title: string) => void
+  onImagesChange: (images: PromptImageAttachment[]) => void
   promptEditorHeight: number
   onPromptEditorHeightChange: (height: number) => void
   promptInputMode: 'canvas' | 'line'
@@ -1782,6 +1977,23 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
 }) {
   const { t } = useI18n()
   const [title, setTitle] = useState('')
+  const initialImages = useMemo(() => normalizePromptImageAttachments(editorDraft?.images), [])
+  const [images, setImages] = useState<PromptImageAttachment[]>(initialImages)
+  const imagesRef = useRef<PromptImageAttachment[]>(initialImages)
+  const batchIdRef = useRef<string>(
+    editorDraft?.batchId || initialImages[0]?.batchId || createPromptImageBatchId()
+  )
+  const batchSharedWithEditingPromptRef = useRef<boolean>(false)
+  const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null)
+  const previewImageIndexRef = useRef<number | null>(null)
+  previewImageIndexRef.current = previewImageIndex
+  const [mentionMenu, setMentionMenu] = useState<PromptAttachmentMentionMenuState | null>(null)
+  const mentionMenuRef = useRef(mentionMenu)
+  mentionMenuRef.current = mentionMenu
+  const [isFileDropTarget, setIsFileDropTarget] = useState(false)
+  const fileDropDepthRef = useRef(0)
+  const lastEditorFileDropRef = useRef<{ rawPaths: string[]; formattedText: string } | null>(null)
+  const lastKnownSelectionRef = useRef<{ start: number; end: number } | null>(null)
   // The editor surface is a contenteditable div (NOT a textarea): a native
   // textarea's IME composition is O(text-before-caret) — ~60ms at the end of a
   // 78KB draft, ~263ms mid-document — because the browser re-lays-out all
@@ -1794,7 +2006,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // `hasContent` boolean drives button-disabled state.
   const [hasContent, setHasContent] = useState(() => {
     const c = editorDraft?.content ?? ''
-    return c.length > 0 && /\S/.test(c)
+    return (c.length > 0 && /\S/.test(c)) || initialImages.length > 0
   })
   const hasContentRef = useRef(hasContent)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; snapshot: ContextMenuSnapshot; canUndo: boolean } | null>(null)
@@ -1864,6 +2076,12 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     }
   }, [])
 
+  const captureCurrentSelection = useCallback(() => {
+    const el = editorRef.current
+    if (!el || document.activeElement !== el) return
+    lastKnownSelectionRef.current = getSelectionOffsets()
+  }, [getSelectionOffsets])
+
   // Place the caret at a flat offset (clamped) within the editor.
   const setCaretOffset = useCallback((offset: number): void => {
     const el = editorRef.current
@@ -1892,6 +2110,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     range.collapse(true)
     sel.removeAllRanges()
     sel.addRange(range)
+    lastKnownSelectionRef.current = { start: Math.max(0, offset), end: Math.max(0, offset) }
   }, [])
 
   // Parent-notification debounce timer + stable-identity plumbing. The parent
@@ -1914,9 +2133,11 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   }, [])
   const onContentChangeRef = useRef(onContentChange)
   const onTitleChangeRef = useRef(onTitleChange)
+  const onImagesChangeRef = useRef(onImagesChange)
   const onEditorDraftChangeRef = useRef(onEditorDraftChange)
   onContentChangeRef.current = onContentChange
   onTitleChangeRef.current = onTitleChange
+  onImagesChangeRef.current = onImagesChange
   onEditorDraftChangeRef.current = onEditorDraftChange
 
   useEffect(() => {
@@ -1926,7 +2147,16 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
       parentNotifyTimerRef.current = null
       const content = editorRef.current?.innerText ?? ''
-      onEditorDraftChangeRef.current(snapshotPromptDraft(titleRef.current, content, heightRef.current, Date.now()))
+      onEditorDraftChangeRef.current(
+        snapshotPromptDraft(
+          titleRef.current,
+          content,
+          heightRef.current,
+          Date.now(),
+          imagesRef.current.length > 0 ? batchIdRef.current : undefined,
+          imagesRef.current.length > 0 ? imagesRef.current : undefined
+        )
+      )
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_QUIT_STATE_FLUSH, { phase: 'editor-collected', characters: content.length })
     })
     return () => {
@@ -1937,8 +2167,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
 
   // Re-render (button-disabled only) when the empty<->non-empty flag flips.
   // /\S/.test stops at the first non-whitespace char (O(1) for real content).
-  const syncHasContent = useCallback((v = readContent()) => {
-    const has = v.length > 0 && /\S/.test(v)
+  const syncHasContent = useCallback((v = readContent(), imgs = imagesRef.current) => {
+    const has = (v.length > 0 && /\S/.test(v)) || imgs.length > 0
     if (has !== hasContentRef.current) {
       hasContentRef.current = has
       setHasContent(has)
@@ -1956,12 +2186,22 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       startTransition(() => {
         const content = readContent()
         const currentTitle = titleRef.current
+        const currentImages = imagesRef.current
         onContentChangeRef.current(content)
         onTitleChangeRef.current(currentTitle)
-        if (!currentTitle.trim() && !content.trim()) {
+        onImagesChangeRef.current(currentImages)
+        if (!currentTitle.trim() && !content.trim() && currentImages.length === 0) {
           onEditorDraftChangeRef.current(null)
         } else {
-          onEditorDraftChangeRef.current({ title: currentTitle, content, height: heightRef.current, savedAt: Date.now() })
+          onEditorDraftChangeRef.current({
+            title: currentTitle,
+            content,
+            height: heightRef.current,
+            savedAt: Date.now(),
+            ...(currentImages.length > 0
+              ? { batchId: batchIdRef.current, images: currentImages }
+              : {})
+          })
         }
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
           phase: 'persist', tabId, revision: draftRevisionRef.current, contentLen: content.length
@@ -1969,6 +2209,52 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       })
     }, 300)
   }, [readContent, tabId])
+
+  const syncMentionMenu = useCallback((content: string, caretOffset: number, imgs = imagesRef.current) => {
+    if (imgs.length === 0) {
+      if (mentionMenuRef.current !== null) setMentionMenu(null)
+      return
+    }
+    const trigger = detectPromptMentionTrigger(content, caretOffset, imgs)
+    if (!trigger) {
+      if (mentionMenuRef.current !== null) setMentionMenu(null)
+      return
+    }
+    setMentionMenu((prev) => {
+      const sameAnchor = prev && prev.startOffset === trigger.startOffset && prev.query === trigger.query
+      const nextSelected = sameAnchor
+        ? Math.min(prev.selectedIndex, trigger.candidates.length - 1)
+        : 0
+      return {
+        startOffset: trigger.startOffset,
+        endOffset: trigger.endOffset,
+        query: trigger.query,
+        selectedIndex: Math.max(0, nextSelected),
+        candidates: trigger.candidates
+      }
+    })
+  }, [])
+
+  const writeImages = useCallback((nextImages: PromptImageAttachment[], nextBatchId?: string) => {
+    const normalized = normalizePromptImageAttachments(nextImages)
+    imagesRef.current = normalized
+    if (nextBatchId) {
+      batchIdRef.current = nextBatchId
+    } else if (normalized[0]?.batchId) {
+      batchIdRef.current = normalized[0].batchId
+    }
+    draftRevisionRef.current += 1
+    setImages(normalized)
+    onImagesChangeRef.current(normalized)
+    const content = readContent()
+    syncHasContent(content, normalized)
+    if (normalized.length === 0 && mentionMenuRef.current !== null) {
+      setMentionMenu(null)
+    } else if (normalized.length > 0 && mentionMenuRef.current !== null) {
+      const caret = lastKnownSelectionRef.current?.end ?? content.length
+      syncMentionMenu(content, caret, normalized)
+    }
+  }, [readContent, syncHasContent, syncMentionMenu])
 
   // Imperatively set the editor content (programmatic mutations only). Writes
   // textContent (a single text node with '\n' chars, rendered as line breaks by
@@ -1978,23 +2264,32 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     localContentRef.current = next
     draftRevisionRef.current += 1
     const el = editorRef.current
+    const pos = caretAt === undefined ? next.length : Math.max(0, Math.min(caretAt, next.length))
+    lastKnownSelectionRef.current = { start: pos, end: pos }
     if (el) {
       el.textContent = next
-      const pos = caretAt === undefined ? next.length : Math.max(0, Math.min(caretAt, next.length))
       if (document.activeElement === el) setCaretOffset(pos)
+    }
+    if (imagesRef.current.length > 0) {
+      syncMentionMenu(next, pos, imagesRef.current)
+    } else if (mentionMenuRef.current !== null) {
+      setMentionMenu(null)
     }
     syncHasContent(next)
     scheduleParentSync()
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, {
       phase: 'write', tabId, revision: draftRevisionRef.current, contentLen: next.length
     })
-  }, [setCaretOffset, syncHasContent, scheduleParentSync, tabId])
+  }, [setCaretOffset, syncHasContent, syncMentionMenu, scheduleParentSync, tabId])
 
   useLayoutEffect(() => registerDraftController(tabId, {
     snapshot: () => ({
       content: readContent(), title: titleRef.current, revision: draftRevisionRef.current,
       sourceId: sourceRef.current?.id ?? null, color: sourceRef.current?.color ?? null,
-      composing: isComposingRef.current
+      composing: isComposingRef.current,
+      ...(imagesRef.current.length > 0
+        ? { images: imagesRef.current, batchId: batchIdRef.current }
+        : {})
     }),
     clearIfRevision: (revision) => {
       readContent()
@@ -2004,7 +2299,10 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         })
         return false
       }
+      batchSharedWithEditingPromptRef.current = false
       writeTitle('')
+      writeImages([], createPromptImageBatchId())
+      setPreviewImageIndex(null)
       writeContent('')
       sourceRef.current = null
       draftRevisionRef.current += 1
@@ -2012,11 +2310,12 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       if (parentNotifyTimerRef.current) clearTimeout(parentNotifyTimerRef.current)
       onContentChangeRef.current('')
       onTitleChangeRef.current('')
+      onImagesChangeRef.current([])
       onEditorDraftChangeRef.current(null)
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_DRAFT, { phase: 'cleared', tabId, sentRevision: revision })
       return true
     }
-  }), [registerDraftController, tabId, readContent, writeTitle, writeContent])
+  }), [registerDraftController, tabId, readContent, writeTitle, writeImages, writeContent])
   const platform = window.electronAPI?.platform ?? 'darwin'
   const isMac = platform === 'darwin'
   const saveShortcutLabel = isMac ? '⌘S' : 'Ctrl+S'
@@ -2042,6 +2341,10 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // contenteditable div has no defaultValue.
   useLayoutEffect(() => {
     if (!hasMountedRef.current && editorDraft) {
+      const restoredImages = normalizePromptImageAttachments(editorDraft.images)
+      if (restoredImages.length > 0 || editorDraft.batchId) {
+        writeImages(restoredImages, editorDraft.batchId || restoredImages[0]?.batchId || createPromptImageBatchId())
+      }
       writeTitle(editorDraft.title)
       writeContent(editorDraft.content)
       setHeight(Math.max(promptEditorHeight, editorDraft.height, MIN_EDITOR_HEIGHT))
@@ -2049,7 +2352,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     } else if (!hasMountedRef.current) {
       hasMountedRef.current = true
     }
-  }, [editorDraft, promptEditorHeight, writeContent, writeTitle])
+  }, [editorDraft, promptEditorHeight, writeContent, writeImages, writeTitle])
 
   useEffect(() => {
     if (isDraggingRef.current) return
@@ -2067,10 +2370,205 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       phase: 'source-changed', tabId, revision: draftRevisionRef.current, hasSource: Boolean(editingPrompt)
     })
     if (editingPrompt) {
+      const promptImages = normalizePromptImageAttachments(editingPrompt.images)
+      batchSharedWithEditingPromptRef.current = promptImages.length > 0
+      writeImages(promptImages, promptImages[0]?.batchId ?? createPromptImageBatchId())
+      setPreviewImageIndex(null)
       writeTitle(editingPrompt.title)
       writeContent(editingPrompt.content)
     }
-  }, [editingPrompt, writeContent, writeTitle, tabId])
+  }, [editingPrompt, writeContent, writeImages, writeTitle, tabId])
+
+  // Copy-on-Write batch isolation so mutating images while editing a saved
+  // Prompt does not corrupt the original entry's on-disk files if the user
+  // cancels or chooses "Save as New".
+  const ensureIsolatedBatchForMutation = useCallback(async (): Promise<string> => {
+    if (!batchSharedWithEditingPromptRef.current) {
+      return batchIdRef.current
+    }
+    const sourceBatchId = batchIdRef.current
+    const nextBatchId = createPromptImageBatchId()
+    batchSharedWithEditingPromptRef.current = false
+    if (imagesRef.current.length > 0 && window.electronAPI?.clipboard?.clonePromptImageBatch) {
+      const cloned = await window.electronAPI.clipboard.clonePromptImageBatch(sourceBatchId, nextBatchId, imagesRef.current)
+      if (cloned.length > 0) {
+        writeImages(cloned, nextBatchId)
+        return nextBatchId
+      }
+    }
+    batchIdRef.current = nextBatchId
+    return nextBatchId
+  }, [writeImages])
+
+  // Programmatic content mutation used by the right-click context menu and
+  // file-drop / token insertion.
+  const applyMutation = useCallback((next: string, cursorAt?: number) => {
+    const sel = getSelectionOffsets()
+    historyRef.current.push({
+      value: readContent(),
+      selectionStart: sel.start,
+      selectionEnd: sel.end
+    })
+    if (historyRef.current.length > HISTORY_LIMIT) {
+      historyRef.current.shift()
+    }
+    writeContent(next, cursorAt)
+    if (performanceTrace.enabled) {
+      performanceTrace.recordInstant('ui.prompt.edit', {
+        field: 'content',
+        mode: editingPrompt ? 'edit' : 'new',
+        ...performanceTrace.summarizeText('payload', next)
+      }, 'prompt')
+    }
+  }, [editingPrompt, getSelectionOffsets, readContent, writeContent])
+
+  // Insert text at the current (or last-known pre-blur) selection/caret, or
+  // append to the end when the editor has never been focused.
+  const insertTextIntoEditor = useCallback((
+    insertedText: string,
+    selectionOverride?: { start: number; end: number } | null
+  ): { nextText: string; nextCaret: number } => {
+    const currentText = readContent()
+    const el = editorRef.current
+    const activeSelection = selectionOverride !== undefined
+      ? selectionOverride
+      : (el && document.activeElement === el ? getSelectionOffsets() : lastKnownSelectionRef.current)
+    const { nextText, nextCaret } = computePromptEditorTextInsertion(currentText, activeSelection, insertedText)
+    applyMutation(nextText, nextCaret)
+    if (el) {
+      el.focus()
+      setCaretOffset(nextCaret)
+    }
+    return { nextText, nextCaret }
+  }, [applyMutation, getSelectionOffsets, readContent, setCaretOffset])
+
+  const dropFilePathsIntoEditor = useCallback((
+    rawPaths: readonly string[]
+  ): { rawPaths: string[]; formattedText: string } | null => {
+    const formattedText = formatDroppedFilePathsForShell(rawPaths, platform)
+    if (!formattedText) return null
+    insertTextIntoEditor(formattedText)
+    const record = { rawPaths: [...rawPaths], formattedText }
+    lastEditorFileDropRef.current = record
+    return record
+  }, [insertTextIntoEditor, platform])
+
+  const pasteClipboardIntoEditor = useCallback(async (
+    selectionOverride?: { start: number; end: number } | null,
+    options?: {
+      filePaths?: string[]
+      autotestImage?: { width: number; height: number }
+    }
+  ) => {
+    const pasteFn = window.electronAPI?.clipboard?.pastePrompt
+    if (!pasteFn) return null
+    const targetBatchId = await ensureIsolatedBatchForMutation()
+    const nextIndex = imagesRef.current.length + 1
+    const result = await pasteFn(targetBatchId, nextIndex, options)
+    if (!result || result.kind === 'empty') return result ?? null
+    if (result.kind === 'files') {
+      const addedAttachments = Array.isArray(result.attachments) ? result.attachments : []
+      if (addedAttachments.length > 0) {
+        const nextImages = normalizePromptImageAttachments([...imagesRef.current, ...addedAttachments])
+        writeImages(nextImages, targetBatchId)
+        scheduleParentSync()
+      }
+      if (Array.isArray(result.directoryPaths) && result.directoryPaths.length > 0) {
+        dropFilePathsIntoEditor(result.directoryPaths)
+      }
+      return result
+    }
+    if (result.kind === 'image' && result.attachment) {
+      const nextImages = normalizePromptImageAttachments([...imagesRef.current, result.attachment])
+      writeImages(nextImages, targetBatchId)
+      scheduleParentSync()
+      return result
+    }
+    if (result.kind === 'text' && typeof result.text === 'string') {
+      insertTextIntoEditor(result.text, selectionOverride)
+      return result
+    }
+    return result
+  }, [dropFilePathsIntoEditor, ensureIsolatedBatchForMutation, insertTextIntoEditor, scheduleParentSync, writeImages])
+
+  const handleRemoveImage = useCallback(async (indexToRemove: number): Promise<boolean> => {
+    const existing = imagesRef.current
+    if (!existing.some((img) => img.index === indexToRemove)) return false
+    const targetBatchId = await ensureIsolatedBatchForMutation()
+    let nextImages = renumberPromptImageAttachmentsAfterRemove(imagesRef.current, indexToRemove)
+    if (window.electronAPI?.clipboard?.removePromptImage) {
+      try {
+        const diskUpdated = await window.electronAPI.clipboard.removePromptImage(
+          targetBatchId,
+          indexToRemove,
+          imagesRef.current
+        )
+        if (Array.isArray(diskUpdated)) {
+          nextImages = normalizePromptImageAttachments(diskUpdated)
+        }
+      } catch (err) {
+        console.warn('[PromptEditor] removePromptImage failed:', err)
+      }
+    }
+    writeImages(nextImages, targetBatchId)
+    const currentText = readContent()
+    const nextText = renumberPromptTextAfterImageRemove(currentText, indexToRemove)
+    if (nextText !== currentText) {
+      writeContent(nextText)
+    } else {
+      scheduleParentSync()
+    }
+    setPreviewImageIndex((prev) => {
+      if (prev === null) return null
+      if (nextImages.length === 0) return null
+      if (prev === indexToRemove) return Math.min(indexToRemove, nextImages.length)
+      if (prev > indexToRemove) return prev - 1
+      return prev
+    })
+    return true
+  }, [ensureIsolatedBatchForMutation, readContent, scheduleParentSync, writeContent, writeImages])
+
+  const handleInsertImageToken = useCallback((index: number): boolean => {
+    if (!imagesRef.current.some((img) => img.index === index)) return false
+    const token = formatPromptImageToken(index)
+    insertTextIntoEditor(token)
+    return true
+  }, [insertTextIntoEditor])
+
+  const handleSelectMentionCandidate = useCallback((candidateIndex: number): boolean => {
+    const currentMenu = mentionMenuRef.current
+    const currentText = readContent()
+    const caret = lastKnownSelectionRef.current?.end ?? currentText.length
+    const trigger = currentMenu
+      ? {
+          startOffset: currentMenu.startOffset,
+          endOffset: currentMenu.endOffset,
+          query: currentMenu.query,
+          candidates: currentMenu.candidates
+        }
+      : detectPromptMentionTrigger(currentText, caret, imagesRef.current)
+    if (!trigger || !trigger.candidates.some((c) => c.index === candidateIndex)) return false
+    const { nextText, nextCaret } = applyPromptMentionCandidate(currentText, trigger, candidateIndex)
+    setMentionMenu(null)
+    applyMutation(nextText, nextCaret)
+    if (editorRef.current) {
+      editorRef.current.focus()
+      setCaretOffset(nextCaret)
+    }
+    return true
+  }, [applyMutation, readContent, setCaretOffset])
+
+  const handleOpenImagePreview = useCallback((index: number): boolean => {
+    if (!imagesRef.current.some((img) => img.index === index)) return false
+    setPreviewImageIndex(index)
+    return true
+  }, [])
+
+  const closeImagePreview = useCallback(() => {
+    setPreviewImageIndex(null)
+  }, [])
+
+  useModalEscape(!hidden && previewImageIndex !== null, closeImagePreview, 'prompt-image-lightbox')
 
   // Autotest-only controls mutate the same local snapshot as trusted input.
   useEffect(() => {
@@ -2091,7 +2589,21 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         // Release resumes the existing debounce, which reads the latest local
         // draft rather than an older payload captured before the hold.
         if (!held) scheduleParentSync()
-      }
+      },
+      dropFiles: (paths: string[]) => dropFilePathsIntoEditor(paths),
+      getLastFileDrop: () => lastEditorFileDropRef.current,
+      getImages: () => imagesRef.current,
+      pasteClipboard: (opts?: {
+        filePaths?: string[]
+        autotestImage?: { width: number; height: number }
+      }) => pasteClipboardIntoEditor(undefined, opts),
+      removeImage: (index: number) => handleRemoveImage(index),
+      insertImageToken: (index: number) => handleInsertImageToken(index),
+      openImagePreview: (index: number) => handleOpenImagePreview(index),
+      closeImagePreview,
+      getImagePreviewIndex: () => previewImageIndexRef.current,
+      getMentionCandidates: () => mentionMenuRef.current?.candidates ?? [],
+      selectMentionCandidate: (index: number) => handleSelectMentionCandidate(index)
     }
     ;(window as unknown as { __onwardPromptEditorContentControl?: typeof control }).__onwardPromptEditorContentControl = control
     return () => {
@@ -2102,7 +2614,19 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         delete w.__onwardPromptEditorContentControl
       }
     }
-  }, [writeContent, writeTitle, scheduleParentSync, activeTab])
+  }, [
+    writeContent,
+    writeTitle,
+    scheduleParentSync,
+    activeTab,
+    dropFilePathsIntoEditor,
+    pasteClipboardIntoEditor,
+    handleRemoveImage,
+    handleInsertImageToken,
+    handleSelectMentionCandidate,
+    handleOpenImagePreview,
+    closeImagePreview
+  ])
 
   // Title / height changes drive the debounced parent sync; content changes
   // drive it imperatively from handleInput / writeContent (content is no longer
@@ -2158,73 +2682,101 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // is preserved as intentional indentation.
   const handleSave = useCallback((saveAsNew: boolean) => {
     const sendContent = transformVirtualPaddingForSend(readContent())
-    if (!sendContent || !editingPrompt) return
+    const currentImages = imagesRef.current
+    if ((!sendContent && currentImages.length === 0) || !editingPrompt) return
 
-    if (saveAsNew) {
-      // Create new entry (inherit colors)
-      onSubmit(title.trim(), sendContent, editingPrompt.color)
-    } else {
-      // Update the original entry directly (preserveTimestamp: true, keep the original position)
-      const updatedPrompt = {
-        ...editingPrompt,
-        title: title.trim(),
-        content: sendContent,
-        lastUsedAt: Date.now()
-        // Do not modify updatedAt, createdAt, pinned, color
-      }
-      onUpdatePrompt(updatedPrompt, true)
-    }
+    const savedTitle = title.trim()
+    const wasSharedBatch = batchSharedWithEditingPromptRef.current
+    const currentBatchId = batchIdRef.current
 
     // Clear editing state and drafts
+    batchSharedWithEditingPromptRef.current = false
     writeTitle('')
+    writeImages([], createPromptImageBatchId())
+    setPreviewImageIndex(null)
     writeContent('')
     onCancelEdit()
     onEditorDraftChange(null)
     onSaveSuccess?.()
-  }, [title, readContent, writeContent, writeTitle, editingPrompt, onSubmit, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
+
+    if (saveAsNew) {
+      // Create new entry (inherit colors); clone batch if still shared with original
+      if (wasSharedBatch && currentImages.length > 0 && window.electronAPI?.clipboard?.clonePromptImageBatch) {
+        const clonedBatchId = createPromptImageBatchId()
+        void window.electronAPI.clipboard.clonePromptImageBatch(currentBatchId, clonedBatchId, currentImages).then((cloned) => {
+          onSubmit(savedTitle, sendContent, editingPrompt.color, cloned.length > 0 ? cloned : currentImages)
+        })
+      } else {
+        onSubmit(savedTitle, sendContent, editingPrompt.color, currentImages)
+      }
+    } else {
+      // Update the original entry directly (preserveTimestamp: true, keep the original position)
+      const updatedPrompt: Prompt = {
+        ...editingPrompt,
+        title: savedTitle,
+        content: sendContent,
+        lastUsedAt: Date.now(),
+        images: currentImages.length > 0 ? currentImages : undefined
+        // Do not modify updatedAt, createdAt, pinned, color
+      }
+      onUpdatePrompt(updatedPrompt, true)
+    }
+  }, [title, readContent, writeContent, writeImages, writeTitle, editingPrompt, onSubmit, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
   // Submit processing (add new Prompt, optionally with a color tag).
   const handleSubmit = useCallback((color?: PromptColor | null) => {
     const sendContent = transformVirtualPaddingForSend(readContent())
-    if (!sendContent) return
+    const currentImages = imagesRef.current
+    if (!sendContent && currentImages.length === 0) return
 
-    onSubmit(title.trim(), sendContent, color ?? null)
+    onSubmit(title.trim(), sendContent, color ?? null, currentImages)
+    batchSharedWithEditingPromptRef.current = false
     writeTitle('')
+    writeImages([], createPromptImageBatchId())
+    setPreviewImageIndex(null)
     writeContent('')
     // Clear draft after submission
     onEditorDraftChange(null)
-  }, [title, readContent, writeContent, writeTitle, onSubmit, onEditorDraftChange])
+  }, [title, readContent, writeContent, writeImages, writeTitle, onSubmit, onEditorDraftChange])
 
   // Edit mode: apply a color and save the current edit in one action
   const handleSaveWithColor = useCallback((color: PromptColor) => {
     const sendContent = transformVirtualPaddingForSend(readContent())
-    if (!sendContent || !editingPrompt) return
+    const currentImages = imagesRef.current
+    if ((!sendContent && currentImages.length === 0) || !editingPrompt) return
 
     onUpdatePrompt({
       ...editingPrompt,
       title: title.trim(),
       content: sendContent,
       color,
-      lastUsedAt: Date.now()
+      lastUsedAt: Date.now(),
+      images: currentImages.length > 0 ? currentImages : undefined
     }, true)
 
+    batchSharedWithEditingPromptRef.current = false
     writeTitle('')
+    writeImages([], createPromptImageBatchId())
+    setPreviewImageIndex(null)
     writeContent('')
     onCancelEdit()
     onEditorDraftChange(null)
     onSaveSuccess?.()
-  }, [title, readContent, writeContent, writeTitle, editingPrompt, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
+  }, [title, readContent, writeContent, writeImages, writeTitle, editingPrompt, onUpdatePrompt, onCancelEdit, onEditorDraftChange, onSaveSuccess])
 
   // Cancel edit
   const handleCancel = useCallback(() => {
+    batchSharedWithEditingPromptRef.current = false
     writeTitle('')
+    writeImages([], createPromptImageBatchId())
+    setPreviewImageIndex(null)
     writeContent('')
     onCancelEdit()
     // Clear draft after canceling
     onEditorDraftChange(null)
     // Cancel the blur input box after editing to ensure that ESC can close the Editor normally next time
     editorRef.current?.blur()
-  }, [writeContent, writeTitle, onCancelEdit, onEditorDraftChange])
+  }, [writeContent, writeImages, writeTitle, onCancelEdit, onEditorDraftChange])
 
   // Parent content/title notifications are handled by the debounced
   // effect above — no separate immediate effects needed here.
@@ -2246,6 +2798,13 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // which is what keeps typing / IME O(1) in React terms regardless of size.
   const handleInput = useCallback(() => {
     const content = readContent()
+    captureCurrentSelection()
+    if (imagesRef.current.length > 0) {
+      const caret = lastKnownSelectionRef.current?.end ?? content.length
+      syncMentionMenu(content, caret, imagesRef.current)
+    } else if (mentionMenuRef.current !== null) {
+      setMentionMenu(null)
+    }
     draftRevisionRef.current += 1
     syncHasContent(content)
     scheduleParentSync()
@@ -2256,36 +2815,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         ...performanceTrace.summarizeText('payload', content)
       }, 'prompt')
     }
-  }, [editingPrompt, syncHasContent, scheduleParentSync, readContent])
-
-  // Programmatic content mutation used by the right-click context menu.
-  // Sets the content (running through React state so debounced parent
-  // notification still fires) and restores the caret position on the next
-  // paint, since the controlled textarea otherwise resets caret to end.
-  // The pre-mutation content/selection is pushed to historyRef so the menu's
-  // "Undo" entry can revert exactly one menu operation. The title is NOT
-  // captured: no current menu action mutates the title, so reverting it
-  // would silently overwrite any keystroke the user typed into the title
-  // input between the menu action and the undo click.
-  const applyMutation = useCallback((next: string, cursorAt?: number) => {
-    const sel = getSelectionOffsets()
-    historyRef.current.push({
-      value: readContent(),
-      selectionStart: sel.start,
-      selectionEnd: sel.end
-    })
-    if (historyRef.current.length > HISTORY_LIMIT) {
-      historyRef.current.shift()
-    }
-    writeContent(next, cursorAt)
-    if (performanceTrace.enabled) {
-      performanceTrace.recordInstant('ui.prompt.edit', {
-        field: 'content',
-        mode: editingPrompt ? 'edit' : 'new',
-        ...performanceTrace.summarizeText('payload', next)
-      }, 'prompt')
-    }
-  }, [editingPrompt, getSelectionOffsets, readContent, writeContent])
+  }, [editingPrompt, captureCurrentSelection, syncHasContent, syncMentionMenu, scheduleParentSync, readContent])
 
   // Undo the most recent applyMutation by popping the history stack. Returns
   // false when the stack is empty (UI surface this as a disabled menu item).
@@ -2299,12 +2829,99 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     return true
   }, [writeContent])
 
+  const handleEditorDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFilesInDataTransfer(e.dataTransfer)) return
+    e.preventDefault()
+    e.stopPropagation()
+    fileDropDepthRef.current += 1
+    setIsFileDropTarget(true)
+  }, [])
+
+  const handleEditorDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFilesInDataTransfer(e.dataTransfer)) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy'
+    }
+    if (!isFileDropTarget) {
+      setIsFileDropTarget(true)
+    }
+  }, [isFileDropTarget])
+
+  const handleEditorDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFilesInDataTransfer(e.dataTransfer) && fileDropDepthRef.current === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    fileDropDepthRef.current = Math.max(0, fileDropDepthRef.current - 1)
+    if (fileDropDepthRef.current === 0) {
+      setIsFileDropTarget(false)
+    }
+  }, [])
+
+  const handleEditorDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFilesInDataTransfer(e.dataTransfer)) return
+    e.preventDefault()
+    e.stopPropagation()
+    fileDropDepthRef.current = 0
+    setIsFileDropTarget(false)
+    const resolvePath = (file: File) => window.electronAPI?.shell?.getPathForFile?.(file) ?? ''
+    const uriListText = (() => {
+      try {
+        return e.dataTransfer?.getData('text/uri-list') ?? ''
+      } catch {
+        return ''
+      }
+    })()
+    const rawPaths = extractDroppedFilePaths(e.dataTransfer?.files, resolvePath, { uriListText, platform })
+    dropFilePathsIntoEditor(rawPaths)
+  }, [dropFilePathsIntoEditor, platform])
+
+  const handleEditorPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const resolvePath = (file: File) => window.electronAPI?.shell?.getPathForFile?.(file) ?? ''
+    const uriListText = (() => {
+      try {
+        return e.clipboardData?.getData('text/uri-list') ?? ''
+      } catch {
+        return ''
+      }
+    })()
+    const droppedFilePaths = extractDroppedFilePaths(e.clipboardData?.files, resolvePath, { uriListText, platform })
+    const clipboardText = e.clipboardData?.getData('text/plain') ?? ''
+    const hasImageItem = Array.from(e.clipboardData?.items ?? []).some((item) =>
+      typeof item.type === 'string' && item.type.startsWith('image/')
+    )
+    const hasFilesType = Array.from(e.clipboardData?.types ?? []).includes('Files')
+    const action = decidePromptEditorPasteAction({
+      droppedFilePaths,
+      clipboardText,
+      hasImage: hasImageItem,
+      hasFilesType
+    })
+    if (action.kind === 'files') {
+      e.preventDefault()
+      const sel = getSelectionOffsets()
+      void pasteClipboardIntoEditor(sel, { filePaths: action.paths })
+      return
+    }
+    if (action.kind === 'image' || action.kind === 'native-probe') {
+      e.preventDefault()
+      const sel = getSelectionOffsets()
+      void pasteClipboardIntoEditor(sel)
+    }
+  }, [getSelectionOffsets, pasteClipboardIntoEditor, platform])
+
+  const handleContextMenuPasteClipboard = useCallback(async (snapshot: ContextMenuSnapshot) => {
+    await pasteClipboardIntoEditor({ start: snapshot.start, end: snapshot.end })
+  }, [pasteClipboardIntoEditor])
+
   const handleEditorContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
     // Capture value/selection atomically at the contextmenu event so menu
     // actions operate on what the user is currently looking at.
     const sel = getSelectionOffsets()
+    lastKnownSelectionRef.current = sel
     setCtxMenu({
       x: e.clientX,
       y: e.clientY,
@@ -2332,6 +2949,41 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   // Shortcut support
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || isComposingRef.current) return
+
+    const activeMention = mentionMenuRef.current
+    if (activeMention && activeMention.candidates.length > 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionMenu((prev) => prev ? {
+          ...prev,
+          selectedIndex: (prev.selectedIndex + 1) % prev.candidates.length
+        } : null)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionMenu((prev) => prev ? {
+          ...prev,
+          selectedIndex: (prev.selectedIndex - 1 + prev.candidates.length) % prev.candidates.length
+        } : null)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const chosen = activeMention.candidates[activeMention.selectedIndex] ?? activeMention.candidates[0]
+        if (chosen) {
+          handleSelectMentionCandidate(chosen.index)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setMentionMenu(null)
+        return
+      }
+    }
+
     // Construct an accelerator format of the current keystroke
     const accelerator = buildAccelerator(e.nativeEvent)
 
@@ -2366,7 +3018,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       return
     }
 
-  }, [handleSubmit, handleSave, editingPrompt, addToHistoryShortcut, matchesAccelerator, saveShortcut, saveAsShortcut])
+  }, [handleSubmit, handleSave, handleSelectMentionCandidate, editingPrompt, addToHistoryShortcut, matchesAccelerator, saveShortcut, saveAsShortcut])
 
   // Register callback to Context (only visible instance registration).
   // Keyboard-shortcut focus lands the caret at offset 0 — the predictable
@@ -2384,15 +3036,27 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
       registerFocusEditor(null)
       registerSubmitEditor(null)
     }
-  }, [registerFocusEditor, registerSubmitEditor, handleSubmit, hidden])
+  }, [registerFocusEditor, registerSubmitEditor, handleSubmit, hidden, setCaretOffset])
+
+  const handleMentionHoverIndex = useCallback((idx: number) => {
+    setMentionMenu((prev) => prev ? { ...prev, selectedIndex: idx } : null)
+  }, [])
+
+  const handleRemoveImageClick = useCallback((index: number) => {
+    void handleRemoveImage(index)
+  }, [handleRemoveImage])
 
   return (
     <div
-      className="prompt-editor"
+      className={isFileDropTarget ? 'prompt-editor is-file-drop-target' : 'prompt-editor'}
       style={{ height }}
       onKeyDown={handleKeyDown}
       onCompositionStart={handleCompositionStart}
       onCompositionEnd={handleCompositionEnd}
+      onDragEnter={handleEditorDragEnter}
+      onDragOver={handleEditorDragOver}
+      onDragLeave={handleEditorDragLeave}
+      onDrop={handleEditorDrop}
       data-prompt-editing={editingPrompt ? 'true' : undefined}
     >
       <div className="prompt-editor-resizer" onMouseDown={handleMouseDown} />
@@ -2401,7 +3065,19 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         <div className="prompt-editor-draft-toast" role="status">{draftToast}</div>
       )}
 
+      <PromptAttachmentStrip
+        images={images}
+        onOpenPreview={handleOpenImagePreview}
+        onInsertToken={handleInsertImageToken}
+        onRemove={handleRemoveImageClick}
+      />
+
       <div className="prompt-editor-inputs">
+        <PromptAttachmentMentionMenu
+          menu={mentionMenu}
+          onHoverIndex={handleMentionHoverIndex}
+          onSelectCandidate={handleSelectMentionCandidate}
+        />
         <div className="prompt-editor-title-row">
           <input
             type="text"
@@ -2422,6 +3098,10 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
           data-placeholder={t('promptNotebook.editorPlaceholder')}
           spellCheck={false}
           onInput={handleInput}
+          onKeyUp={captureCurrentSelection}
+          onMouseUp={captureCurrentSelection}
+          onBlur={captureCurrentSelection}
+          onPaste={handleEditorPaste}
           onContextMenu={handleEditorContextMenu}
         />
       </div>
@@ -2435,6 +3115,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
           textareaRef={editorRef}
           applyMutation={applyMutation}
           onUndo={undoLastMutation}
+          onPasteClipboard={handleContextMenuPasteClipboard}
           pinnedPrompts={ctxPinnedPrompts}
           appendPromptToContent={ctxAppendPromptToContent}
           saveSelectionAsPinned={ctxSaveSelectionAsPinned}
@@ -2445,6 +3126,15 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
           onSendToTask={ctxSendToTask}
         />
       )}
+
+      <PromptAttachmentLightbox
+        images={images}
+        previewImageIndex={previewImageIndex}
+        hidden={hidden}
+        onSelectIndex={setPreviewImageIndex}
+        onInsertToken={handleInsertImageToken}
+        onClose={closeImagePreview}
+      />
 
       <div className="prompt-editor-actions">
         <div

@@ -81,6 +81,8 @@ export interface EditorDraft {
   content: string
   height: number
   savedAt: number
+  batchId?: string
+  images?: import('../utils/prompt-images').PromptImageAttachment[]
 }
 
 /**

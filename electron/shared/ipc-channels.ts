@@ -63,6 +63,7 @@ export const IPC = {
 
   // changelog / clipboard
   CHANGELOG_GET_CURRENT: 'changelog:get-current',
+  CLIPBOARD_PASTE_PROMPT: 'clipboard:paste-prompt',
   CLIPBOARD_READ_TEXT: 'clipboard:read-text',
   CLIPBOARD_READ_TERMINAL: 'clipboard:read-terminal',
   CLIPBOARD_WRITE_TEXT: 'clipboard:write-text',
@@ -244,6 +245,10 @@ export const IPC = {
   PROMPT_BRIDGE_RESPONSE: 'prompt:bridge-response',
   PROMPT_BRIDGE_SEND: 'prompt:bridge-send',
   PROMPT_DELETE: 'prompt:delete',
+  PROMPT_IMAGE_CLONE_BATCH: 'prompt-image:clone-batch',
+  PROMPT_IMAGE_GC: 'prompt-image:gc',
+  PROMPT_IMAGE_READ_TEXT_PREVIEW: 'prompt-image:read-text-preview',
+  PROMPT_IMAGE_REMOVE: 'prompt-image:remove',
   PROMPT_LOAD: 'prompt:load',
   PROMPT_SAVE: 'prompt:save',
 

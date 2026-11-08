@@ -16,6 +16,15 @@ if [[ -z "$APP_BIN" || ! -x "$APP_BIN" ]]; then
   exit 1
 fi
 
+RESULTS_DIR="$ROOT_DIR/test/autotest/results"
+mkdir -p "$RESULTS_DIR"
+USER_DATA_DIR="$(mktemp -d "$RESULTS_DIR/prompt-list-user-data.XXXXXX")"
+cleanup() {
+  rm -rf "$USER_DATA_DIR"
+  find "$ROOT_DIR" -maxdepth 1 -name '__autotest_*' -exec rm -rf {} + 2>/dev/null || true
+}
+trap cleanup EXIT
+
 rm -f "$LOG_FILE"
 
 echo "Starting prompt list autotest..."
@@ -29,6 +38,7 @@ ONWARD_AUTOTEST=1 \
 ONWARD_AUTOTEST_SUITE=prompt-list \
 ONWARD_AUTOTEST_CWD="$ROOT_DIR" \
 ONWARD_AUTOTEST_EXIT=1 \
+ONWARD_USER_DATA_DIR="$USER_DATA_DIR" \
 "$APP_BIN" > "$LOG_FILE" 2>&1 || true
 
 echo ""
@@ -44,8 +54,8 @@ if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   exit 1
 fi
 
-if ! grep -q "PL-10-filter-disable-resets-state" "$LOG_FILE"; then
-  echo "Missing PL-10 result; the test may not have executed correctly" >&2
+if ! grep -q "PL-10-filter-disable-resets-state" "$LOG_FILE" || ! grep -q "PL-21-editor-paste-files-and-folders" "$LOG_FILE"; then
+  echo "Missing PL-10 / PL-21 result; the test may not have executed correctly" >&2
   tail -n 80 "$LOG_FILE" >&2
   exit 1
 fi

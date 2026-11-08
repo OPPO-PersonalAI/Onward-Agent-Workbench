@@ -30,6 +30,22 @@ export async function awaitInitialStateForFlush(load: Promise<boolean> | null): 
   if (!load || !await load) throw new Error('Initial AppState load did not complete')
 }
 
-export function snapshotPromptDraft(title: string, content: string, height: number, savedAt: number) {
-  return !title.trim() && !content.trim() ? null : { title, content, height, savedAt }
+export function snapshotPromptDraft(
+  title: string,
+  content: string,
+  height: number,
+  savedAt: number,
+  batchId?: string,
+  images?: import('./prompt-images').PromptImageAttachment[]
+) {
+  const hasImages = Array.isArray(images) && images.length > 0
+  if (!title.trim() && !content.trim() && !hasImages) return null
+  return {
+    title,
+    content,
+    height,
+    savedAt,
+    ...(batchId ? { batchId } : {}),
+    ...(hasImages ? { images } : {})
+  }
 }

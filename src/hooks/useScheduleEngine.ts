@@ -8,6 +8,7 @@ import type { PromptSchedule, ExecutionLogEntry } from '../types/tab.d.ts'
 import type { Prompt } from '../types/electron.d.ts'
 import type { TerminalBatchResult } from '../types/prompt'
 import { computeNextExecution } from '../utils/schedule'
+import { buildPromptContentWithImagesForSend, normalizePromptImageAttachments } from '../utils/prompt-images'
 import { useI18n } from '../i18n/useI18n'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 /** Maximum polling interval (60 seconds) */
@@ -141,7 +142,12 @@ export function useScheduleEngine({
     // Scheduled prompt actually fires here (prompt + target terminals verified above).
     trackFeatureUse('schedule-run')
     try {
-      const result = await onSendAndExecuteRef.current(existingTerminalIds, prompt.content)
+      const resolvedContent = buildPromptContentWithImagesForSend(
+        prompt.content,
+        normalizePromptImageAttachments(prompt.images),
+        window.electronAPI?.platform ?? 'darwin'
+      )
+      const result = await onSendAndExecuteRef.current(existingTerminalIds, resolvedContent)
       if (result.failedIds.length > 0 || result.sentOnlyIds.length > 0) {
         const errorMessage = summarizeBatchErrorRef.current(result)
         const errorLog: ExecutionLogEntry = {

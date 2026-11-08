@@ -13,6 +13,12 @@ import { resolveExistingTerminalCwd } from './terminal-cwd-validation'
 import { normalizePersistedTerminals, type PersistedTerminalState } from './persisted-terminal'
 
 import { validatePreviewScrollAnchor, validateFileViewMemoryEntry } from './app-state-file-view-memory'
+import {
+  isValidPromptImageBatchId,
+  normalizePromptImageAttachments,
+  type PromptImageAttachment
+} from '../../src/utils/prompt-images'
+import { gcUnreferencedPromptImageBatches } from './prompt-image-storage'
 
 /**
  * Prompt data structure
@@ -26,6 +32,7 @@ interface Prompt {
   createdAt: number
   updatedAt: number
   lastUsedAt: number
+  images?: PromptImageAttachment[]
 }
 
 /**
@@ -50,6 +57,8 @@ interface EditorDraft {
   content: string
   height: number
   savedAt: number
+  batchId?: string
+  images?: PromptImageAttachment[]
 }
 
 /**
@@ -331,9 +340,11 @@ function normalizePromptTimestamp<T extends Prompt>(prompt: T): T {
   const fallback = typeof prompt.updatedAt === 'number'
     ? prompt.updatedAt
     : (typeof prompt.createdAt === 'number' ? prompt.createdAt : Date.now())
+  const normalizedImages = normalizePromptImageAttachments((prompt as Prompt).images)
   return {
     ...prompt,
-    lastUsedAt: typeof prompt.lastUsedAt === 'number' ? prompt.lastUsedAt : fallback
+    lastUsedAt: typeof prompt.lastUsedAt === 'number' ? prompt.lastUsedAt : fallback,
+    ...(normalizedImages.length > 0 ? { images: normalizedImages } : { images: undefined })
   }
 }
 
@@ -415,6 +426,11 @@ class AppStateStorage {
     this.legacyConfigPath = join(userDataPath, 'terminal-config.json')
     this.legacyPromptsPath = join(userDataPath, 'prompts.json')
     this.state = this.load()
+    try {
+      gcUnreferencedPromptImageBatches(this.state)
+    } catch {
+      // Best-effort startup GC for orphan prompt image batches
+    }
   }
 
   /**
@@ -766,8 +782,13 @@ class AppStateStorage {
       return undefined
     }
 
-    // Don't save draft when empty content
-    if (!d.title.trim() && !d.content.trim()) {
+    const normalizedImages = normalizePromptImageAttachments(d.images)
+    const batchId = isValidPromptImageBatchId(d.batchId)
+      ? d.batchId
+      : (normalizedImages[0]?.batchId ?? undefined)
+
+    // Don't save draft when empty content and no attached images
+    if (!d.title.trim() && !d.content.trim() && normalizedImages.length === 0) {
       return undefined
     }
 
@@ -775,7 +796,9 @@ class AppStateStorage {
       title: d.title,
       content: d.content,
       height: d.height,
-      savedAt: d.savedAt
+      savedAt: d.savedAt,
+      ...(batchId ? { batchId } : {}),
+      ...(normalizedImages.length > 0 ? { images: normalizedImages } : {})
     }
   }
 
@@ -900,6 +923,12 @@ class AppStateStorage {
         if (this.persistQueued) {
           this.persistQueued = false
           void this.startPersist()
+        } else {
+          try {
+            gcUnreferencedPromptImageBatches(this.state)
+          } catch {
+            // Best-effort GC of unreferenced prompt image batches
+          }
         }
       })
     this.pendingPersist = promise

@@ -7,6 +7,7 @@ import { createContext, useContext, useRef, useCallback, useMemo, useSyncExterna
 import { perfTraceDiagnostic } from '../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../utils/perf-trace-names'
 import type { PromptShortcutEvent } from '../utils/prompt-input'
+import type { PromptImageAttachment } from '../utils/prompt-images'
 
 export interface PromptLeaderView {
   event: PromptShortcutEvent
@@ -21,6 +22,8 @@ export interface PromptDraftSnapshot {
   sourceId: string | null
   color: 'red' | 'yellow' | 'green' | null
   composing: boolean
+  images?: PromptImageAttachment[]
+  batchId?: string
 }
 
 export interface PromptDraftController {

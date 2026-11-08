@@ -236,8 +236,14 @@ function highlightText(text: string, keyword: string): React.ReactNode {
 // Get the display text (title is displayed first, otherwise the first few lines of content are displayed)
 function getDisplayText(prompt: Prompt): string {
   if (prompt.title) return prompt.title
-  const lines = prompt.content.split('\n').slice(0, 4)
-  return lines.join('\n')
+  if (prompt.content) {
+    const lines = prompt.content.split('\n').slice(0, 4)
+    return lines.join('\n')
+  }
+  if (prompt.images && prompt.images.length > 0) {
+    return prompt.images.map((img) => `@${img.index}`).join(' ')
+  }
+  return ''
 }
 
 function getTaskAccentColor(taskNumber: number): string {
@@ -852,6 +858,14 @@ export const PromptList = memo(function PromptList({
                           <rect x="8.5" y="5" width="2" height="6" rx="0.5" fill="currentColor" />
                         </svg>
                         <span className="prompt-item-schedule-time">{t('promptList.paused')}</span>
+                      </span>
+                    )}
+                    {prompt.images && prompt.images.length > 0 && (
+                      <span
+                        className="prompt-item-image-badge"
+                        title={t('promptEditor.images.aria')}
+                      >
+                        📎 {prompt.images.length}
                       </span>
                     )}
                     <span className="prompt-item-text">

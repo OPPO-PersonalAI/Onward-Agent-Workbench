@@ -468,10 +468,58 @@ export interface ScheduleDebugInfo {
 
 export interface PromptNotebookDebugApi {
   getPromptCount: () => number
-  getPrompts: () => Array<{ id: string; title: string; content: string; pinned: boolean; color?: string; lastUsedAt: number; taskNumbers: number[]; sendHistoryCount: number }>
+  getPrompts: () => Array<{
+    id: string
+    title: string
+    content: string
+    pinned: boolean
+    color?: string
+    lastUsedAt: number
+    taskNumbers: number[]
+    sendHistoryCount: number
+    images?: Array<{
+      index: number
+      batchId: string
+      path: string
+      width: number
+      height: number
+      updatedAt: number
+    }>
+  }>
   getVisiblePromptItems?: () => Array<{ id: string; title: string; color?: string; taskNumbers: number[] }>
   getSelectedPromptId?: () => string | null
   getLastEditorSendToTask?: () => { content: string; terminalId: string } | null
+  dropFilesIntoEditor?: (filePaths: string[]) => { rawPaths: string[]; formattedText: string } | null
+  getLastEditorFileDrop?: () => { rawPaths: string[]; formattedText: string } | null
+  getEditorImages?: () => Array<{
+    index: number
+    batchId: string
+    path: string
+    width: number
+    height: number
+    updatedAt: number
+  }>
+  pasteClipboardIntoEditor?: (options?: {
+    filePaths?: string[]
+    autotestImage?: { width: number; height: number }
+  }) => Promise<unknown>
+  removeEditorImage?: (index: number) => Promise<boolean>
+  insertEditorImageToken?: (index: number) => boolean
+  openEditorImagePreview?: (index: number) => boolean
+  closeEditorImagePreview?: () => void
+  getEditorImagePreviewIndex?: () => number | null
+  getEditorMentionCandidates?: () => Array<{
+    index: number
+    batchId: string
+    path: string
+    width: number
+    height: number
+    updatedAt: number
+    ext?: string
+    mediaKind?: string
+    originalName?: string
+  }>
+  selectEditorMentionCandidate?: (index: number) => boolean
   selectPrompt?: (promptId: string) => boolean
   setPromptColor?: (promptId: string, color: 'red' | 'yellow' | 'green' | null) => boolean
   copyPrompt?: (promptId: string) => Promise<boolean>

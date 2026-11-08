@@ -25,12 +25,14 @@ export interface DraftPreservationInput {
   normalizedContent: string
   /** Editor title as typed (compared trimmed). */
   title: string
+  /** Optional list of attached image paths on the current draft. */
+  imagePaths?: readonly string[]
   /**
    * The history entry currently loaded for editing, both fields normalized
    * the same way as the editor values; null when the editor holds a fresh
    * draft that was never loaded from history.
    */
-  editingOriginal: { normalizedContent: string; title: string } | null
+  editingOriginal: { normalizedContent: string; title: string; imagePaths?: readonly string[] } | null
 }
 
 export type DraftPreservationReason = 'empty' | 'unchanged-from-source' | 'draft-preserved'
@@ -40,15 +42,24 @@ export interface DraftPreservationDecision {
   reason: DraftPreservationReason
 }
 
+function areImagePathsEqual(a?: readonly string[], b?: readonly string[]): boolean {
+  const listA = a ?? []
+  const listB = b ?? []
+  if (listA.length !== listB.length) return false
+  return listA.every((item, idx) => item === listB[idx])
+}
+
 export function decideDraftPreservation(input: DraftPreservationInput): DraftPreservationDecision {
-  if (!input.normalizedContent.trim()) {
+  const hasImages = Boolean(input.imagePaths && input.imagePaths.length > 0)
+  if (!input.normalizedContent.trim() && !hasImages) {
     return { preserve: false, reason: 'empty' }
   }
   const original = input.editingOriginal
   if (
     original &&
     input.normalizedContent === original.normalizedContent &&
-    input.title.trim() === original.title.trim()
+    input.title.trim() === original.title.trim() &&
+    areImagePathsEqual(input.imagePaths, original.imagePaths)
   ) {
     return { preserve: false, reason: 'unchanged-from-source' }
   }

@@ -61,6 +61,15 @@ import { isSettingsPageCommit, mergeSettingsPage, selectSettingsPage, type Setti
 import { installSettingsExitGuard } from './settings-exit-guard'
 import { promptInputShortcuts } from './prompt-input-shortcuts'
 import { registerPromptInputHandlers, cleanupPromptInputHandlers } from './prompt-input-handlers'
+import {
+  clonePromptImageBatchOnDisk,
+  gcUnreferencedPromptImageBatches,
+  pastePromptClipboard,
+  readPromptAttachmentTextPreview,
+  removePromptImageFromBatchOnDisk,
+  type PastePromptClipboardOptions
+} from './prompt-image-storage'
+import type { PromptImageAttachment } from '../../src/utils/prompt-images'
 import { normalizePromptShortcut, promptTargetSlot } from '../../src/utils/prompt-input'
 import { getAppInfo } from './app-info'
 import { createDiagnosticBundle } from './diagnostic-bundle'
@@ -2263,6 +2272,38 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     }
   })
 
+  ipcMain.handle(
+    IPC.CLIPBOARD_PASTE_PROMPT,
+    (_, batchId: string, nextIndex: number, options?: PastePromptClipboardOptions) => {
+      return pastePromptClipboard(batchId, nextIndex, undefined, options)
+    }
+  )
+
+  ipcMain.handle(
+    IPC.PROMPT_IMAGE_REMOVE,
+    (_, batchId: string, removedIndex: number, currentAttachments: PromptImageAttachment[]) => {
+      return removePromptImageFromBatchOnDisk(batchId, removedIndex, currentAttachments)
+    }
+  )
+
+  ipcMain.handle(
+    IPC.PROMPT_IMAGE_CLONE_BATCH,
+    (_, sourceBatchId: string, targetBatchId: string, sourceAttachments: PromptImageAttachment[]) => {
+      return clonePromptImageBatchOnDisk(sourceBatchId, targetBatchId, sourceAttachments)
+    }
+  )
+
+  ipcMain.handle(IPC.PROMPT_IMAGE_GC, (_, options?: { gracePeriodMs?: number }) => {
+    const state = getAppStateStorage().get()
+    return gcUnreferencedPromptImageBatches(state, {
+      gracePeriodMs: typeof options?.gracePeriodMs === 'number' ? options.gracePeriodMs : undefined
+    })
+  })
+
+  ipcMain.handle(IPC.PROMPT_IMAGE_READ_TEXT_PREVIEW, (_, filePath: string, maxBytes?: number) => {
+    return readPromptAttachmentTextPreview(filePath, undefined, maxBytes)
+  })
+
   browserViewManager.init(mainWindow)
 
   ipcMain.handle(IPC.HTML_PREVIEW_CREATE_SESSION, (_, rootPath: string, filePath: string, reloadKey: number) => {
@@ -3452,6 +3493,11 @@ async function runCleanupIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(IPC.CLIPBOARD_WRITE_TEXT)
   ipcMain.removeHandler(IPC.CLIPBOARD_READ_TEXT)
   ipcMain.removeHandler(IPC.CLIPBOARD_READ_TERMINAL)
+  ipcMain.removeHandler(IPC.CLIPBOARD_PASTE_PROMPT)
+  ipcMain.removeHandler(IPC.PROMPT_IMAGE_REMOVE)
+  ipcMain.removeHandler(IPC.PROMPT_IMAGE_CLONE_BATCH)
+  ipcMain.removeHandler(IPC.PROMPT_IMAGE_GC)
+  ipcMain.removeHandler(IPC.PROMPT_IMAGE_READ_TEXT_PREVIEW)
   browserViewManager.destroyAll()
   htmlPreviewProtocolManager.destroyAll()
   ipcMain.removeHandler(IPC.HTML_PREVIEW_CREATE_SESSION)

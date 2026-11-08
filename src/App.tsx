@@ -61,6 +61,7 @@ import { registerTerminalFocusDebugApi } from './terminal/focus-debug-api'
 import { buildChangeDirectoryCommand, type TerminalShellKind } from './utils/terminal-command'
 import { performanceTrace } from './utils/performance-trace'
 import { findStickyProjectEditorRoot } from './utils/projectEditorStateKey'
+import { buildPromptContentWithImagesForSend, normalizePromptImageAttachments } from './utils/prompt-images'
 import { trackFeatureUse } from './telemetry/track-feature-use'
 import './App.css'
 import './styles/form-controls.css'
@@ -1012,7 +1013,12 @@ function AppContent({
   }, [sendContentToTerminals, writeToTerminals])
 
   const handleTerminalPinnedPromptSend = useCallback((terminalId: string, prompt: Prompt) => {
-    void handleSendAndExecuteOnTerminals([terminalId], prompt.content)
+    const resolved = buildPromptContentWithImagesForSend(
+      prompt.content,
+      normalizePromptImageAttachments(prompt.images),
+      window.electronAPI?.platform ?? 'darwin'
+    )
+    void handleSendAndExecuteOnTerminals([terminalId], resolved)
   }, [handleSendAndExecuteOnTerminals])
 
   const handleRetrySchedule = useCallback(async (promptId: string) => {
@@ -1027,7 +1033,12 @@ function AppContent({
       tab.terminals.some(t => t.id === terminalId)
     )
 
-    const result = await handleSendAndExecuteOnTerminals(availableTerminalIds, prompt.content)
+    const resolvedContent = buildPromptContentWithImagesForSend(
+      prompt.content,
+      normalizePromptImageAttachments(prompt.images),
+      window.electronAPI?.platform ?? 'darwin'
+    )
+    const result = await handleSendAndExecuteOnTerminals(availableTerminalIds, resolvedContent)
     const now = Date.now()
     const successLog: ExecutionLogEntry = {
       timestamp: now,
