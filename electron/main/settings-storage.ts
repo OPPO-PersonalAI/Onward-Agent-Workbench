@@ -15,6 +15,7 @@ import { getAvailableThemeIds, normalizeThemeSettings } from '../../src/themes/t
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, promptTargetSlot, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
+import { DEFAULT_PROMPT_PANEL_POSITION, normalizePromptPanelPosition, type PromptPanelPosition } from '../../src/utils/prompt-panel-layout'
 
 /**
  * Shortcut configuration
@@ -92,6 +93,7 @@ interface SettingsState {
   /** Global switch for opt-in performance diagnostics panels. Added in v7. */
   performanceDiagnosticsEnabled: boolean
   terminalMacOptionIsMeta?: boolean
+  promptPanelPosition: PromptPanelPosition
   updatedAt: number
 }
 
@@ -167,6 +169,7 @@ function createDefaultSettingsState(): SettingsState {
     autoFollowGitBranchForTaskName: true,
     performanceDiagnosticsEnabled: false,
     terminalMacOptionIsMeta: false,
+    promptPanelPosition: DEFAULT_PROMPT_PANEL_POSITION,
     updatedAt: Date.now()
   }
 }
@@ -353,6 +356,7 @@ class SettingsStorage {
       autoFollowGitBranchForTaskName,
       performanceDiagnosticsEnabled,
       terminalMacOptionIsMeta: state.terminalMacOptionIsMeta === true,
+      promptPanelPosition: normalizePromptPanelPosition(state.promptPanelPosition),
       updatedAt: state.updatedAt ?? Date.now()
     }
   }
@@ -568,6 +572,9 @@ class SettingsStorage {
       }
       if (typeof partial.terminalMacOptionIsMeta === 'boolean') {
         this.state.terminalMacOptionIsMeta = partial.terminalMacOptionIsMeta
+      }
+      if (partial.promptPanelPosition !== undefined) {
+        this.state.promptPanelPosition = normalizePromptPanelPosition(partial.promptPanelPosition)
       }
       this.state.updatedAt = Date.now()
       this.persist(true)

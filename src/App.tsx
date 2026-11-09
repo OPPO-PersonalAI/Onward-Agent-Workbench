@@ -62,6 +62,16 @@ import { buildChangeDirectoryCommand, type TerminalShellKind } from './utils/ter
 import { performanceTrace } from './utils/performance-trace'
 import { findStickyProjectEditorRoot } from './utils/projectEditorStateKey'
 import { buildPromptContentWithImagesForSend, normalizePromptImageAttachments } from './utils/prompt-images'
+import {
+  normalizePromptPanelPosition,
+  normalizePromptPanelWidth,
+  normalizePromptPanelRightWidth,
+  normalizePromptPanelBottomHeight,
+  normalizePromptBottomHistoryWidth,
+  normalizePromptBottomSenderWidth,
+  resolveMainContentLayout,
+  type PromptPanelPosition
+} from './utils/prompt-panel-layout'
 import { trackFeatureUse } from './telemetry/track-feature-use'
 import './App.css'
 import './styles/form-controls.css'
@@ -322,6 +332,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   tab,
   isActive,
   showSettings,
+  position,
   onSendAndExecute,
   onChangeWorkDir,
   addPrompt: onAddPrompt,
@@ -346,6 +357,7 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   tab: TabState
   isActive: boolean
   showSettings: boolean
+  position: PromptPanelPosition
   onSendAndExecute: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
   onChangeWorkDir: (terminalIds: string[], directory: string) => void
   addPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => void
@@ -443,7 +455,23 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
   }, [tab.id, getTerminalRepoRoot, setTerminalCustomName])
 
   const handleWidthChange = useCallback((width: number) => {
-    updateTabById(tab.id, { promptPanelWidth: width })
+    updateTabById(tab.id, { promptPanelWidth: normalizePromptPanelWidth(width) })
+  }, [tab.id, updateTabById])
+
+  const handleRightWidthChange = useCallback((width: number) => {
+    updateTabById(tab.id, { promptPanelRightWidth: normalizePromptPanelRightWidth(width) })
+  }, [tab.id, updateTabById])
+
+  const handleBottomHeightChange = useCallback((height: number) => {
+    updateTabById(tab.id, { promptPanelBottomHeight: normalizePromptPanelBottomHeight(height) })
+  }, [tab.id, updateTabById])
+
+  const handleBottomHistoryWidthChange = useCallback((width: number) => {
+    updateTabById(tab.id, { promptBottomHistoryWidth: normalizePromptBottomHistoryWidth(width) })
+  }, [tab.id, updateTabById])
+
+  const handleBottomSenderWidthChange = useCallback((width: number) => {
+    updateTabById(tab.id, { promptBottomSenderWidth: normalizePromptBottomSenderWidth(width) })
   }, [tab.id, updateTabById])
 
   const handleEditorDraftChange = useCallback((draft: EditorDraft | null) => {
@@ -521,8 +549,17 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       onSendAndExecute={onSendAndExecute}
       onTerminalRename={handleTerminalRename}
       onChangeWorkDir={onChangeWorkDir}
-      width={tab.promptPanelWidth}
+      position={position}
+      width={normalizePromptPanelWidth(tab.promptPanelWidth)}
       onWidthChange={handleWidthChange}
+      rightWidth={normalizePromptPanelRightWidth(tab.promptPanelRightWidth)}
+      onRightWidthChange={handleRightWidthChange}
+      bottomHeight={normalizePromptPanelBottomHeight(tab.promptPanelBottomHeight)}
+      onBottomHeightChange={handleBottomHeightChange}
+      bottomHistoryWidth={normalizePromptBottomHistoryWidth(tab.promptBottomHistoryWidth)}
+      onBottomHistoryWidthChange={handleBottomHistoryWidthChange}
+      bottomSenderWidth={normalizePromptBottomSenderWidth(tab.promptBottomSenderWidth)}
+      onBottomSenderWidthChange={handleBottomSenderWidthChange}
       prompts={prompts}
       onAddPrompt={onAddPrompt}
       onAddPinnedPrompt={onAddPinnedPrompt}
@@ -1927,6 +1964,8 @@ function AppContent({
 
   // Calculate the displayed activePanel (for Sidebar)
   const displayActivePanel = showSettings ? 'settings' : activePanel
+  const promptPanelPosition = normalizePromptPanelPosition(settings?.promptPanelPosition)
+  const mainContentLayout = resolveMainContentLayout(promptPanelPosition, showSettings)
 
   return (
     <div className="app">
@@ -1955,7 +1994,10 @@ function AppContent({
           onCommitPresetEdit={handleCommitPresetEdit}
           onChangeLogToggle={handleToggleChangeLog}
         />
-        <main className="main-content">
+        <main
+          className={`main-content main-content--prompt-${mainContentLayout.effectivePosition}`}
+          data-prompt-position={mainContentLayout.effectivePosition}
+        >
           {showSettings && (
             <Settings
               terminals={terminals.slice(0, layoutEffectiveCount)}
@@ -1971,6 +2013,7 @@ function AppContent({
               tab={tab}
               isActive={tab.id === state.activeTabId}
               showSettings={showSettings}
+              position={promptPanelPosition}
               onSendAndExecute={handleSendAndExecuteOnTerminals}
               onChangeWorkDir={handleChangeWorkDir}
               addPrompt={addPrompt}

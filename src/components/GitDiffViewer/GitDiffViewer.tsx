@@ -1047,6 +1047,15 @@ function normalizeRepoRoot(root: string | null | undefined): string {
   return (root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
+function normalizeDiffScopeCwd(root: string | null | undefined): string | null {
+  const trimmed = normalizeRepoRoot(root)
+  if (!trimmed) return null
+  if (/^[A-Za-z]:(\/|$)/.test(trimmed) || trimmed.startsWith('//')) {
+    return trimmed.toLowerCase()
+  }
+  return trimmed
+}
+
 function getRepoTreeDepth(repo: GitRepoContext): number {
   return repo.isSubmodule ? repo.depth + 1 : 0
 }
@@ -3531,7 +3540,12 @@ export function GitDiffViewer({
 
     if (!options?.reset && !options?.force) {
       const cached = lastDiffRef.current
-      if (cached && (cached.originalCwd === cwd || cached.cwd === cwd)) {
+      const normalizedCwd = normalizeDiffScopeCwd(cwd)
+      if (
+        cached &&
+        (normalizeDiffScopeCwd(cached.originalCwd) === normalizedCwd ||
+          normalizeDiffScopeCwd(cached.cwd) === normalizedCwd)
+      ) {
         const age = Date.now() - cached.at
         if (age < 800 && !cached.result.submodulesLoading) {
           debugLog('diff:load:cache', { cwd, age })
@@ -3571,7 +3585,9 @@ export function GitDiffViewer({
       const latestResult = diffResultRef.current
       const cwdMatchesLatest = Boolean(
         latestResult &&
-        (latestResult.cwd === cwd || latestResult.cwd === '' || cwd === null)
+        (normalizeDiffScopeCwd(latestResult.cwd) === normalizeDiffScopeCwd(cwd) ||
+          latestResult.cwd === '' ||
+          cwd === null)
       )
       const timingMarked = cwdMatchesLatest
         ? markDiffLoadedForTiming('in-flight-idle', {
@@ -3838,7 +3854,7 @@ export function GitDiffViewer({
   // Clear stale state before paint only when the backing cwd changes.
   useLayoutEffect(() => {
     if (isOpen) {
-      const nextScope = cwd ?? null
+      const nextScope = normalizeDiffScopeCwd(cwd)
       const shouldReset = lastOpenScopeRef.current !== nextScope
       const openingFromClosed = !wasOpenRef.current
       lastOpenScopeRef.current = nextScope

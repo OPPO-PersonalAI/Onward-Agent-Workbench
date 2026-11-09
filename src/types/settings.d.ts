@@ -8,6 +8,9 @@
 import type { ThemeSettings } from './theme'
 import type { AppLocale } from '../i18n/core'
 import type { PromptInputSettings } from '../utils/prompt-input'
+import type { PromptPanelPosition } from '../utils/prompt-panel-layout'
+
+export type { PromptPanelPosition }
 
 // Shortcut configuration
 export interface ShortcutConfig {
@@ -89,6 +92,8 @@ export interface SettingsState {
   performanceDiagnosticsEnabled: boolean
   /** Opt-in macOS Option-to-Meta terminal input; absent legacy values mean false. */
   terminalMacOptionIsMeta?: boolean
+  /** Docking position of the Prompt Notebook panel relative to the Task area ('left' | 'bottom' | 'right'). Default 'left'. */
+  promptPanelPosition?: PromptPanelPosition
   updatedAt: number
 }
 

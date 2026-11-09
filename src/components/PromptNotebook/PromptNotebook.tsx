@@ -55,6 +55,16 @@ import {
 } from './PromptAttachmentWidgets'
 
 import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
+import {
+  computeBottomHistoryResize,
+  computeBottomSenderResize,
+  computeOuterPanelResize,
+  DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+  DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+  DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+  DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+  type PromptPanelPosition
+} from '../../utils/prompt-panel-layout'
 import { buildPromptTaskHistorySummary } from './promptTaskHistory'
 import { PROMPT_COLORS, type PromptColor } from './prompt-colors'
 import './PromptNotebook.css'
@@ -89,8 +99,17 @@ interface PromptNotebookProps {
   onSendAndExecute: (terminalIds: string[], content: string) => Promise<TerminalBatchResult>
   onTerminalRename: (id: string, newTitle: string) => void
   onChangeWorkDir: (terminalIds: string[], directory: string) => void
+  position?: PromptPanelPosition
   width: number
   onWidthChange: (width: number) => void
+  rightWidth?: number
+  onRightWidthChange?: (width: number) => void
+  bottomHeight?: number
+  onBottomHeightChange?: (height: number) => void
+  bottomHistoryWidth?: number
+  onBottomHistoryWidthChange?: (width: number) => void
+  bottomSenderWidth?: number
+  onBottomSenderWidthChange?: (width: number) => void
   // Tab prompt related
   prompts: Prompt[]
   onAddPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => void
@@ -168,8 +187,17 @@ export const PromptNotebook = memo(function PromptNotebook({
   onSendAndExecute,
   onTerminalRename,
   onChangeWorkDir,
+  position = 'left',
   width,
   onWidthChange,
+  rightWidth = DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+  onRightWidthChange,
+  bottomHeight = DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+  onBottomHeightChange,
+  bottomHistoryWidth = DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+  onBottomHistoryWidthChange,
+  bottomSenderWidth = DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+  onBottomSenderWidthChange,
   prompts,
   onAddPrompt,
   onAddPinnedPrompt,
@@ -950,7 +978,16 @@ export const PromptNotebook = memo(function PromptNotebook({
         return true
       },
       // DOM-derived so the api effect needs no dependency on the state.
-      isSendHistoryOpen: () => document.querySelector('.prompt-send-history-overlay') !== null
+      isSendHistoryOpen: () => document.querySelector('.prompt-send-history-overlay') !== null,
+      getDockPosition: () => position,
+      getPanelDimensions: () => ({
+        width,
+        rightWidth,
+        bottomHeight,
+        bottomHistoryWidth,
+        bottomSenderWidth,
+        promptEditorHeight
+      })
     }
     ;(window as any).__onwardPromptNotebookDebug = api
     return () => {
@@ -963,6 +1000,12 @@ export const PromptNotebook = memo(function PromptNotebook({
     prompts,
     promptCleanup,
     promptEditorHeight,
+    position,
+    width,
+    rightWidth,
+    bottomHeight,
+    bottomHistoryWidth,
+    bottomSenderWidth,
     onAddPrompt,
     scheduleMap,
     tabId,
@@ -1503,16 +1546,69 @@ export const PromptNotebook = memo(function PromptNotebook({
     ? getTerminalBranch(activeTerminal.id)
     : null
 
-  // Drag to adjust width
+  const notebookRef = useRef<HTMLDivElement>(null)
+
+  // Drag to adjust outer panel dimension (width in left/right, height in bottom)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     const startX = e.clientX
-    const startWidth = width
+    const startY = e.clientY
+    const startSize = position === 'bottom'
+      ? bottomHeight
+      : position === 'right'
+        ? rightWidth
+        : width
+    const bodyClass = position === 'bottom'
+      ? 'resizing-prompt-panel-vertical'
+      : 'resizing-prompt-panel'
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const delta = e.clientX - startX
-      const newWidth = Math.max(200, startWidth + delta)
-      onWidthChange(newWidth)
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextSize = computeOuterPanelResize({
+        position,
+        startSize,
+        startX,
+        startY,
+        clientX: moveEvent.clientX,
+        clientY: moveEvent.clientY
+      })
+      if (position === 'bottom') {
+        onBottomHeightChange?.(nextSize)
+      } else if (position === 'right') {
+        onRightWidthChange?.(nextSize)
+      } else {
+        onWidthChange(nextSize)
+      }
+    }
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove(bodyClass)
+    }
+
+    document.body.classList.add(bodyClass)
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }, [position, width, rightWidth, bottomHeight, onWidthChange, onRightWidthChange, onBottomHeightChange])
+
+  // Drag left internal resizer in bottom 3-column mode (adjusts history column width)
+  const handleBottomHistoryResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    if (position !== 'bottom') return
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = bottomHistoryWidth
+    const currentSenderWidth = bottomSenderWidth
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const containerWidth = notebookRef.current?.getBoundingClientRect().width
+      const nextWidth = computeBottomHistoryResize({
+        startWidth,
+        startX,
+        clientX: moveEvent.clientX,
+        containerWidth,
+        senderWidth: currentSenderWidth
+      })
+      onBottomHistoryWidthChange?.(nextWidth)
     }
 
     const handleMouseUp = () => {
@@ -1524,7 +1620,45 @@ export const PromptNotebook = memo(function PromptNotebook({
     document.body.classList.add('resizing-prompt-panel')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [width, onWidthChange])
+  }, [position, bottomHistoryWidth, bottomSenderWidth, onBottomHistoryWidthChange])
+
+  // Drag right internal resizer in bottom 3-column mode (adjusts sender column width)
+  const handleBottomSenderResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    if (position !== 'bottom') return
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = bottomSenderWidth
+    const currentHistoryWidth = bottomHistoryWidth
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const containerWidth = notebookRef.current?.getBoundingClientRect().width
+      const nextWidth = computeBottomSenderResize({
+        startWidth,
+        startX,
+        clientX: moveEvent.clientX,
+        containerWidth,
+        historyWidth: currentHistoryWidth
+      })
+      onBottomSenderWidthChange?.(nextWidth)
+    }
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove('resizing-prompt-panel')
+    }
+
+    document.body.classList.add('resizing-prompt-panel')
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }, [position, bottomSenderWidth, bottomHistoryWidth, onBottomSenderWidthChange])
+
+  const outerStyle = useMemo(() => {
+    if (position === 'bottom') {
+      return { height: bottomHeight }
+    }
+    return { width: position === 'right' ? rightWidth : width }
+  }, [position, width, rightWidth, bottomHeight])
 
   // Delete confirmation box shortcut
   useEffect(() => {
@@ -1609,73 +1743,94 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   return (
     <>
-      <div className={`prompt-notebook${hidden ? ' prompt-notebook-hidden' : ''}`} style={{ width }}>
+      <div
+        ref={notebookRef}
+        className={`prompt-notebook prompt-notebook--${position}${hidden ? ' prompt-notebook-hidden' : ''}`}
+        data-dock-position={position}
+        style={outerStyle}
+      >
         <div
           className="prompt-notebook-resizer"
+          data-testid="prompt-notebook-resizer"
           onMouseDown={handleMouseDown}
         />
 
-        {/* search box */}
-        <PromptSearch
-          value={searchKeyword}
-          onChange={setSearchKeyword}
-          saveMessage={saveMessage}
-        />
+        <div
+          className="prompt-notebook-history-pane"
+          data-testid="prompt-notebook-history-pane"
+          style={position === 'bottom' ? { width: bottomHistoryWidth } : undefined}
+        >
+          {/* search box */}
+          <PromptSearch
+            value={searchKeyword}
+            onChange={setSearchKeyword}
+            saveMessage={saveMessage}
+          />
 
-        {/* Scheduled task notification */}
-        <ScheduleNotificationBar
-          notifications={scheduleNotifications}
-          onDismiss={onDismissScheduleNotification}
-          onRetry={onRetrySchedule}
-        />
+          {/* Scheduled task notification */}
+          <ScheduleNotificationBar
+            notifications={scheduleNotifications}
+            onDismiss={onDismissScheduleNotification}
+            onRetry={onRetrySchedule}
+          />
 
-        {/* History list */}
-        <PromptList
-          prompts={filteredPrompts}
-          selectedId={selectedId}
-          searchKeyword={searchKeyword}
-          filterEnabled={filterEnabled}
-          targetsEnabled={targetsEnabled}
-          activeColorFilter={activeColorFilter}
-          colorFilterStats={colorFilterStats}
-          activeTaskFilter={activeTaskFilter}
-          taskFilterOptions={taskFilterOptions}
-          promptTaskNumbers={promptTaskHistory.promptTaskNumbers}
-          onSelect={handleSelect}
-          onDoubleClick={handleDoubleClick}
-          onDelete={handleDelete}
-          onTogglePin={handleTogglePin}
-          onAppend={handleAppend}
-          onColorChange={handleColorChange}
-          onToggleFilterEnabled={handleToggleFilterEnabled}
-          onToggleTargetsEnabled={handleToggleTargetsEnabled}
-          onToggleColorFilter={handleToggleColorFilter}
-          onToggleTaskFilter={handleToggleTaskFilter}
-          globalPromptIds={globalPromptIds}
-          onReorderPinned={onReorderPinnedPrompts}
-          autoCleanupEnabled={promptCleanup.autoEnabled}
-          onExportAllPrompts={handleExportAllPrompts}
-          onImportPrompts={handleImportPrompts}
-          onRetentionKeepDays={handleRetentionKeepDays}
-          onRetentionKeepCustom={handleRetentionKeepCustom}
-          onToggleAutoCleanup={handleToggleAutoCleanup}
-          scheduleMap={scheduleMap}
-          onSetSchedule={handleSetSchedule}
-          onEditSchedule={handleEditSchedule}
-          onCancelSchedule={handleCancelSchedule}
-          onPauseSchedule={handlePauseSchedule}
-          onResumeSchedule={handleResumeSchedule}
-          onViewSendHistory={handleViewSendHistory}
-          onCopyPrompt={handleCopyPrompt}
-          terminals={terminals}
-          onSendAndExecuteToTask={handleContextMenuSendAndExecute}
-          onSendAndExecuteToAllTasks={handleContextMenuSendAndExecuteAll}
-        />
+          {/* History list */}
+          <PromptList
+            prompts={filteredPrompts}
+            selectedId={selectedId}
+            searchKeyword={searchKeyword}
+            filterEnabled={filterEnabled}
+            targetsEnabled={targetsEnabled}
+            activeColorFilter={activeColorFilter}
+            colorFilterStats={colorFilterStats}
+            activeTaskFilter={activeTaskFilter}
+            taskFilterOptions={taskFilterOptions}
+            promptTaskNumbers={promptTaskHistory.promptTaskNumbers}
+            onSelect={handleSelect}
+            onDoubleClick={handleDoubleClick}
+            onDelete={handleDelete}
+            onTogglePin={handleTogglePin}
+            onAppend={handleAppend}
+            onColorChange={handleColorChange}
+            onToggleFilterEnabled={handleToggleFilterEnabled}
+            onToggleTargetsEnabled={handleToggleTargetsEnabled}
+            onToggleColorFilter={handleToggleColorFilter}
+            onToggleTaskFilter={handleToggleTaskFilter}
+            globalPromptIds={globalPromptIds}
+            onReorderPinned={onReorderPinnedPrompts}
+            autoCleanupEnabled={promptCleanup.autoEnabled}
+            onExportAllPrompts={handleExportAllPrompts}
+            onImportPrompts={handleImportPrompts}
+            onRetentionKeepDays={handleRetentionKeepDays}
+            onRetentionKeepCustom={handleRetentionKeepCustom}
+            onToggleAutoCleanup={handleToggleAutoCleanup}
+            scheduleMap={scheduleMap}
+            onSetSchedule={handleSetSchedule}
+            onEditSchedule={handleEditSchedule}
+            onCancelSchedule={handleCancelSchedule}
+            onPauseSchedule={handlePauseSchedule}
+            onResumeSchedule={handleResumeSchedule}
+            onViewSendHistory={handleViewSendHistory}
+            onCopyPrompt={handleCopyPrompt}
+            terminals={terminals}
+            onSendAndExecuteToTask={handleContextMenuSendAndExecute}
+            onSendAndExecuteToAllTasks={handleContextMenuSendAndExecuteAll}
+          />
+        </div>
+
+        {position === 'bottom' && (
+          <div
+            className="prompt-notebook-col-resizer prompt-notebook-col-resizer-left"
+            data-testid="prompt-bottom-resizer-left"
+            onMouseDown={handleBottomHistoryResizeMouseDown}
+          />
+        )}
 
         {/* input area */}
         <PromptEditorWithAppend
           tabId={tabId}
           activeTab={activeTab}
+          dockPosition={position}
           draftToast={draftToast}
           onSubmit={handleSubmit}
           onUpdatePrompt={onUpdatePrompt}
@@ -1705,24 +1860,38 @@ export const PromptNotebook = memo(function PromptNotebook({
           ctxCurrentTaskTitle={editorTaskTitle}
         />
 
+        {position === 'bottom' && (
+          <div
+            className="prompt-notebook-col-resizer prompt-notebook-col-resizer-right"
+            data-testid="prompt-bottom-resizer-right"
+            onMouseDown={handleBottomSenderResizeMouseDown}
+          />
+        )}
+
         {/* Send control area */}
-        <PromptSender
-          terminals={terminals}
-          taskLayout={taskLayout}
-          tabId={tabId}
-          hidden={hidden}
-          activeTab={activeTab}
-          promptContent={editorContentForSend}
-          inputSettings={inputSettings}
-          selectedIds={selectedTerminalIds}
-          onSelectionChange={handleInputSelectionChange}
-          registerSelectionFlush={registerSelectionFlush}
-          onAction={handleInputAction}
-          isSubmitting={inputBusy}
-          notice={inputNotice}
-          onTerminalRename={onTerminalRename}
-          onChangeWorkDir={onChangeWorkDir}
-        />
+        <div
+          className="prompt-notebook-sender-pane"
+          data-testid="prompt-notebook-sender-pane"
+          style={position === 'bottom' ? { width: bottomSenderWidth } : undefined}
+        >
+          <PromptSender
+            terminals={terminals}
+            taskLayout={taskLayout}
+            tabId={tabId}
+            hidden={hidden}
+            activeTab={activeTab}
+            promptContent={editorContentForSend}
+            inputSettings={inputSettings}
+            selectedIds={selectedTerminalIds}
+            onSelectionChange={handleInputSelectionChange}
+            registerSelectionFlush={registerSelectionFlush}
+            onAction={handleInputAction}
+            isSubmitting={inputBusy}
+            notice={inputNotice}
+            onTerminalRename={onTerminalRename}
+            onChangeWorkDir={onChangeWorkDir}
+          />
+        </div>
       </div>
 
       {/* Delete confirmation dialog */}
@@ -1914,6 +2083,7 @@ export const PromptNotebook = memo(function PromptNotebook({
 const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   tabId,
   activeTab,
+  dockPosition = 'left',
   draftToast,
   onSubmit,
   onUpdatePrompt,
@@ -1942,6 +2112,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
 }: {
   tabId: string
   activeTab: boolean
+  dockPosition?: PromptPanelPosition
   draftToast: string | null
   onSubmit: (
     title: string,
@@ -3049,7 +3220,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   return (
     <div
       className={isFileDropTarget ? 'prompt-editor is-file-drop-target' : 'prompt-editor'}
-      style={{ height }}
+      style={dockPosition === 'bottom' ? undefined : { height }}
       onKeyDown={handleKeyDown}
       onCompositionStart={handleCompositionStart}
       onCompositionEnd={handleCompositionEnd}

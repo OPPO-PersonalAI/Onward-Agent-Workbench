@@ -23,6 +23,18 @@ import { canonicalizeTerminalCwdForPersist } from '../utils/terminal-cwd-osc'
 import { appStateContentChanged } from '../utils/app-state-diff'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 import { pendingStateFlush, awaitInitialStateForFlush } from '../utils/pending-state-flush'
+import {
+  DEFAULT_PROMPT_PANEL_WIDTH,
+  DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+  DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+  DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+  DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+  normalizePromptPanelWidth,
+  normalizePromptPanelRightWidth,
+  normalizePromptPanelBottomHeight,
+  normalizePromptBottomHistoryWidth,
+  normalizePromptBottomSenderWidth
+} from '../utils/prompt-panel-layout'
 
 export const normalizeProjectCwd = normalizeProjectCwdImpl
 
@@ -43,7 +55,6 @@ const DEFAULT_PROMPT_CLEANUP_CONFIG: PromptCleanupConfig = {
   autoDeleteColored: false,
   lastAutoCleanupAt: null
 }
-const DEFAULT_PROMPT_PANEL_WIDTH = 320
 const DEFAULT_PROMPT_EDITOR_HEIGHT = 350
 const MIN_PROMPT_EDITOR_HEIGHT = 100
 
@@ -295,6 +306,10 @@ function createDefaultTabState(id: string): TabState {
     layoutMode: DEFAULT_LAYOUT_MODE,
     activePanel: null,
     promptPanelWidth: DEFAULT_PROMPT_PANEL_WIDTH,
+    promptPanelRightWidth: DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+    promptPanelBottomHeight: DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+    promptBottomHistoryWidth: DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+    promptBottomSenderWidth: DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
     promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
     activeTerminalId: null,
     terminals: [],
@@ -580,7 +595,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             return {
               ...restTab,
               layoutMode: migrateLayoutMode((tab as { layoutMode?: unknown }).layoutMode),
-              promptPanelWidth: Math.max(tab.promptPanelWidth || 0, DEFAULT_PROMPT_PANEL_WIDTH),
+              promptPanelWidth: normalizePromptPanelWidth(tab.promptPanelWidth),
+              promptPanelRightWidth: normalizePromptPanelRightWidth(tab.promptPanelRightWidth),
+              promptPanelBottomHeight: normalizePromptPanelBottomHeight(tab.promptPanelBottomHeight),
+              promptBottomHistoryWidth: normalizePromptBottomHistoryWidth(tab.promptBottomHistoryWidth),
+              promptBottomSenderWidth: normalizePromptBottomSenderWidth(tab.promptBottomSenderWidth),
               promptEditorHeight: normalizePromptEditorHeight(
                 tab.promptEditorHeight ?? tab.editorDraft?.height ?? DEFAULT_PROMPT_EDITOR_HEIGHT
               ),
@@ -611,6 +630,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           const original = loadedState.tabs[index]
           return !original
             || tab.promptPanelWidth !== original.promptPanelWidth
+            || tab.promptPanelRightWidth !== original.promptPanelRightWidth
+            || tab.promptPanelBottomHeight !== original.promptPanelBottomHeight
+            || tab.promptBottomHistoryWidth !== original.promptBottomHistoryWidth
+            || tab.promptBottomSenderWidth !== original.promptBottomSenderWidth
             || tab.promptEditorHeight !== original.promptEditorHeight
             || original.promptInputMode !== undefined
             || original.promptInputModePreferenceVersion !== undefined

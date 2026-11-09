@@ -5,12 +5,13 @@
 
 import type { SettingsState } from '../types/settings'
 import { normalizePromptShortcut, promptTargetSlot } from './prompt-input.ts'
+import { isPromptPanelPosition, normalizePromptPanelPosition } from './prompt-panel-layout.ts'
 import { RESERVED_SHORTCUTS } from '../../electron/main/reserved-shortcuts.ts'
 
 export const SETTINGS_EDITABLE_PAGES = ['general', 'appearance', 'fonts', 'shortcuts'] as const
 export type SettingsEditablePage = typeof SETTINGS_EDITABLE_PAGES[number]
 export const SETTINGS_PAGE_FIELDS = {
-  general: ['language', 'performanceDiagnosticsEnabled', 'telemetryConsent', 'terminalMacOptionIsMeta'],
+  general: ['language', 'performanceDiagnosticsEnabled', 'telemetryConsent', 'terminalMacOptionIsMeta', 'promptPanelPosition'],
   appearance: ['theme'],
   fonts: ['terminalStyles', 'globalTerminalStyle', 'gitDiffFontSize'],
   shortcuts: ['shortcuts', 'promptInput']
@@ -36,7 +37,14 @@ export function settingsValuesEqual(left: unknown, right: unknown): boolean {
 }
 
 export function selectSettingsPage(settings: SettingsState, page: SettingsEditablePage): SettingsPageValues {
-  return Object.fromEntries(SETTINGS_PAGE_FIELDS[page].map(key => [key, key === 'terminalMacOptionIsMeta' ? settings[key] === true : settings[key]]))
+  return Object.fromEntries(SETTINGS_PAGE_FIELDS[page].map(key => [
+    key,
+    key === 'terminalMacOptionIsMeta'
+      ? settings[key] === true
+      : key === 'promptPanelPosition'
+        ? normalizePromptPanelPosition(settings[key])
+        : settings[key]
+  ]))
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -73,6 +81,7 @@ export function isSettingsPageCommit(value: unknown): value is SettingsPageCommi
       if (!Object.hasOwn(part, field)) return false
       const entry = part[field]
       if (field === 'language') return entry === 'en' || entry === 'zh-CN'
+      if (field === 'promptPanelPosition') return isPromptPanelPosition(entry)
       if (field === 'performanceDiagnosticsEnabled' || field === 'terminalMacOptionIsMeta') return typeof entry === 'boolean'
       if (field === 'telemetryConsent') return entry === null || typeof entry === 'boolean'
       if (field === 'gitDiffFontSize') return entry === null || typeof entry === 'number' && Number.isFinite(entry)

@@ -206,8 +206,16 @@ export interface TabState {
   layoutMode: LayoutMode
   /** Currently active panel */
   activePanel: 'prompt' | null
-  /** Prompt panel width */
+  /** Prompt panel width (left dock) */
   promptPanelWidth: number
+  /** Prompt panel width when docked on the right */
+  promptPanelRightWidth?: number
+  /** Prompt panel height when docked at the bottom */
+  promptPanelBottomHeight?: number
+  /** Left history column width inside bottom-docked Prompt panel */
+  promptBottomHistoryWidth?: number
+  /** Right sender column width inside bottom-docked Prompt panel */
+  promptBottomSenderWidth?: number
   /** Prompt editor height */
   promptEditorHeight: number
   /** Current active terminal ID */

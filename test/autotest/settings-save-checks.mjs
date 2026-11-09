@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { saveSettingsPage } from './themes-ui-driver-support.mjs'
+import { eventually, saveSettingsPage } from './themes-ui-driver-support.mjs'
 
 const TRIALS = 5
 const live = h => h.page.evaluate(() => window.electronAPI.settings.load())
@@ -147,5 +147,222 @@ export async function settingsSaveChecks(h) {
     await h.page.locator('.settings-container').waitFor({ state: 'detached' })
     await h.openSettings('about')
     assert.equal(await h.page.getByTestId('settings-save-footer').count(), 0)
+  })
+  await h.case('SP-UI05-prompt-panel-position-layout-resizing-and-dimension-memory', async () => {
+    await h.openSettings('general')
+    await h.page.getByTestId('settings-language-select').selectOption('en')
+    await saveSettingsPage(h.page)
+
+    // 1. Verify Settings search locates Prompt Panel Position and highlights the section
+    const searchInput = h.page.getByTestId('settings-search')
+    await searchInput.fill('Prompt Panel')
+    const searchHit = h.page.getByTestId('settings-search-promptPanelPosition')
+    await searchHit.waitFor({ state: 'visible' })
+    await searchHit.click()
+    await h.page.locator('[data-settings-target="promptPanelPosition"]').waitFor({ state: 'visible' })
+
+    // 2. Verify Segmented Control radio semantics, draft dirty state, and Discard
+    const leftBtn = h.page.getByTestId('settings-prompt-position-left')
+    const bottomBtn = h.page.getByTestId('settings-prompt-position-bottom')
+    const rightBtn = h.page.getByTestId('settings-prompt-position-right')
+    assert.equal(await leftBtn.getAttribute('aria-checked'), 'true')
+    assert.equal(await bottomBtn.getAttribute('aria-checked'), 'false')
+    assert.equal(await rightBtn.getAttribute('aria-checked'), 'false')
+
+    await bottomBtn.click()
+    assert.equal(await bottomBtn.getAttribute('aria-checked'), 'true')
+    assert.equal((await live(h)).promptPanelPosition ?? 'left', 'left', 'Uncommitted draft must not mutate live setting')
+    await h.page.getByTestId('settings-discard').click()
+    assert.equal(await leftBtn.getAttribute('aria-checked'), 'true')
+
+    // Helper to ensure PromptNotebook is open and Settings is closed
+    const ensurePromptOpen = async () => {
+      if (await h.page.locator('.settings-container').isVisible()) {
+        await h.page.locator('.settings-close-btn').click()
+        await h.page.locator('.settings-container').waitFor({ state: 'detached' })
+      }
+      const visibleNotebook = h.page.locator('.prompt-notebook:not(.prompt-notebook-hidden)')
+      if (!await visibleNotebook.isVisible()) {
+        await h.page.getByTestId('sidebar-prompt-button').click()
+        await visibleNotebook.waitFor({ state: 'visible' })
+      }
+    }
+
+    // Helper to perform a real mouse drag on a resizer element
+    const dragResizer = async (selector, dx, dy) => {
+      const box = await h.page.locator(selector).boundingBox()
+      assert(box, `Resizer bounding box not found: ${selector}`)
+      const startX = Math.round(box.x + box.width / 2)
+      const startY = Math.round(box.y + box.height / 2)
+      await h.page.mouse.move(startX, startY)
+      await h.page.mouse.down()
+      await h.page.mouse.move(startX + dx, startY + dy, { steps: 4 })
+      await h.page.mouse.up()
+    }
+
+    // 3. Verify LEFT mode geometry & outer resizer drag (+60px -> 380px)
+    await ensurePromptOpen()
+    const leftGeomBefore = await h.page.evaluate(() => {
+      const main = document.querySelector('main.main-content')
+      const nb = document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden)')
+      const term = document.querySelector('.terminal-area')
+      const nbRect = nb.getBoundingClientRect()
+      const termRect = term.getBoundingClientRect()
+      return {
+        mainPos: main.getAttribute('data-prompt-position'),
+        flexDir: getComputedStyle(main).flexDirection,
+        dockPos: nb.getAttribute('data-dock-position'),
+        nbRight: nbRect.right,
+        termLeft: termRect.left,
+        nbWidth: Math.round(nbRect.width)
+      }
+    })
+    assert.equal(leftGeomBefore.mainPos, 'left')
+    assert.equal(leftGeomBefore.flexDir, 'row')
+    assert.equal(leftGeomBefore.dockPos, 'left')
+    assert(leftGeomBefore.nbRight <= leftGeomBefore.termLeft + 2, `Left mode: notebook should be left of terminal (${JSON.stringify(leftGeomBefore)})`)
+    await dragResizer('.prompt-notebook:not(.prompt-notebook-hidden) > [data-testid="prompt-notebook-resizer"]', 60, 0)
+    const leftDimsAfter = await eventually(
+      'left outer resize',
+      () => h.page.evaluate(() => window.__onwardPromptNotebookDebug.getPanelDimensions()),
+      dims => dims?.width === leftGeomBefore.nbWidth + 60
+    )
+
+    // 4. Switch to RIGHT mode in Settings -> Save -> verify Settings left-fixed invariant while open, then close & verify RIGHT geometry + drag
+    await h.openSettings('general')
+    await h.page.getByTestId('settings-prompt-position-right').click()
+    await saveSettingsPage(h.page)
+    assert.equal((await live(h)).promptPanelPosition, 'right')
+
+    // While Settings is still open, main-content MUST remain left-fixed row!
+    const whileSettingsOpenRight = await h.page.evaluate(() => {
+      const main = document.querySelector('main.main-content')
+      const settingsEl = document.querySelector('.settings-container')
+      const term = document.querySelector('.terminal-area')
+      return {
+        mainPos: main.getAttribute('data-prompt-position'),
+        flexDir: getComputedStyle(main).flexDirection,
+        settingsRight: settingsEl.getBoundingClientRect().right,
+        termLeft: term.getBoundingClientRect().left,
+        visibleNotebooks: document.querySelectorAll('.prompt-notebook:not(.prompt-notebook-hidden)').length
+      }
+    })
+    assert.equal(whileSettingsOpenRight.mainPos, 'left', 'Settings open must force effectivePosition=left')
+    assert.equal(whileSettingsOpenRight.flexDir, 'row')
+    assert(whileSettingsOpenRight.settingsRight <= whileSettingsOpenRight.termLeft + 2, 'Settings must remain on the left of terminal-area')
+    assert.equal(whileSettingsOpenRight.visibleNotebooks, 0, 'PromptNotebook must be hidden while Settings is open')
+
+    await ensurePromptOpen()
+    const rightGeomBefore = await h.page.evaluate(() => {
+      const main = document.querySelector('main.main-content')
+      const nb = document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden)')
+      const term = document.querySelector('.terminal-area')
+      const nbRect = nb.getBoundingClientRect()
+      const termRect = term.getBoundingClientRect()
+      return {
+        mainPos: main.getAttribute('data-prompt-position'),
+        flexDir: getComputedStyle(main).flexDirection,
+        dockPos: nb.getAttribute('data-dock-position'),
+        termRight: termRect.right,
+        nbLeft: nbRect.left,
+        nbWidth: Math.round(nbRect.width),
+        dims: window.__onwardPromptNotebookDebug.getPanelDimensions()
+      }
+    })
+    assert.equal(rightGeomBefore.mainPos, 'right')
+    assert.equal(rightGeomBefore.flexDir, 'row')
+    assert.equal(rightGeomBefore.dockPos, 'right')
+    assert(rightGeomBefore.termRight <= rightGeomBefore.nbLeft + 2, `Right mode: notebook should be right of terminal (${JSON.stringify(rightGeomBefore)})`)
+    assert.equal(rightGeomBefore.dims.width, leftDimsAfter.width, 'Switching to right mode must preserve left width')
+    // Drag left edge of right-docked panel by -50px (widens rightWidth by +50px)
+    await dragResizer('.prompt-notebook:not(.prompt-notebook-hidden) > [data-testid="prompt-notebook-resizer"]', -50, 0)
+    const rightDimsAfter = await eventually(
+      'right outer resize',
+      () => h.page.evaluate(() => window.__onwardPromptNotebookDebug.getPanelDimensions()),
+      dims => dims?.rightWidth === rightGeomBefore.nbWidth + 50
+    )
+    assert.equal(rightDimsAfter.width, leftDimsAfter.width, 'Right drag must not alter left width')
+
+    // 5. Switch to BOTTOM mode in Settings -> Save -> close Settings -> verify 3-column layout & all 3 bottom resizers
+    await h.openSettings('general')
+    await h.page.getByTestId('settings-prompt-position-bottom').click()
+    await saveSettingsPage(h.page)
+    assert.equal((await live(h)).promptPanelPosition, 'bottom')
+
+    // Verify Settings left-fixed invariant when promptPanelPosition === 'bottom'
+    const whileSettingsOpenBottom = await h.page.evaluate(() => ({
+      mainPos: document.querySelector('main.main-content').getAttribute('data-prompt-position'),
+      flexDir: getComputedStyle(document.querySelector('main.main-content')).flexDirection
+    }))
+    assert.equal(whileSettingsOpenBottom.mainPos, 'left')
+    assert.equal(whileSettingsOpenBottom.flexDir, 'row')
+
+    await ensurePromptOpen()
+    const bottomGeomBefore = await h.page.evaluate(() => {
+      const main = document.querySelector('main.main-content')
+      const nb = document.querySelector('.prompt-notebook:not(.prompt-notebook-hidden)')
+      const term = document.querySelector('.terminal-area')
+      const hist = nb.querySelector('[data-testid="prompt-notebook-history-pane"]')
+      const editor = nb.querySelector('.prompt-editor')
+      const sender = nb.querySelector('[data-testid="prompt-notebook-sender-pane"]')
+      const editorResizer = nb.querySelector('.prompt-editor-resizer')
+      const nbRect = nb.getBoundingClientRect()
+      const termRect = term.getBoundingClientRect()
+      const histRect = hist.getBoundingClientRect()
+      const editorRect = editor.getBoundingClientRect()
+      const senderRect = sender.getBoundingClientRect()
+      return {
+        mainPos: main.getAttribute('data-prompt-position'),
+        mainFlexDir: getComputedStyle(main).flexDirection,
+        dockPos: nb.getAttribute('data-dock-position'),
+        nbFlexDir: getComputedStyle(nb).flexDirection,
+        termBottom: termRect.bottom,
+        nbTop: nbRect.top,
+        nbHeight: Math.round(nbRect.height),
+        histRight: histRect.right,
+        editorLeft: editorRect.left,
+        editorRight: editorRect.right,
+        senderLeft: senderRect.left,
+        histWidth: Math.round(histRect.width),
+        senderWidth: Math.round(senderRect.width),
+        editorResizerDisplay: getComputedStyle(editorResizer).display,
+        dims: window.__onwardPromptNotebookDebug.getPanelDimensions()
+      }
+    })
+    assert.equal(bottomGeomBefore.mainPos, 'bottom')
+    assert.equal(bottomGeomBefore.mainFlexDir, 'column')
+    assert.equal(bottomGeomBefore.dockPos, 'bottom')
+    assert.equal(bottomGeomBefore.nbFlexDir, 'row')
+    assert(bottomGeomBefore.termBottom <= bottomGeomBefore.nbTop + 2, `Bottom mode: notebook should be below terminal (${JSON.stringify(bottomGeomBefore)})`)
+    assert(bottomGeomBefore.histRight <= bottomGeomBefore.editorLeft + 8, `Bottom 3-col: history left of editor (${JSON.stringify(bottomGeomBefore)})`)
+    assert(bottomGeomBefore.editorRight <= bottomGeomBefore.senderLeft + 8, `Bottom 3-col: editor left of sender (${JSON.stringify(bottomGeomBefore)})`)
+    assert.equal(bottomGeomBefore.editorResizerDisplay, 'none', 'Vertical editor resizer must be hidden in bottom mode')
+
+    // Drag outer top resizer up by -40px (increases bottomHeight by +40px)
+    await dragResizer('.prompt-notebook:not(.prompt-notebook-hidden) > [data-testid="prompt-notebook-resizer"]', 0, -40)
+    // Drag bottom left column resizer right by +35px (increases bottomHistoryWidth by +35px)
+    await dragResizer('.prompt-notebook:not(.prompt-notebook-hidden) [data-testid="prompt-bottom-resizer-left"]', 35, 0)
+    // Drag bottom right column resizer left by -30px (increases bottomSenderWidth by +30px)
+    await dragResizer('.prompt-notebook:not(.prompt-notebook-hidden) [data-testid="prompt-bottom-resizer-right"]', -30, 0)
+
+    const bottomDimsAfter = await eventually(
+      'bottom outer and inner column resizes',
+      () => h.page.evaluate(() => window.__onwardPromptNotebookDebug.getPanelDimensions()),
+      dims =>
+        dims?.bottomHeight === bottomGeomBefore.nbHeight + 40 &&
+        dims?.bottomHistoryWidth === bottomGeomBefore.histWidth + 35 &&
+        dims?.bottomSenderWidth === bottomGeomBefore.senderWidth + 30
+    )
+    assert.equal(bottomDimsAfter.width, leftDimsAfter.width, 'Bottom drags must not alter left width')
+    assert.equal(bottomDimsAfter.rightWidth, rightDimsAfter.rightWidth, 'Bottom drags must not alter right width')
+
+    // 6. Restore position to 'left' and verify all 5 dimensions remain intact
+    await h.openSettings('general')
+    await h.page.getByTestId('settings-prompt-position-left').click()
+    await saveSettingsPage(h.page)
+    assert.equal((await live(h)).promptPanelPosition, 'left')
+    await ensurePromptOpen()
+    const finalDims = await h.page.evaluate(() => window.__onwardPromptNotebookDebug.getPanelDimensions())
+    assert.deepEqual(finalDims, bottomDimsAfter, 'All 5 independent panel dimensions must persist across position switches')
   })
 }

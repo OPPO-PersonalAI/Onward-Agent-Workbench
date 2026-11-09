@@ -178,6 +178,15 @@ function normalizeRepoRoot(root: string | null | undefined): string {
   return (root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
+function normalizeHistoryScopeCwd(root: string | null | undefined): string | null {
+  const trimmed = normalizeRepoRoot(root)
+  if (!trimmed) return null
+  if (/^[A-Za-z]:(\/|$)/.test(trimmed) || trimmed.startsWith('//')) {
+    return trimmed.toLowerCase()
+  }
+  return trimmed
+}
+
 function getRepoTreeDepth(repo: GitRepoContext): number {
   return repo.isSubmodule ? repo.depth + 1 : 0
 }
@@ -453,6 +462,8 @@ export function GitHistoryViewer({
         ? jumpToEditorCheck.status
         : 'checking'
   const cwdRef = useRef(cwd)
+  cwdRef.current = cwd
+  activeCwdRef.current = activeCwd
   useEffect(() => {
     activeCwdRef.current = activeCwd
   }, [activeCwd])
@@ -493,8 +504,11 @@ export function GitHistoryViewer({
     cwdRef.current = cwd
   }, [cwd])
   const terminalId = _terminalId
-  const historyStateKey = activeCwd ? `${STORAGE_KEY_STATE_PREFIX}:${activeCwd}` : null
+  const normalizedActiveCwd = normalizeRepoRoot(activeCwd)
+  const historyStateKey = normalizedActiveCwd ? `${STORAGE_KEY_STATE_PREFIX}:${normalizedActiveCwd}` : null
+  const legacyHistoryStateKey = activeCwd ? `${STORAGE_KEY_STATE_PREFIX}:${activeCwd}` : null
   const historyStateKeyRef = useRef(historyStateKey)
+  historyStateKeyRef.current = historyStateKey
   useEffect(() => {
     historyStateKeyRef.current = historyStateKey
   }, [historyStateKey])
@@ -783,6 +797,9 @@ export function GitHistoryViewer({
     setDiffPatch('')
     setSelectedFileContent(null)
     setDiffError(null)
+    loadingRef.current = false
+    loadingStateRef.current = { loading: false, filesLoading: false, diffLoading: false }
+    setLoading(false)
     setDiffLoading(false)
     setFilesLoading(false)
     fileCacheRef.current.clear()
@@ -815,6 +832,7 @@ export function GitHistoryViewer({
     if (!targetCwd) return
     if (loadingRef.current) return
     loadingRef.current = true
+    loadingStateRef.current.loading = true
     const isSwitching = isSwitchingRepoRef.current
     setLoading(true)
     const token = ++loadTokenRef.current
@@ -825,6 +843,7 @@ export function GitHistoryViewer({
         skip
       })
       if (token !== loadTokenRef.current) return
+      activeCwdRef.current = selectedRepoRootRef.current || result.cwd || cachedParentCwdRef.current || cwdRef.current
       setHistoryResult(result)
       if (!targetRepoRoot && result.repos && result.repos.length > 1) {
         cachedParentCwdRef.current = result.cwd
@@ -860,8 +879,9 @@ export function GitHistoryViewer({
     } finally {
       isSwitchingRepoRef.current = false
       if (token === loadTokenRef.current) {
-        setLoading(false)
         loadingRef.current = false
+        loadingStateRef.current.loading = false
+        setLoading(false)
       }
     }
   }, [])
@@ -873,10 +893,13 @@ export function GitHistoryViewer({
     if (fileCacheRef.current.has(cacheKey)) {
       const cached = fileCacheRef.current.get(cacheKey) || []
       filesRef.current = cached
+      loadingStateRef.current.filesLoading = false
+      setFilesLoading(false)
       setFiles(cached)
       return
     }
     const token = ++filesTokenRef.current
+    loadingStateRef.current.filesLoading = true
     setFilesLoading(true)
     setDiffError(null)
     try {
@@ -898,6 +921,7 @@ export function GitHistoryViewer({
       setFiles(result.files)
     } finally {
       if (token === filesTokenRef.current) {
+        loadingStateRef.current.filesLoading = false
         setFilesLoading(false)
       }
     }
@@ -989,10 +1013,13 @@ export function GitHistoryViewer({
     if (!cwdToUse) return
     const cacheKey = buildPatchKey(base, head, file.filename, hideWhitespace)
     if (patchCacheRef.current.has(cacheKey)) {
+      loadingStateRef.current.diffLoading = false
+      setDiffLoading(false)
       setDiffPatch(patchCacheRef.current.get(cacheKey) || '')
       return
     }
     const token = ++patchTokenRef.current
+    loadingStateRef.current.diffLoading = true
     setDiffLoading(true)
     setDiffError(null)
     try {
@@ -1023,6 +1050,7 @@ export function GitHistoryViewer({
       setDiffPatch(result.patch)
     } finally {
       if (token === patchTokenRef.current) {
+        loadingStateRef.current.diffLoading = false
         setDiffLoading(false)
       }
     }
@@ -1033,10 +1061,13 @@ export function GitHistoryViewer({
     if (!cwdToUse) return
     const cacheKey = buildFileContentKey(base, head, file)
     if (fileContentCacheRef.current.has(cacheKey)) {
+      loadingStateRef.current.diffLoading = false
+      setDiffLoading(false)
       setSelectedFileContent(fileContentCacheRef.current.get(cacheKey) || null)
       return
     }
     const token = ++fileContentTokenRef.current
+    loadingStateRef.current.diffLoading = true
     setDiffLoading(true)
     setDiffError(null)
     try {
@@ -1051,6 +1082,7 @@ export function GitHistoryViewer({
       setSelectedFileContent(result)
     } finally {
       if (token === fileContentTokenRef.current) {
+        loadingStateRef.current.diffLoading = false
         setDiffLoading(false)
       }
     }
@@ -1065,6 +1097,8 @@ export function GitHistoryViewer({
     if (fileContentCacheRef.current.has(cacheKey)) {
       const cached = fileContentCacheRef.current.get(cacheKey)
       if (cached && cached.success && !cached.isBinary) {
+        loadingStateRef.current.diffLoading = false
+        setDiffLoading(false)
         setSelectedFileContent(cached)
         return
       }
@@ -1072,6 +1106,7 @@ export function GitHistoryViewer({
       return
     }
     const token = ++fileContentTokenRef.current
+    loadingStateRef.current.diffLoading = true
     setDiffLoading(true)
     setDiffError(null)
     let loaded = false
@@ -1095,10 +1130,12 @@ export function GitHistoryViewer({
       if (token !== fileContentTokenRef.current) return
     } finally {
       if (token === fileContentTokenRef.current && loaded) {
+        loadingStateRef.current.diffLoading = false
         setDiffLoading(false)
       }
     }
     if (token === fileContentTokenRef.current) {
+      loadingStateRef.current.diffLoading = false
       setDiffLoading(false)
       void loadPatchForFile(base, head, file)
     }
@@ -1110,6 +1147,10 @@ export function GitHistoryViewer({
     skipRepoReloadRef.current = true
     ++loadTokenRef.current
     loadingRef.current = false
+    loadingStateRef.current = { loading: false, filesLoading: false, diffLoading: false }
+    setLoading(false)
+    setFilesLoading(false)
+    setDiffLoading(false)
     fileCacheRef.current.clear()
     patchCacheRef.current.clear()
     fileContentCacheRef.current.clear()
@@ -1132,6 +1173,7 @@ export function GitHistoryViewer({
     setSelectedFileContent(null)
     didRestoreRef.current = false
     selectedRepoRootRef.current = repoRoot
+    activeCwdRef.current = repoRoot || cachedParentCwdRef.current || cwdRef.current
     setSelectedRepoRoot(repoRoot)
     void loadHistory(true)
   }, [loadHistory, settleLargeFileConfirmation])
@@ -1172,7 +1214,7 @@ export function GitHistoryViewer({
       persistStateRef.current()
       return
     }
-    const nextScope = { terminalId, cwd: cwd ?? null }
+    const nextScope = { terminalId, cwd: normalizeHistoryScopeCwd(cwd) }
     const previousScope = lastOpenScopeRef.current
     const shouldReset = !previousScope ||
       previousScope.terminalId !== nextScope.terminalId ||
@@ -1228,7 +1270,11 @@ export function GitHistoryViewer({
     didRestoreRef.current = true
     const prefs = getUIPreferences()
     const raw = localStorage.getItem(historyStateKey)
+      || (legacyHistoryStateKey ? localStorage.getItem(legacyHistoryStateKey) : null)
       || (prefs.gitHistoryStates?.[historyStateKey] ? JSON.stringify(prefs.gitHistoryStates[historyStateKey]) : null)
+      || (legacyHistoryStateKey && prefs.gitHistoryStates?.[legacyHistoryStateKey]
+        ? JSON.stringify(prefs.gitHistoryStates[legacyHistoryStateKey])
+        : null)
     if (!raw) return
     try {
       const stored = JSON.parse(raw) as {
@@ -1340,6 +1386,7 @@ export function GitHistoryViewer({
       // placeholder, this branch is the only place that can.
       ++patchTokenRef.current
       ++fileContentTokenRef.current
+      loadingStateRef.current.diffLoading = false
       setDiffLoading(false)
       setDiffPatch('')
       setSelectedFileContent(null)
@@ -1535,6 +1582,7 @@ export function GitHistoryViewer({
         const currentCommits = commitsRef.current
         if (index < 0 || index >= currentCommits.length) return false
         const commit = currentCommits[index]
+        didRestoreRef.current = true
         const nextSelected = [commit.sha]
         selectedShasRef.current = nextSelected
         selectionAnchorRef.current = commit.sha
@@ -1563,6 +1611,7 @@ export function GitHistoryViewer({
         const currentFiles = filesRef.current
         if (index < 0 || index >= currentFiles.length) return false
         const file = currentFiles[index]
+        didRestoreRef.current = true
         selectedFileRef.current = file
         explicitSelectionRef.current = file.filename
         selectionRef.current = {
@@ -1576,6 +1625,7 @@ export function GitHistoryViewer({
         const currentFiles = filesRef.current
         const file = currentFiles.find((entry) => entry.filename === path || entry.originalFilename === path)
         if (!file) return false
+        didRestoreRef.current = true
         selectedFileRef.current = file
         explicitSelectionRef.current = file.filename
         selectionRef.current = {
@@ -1670,6 +1720,7 @@ export function GitHistoryViewer({
     event.preventDefault()
     const index = commitIndexMap.get(commit.sha)
     if (index === undefined) return
+    didRestoreRef.current = true
     if (event.shiftKey && selectionAnchor) {
       const anchorIndex = commitIndexMap.get(selectionAnchor)
       if (anchorIndex === undefined) {
@@ -2086,7 +2137,7 @@ export function GitHistoryViewer({
             <div
               key={`${file.filename}-${file.status}`}
               className={`git-history-file-item ${isSelected ? 'selected' : ''}`}
-              onClick={() => { explicitSelectionRef.current = file.filename; trackFeatureUse('git-history-file-diff'); setSelectedFile(file) }}
+              onClick={() => { didRestoreRef.current = true; selectedFileRef.current = file; explicitSelectionRef.current = file.filename; trackFeatureUse('git-history-file-diff'); setSelectedFile(file) }}
               onContextMenu={(e) => handleFileContextMenu(e, file)}
               title={renameText}
             >

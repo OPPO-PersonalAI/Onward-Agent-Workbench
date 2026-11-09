@@ -16,7 +16,13 @@ test('SP-U01: dirty compares values, independent of object key order', () => {
 })
 
 test('SP-U02: page commit rejects missing and unrelated fields', () => {
-  const general = { language: 'en', telemetryConsent: false, performanceDiagnosticsEnabled: false, terminalMacOptionIsMeta: false }
+  const general = {
+    language: 'en',
+    promptPanelPosition: 'left',
+    telemetryConsent: false,
+    performanceDiagnosticsEnabled: false,
+    terminalMacOptionIsMeta: false
+  }
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: general }), true)
   assert.equal(isSettingsPageCommit({ page: 'about', baseline: {}, draft: {} }), false)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, settingsPanelWidth: 600 } }), false)
@@ -24,13 +30,41 @@ test('SP-U02: page commit rejects missing and unrelated fields', () => {
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, telemetryConsent: 'yes' } }), false)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, terminalMacOptionIsMeta: true } }), true)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, terminalMacOptionIsMeta: 'yes' } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: 'bottom' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: 'right' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: 'top' } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: null } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: 123 } }), false)
 })
 
 test('SP-U03: unrelated concurrent page fields merge without losing live values', () => {
-  const baseline = { language: 'en' as const, telemetryConsent: false, performanceDiagnosticsEnabled: false }
+  const baseline = {
+    language: 'en' as const,
+    promptPanelPosition: 'left' as const,
+    telemetryConsent: false,
+    performanceDiagnosticsEnabled: false
+  }
   assert.deepEqual(mergeSettingsPage({ ...baseline, telemetryConsent: true }, baseline, { ...baseline, language: 'zh-CN' }), {
-    success: true, values: { language: 'zh-CN', telemetryConsent: true, performanceDiagnosticsEnabled: false }
+    success: true,
+    values: {
+      language: 'zh-CN',
+      promptPanelPosition: 'left',
+      telemetryConsent: true,
+      performanceDiagnosticsEnabled: false
+    }
   })
+  assert.deepEqual(
+    mergeSettingsPage({ ...baseline, language: 'zh-CN' }, baseline, { ...baseline, promptPanelPosition: 'bottom' }),
+    {
+      success: true,
+      values: {
+        language: 'zh-CN',
+        promptPanelPosition: 'bottom',
+        telemetryConsent: false,
+        performanceDiagnosticsEnabled: false
+      }
+    }
+  )
 })
 
 test('SP-U04: diverging edits conflict, identical concurrent edits succeed', () => {

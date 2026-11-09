@@ -34,6 +34,7 @@ test('SN-02: search finds labels, category words and theme export/import keyword
   const translate = createTranslator('en')
   const cases = [
     ['language', ['language']], ['GENERAL language', ['language']],
+    ['prompt panel', ['promptPanelPosition']], ['bottom', ['promptPanelPosition']],
     ['  ExPoRt\tTHEME  ', ['themes']], ['import', ['themes']], ['system', ['themes']],
     ['performance', ['diagnostics']], ['anonymous', ['privacy']],
     ['fonts', ['terminal-font-size', 'editor-font-size', 'font-family']],
@@ -50,6 +51,7 @@ test('SN-03: Chinese search uses real localized labels and requires every whites
   const translate = createTranslator('zh-CN')
   const cases = [
     ['语言', ['language']], ['常规 语言', ['language']], ['导出', ['themes']], ['导入', ['themes']],
+    ['Prompt 面板', ['promptPanelPosition']], ['底部', ['promptPanelPosition']], ['右侧', ['promptPanelPosition']],
     ['诊断', ['diagnostics']], ['匿名', ['privacy']],
     ['字体', ['terminal-font-size', 'editor-font-size', 'font-family']],
     ['终端 字体', ['terminal-font-size']], ['project 字体', ['editor-font-size']],

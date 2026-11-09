@@ -19,6 +19,18 @@ import {
   type PromptImageAttachment
 } from '../../src/utils/prompt-images'
 import { gcUnreferencedPromptImageBatches } from './prompt-image-storage'
+import {
+  DEFAULT_PROMPT_PANEL_WIDTH,
+  DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+  DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+  DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+  DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+  normalizePromptPanelWidth,
+  normalizePromptPanelRightWidth,
+  normalizePromptPanelBottomHeight,
+  normalizePromptBottomHistoryWidth,
+  normalizePromptBottomSenderWidth
+} from '../../src/utils/prompt-panel-layout'
 
 /**
  * Prompt data structure
@@ -132,6 +144,10 @@ interface TabState {
   layoutMode: LayoutMode
   activePanel: 'prompt' | null
   promptPanelWidth: number
+  promptPanelRightWidth?: number
+  promptPanelBottomHeight?: number
+  promptBottomHistoryWidth?: number
+  promptBottomSenderWidth?: number
   promptEditorHeight: number
   activeTerminalId: string | null
   terminals: PersistedTerminalState[]
@@ -285,9 +301,7 @@ function validateCustomLayoutPresets(value: unknown): CustomLayoutPreset[] {
   return out
 }
 
-const DEFAULT_PROMPT_PANEL_WIDTH = 320
 const DEFAULT_PROMPT_EDITOR_HEIGHT = 350
-const MIN_PROMPT_PANEL_WIDTH = 150
 const MIN_PROMPT_EDITOR_HEIGHT = 100
 
 /**
@@ -373,6 +387,10 @@ function createDefaultTabState(id: string): TabState {
     layoutMode: { kind: 'preset', count: 1 },
     activePanel: null,
     promptPanelWidth: DEFAULT_PROMPT_PANEL_WIDTH,
+    promptPanelRightWidth: DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+    promptPanelBottomHeight: DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+    promptBottomHistoryWidth: DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+    promptBottomSenderWidth: DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
     promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
     activeTerminalId: null,
     terminals: [],
@@ -522,7 +540,11 @@ class AppStateStorage {
       createdAt: Date.now(),
       layoutMode: migrateLayoutMode(legacyConfig?.layoutMode),
       activePanel: legacyConfig?.activePanel ?? null,
-      promptPanelWidth: legacyConfig?.promptPanelWidth ?? DEFAULT_PROMPT_PANEL_WIDTH,
+      promptPanelWidth: normalizePromptPanelWidth(legacyConfig?.promptPanelWidth),
+      promptPanelRightWidth: DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+      promptPanelBottomHeight: DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
+      promptBottomHistoryWidth: DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
+      promptBottomSenderWidth: DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
       promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
       activeTerminalId: legacyConfig?.activeTerminalId ?? null,
       terminals: migratedTerminals,
@@ -713,9 +735,11 @@ class AppStateStorage {
    * Validate single tab data
    */
   private validateTab(tab: Partial<TabState> & { name?: string; layoutMode?: unknown }): TabState {
-    const promptPanelWidth = typeof tab.promptPanelWidth === 'number' && tab.promptPanelWidth >= MIN_PROMPT_PANEL_WIDTH
-      ? tab.promptPanelWidth
-      : DEFAULT_PROMPT_PANEL_WIDTH
+    const promptPanelWidth = normalizePromptPanelWidth(tab.promptPanelWidth)
+    const promptPanelRightWidth = normalizePromptPanelRightWidth(tab.promptPanelRightWidth)
+    const promptPanelBottomHeight = normalizePromptPanelBottomHeight(tab.promptPanelBottomHeight)
+    const promptBottomHistoryWidth = normalizePromptBottomHistoryWidth(tab.promptBottomHistoryWidth)
+    const promptBottomSenderWidth = normalizePromptBottomSenderWidth(tab.promptBottomSenderWidth)
 
     // Handle migration from older versions: if there is a name field but no customName, try to extract the custom name
     let customName: string | null = null
@@ -748,6 +772,10 @@ class AppStateStorage {
       layoutMode: migrateLayoutMode(tab.layoutMode),
       activePanel: tab.activePanel === 'prompt' ? 'prompt' : null,
       promptPanelWidth,
+      promptPanelRightWidth,
+      promptPanelBottomHeight,
+      promptBottomHistoryWidth,
+      promptBottomSenderWidth,
       promptEditorHeight,
       activeTerminalId: tab.activeTerminalId ?? null,
       terminals,

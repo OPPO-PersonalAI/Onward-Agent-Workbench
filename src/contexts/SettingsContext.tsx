@@ -23,6 +23,7 @@ import { getAppliedEditorTheme } from '../themes/editor-theme'
 import { DEFAULT_LOCALE, type AppLocale } from '../i18n/core'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, validatePromptInputSettings, type PromptInputSettings } from '../utils/prompt-input'
+import { DEFAULT_PROMPT_PANEL_POSITION, normalizePromptPanelPosition, type PromptPanelPosition } from '../utils/prompt-panel-layout'
 import { RESERVED_SHORTCUTS } from '../../electron/main/reserved-shortcuts'
 import { selectSettingsPage, type SettingsPageCommit, type SettingsPageCommitResult } from '../utils/settings-page'
 
@@ -92,6 +93,7 @@ function createDefaultSettings(): SettingsState {
     autoFollowGitBranchForTaskName: true,
     performanceDiagnosticsEnabled: false,
     terminalMacOptionIsMeta: false,
+    promptPanelPosition: DEFAULT_PROMPT_PANEL_POSITION,
     updatedAt: Date.now()
   }
 }
@@ -137,6 +139,7 @@ interface SettingsContextValue {
   setAutoFollowGitBranchForTaskName: (enabled: boolean) => void
 
   updatePerformanceDiagnosticsEnabled: (enabled: boolean) => void
+  updatePromptPanelPosition: (position: PromptPanelPosition) => void
 }
 
 const SettingsContext = createContext<SettingsContextValue | null>(null)
@@ -149,7 +152,12 @@ interface SettingsProviderProps {
 export function SettingsProvider({ children, onShortcutAction }: SettingsProviderProps) {
   const [settings, setSettings] = useState<SettingsState | null>(() => {
     const bootstrap = (window as unknown as { onwardThemeBootstrap?: { settings: SettingsState } }).onwardThemeBootstrap?.settings
-    return bootstrap ? { ...bootstrap, version: Math.max(10, bootstrap.version ?? 0), promptInput: normalizePromptInputSettings(bootstrap.promptInput) } : null
+    return bootstrap ? {
+      ...bootstrap,
+      version: Math.max(10, bootstrap.version ?? 0),
+      promptInput: normalizePromptInputSettings(bootstrap.promptInput),
+      promptPanelPosition: normalizePromptPanelPosition(bootstrap.promptPanelPosition)
+    } : null
   })
   const [isLoaded, setIsLoaded] = useState(Boolean(settings))
   const settingsRef = useRef<SettingsState | null>(settings)
@@ -239,7 +247,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
           perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'load-send' })
           const loadedSettings = await window.electronAPI.settings.load()
           const normalized = { ...loadedSettings, version: Math.max(10, loadedSettings.version ?? 0),
-            theme: normalizeThemeSettings(loadedSettings.theme), promptInput: normalizePromptInputSettings(loadedSettings.promptInput) }
+            theme: normalizeThemeSettings(loadedSettings.theme), promptInput: normalizePromptInputSettings(loadedSettings.promptInput),
+            promptPanelPosition: normalizePromptPanelPosition(loadedSettings.promptPanelPosition) }
           settingsRef.current = normalized
           setSettings(normalized)
         } else {
@@ -677,6 +686,15 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     }))
   }, [updateSettings])
 
+  const updatePromptPanelPosition = useCallback((position: PromptPanelPosition) => {
+    const normalized = normalizePromptPanelPosition(position)
+    trackFeatureUse('setting-change')
+    updateSettings(prev => ({
+      ...prev,
+      promptPanelPosition: normalized
+    }))
+  }, [updateSettings])
+
   // Memoized: this context is consumed app-wide (every useI18n caller). A
   // literal object here would change identity on every provider render and
   // force all consumers to re-render past React.memo / element-identity
@@ -706,7 +724,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
-    updatePerformanceDiagnosticsEnabled
+    updatePerformanceDiagnosticsEnabled,
+    updatePromptPanelPosition
   }), [
     settings,
     isLoaded,
@@ -731,7 +750,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     updateLanguage,
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
-    updatePerformanceDiagnosticsEnabled
+    updatePerformanceDiagnosticsEnabled,
+    updatePromptPanelPosition
   ])
 
   return (

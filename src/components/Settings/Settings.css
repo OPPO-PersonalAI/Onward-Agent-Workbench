@@ -841,3 +841,81 @@
     min-width: 0;
   }
 }
+
+.settings-prompt-position-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-prompt-position-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-prompt-position-description {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+}
+
+.settings-segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background-color: var(--bg-1);
+  border: 1px solid var(--border);
+  width: 100%;
+}
+
+.settings-segmented-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--font-xs);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-segmented-btn:hover:not(:disabled) {
+  background-color: var(--bg-2);
+  color: var(--text-1);
+}
+
+.settings-segmented-btn.is-active {
+  background-color: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-1);
+}
+
+.settings-segmented-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-segmented-icon {
+  width: 16px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.settings-segmented-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

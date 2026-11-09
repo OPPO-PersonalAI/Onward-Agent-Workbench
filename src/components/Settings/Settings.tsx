@@ -24,6 +24,7 @@ import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { SETTINGS_PAGES, PAGE_LABELS, searchSettings, nextSettingsTab, type SettingsPage } from './settings-navigation'
 import { resizedSettingsWidth } from './settings-panel-width'
+import { normalizePromptPanelPosition, PROMPT_PANEL_POSITIONS, type PromptPanelPosition } from '../../utils/prompt-panel-layout'
 import './Settings.css'
 
 interface SettingsProps {
@@ -339,6 +340,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const handleLanguageChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const language = e.target.value as typeof locale
     updateDraft(current => ({ ...current, language }))
+  }, [updateDraft])
+
+  const handlePromptPanelPositionChange = useCallback((position: PromptPanelPosition) => {
+    updateDraft(current => ({ ...current, promptPanelPosition: position }))
   }, [updateDraft])
 
   const formatUpdateTimestamp = useCallback((value: number) => {
@@ -956,6 +961,60 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                       ))}
                     </select>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Prompt Panel Position Section */}
+        <div className="settings-section" data-settings-target="promptPanelPosition" tabIndex={-1}>
+          <div className="settings-section-title">{t('settings.promptPanel.title')}</div>
+          <div className="settings-section-content">
+            <div className="settings-group">
+              <div className="settings-prompt-position-group">
+                <div className="settings-prompt-position-header">
+                  <span className="settings-row-label">{t('settings.promptPanel.positionLabel')}</span>
+                  <p className="settings-prompt-position-description">
+                    {t('settings.promptPanel.positionDescription')}
+                  </p>
+                </div>
+                <div
+                  className="settings-segmented-control"
+                  role="radiogroup"
+                  aria-label={t('settings.promptPanel.positionLabel')}
+                  data-testid="settings-prompt-position-group"
+                >
+                  {PROMPT_PANEL_POSITIONS.map((pos) => {
+                    const currentPos = normalizePromptPanelPosition(settings?.promptPanelPosition)
+                    const isActive = currentPos === pos
+                    const labelKey = `settings.promptPanel.position.${pos}` as const
+                    return (
+                      <button
+                        key={pos}
+                        type="button"
+                        role="radio"
+                        aria-checked={isActive}
+                        className={`settings-segmented-btn${isActive ? ' is-active' : ''}`}
+                        data-testid={`settings-prompt-position-${pos}`}
+                        onClick={() => handlePromptPanelPositionChange(pos)}
+                      >
+                        <svg className="settings-segmented-icon" viewBox="0 0 18 14" fill="none" aria-hidden="true">
+                          <rect x="1" y="1" width="16" height="12" rx="2" stroke="currentColor" strokeWidth="1.4" />
+                          {pos === 'left' && (
+                            <rect x="2.2" y="2.2" width="4.8" height="9.6" rx="1" fill="currentColor" />
+                          )}
+                          {pos === 'bottom' && (
+                            <rect x="2.2" y="8.2" width="13.6" height="3.6" rx="1" fill="currentColor" />
+                          )}
+                          {pos === 'right' && (
+                            <rect x="11" y="2.2" width="4.8" height="9.6" rx="1" fill="currentColor" />
+                          )}
+                        </svg>
+                        <span className="settings-segmented-label">{t(labelKey)}</span>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
             </div>
