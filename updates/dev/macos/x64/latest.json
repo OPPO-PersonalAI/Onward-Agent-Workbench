@@ -1,0 +1,12 @@
+{
+  "channel": "dev",
+  "version": "2.1.0-dev.20261112.11",
+  "tag": "v2.1.0-dev.20261112.11",
+  "platform": "macos",
+  "arch": "x64",
+  "artifactName": "Onward.2-v2.1.0-dev.20261112.11-macos-x64.zip",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.11/Onward.2-v2.1.0-dev.20261112.11-macos-x64.zip",
+  "sha256": "6a2b9215cbf854901e28335822f863fc9df0de441813fd7e5dfc5fa79702629c",
+  "releaseNotes": "# Dev Build v2.1.0-dev.20261112.11\n\n## Highlights\n- Seamless Windows background update live interactive verification build.\n- Background archive staging into the local staging folder with zero console popups.\n- Instant directory swap on Restart to update or silent swap on graceful window exit.\n",
+  "publishedAt": "2026-11-12T06:43:53.412Z"
+}
