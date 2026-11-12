@@ -1,0 +1,17 @@
+{
+  "channel": "dev",
+  "version": "2.1.0-dev.20261112.1",
+  "tag": "v2.1.0-dev.20261112.1",
+  "platform": "windows",
+  "arch": "x64",
+  "artifactName": "Onward.2-v2.1.0-dev.20261112.1-windows-x64.exe",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.1/Onward.2-v2.1.0-dev.20261112.1-windows-x64.exe",
+  "sha256": "eece002c3f38678c871fe89c083edb91f5e71409d88454227335d632168d03f9",
+  "archive": {
+    "artifactName": "Onward.2-v2.1.0-dev.20261112.1-windows-x64.zip",
+    "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.1/Onward.2-v2.1.0-dev.20261112.1-windows-x64.zip",
+    "sha256": "554084a868a7ff7d299f7ffa083db67c1aa07b30d879aa322cfbf1052e66cd43"
+  },
+  "releaseNotes": "# Onward Dev Build v2.1.0-dev.20261112.1\n\nAutomated end-to-end verification baseline build (`dev` channel) for Windows seamless background auto-update.\n\n## New Features\n- Introduce background `.zip` archive extraction into `<installDir>\\_` via `original-fs` worker thread on Windows.\n- Bundle native Win32 GUI helper `onward-updater.exe` (`IMAGE_SUBSYSTEM_WINDOWS_GUI`) for silent atomic directory swap with automatic rollback.\n- Support both immediate Restart-to-Update and silent swap on normal graceful window close.\n",
+  "publishedAt": "2026-11-12T03:52:48.659Z"
+}
