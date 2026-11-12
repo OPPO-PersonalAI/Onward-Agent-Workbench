@@ -29,15 +29,28 @@ rm -f "$LOG_FILE"
 
 echo "Starting settings update autotest..."
 
+TEMP_USER_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/onward-su-autotest.XXXXXX")"
+cleanup() {
+  rm -rf "$TEMP_USER_DATA_DIR"
+}
+trap cleanup EXIT
+
 ONWARD_DEBUG=1 \
 ONWARD_AUTOTEST=1 \
 ONWARD_AUTOTEST_SUITE=settings-update \
 ONWARD_AUTOTEST_CWD="$ROOT_DIR" \
 ONWARD_AUTOTEST_EXIT=1 \
+ONWARD_USER_DATA_DIR="$TEMP_USER_DATA_DIR" \
 "$APP_BIN" > "$LOG_FILE" 2>&1 || true
 
 if grep -q "\[AutoTest\] FAIL" "$LOG_FILE"; then
   echo "Settings update autotest failed. Log: $LOG_FILE" >&2
+  tail -n 120 "$LOG_FILE" >&2
+  exit 1
+fi
+
+if ! grep -q "SU-07d-preparing-disables-action-and-shows-indeterminate-progress" "$LOG_FILE"; then
+  echo "Settings update autotest missing SU-07d preparing assertion. Log: $LOG_FILE" >&2
   tail -n 120 "$LOG_FILE" >&2
   exit 1
 fi

@@ -35,19 +35,39 @@ if (Test-Path $LogFile) {
 
 Write-Host "Starting settings update autotest..."
 
+$TempUserDataDir = Join-Path ([System.IO.Path]::GetTempPath()) ("onward-su-autotest-" + [System.Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force $TempUserDataDir | Out-Null
+
 $env:ONWARD_DEBUG = "1"
 $env:ONWARD_AUTOTEST = "1"
 $env:ONWARD_AUTOTEST_SUITE = "settings-update"
 $env:ONWARD_AUTOTEST_CWD = $RootDir
 $env:ONWARD_AUTOTEST_EXIT = "1"
+$env:ONWARD_USER_DATA_DIR = $TempUserDataDir
+
+$StdoutFile = "$LogFile.stdout"
+$StderrFile = "$LogFile.stderr"
 
 try {
-  & $AppBin *> $LogFile
+  $proc = Start-Process -FilePath $AppBin -NoNewWindow -PassThru -Wait -RedirectStandardOutput $StdoutFile -RedirectStandardError $StderrFile
+  $combined = @()
+  if (Test-Path $StdoutFile) { $combined += Get-Content $StdoutFile }
+  if (Test-Path $StderrFile) { $combined += Get-Content $StderrFile }
+  $combined | Set-Content -Path $LogFile -Encoding UTF8
 } catch {
+} finally {
+  Remove-Item -Force $StdoutFile, $StderrFile -ErrorAction SilentlyContinue
+  Remove-Item -Recurse -Force $TempUserDataDir -ErrorAction SilentlyContinue
 }
 
 if (Select-String -Path $LogFile -Pattern "\[AutoTest\] FAIL" -Quiet) {
   Write-Error "Settings update autotest failed. Log: $LogFile"
+  Get-Content $LogFile -Tail 120
+  exit 1
+}
+
+if (-not (Select-String -Path $LogFile -Pattern "SU-07d-preparing-disables-action-and-shows-indeterminate-progress" -Quiet)) {
+  Write-Error "Settings update autotest missing SU-07d preparing assertion. Log: $LogFile"
   Get-Content $LogFile -Tail 120
   exit 1
 }

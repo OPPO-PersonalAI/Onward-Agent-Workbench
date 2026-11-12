@@ -971,7 +971,7 @@ export type { SettingsState, ShortcutAction }
 export type ReleaseChannel = 'daily' | 'dev' | 'stable' | 'unknown'
 export type ReleaseOs = 'macos' | 'windows' | 'linux' | 'unknown'
 export type RuntimePlatform = 'darwin' | 'win32' | 'linux' | 'unknown'
-export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'preparing' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
 
 export interface AppInfo {
   buildChannel: 'dev' | 'prod'

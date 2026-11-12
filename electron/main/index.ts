@@ -84,6 +84,7 @@ if (SMOKE_LAUNCH_MODE) {
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 let installUpdateOnQuit = false
+let relaunchAfterUpdateOnQuit = false
 let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null
 let lastNormalBounds: { x: number; y: number; width: number; height: number } | null = null
 const hardenedBrowserSessions = new WeakSet<Electron.Session>()
@@ -400,7 +401,20 @@ const quitCoordinator = new QuitCoordinator({
   },
   begin: reason => {
     isQuitting = true
-    installUpdateOnQuit = reason === 'restart-to-update'
+    if (reason === 'restart-to-update') {
+      installUpdateOnQuit = true
+      relaunchAfterUpdateOnQuit = true
+    } else if (
+      process.platform === 'win32' &&
+      (reason === 'quit' || reason === 'window-all-closed' || reason === 'will-quit' || reason === 'debug-quit') &&
+      getUpdateService().canInstallDownloadedUpdate()
+    ) {
+      installUpdateOnQuit = true
+      relaunchAfterUpdateOnQuit = false
+    } else {
+      installUpdateOnQuit = false
+      relaunchAfterUpdateOnQuit = false
+    }
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setEnabled(false)
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'input-disabled', reason })
     if (reason === 'relaunch-for-recovery') app.relaunch()
@@ -445,7 +459,7 @@ const quitCoordinator = new QuitCoordinator({
       watcherService.forceStop()
       ptyManager.disposeAll()
       if (clean) markSessionLedgerClean(reason, getConfirmedQuitTerminatedActiveJobs())
-      if (installUpdateOnQuit) getUpdateService().installDownloadedUpdateOnQuit()
+      if (installUpdateOnQuit) getUpdateService().installDownloadedUpdateOnQuit({ relaunch: relaunchAfterUpdateOnQuit })
     } catch {
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_QUIT_COORDINATOR, { phase: 'forced-cleanup-failed', reason })
     } finally {
@@ -1266,7 +1280,7 @@ app.on('will-quit', (event) => {
     return
   }
   if (installUpdateOnQuit) {
-    getUpdateService().installDownloadedUpdateOnQuit()
+    getUpdateService().installDownloadedUpdateOnQuit({ relaunch: relaunchAfterUpdateOnQuit })
   }
   getUpdateService().stop()
   stopApiServer()

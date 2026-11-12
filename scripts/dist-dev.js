@@ -126,6 +126,7 @@ run('pnpm', ['typecheck'])
 run('pnpm', ['generate-notices'])
 run('node', [join(__dirname, 'ensure-node-pty-spawn-helper.js')])
 run('node', [join(__dirname, 'ensure-windows-process-tree.js')])
+run('node', [join(__dirname, 'ensure-windows-updater.js')])
 run('electron-vite', ['build'])
 // On Windows with shell: true, arguments containing spaces must be quoted
 const q = process.platform === 'win32' ? '"' : ''

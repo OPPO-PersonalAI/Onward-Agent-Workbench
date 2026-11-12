@@ -59,3 +59,6 @@ test/full-regression-results/
 # (pty-manager points ZDOTDIR at this committed config dir). The .zsh_* configs
 # are committed; the generated history file is per-run scratch, never committed.
 resources/shell-integration/zsh-zdotdir/.zsh_history
+# Compiled Windows GUI updater helper binary (built from OnwardUpdater.cs via scripts/ensure-windows-updater.js).
+resources/updater/win32/*.exe
+resources/updater/win32/*.pdb

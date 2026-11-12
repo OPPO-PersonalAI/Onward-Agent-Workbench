@@ -140,6 +140,12 @@ export async function startApiServer(mainWindow: BrowserWindow, options: ApiServ
             return
           }
 
+          if (method === 'POST' && pathname === '/api/debug/updater/download') {
+            const status = await getUpdateService().downloadNow()
+            sendJson(res, 200, status)
+            return
+          }
+
           if (method === 'POST' && pathname === '/api/debug/updater/restart') {
             if (!options.onRestartToApplyUpdate) {
               sendJson(res, 501, { success: false, error: 'Updater restart callback is not configured.' })

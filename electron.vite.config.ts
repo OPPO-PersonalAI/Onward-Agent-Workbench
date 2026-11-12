@@ -24,12 +24,13 @@ export default defineConfig({
           'project-fs-worker-entry': resolve(__dirname, 'electron/main/project-fs-worker-entry.ts'),
           'theme-import-worker-entry': resolve(__dirname, 'electron/main/theme-import-worker-entry.ts'),
           'theme-export-worker-entry': resolve(__dirname, 'electron/main/theme-export-worker-entry.ts'),
-          'ripgrep-search-worker-entry': resolve(__dirname, 'electron/main/ripgrep-search-worker-entry.ts')
+          'ripgrep-search-worker-entry': resolve(__dirname, 'electron/main/ripgrep-search-worker-entry.ts'),
+          'windows-update-stage-worker-entry': resolve(__dirname, 'electron/main/windows-update-stage-worker-entry.ts')
         },
         formats: ['cjs']
       },
       rollupOptions: {
-        external: ['node-pty'],
+        external: ['node-pty', 'original-fs'],
         output: {
           entryFileNames: '[name].js'
         }

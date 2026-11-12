@@ -7,8 +7,8 @@ import { app, BrowserWindow } from 'electron'
 import { createHash } from 'crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { basename, dirname, isAbsolute, join } from 'path'
-import { spawn, execFileSync } from 'child_process'
+import { dirname, isAbsolute, join } from 'path'
+import { spawn } from 'child_process'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { getAppInfo, type ReleaseChannel, type ReleaseOs } from './app-info'
@@ -24,8 +24,43 @@ import {
   formatDownloadBytes,
   getPartialDownloadPath
 } from './update-download'
+import {
+  isNonEmptyString,
+  isSafeArtifactNameForPlatform,
+  isValidSha256,
+  normalizeUpdateManifest,
+  type NormalizedUpdateManifest
+} from './update-manifest-utils'
+import {
+  WindowsStagingError,
+  cleanupTransientStageArtifacts,
+  getWindowsStagePaths,
+  inspectStagedWindowsUpdate,
+  launchWindowsGuiUpdater,
+  readAndClearLastInstallError,
+  resolveBundledWindowsUpdaterExe,
+  resolveLastInstallErrorPath,
+  stageWindowsUpdateArchive,
+  type WindowsUpdaterEnvEntry,
+  type WindowsUpdaterPlan
+} from './windows-update-staging'
 
-export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'unsupported' | 'error'
+function extractUpdateErrorCode(error: unknown): DownloadErrorCode | null {
+  if (error instanceof DownloadError) return error.code
+  if (error instanceof WindowsStagingError) return error.code
+  return null
+}
+
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'preparing'
+  | 'downloaded'
+  | 'up-to-date'
+  | 'unsupported'
+  | 'error'
 
 export interface UpdateStatus {
   phase: UpdatePhase
@@ -44,18 +79,7 @@ export interface UpdateStatus {
   downloadProgress: DownloadProgress | null
 }
 
-interface UpdateManifest {
-  channel: ReleaseChannel
-  version: string
-  tag: string
-  platform: ReleaseOs
-  arch: 'arm64' | 'x64'
-  artifactName: string
-  artifactUrl: string
-  sha256: string
-  releaseNotes: string | null
-  publishedAt: string
-}
+type UpdateManifest = NormalizedUpdateManifest
 
 interface DownloadedUpdate {
   manifest: UpdateManifest
@@ -64,8 +88,10 @@ interface DownloadedUpdate {
 
 const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const DEFAULT_UPDATE_REQUEST_TIMEOUT_MS = 60 * 1000
+const DEFAULT_WINDOWS_WAIT_GRACE_MS = 15_000
+const DEFAULT_WINDOWS_MOVE_RETRY_MS = 10_000
 const LOG_PREFIX = '[UpdateService]'
-const PENDING_UPDATE_MARKER_SCHEMA_VERSION = 2
+const PENDING_UPDATE_MARKER_SCHEMA_VERSION = 3
 const MAX_PENDING_UPDATE_MARKER_AGE_MS = 60 * 60 * 1000
 const MAX_PENDING_UPDATE_STARTUP_ATTEMPTS = 1
 
@@ -74,6 +100,9 @@ const RELAUNCH_ENV_KEYS = [
   'ONWARD_DEBUG',
   'ONWARD_UPDATE_CHECK_INTERVAL_MS',
   'ONWARD_UPDATE_BASE_URL',
+  'ONWARD_UPDATER_WAIT_GRACE_MS',
+  'ONWARD_UPDATER_MOVE_RETRY_MS',
+  'ONWARD_UPDATER_DISABLE_LINGERING_KILL',
   'ONWARD_AUTOTEST',
   'ONWARD_AUTOTEST_CWD',
   'ONWARD_AUTOTEST_EXIT',
@@ -81,17 +110,19 @@ const RELAUNCH_ENV_KEYS = [
   'ONWARD_FEATURE_GIT_DIFF_PERFORMANCE_DIAGNOSTICS'
 ] as const
 
-/** Pending update marker written before launching the installer script. */
+/** Pending update marker written before launching the Windows GUI updater helper. */
 interface PendingUpdateInfo {
-  schemaVersion: 2
-  artifactPath: string
-  artifactSha256: string
-  artifactName: string
+  schemaVersion: 3
   installDir: string
+  stageDir: string
+  backupDir: string
   execPath: string
   logPath: string
+  errorReportPath: string
+  cleanupPaths: string[]
   timestamp: number
   targetVersion: string
+  relaunch: boolean
   attempts: number
 }
 
@@ -116,7 +147,7 @@ function resolveCurrentInstallPath(): string | null {
     return dirname(dirname(dirname(exePath)))
   }
   if (process.platform === 'win32') {
-    // Windows NSIS per-user: exe is at %LOCALAPPDATA%\Programs\Onward 2\Onward 2.exe.
+    // Windows per-user install: exe is at %LOCALAPPDATA%\Programs\Onward 2\Onward 2.exe.
     return dirname(exePath)
   }
   return null
@@ -126,133 +157,33 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
 }
 
-function powershellEscape(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
-}
-
 function resolveUpdateLogPath(): string {
   return join(app.getPath('userData'), 'updates', 'install.log')
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0
-}
-
-function getExpectedArtifactExtension(platform: ReleaseOs): '.zip' | '.exe' | null {
-  if (platform === 'windows') return '.exe'
-  if (platform === 'macos' || platform === 'linux') return '.zip'
-  return null
-}
-
-function isSafeArtifactFileName(value: string): boolean {
-  return value === basename(value) &&
-    !value.includes('/') &&
-    !value.includes('\\')
-}
-
-function isSafeArtifactName(value: string, platform: ReleaseOs): boolean {
-  const expectedExtension = getExpectedArtifactExtension(platform)
-  return isSafeArtifactFileName(value) &&
-    expectedExtension !== null &&
-    value.toLowerCase().endsWith(expectedExtension)
-}
-
-function isSafeLegacyWindowsZipArtifactName(value: string): boolean {
-  return isSafeArtifactFileName(value) && value.toLowerCase().endsWith('.zip')
-}
-
-function parseGitHubReleaseDownloadUrl(rawUrl: string): {
-  owner: string
-  repo: string
-  tag: string
-  assetName: string
-} | null {
-  try {
-    const url = new URL(rawUrl)
-    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com') {
-      return null
-    }
-
-    const parts = url.pathname.split('/').filter(Boolean).map((part) => decodeURIComponent(part))
-    if (parts.length < 6 || parts[2] !== 'releases' || parts[3] !== 'download') {
-      return null
-    }
-
-    return {
-      owner: parts[0],
-      repo: parts[1],
-      tag: parts[4],
-      assetName: parts.slice(5).join('/')
-    }
-  } catch {
-    return null
-  }
-}
-
-function buildGitHubReleaseDownloadUrl(
-  release: {
-    owner: string
-    repo: string
-    tag: string
-  },
-  assetName: string
-): string {
-  const parts = [
-    release.owner,
-    release.repo,
-    'releases',
-    'download',
-    release.tag,
-    assetName
-  ].map((part) => encodeURIComponent(part))
-  return `https://github.com/${parts.join('/')}`
-}
-
-function buildGitHubExpandedAssetsUrl(release: {
-  owner: string
-  repo: string
-  tag: string
-}): string {
-  const parts = [
-    release.owner,
-    release.repo,
-    'releases',
-    'expanded_assets',
-    release.tag
-  ].map((part) => encodeURIComponent(part))
-  return `https://github.com/${parts.join('/')}`
-}
-
-function findGitHubExpandedAssetSha256(html: string, assetName: string): string | null {
-  let searchFrom = 0
-  while (searchFrom < html.length) {
-    const assetIndex = html.indexOf(assetName, searchFrom)
-    if (assetIndex === -1) return null
-
-    const rowStart = html.lastIndexOf('<li', assetIndex)
-    const rowEnd = html.indexOf('</li>', assetIndex)
-    searchFrom = assetIndex + assetName.length
-
-    if (rowStart === -1 || rowEnd === -1 || rowEnd <= rowStart) {
-      continue
-    }
-
-    const row = html.slice(rowStart, rowEnd)
-    if (!row.includes('/releases/download/') || !row.includes(assetName)) {
-      continue
-    }
-
-    const match = /sha256:([a-f0-9]{64})/i.exec(row)
-    if (match) {
-      return match[1].toLowerCase()
-    }
-  }
-
-  return null
-}
-
 function normalizeWindowsPathForCompare(value: string): string {
   return value.replace(/[\\/]+$/, '').toLowerCase()
+}
+
+function resolvePositiveEnvMs(envName: string, fallbackMs: number, minMs: number, maxMs: number): number {
+  const raw = String(process.env[envName] || '').trim()
+  if (!raw) return fallbackMs
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed) || parsed < minMs || parsed > maxMs) {
+    return fallbackMs
+  }
+  return parsed
+}
+
+function collectRelaunchEnvEntries(): WindowsUpdaterEnvEntry[] {
+  const entries: WindowsUpdaterEnvEntry[] = []
+  for (const key of RELAUNCH_ENV_KEYS) {
+    const value = process.env[key]
+    if (value) {
+      entries.push({ key, value })
+    }
+  }
+  return entries
 }
 
 function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | null; error: string | null } {
@@ -261,19 +192,19 @@ function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | nu
   }
 
   const value = raw as Partial<PendingUpdateInfo>
-  const requiredStrings: Array<keyof Pick<PendingUpdateInfo, 'artifactPath' | 'artifactSha256' | 'artifactName' | 'installDir' | 'execPath' | 'logPath' | 'targetVersion'>> = [
-    'artifactPath',
-    'artifactSha256',
-    'artifactName',
-    'installDir',
-    'execPath',
-    'logPath',
-    'targetVersion'
-  ]
-
   if (value.schemaVersion !== PENDING_UPDATE_MARKER_SCHEMA_VERSION) {
     return { info: null, error: `unsupported marker schema version: ${String(value.schemaVersion)}` }
   }
+
+  const requiredStrings: Array<keyof Pick<PendingUpdateInfo, 'installDir' | 'stageDir' | 'backupDir' | 'execPath' | 'logPath' | 'errorReportPath' | 'targetVersion'>> = [
+    'installDir',
+    'stageDir',
+    'backupDir',
+    'execPath',
+    'logPath',
+    'errorReportPath',
+    'targetVersion'
+  ]
   for (const key of requiredStrings) {
     if (!isNonEmptyString(value[key])) {
       return { info: null, error: `missing or invalid marker field: ${key}` }
@@ -285,13 +216,13 @@ function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | nu
   if (!Number.isInteger(value.attempts) || typeof value.attempts !== 'number' || value.attempts < 0) {
     return { info: null, error: 'missing or invalid marker attempts' }
   }
-  if (!/^[a-f0-9]{64}$/i.test(value.artifactSha256!)) {
-    return { info: null, error: 'invalid artifact checksum in marker' }
+  if (typeof value.relaunch !== 'boolean') {
+    return { info: null, error: 'missing or invalid marker relaunch flag' }
   }
-  if (!isSafeArtifactName(value.artifactName!, 'windows')) {
-    return { info: null, error: 'invalid artifact name in marker' }
+  if (!Array.isArray(value.cleanupPaths) || !value.cleanupPaths.every((p) => isNonEmptyString(p) && isAbsolute(p))) {
+    return { info: null, error: 'invalid cleanupPaths in marker' }
   }
-  for (const key of ['artifactPath', 'installDir', 'execPath', 'logPath'] as const) {
+  for (const key of ['installDir', 'stageDir', 'backupDir', 'execPath', 'logPath', 'errorReportPath'] as const) {
     if (!isAbsolute(value[key]!)) {
       return { info: null, error: `marker path must be absolute: ${key}` }
     }
@@ -303,319 +234,6 @@ function validatePendingUpdateInfo(raw: unknown): { info: PendingUpdateInfo | nu
 function writePendingUpdateInfo(markerPath: string, info: PendingUpdateInfo): void {
   mkdirSync(dirname(markerPath), { recursive: true })
   writeFileSync(markerPath, `${JSON.stringify(info, null, 2)}\n`, 'utf-8')
-}
-
-/** Build PowerShell $env:KEY = 'VALUE' statements for preserved env vars. */
-function buildEnvSetStatements(): string {
-  return RELAUNCH_ENV_KEYS
-    .map((key) => {
-      const value = process.env[key]
-      if (!value) return null
-      return `$env:${key} = ${powershellEscape(value)}`
-    })
-    .filter((value): value is string => Boolean(value))
-    .join('\n')
-}
-
-/**
- * Generate the Windows installer runner. Windows updates are applied by the
- * NSIS installer instead of renaming the live installation directory, because
- * Electron child processes and security tools can keep files locked after quit.
- */
-function buildWindowsUpdateScript(params: {
-  installDir: string
-  execPath: string
-  installerPath: string
-  installerSha256: string
-  parentPid: number
-  stagingRoot: string
-  logPath: string
-  markerPath: string
-  lockPath: string
-  targetVersion: string
-  envSetStatements: string
-}): string {
-  return [
-    '$ErrorActionPreference = "Stop"',
-    `$installDir = ${powershellEscape(params.installDir)}`,
-    `$execPath = ${powershellEscape(params.execPath)}`,
-    `$installerPath = ${powershellEscape(params.installerPath)}`,
-    `$installerSha256 = ${powershellEscape(params.installerSha256)}`,
-    `$parentPid = ${params.parentPid}`,
-    `$stagingRoot = ${powershellEscape(params.stagingRoot)}`,
-    `$logPath = ${powershellEscape(params.logPath)}`,
-    `$markerPath = ${powershellEscape(params.markerPath)}`,
-    `$lockPath = ${powershellEscape(params.lockPath)}`,
-    `$targetVersion = ${powershellEscape(params.targetVersion)}`,
-    '$exeName = Split-Path $execPath -Leaf',
-    '$appProcessNameForQuery = $exeName.Replace("\'", "\'\'")',
-    '$lockCreated = $false',
-    '$parentExited = $false',
-    '',
-    'function Write-Log($msg) {',
-    '    $dir = Split-Path $logPath -Parent',
-    '    if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }',
-    '    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"',
-    '    Add-Content -LiteralPath $logPath -Value "$ts $msg" -ErrorAction SilentlyContinue',
-    '}',
-    '',
-    'function Clear-Marker {',
-    '    Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue',
-    '}',
-    '',
-    'function Normalize-PathForCompare($value) {',
-    '    try {',
-    '        return [System.IO.Path]::GetFullPath([string]$value).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()',
-    '    } catch {',
-    '        return ([string]$value).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()',
-    '    }',
-    '}',
-    '',
-    'function Get-AppProcesses {',
-    '    $targetPath = Normalize-PathForCompare -value $execPath',
-    '    $items = @(Get-CimInstance -ClassName Win32_Process -Filter ("Name = \'{0}\'" -f $appProcessNameForQuery) -ErrorAction SilentlyContinue)',
-    '    return @($items | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and (Normalize-PathForCompare -value $_.ExecutablePath) -eq $targetPath })',
-    '}',
-    '',
-    'function Wait-ForAppProcessesToExit($timeoutSeconds) {',
-    '    $deadline = (Get-Date).AddSeconds($timeoutSeconds)',
-    '    $lastLogAt = [datetime]::MinValue',
-    '    while ((Get-Date) -lt $deadline) {',
-    '        $processes = @(Get-AppProcesses)',
-    '        if ($processes.Count -eq 0) { return $true }',
-    '        if (((Get-Date) - $lastLogAt).TotalSeconds -ge 5) {',
-    '            $ids = (($processes | ForEach-Object { $_.ProcessId }) -join ",")',
-    '            Write-Log "Waiting for app process(es) to exit: $ids"',
-    '            $lastLogAt = Get-Date',
-    '        }',
-    '        Start-Sleep -Seconds 1',
-    '    }',
-    '    return $false',
-    '}',
-    '',
-    'function Relaunch-CurrentApp($reason) {',
-    '    if (-not (Test-Path -LiteralPath $execPath)) {',
-    '        Write-Log "Cannot relaunch ${reason}: executable not found at $execPath"',
-    '        return',
-    '    }',
-    '    try {',
-    params.envSetStatements,
-    '        Write-Log "Relaunching ${reason}."',
-    '        Start-Process -FilePath $execPath',
-    '    } catch {',
-    '        Write-Log "Failed to relaunch ${reason}: $_"',
-    '    }',
-    '}',
-    '',
-    'try {',
-    '    Write-Log "Starting Windows installer helper. PID=$PID Target=$targetVersion"',
-    '',
-    '    $lockDir = Split-Path $lockPath -Parent',
-    '    if (-not (Test-Path -LiteralPath $lockDir)) { New-Item -Path $lockDir -ItemType Directory -Force | Out-Null }',
-    '    if (Test-Path -LiteralPath $lockPath) {',
-    '        try {',
-    '            $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction Stop',
-    '            if (((Get-Date) - $lockItem.LastWriteTime).TotalMinutes -gt 30) {',
-    '                Write-Log "Removing stale install lock: $lockPath"',
-    '                Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop',
-    '            }',
-    '        } catch {',
-    '            Write-Log "Failed to inspect stale install lock: $_"',
-    '        }',
-    '    }',
-    '    try {',
-    '        New-Item -Path $lockPath -ItemType File -Value "$PID" -ErrorAction Stop | Out-Null',
-    '        $lockCreated = $true',
-    '    } catch {',
-    '        Write-Log "Another update install helper is already active: $_"',
-    '        exit 0',
-    '    }',
-    '',
-    '    # Wait for parent process to exit',
-    '    try {',
-    '        $proc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue',
-    '        if ($proc) {',
-    '            Write-Log "Waiting for parent process ($parentPid) to exit."',
-    '            $parentExited = $proc.WaitForExit(120000)',
-    '            if (-not $parentExited) { throw "Parent process $parentPid did not exit within 120s." }',
-    '        } else {',
-    '            $parentExited = $true',
-    '        }',
-    '    } catch { throw }',
-    '    Write-Log "Parent process exited."',
-    '',
-    '    if (-not (Wait-ForAppProcessesToExit 120)) {',
-    '        $remaining = ((@(Get-AppProcesses) | ForEach-Object { $_.ProcessId }) -join ",")',
-    '        throw "Timed out waiting for app processes to exit. Remaining PIDs: $remaining"',
-    '    }',
-    '    Write-Log "No matching app processes remain."',
-    '',
-    '    # Wait briefly for Windows to release file handles held by exited processes.',
-    '    Start-Sleep -Seconds 2',
-    '',
-    '    # Verify installer before running code downloaded from the network.',
-    '    Write-Log "Verifying Windows installer checksum."',
-    '    $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()',
-    '    if ($actualSha256 -ne $installerSha256.ToLowerInvariant()) {',
-    '        throw "Installer checksum mismatch: expected=$installerSha256 actual=$actualSha256"',
-    '    }',
-    '',
-    '    Write-Log "Running Windows installer silently: $installerPath"',
-    '    $installerArguments = @("/S", "/D=$installDir")',
-    '    $installerProcess = Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait -PassThru',
-    '    $exitCode = $installerProcess.ExitCode',
-    '    Write-Log "Windows installer exited with code $exitCode."',
-    '    if ($null -ne $exitCode -and $exitCode -ne 0) {',
-    '        throw "Windows installer exited with code $exitCode."',
-    '    }',
-    '    if (-not (Test-Path -LiteralPath $execPath)) {',
-    '        throw "Installed app is missing expected executable: $execPath"',
-    '    }',
-    '',
-    '    # Mark success BEFORE relaunching, because the new app reads and',
-    '    # clears install.log on startup (reportPreviousInstallResult).',
-    '    Write-Log "Update installed successfully."',
-    '    Clear-Marker',
-    '',
-    '    # Relaunch the updated app.',
-    '    Relaunch-CurrentApp "updated app"',
-    '',
-    '    # Cleanup (non-critical, runs after relaunch).',
-    '    Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue',
-    '} catch {',
-    '    Write-Log "Update install failed: $_"',
-    '    Clear-Marker',
-    '    $remainingProcesses = @(Get-AppProcesses)',
-    '    if ($parentExited -and $remainingProcesses.Count -eq 0) {',
-    '        Relaunch-CurrentApp "existing app after update failure"',
-    '    } else {',
-    '        Write-Log "Skipping relaunch because an app process may still be running."',
-    '    }',
-    '} finally {',
-    '    if ($lockCreated) {',
-    '        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue',
-    '    }',
-    '}'
-  ].join('\n')
-}
-
-function windowsCommandQuote(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`
-}
-
-function launchWindowsUpdateScript(params: {
-  stagingRoot: string
-  scriptPath: string
-  logPath: string
-}): boolean {
-  const psPath = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-
-  // Strategy 1: WMI process creation.
-  // Win32_Process.Create() spawns the process through the WMI service, outside
-  // the caller's Job Object. This helps the helper survive Electron shutdown.
-  const workerCmd = [
-    windowsCommandQuote(psPath),
-    '-ExecutionPolicy Bypass',
-    '-NoProfile',
-    '-WindowStyle Hidden',
-    '-File',
-    windowsCommandQuote(params.scriptPath)
-  ].join(' ')
-  const launcherPath = join(params.stagingRoot, 'launch.ps1')
-  const launcherContent = [
-    '$ErrorActionPreference = "Stop"',
-    `$result = ([wmiclass]'Win32_Process').Create(${powershellEscape(workerCmd)})`,
-    'if ($result.ReturnValue -ne 0) {',
-    `    Add-Content -LiteralPath ${powershellEscape(params.logPath)} -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') WMI Create failed: ReturnValue=$($result.ReturnValue)" -ErrorAction SilentlyContinue`,
-    '    exit 1',
-    '}'
-  ].join('\n')
-  writeFileSync(launcherPath, launcherContent, { encoding: 'utf-8' })
-
-  try {
-    const wmiStart = Date.now()
-    execFileSync(psPath, ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', launcherPath], {
-      windowsHide: true,
-      stdio: 'ignore',
-      timeout: 15000
-    })
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
-      strategy: 'wmi',
-      platform: 'win32',
-      ok: true,
-      durationMs: Date.now() - wmiStart
-    })
-    appendToInstallLog(params.logPath, 'Node.js: WMI launch succeeded.')
-    return true
-  } catch (err) {
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
-      strategy: 'wmi',
-      platform: 'win32',
-      ok: false,
-      error: String(err)
-    })
-    appendToInstallLog(params.logPath, `Node.js: WMI launch failed: ${err}. Trying batch launcher.`)
-  }
-
-  // Strategy 2: Batch file with cmd.exe /c start (legacy fallback).
-  const batPath = join(params.stagingRoot, 'up.bat')
-  const batContent = `@echo off\r\nstart "" /min "${psPath}" -ExecutionPolicy Bypass -NoProfile -File "${params.scriptPath}"\r\n`
-  writeFileSync(batPath, batContent, { encoding: 'utf-8' })
-
-  try {
-    const batStart = Date.now()
-    execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', batPath], {
-      windowsHide: true,
-      stdio: 'ignore',
-      timeout: 5000
-    })
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
-      strategy: 'batch',
-      platform: 'win32',
-      ok: true,
-      durationMs: Date.now() - batStart
-    })
-    appendToInstallLog(params.logPath, 'Node.js: Batch launcher succeeded.')
-    return true
-  } catch (err) {
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
-      strategy: 'batch',
-      platform: 'win32',
-      ok: false,
-      error: String(err)
-    })
-    appendToInstallLog(params.logPath, `Node.js: Batch launcher failed: ${err}. Trying detached spawn.`)
-  }
-
-  // Strategy 3: Direct detached spawn (least reliable during will-quit).
-  try {
-    const child = spawn(psPath, ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-WindowStyle', 'Hidden', '-File', params.scriptPath], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    })
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
-      strategy: 'detached-spawn',
-      platform: 'win32',
-      ok: true,
-      pid: child.pid ?? null
-    })
-    child.on('error', (err) => {
-      appendToInstallLog(params.logPath, `Node.js: Detached spawn emitted error: ${err}`)
-    })
-    child.unref()
-    appendToInstallLog(params.logPath, 'Node.js: Detached spawn succeeded (fire-and-forget).')
-    return true
-  } catch (err) {
-    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
-      strategy: 'detached-spawn',
-      platform: 'win32',
-      ok: false,
-      error: String(err)
-    })
-    appendToInstallLog(params.logPath, `Node.js: All launch strategies failed: ${err}`)
-    return false
-  }
 }
 
 function trackUpdateEvent(
@@ -631,9 +249,6 @@ function trackUpdateFailure(
   error: string,
   properties: Record<string, string | number | boolean | null> = {}
 ): void {
-  // Single tracked event: the Tier-2 live lane uploads it ack-gated within
-  // one heartbeat (deduplicated per phase per day at upload selection), so
-  // the old immediate-send path and its once-a-day throttle are gone.
   getTelemetryService().track('update/error', {
     phase,
     error,
@@ -712,54 +327,6 @@ function resolveUpdateCheckIntervalMs(): number {
   return parsedValue
 }
 
-async function resolveWindowsInstallerManifestFromLegacyZip(manifest: UpdateManifest): Promise<UpdateManifest> {
-  const parsedZipUrl = parseGitHubReleaseDownloadUrl(manifest.artifactUrl)
-  if (!parsedZipUrl || parsedZipUrl.assetName !== manifest.artifactName || parsedZipUrl.tag !== manifest.tag) {
-    throw new Error('Windows legacy ZIP manifest cannot be resolved to an installer artifact.')
-  }
-
-  const installerName = manifest.artifactName.replace(/\.zip$/i, '.exe')
-  if (!isSafeArtifactName(installerName, 'windows')) {
-    throw new Error(`Resolved Windows installer artifact name is invalid: ${installerName}`)
-  }
-
-  const expandedAssetsUrl = buildGitHubExpandedAssetsUrl(parsedZipUrl)
-  const response = await fetchUpdateResource(expandedAssetsUrl, {
-    headers: {
-      Accept: 'text/html',
-      'User-Agent': 'Onward-UpdateService'
-    },
-    timeoutMs: DEFAULT_UPDATE_REQUEST_TIMEOUT_MS
-  })
-  if (!response.ok) {
-    throw new Error(`GitHub release asset digest request failed: ${response.status} ${response.statusText}`)
-  }
-
-  const html = await response.text()
-  const installerSha256 = findGitHubExpandedAssetSha256(html, installerName)
-  if (!installerSha256) {
-    throw new Error(`GitHub release installer artifact is missing a SHA-256 digest: ${installerName}`)
-  }
-
-  const installerUrl = buildGitHubReleaseDownloadUrl(parsedZipUrl, installerName)
-  const parsedInstallerUrl = parseGitHubReleaseDownloadUrl(installerUrl)
-  if (!parsedInstallerUrl ||
-      parsedInstallerUrl.owner !== parsedZipUrl.owner ||
-      parsedInstallerUrl.repo !== parsedZipUrl.repo ||
-      parsedInstallerUrl.tag !== parsedZipUrl.tag ||
-      parsedInstallerUrl.assetName !== installerName) {
-    throw new Error(`GitHub release installer download URL is not consistent with the manifest tag: ${installerName}`)
-  }
-
-  console.log(`${LOG_PREFIX} Resolved legacy Windows ZIP manifest to installer artifact: ${installerName}`)
-  return {
-    ...manifest,
-    artifactName: installerName,
-    artifactUrl: installerUrl,
-    sha256: installerSha256
-  }
-}
-
 function canInstallUpdatesOnCurrentPlatform(): boolean {
   return process.platform === 'darwin' || process.platform === 'win32'
 }
@@ -771,8 +338,15 @@ export class UpdateService {
   private intervalHandle: NodeJS.Timeout | null = null
   private downloadedUpdate: DownloadedUpdate | null = null
   private pendingManifest: UpdateManifest | null = null
+  private lastInstallFailure: { version: string; error: string } | null = null
   private installRequested = false
+  private quitInstallLaunched = false
   private readonly checkIntervalMs = resolveUpdateCheckIntervalMs()
+
+  private getPreservedInstallFailureError(version: string | null): string | null {
+    if (!version || !this.lastInstallFailure) return null
+    return this.lastInstallFailure.version === version ? this.lastInstallFailure.error : null
+  }
 
   private createInitialStatus(): UpdateStatus {
     const appInfo = getAppInfo()
@@ -823,9 +397,6 @@ export class UpdateService {
       ...this.status,
       ...patch
     }
-    // Updater phase breadcrumb (BUG-0002/0003 P1): user reports correlate
-    // rendering incidents with "after upgrading", but traces carried no
-    // updater state at all. Hourly-scale frequency; transitions only.
     if (patch.phase !== undefined && patch.phase !== fromPhase) {
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_STATE_CHANGED, {
         fromPhase,
@@ -862,45 +433,12 @@ export class UpdateService {
       throw new Error(`Manifest request failed: ${response.status} ${response.statusText}`)
     }
 
-    const manifest = await response.json() as Partial<UpdateManifest>
-    const arch = normalizeArch(process.arch)
-    if (!manifest.version || !manifest.tag || !manifest.artifactUrl || !manifest.sha256 || !manifest.artifactName) {
-      throw new Error('Manifest is missing required fields.')
-    }
-    if (!/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
-      throw new Error('Manifest SHA-256 is invalid.')
-    }
-    if (manifest.channel !== this.status.currentChannel) {
-      throw new Error(`Manifest channel mismatch: expected ${this.status.currentChannel}, got ${String(manifest.channel)}`)
-    }
-    if (manifest.platform !== this.status.currentReleaseOs) {
-      throw new Error(`Manifest platform mismatch: expected ${this.status.currentReleaseOs}, got ${String(manifest.platform)}`)
-    }
-    if (!arch || manifest.arch !== arch) {
-      throw new Error(`Manifest architecture mismatch: expected ${arch || 'unknown'}, got ${String(manifest.arch)}`)
-    }
-
-    const normalizedManifest: UpdateManifest = {
-      channel: manifest.channel,
-      version: manifest.version,
-      tag: manifest.tag,
-      platform: manifest.platform,
-      arch: manifest.arch,
-      artifactName: manifest.artifactName,
-      artifactUrl: manifest.artifactUrl,
-      sha256: manifest.sha256,
-      releaseNotes: manifest.releaseNotes ?? null,
-      publishedAt: manifest.publishedAt ?? new Date().toISOString()
-    }
-
-    if (isSafeArtifactName(normalizedManifest.artifactName, normalizedManifest.platform)) {
-      return normalizedManifest
-    }
-    if (normalizedManifest.platform === 'windows' && isSafeLegacyWindowsZipArtifactName(normalizedManifest.artifactName)) {
-      return resolveWindowsInstallerManifestFromLegacyZip(normalizedManifest)
-    }
-
-    throw new Error(`Manifest artifact name is invalid for ${normalizedManifest.platform}: ${normalizedManifest.artifactName}`)
+    const rawManifest = await response.json() as unknown
+    return normalizeUpdateManifest(rawManifest, {
+      channel: this.status.currentChannel,
+      platform: this.status.currentReleaseOs,
+      arch: normalizeArch(process.arch)
+    })
   }
 
   private getDownloadPath(manifest: UpdateManifest): string {
@@ -923,20 +461,108 @@ export class UpdateService {
     }
   }
 
+  private cleanupAndRecoverWindowsStagedUpdate(): boolean {
+    const installDir = resolveCurrentInstallPath()
+    if (!installDir) return false
+
+    cleanupTransientStageArtifacts(installDir)
+
+    const currentVersion = this.status.currentVersion
+    const updatesRoot = resolveUpdatesRootPath()
+
+    // Sweep expired version download directories (<= currentVersion).
+    if (existsSync(updatesRoot)) {
+      for (const entry of readdirSync(updatesRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const version = entry.name
+        try {
+          parseVersion(version)
+        } catch {
+          rmSync(join(updatesRoot, version), { recursive: true, force: true })
+          continue
+        }
+        if (compareVersions(version, currentVersion) <= 0) {
+          rmSync(join(updatesRoot, version), { recursive: true, force: true })
+          console.log(`${LOG_PREFIX} Cleaned up expired download: ${version}`)
+        }
+      }
+    }
+
+    const inspection = inspectStagedWindowsUpdate({
+      installDir,
+      execPath: app.getPath('exe'),
+      currentVersion,
+      currentChannel: this.status.currentChannel,
+      currentArch: normalizeArch(process.arch)
+    })
+
+    if (inspection.state !== 'ready') {
+      if (inspection.state === 'cleaned-expired') {
+        console.log(`${LOG_PREFIX} Removed expired staged directory (_): ${inspection.version}`)
+      } else if (inspection.state === 'cleaned-invalid') {
+        console.log(`${LOG_PREFIX} Removed invalid staged directory (_): ${inspection.reason}`)
+      }
+      return false
+    }
+
+    const { metadata } = inspection
+    const storedManifest = this.loadManifestFile(metadata.version)
+    const manifest: UpdateManifest = storedManifest ?? {
+      channel: metadata.channel,
+      version: metadata.version,
+      tag: metadata.tag,
+      platform: 'windows',
+      arch: metadata.arch,
+      artifactName: metadata.artifactName,
+      artifactUrl: '',
+      sha256: metadata.sha256,
+      releaseNotes: null,
+      publishedAt: new Date(metadata.stagedAt).toISOString()
+    }
+
+    // Remove any older superseded download folders under userData/updates.
+    if (existsSync(updatesRoot)) {
+      for (const entry of readdirSync(updatesRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const candidateVersion = entry.name
+        try {
+          if (compareVersions(candidateVersion, metadata.version) < 0) {
+            rmSync(join(updatesRoot, candidateVersion), { recursive: true, force: true })
+            console.log(`${LOG_PREFIX} Cleaned up superseded download: ${candidateVersion}`)
+          }
+        } catch {
+          rmSync(join(updatesRoot, candidateVersion), { recursive: true, force: true })
+        }
+      }
+    }
+
+    const artifactPath = this.getDownloadPath(manifest)
+    this.downloadedUpdate = { manifest, artifactPath }
+    this.setStatus({
+      phase: 'downloaded',
+      targetVersion: manifest.version,
+      targetTag: manifest.tag,
+      downloadedFileName: manifest.artifactName,
+      error: null,
+      errorCode: null,
+      downloadProgress: null
+    })
+    console.log(`${LOG_PREFIX} Recovered ready staged Windows update (_): ${manifest.version}`)
+    return true
+  }
+
   /**
    * Clean up stale downloads and recover the latest pending update on startup.
-   *
-   * Expiration rules:
-   * 1. Versions <= currentVersion are expired (already installed or older), then deleted
-   * 2. Among versions > currentVersion, try to recover from newest to oldest
-   * 3. On first successful recovery, delete all remaining older candidates
-   * 4. Each candidate is verified (channel/platform/arch + manifest + checksum);
-   *    corrupt/incomplete/incompatible files are removed.
-   *
-   * The verify-before-delete order ensures that a corrupt newest version does
-   * not cause valid older versions to be discarded prematurely.
    */
   private cleanupAndRecoverPendingUpdate(): void {
+    if (process.platform === 'win32') {
+      if (this.cleanupAndRecoverWindowsStagedUpdate()) {
+        return
+      }
+      // If "_" is not ready yet, still clean invalid/superseded zip folders below;
+      // any valid cached .zip will be staged asynchronously when checkNow() runs or in background.
+    }
+
     const updatesRoot = resolveUpdatesRootPath()
     if (!existsSync(updatesRoot)) return
 
@@ -948,7 +574,6 @@ export class UpdateService {
       if (!entry.isDirectory()) continue
       const version = entry.name
 
-      // Skip directories that are not valid version strings
       try {
         parseVersion(version)
       } catch {
@@ -973,25 +598,19 @@ export class UpdateService {
       return
     }
 
-    // Sort descending: try newest first, fall back to older candidates.
     pendingVersions.sort((a, b) => compareVersions(b, a))
 
-    // Try candidates in descending order. Only delete superseded versions
-    // AFTER a successful recovery (verify-before-delete).
     let recoveredIndex = -1
     for (let i = 0; i < pendingVersions.length; i++) {
       if (this.recoverPendingUpdate(pendingVersions[i])) {
         recoveredIndex = i
         break
       }
-      // Count as cleaned only if the directory was actually removed
-      // (partial downloads are preserved for cross-session resume)
       if (!existsSync(join(updatesRoot, pendingVersions[i]))) {
         cleanedCount++
       }
     }
 
-    // Delete remaining untried candidates that are older than the recovered one
     if (recoveredIndex >= 0) {
       for (let i = recoveredIndex + 1; i < pendingVersions.length; i++) {
         rmSync(join(updatesRoot, pendingVersions[i]), { recursive: true, force: true })
@@ -1008,9 +627,6 @@ export class UpdateService {
 
   /**
    * Attempt to recover a previously downloaded update from disk.
-   * Validates channel/platform/arch compatibility, manifest integrity, and
-   * artifact checksum. Removes the version directory on any failure.
-   * @returns true if recovery succeeded, false if the candidate was invalid.
    */
   private recoverPendingUpdate(version: string): boolean {
     const versionDir = join(resolveUpdatesRootPath(), version)
@@ -1022,9 +638,6 @@ export class UpdateService {
       return false
     }
 
-    // Reject artifacts from a different channel, platform, or architecture.
-    // Prod builds across release channels (daily/dev/stable) share the same
-    // userData directory, so a channel switch can leave foreign artifacts behind.
     const arch = normalizeArch(process.arch)
     if (manifest.channel !== this.status.currentChannel ||
         manifest.platform !== this.status.currentReleaseOs ||
@@ -1035,7 +648,7 @@ export class UpdateService {
         ` (channel=${String(manifest.channel)}, platform=${String(manifest.platform)}, arch=${String(manifest.arch)})`)
       return false
     }
-    if (!isSafeArtifactName(manifest.artifactName, manifest.platform) || !/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
+    if (!isSafeArtifactNameForPlatform(manifest.artifactName, manifest.platform) || !isValidSha256(manifest.sha256)) {
       rmSync(versionDir, { recursive: true, force: true })
       console.log(`${LOG_PREFIX} Removed invalid download manifest: ${version}`)
       return false
@@ -1043,7 +656,6 @@ export class UpdateService {
 
     const artifactPath = join(versionDir, manifest.artifactName)
     if (!existsSync(artifactPath)) {
-      // Preserve directories with a .partial file so they can be resumed.
       const partialPath = getPartialDownloadPath(artifactPath)
       if (existsSync(partialPath)) {
         const partialSize = statSync(partialPath).size
@@ -1068,6 +680,13 @@ export class UpdateService {
       return false
     }
 
+    if (process.platform === 'win32') {
+      // On Windows, a cached .zip without a staged "_" directory is not yet ready for instant swap.
+      // Kick off background staging asynchronously without blocking startup.
+      void this.stageCachedWindowsZipOnStartup(manifest, artifactPath)
+      return true
+    }
+
     this.downloadedUpdate = { manifest, artifactPath }
     this.setStatus({
       phase: 'downloaded',
@@ -1082,13 +701,76 @@ export class UpdateService {
     return true
   }
 
+  private async stageCachedWindowsZipOnStartup(manifest: UpdateManifest, artifactPath: string): Promise<void> {
+    const installDir = resolveCurrentInstallPath()
+    if (!installDir) return
+
+    try {
+      this.setStatus({
+        phase: 'preparing',
+        targetVersion: manifest.version,
+        targetTag: manifest.tag,
+        downloadedFileName: manifest.artifactName,
+        error: null,
+        errorCode: null,
+        downloadProgress: null
+      })
+      await stageWindowsUpdateArchive({
+        zipPath: artifactPath,
+        installDir,
+        execPath: app.getPath('exe'),
+        currentVersion: this.status.currentVersion,
+        manifest
+      })
+      this.downloadedUpdate = { manifest, artifactPath }
+      this.setStatus({
+        phase: 'downloaded',
+        targetVersion: manifest.version,
+        targetTag: manifest.tag,
+        downloadedFileName: manifest.artifactName,
+        error: null,
+        errorCode: null,
+        downloadProgress: null
+      })
+      console.log(`${LOG_PREFIX} Completed startup background staging for cached update: ${manifest.version}`)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.warn(`${LOG_PREFIX} Failed startup background staging for ${manifest.version}: ${errorMessage}`)
+      if (this.status.phase === 'preparing') {
+        this.setStatus({
+          phase: 'error',
+          error: errorMessage,
+          errorCode: extractUpdateErrorCode(error),
+          downloadProgress: null
+        })
+      }
+    }
+  }
+
+  private isWindowsUpdateReadyOnDisk(manifest: UpdateManifest): boolean {
+    if (process.platform !== 'win32') return true
+    const installDir = resolveCurrentInstallPath()
+    if (!installDir) return false
+    const inspection = inspectStagedWindowsUpdate({
+      installDir,
+      execPath: app.getPath('exe'),
+      currentVersion: this.status.currentVersion,
+      currentChannel: this.status.currentChannel,
+      currentArch: normalizeArch(process.arch)
+    })
+    return (
+      inspection.state === 'ready' &&
+      inspection.metadata.version === manifest.version &&
+      inspection.metadata.sha256.toLowerCase() === manifest.sha256.toLowerCase()
+    )
+  }
+
   private async ensureDownloaded(
     manifest: UpdateManifest,
     onProgress?: (progress: DownloadProgress) => void
   ): Promise<DownloadedUpdate> {
     const artifactPath = this.getDownloadPath(manifest)
 
-    // Persist manifest before download so partial files can be resumed across sessions.
     this.saveManifestFile(manifest)
 
     if (!existsSync(artifactPath)) {
@@ -1114,8 +796,33 @@ export class UpdateService {
     }
     console.log(`${LOG_PREFIX} Checksum verified: ${checksum}`)
 
-    // Clean up partial file after successful verification.
     rmSync(getPartialDownloadPath(artifactPath), { force: true })
+
+    if (process.platform === 'win32') {
+      const installDir = resolveCurrentInstallPath()
+      if (!installDir) {
+        throw new DownloadError('disk-error', 'Unable to resolve Windows installation directory.')
+      }
+
+      this.setStatus({
+        phase: 'preparing',
+        targetVersion: manifest.version,
+        targetTag: manifest.tag,
+        downloadedFileName: manifest.artifactName,
+        error: null,
+        errorCode: null,
+        downloadProgress: null
+      })
+      console.log(`${LOG_PREFIX} Staging Windows update into ${join(installDir, '_')} ...`)
+      await stageWindowsUpdateArchive({
+        zipPath: artifactPath,
+        installDir,
+        execPath: app.getPath('exe'),
+        currentVersion: this.status.currentVersion,
+        manifest
+      })
+      console.log(`${LOG_PREFIX} Windows update staged and verified: ${manifest.version}`)
+    }
 
     return {
       manifest,
@@ -1127,12 +834,23 @@ export class UpdateService {
     this.mainWindow = mainWindow
     this.status = this.createInitialStatus()
     this.cleanupAndRecoverPendingUpdate()
+
+    // Check install log / rollback report from previous update attempt and report via telemetry
+    const previousFailureError = this.reportPreviousInstallResult()
+    if (previousFailureError && this.status.phase === 'downloaded' && this.status.targetVersion) {
+      this.lastInstallFailure = {
+        version: this.status.targetVersion,
+        error: previousFailureError
+      }
+      this.status = {
+        ...this.status,
+        error: previousFailureError
+      }
+    }
+
     this.emitStatus()
 
     console.log(`${LOG_PREFIX} Initialized: supported=${this.status.supported}, version=${this.status.currentVersion}, os=${this.status.currentReleaseOs}, channel=${this.status.currentChannel}`)
-
-    // Check install log from previous update attempt and report result via telemetry
-    this.reportPreviousInstallResult()
 
     if (!this.status.supported) return
 
@@ -1146,17 +864,25 @@ export class UpdateService {
   }
 
   /**
-   * Read the install log left by the previous update helper script.
-   * If the log indicates a failure, report it via telemetry.
-   * The log is cleared after reading to avoid duplicate reports.
+   * Read the install log and rollback error report left by the previous update helper.
+   * Returns an error summary if the previous install rolled back, otherwise null.
    */
-  private reportPreviousInstallResult(): void {
+  private reportPreviousInstallResult(): string | null {
+    let surfacedInstallError: string | null = null
+
+    if (process.platform === 'win32') {
+      const lastError = readAndClearLastInstallError(resolveUpdatesRootPath())
+      if (lastError) {
+        surfacedInstallError = lastError.error
+      }
+    }
+
     const logPath = resolveUpdateLogPath()
-    if (!existsSync(logPath)) return
+    if (!existsSync(logPath)) return surfacedInstallError
 
     try {
       const content = readFileSync(logPath, 'utf-8').trim()
-      if (!content) return
+      if (!content) return surfacedInstallError
 
       const lines = content.split('\n').filter(Boolean)
       let lastSuccessIndex = -1
@@ -1170,24 +896,28 @@ export class UpdateService {
       const failed = lastFailureIndex >= 0 && lastFailureIndex > lastSuccessIndex
 
       if (success) {
+        surfacedInstallError = null
         console.log(`${LOG_PREFIX} Previous update installed successfully`)
         trackUpdateEvent('update/installComplete', { result: 'success' })
       } else if (failed) {
         const failedLine = lines[lastFailureIndex] || ''
-        // Extract error from the log line: "YYYY-MM-DD HH:MM:SS Update install failed: <error>"
         const errorMatch = /install failed:\s*(.+)$/i.exec(failedLine)
         const errorDetail = errorMatch ? errorMatch[1] : 'unknown'
+        if (!surfacedInstallError) {
+          surfacedInstallError = errorDetail
+        }
         console.error(`${LOG_PREFIX} Previous update install failed: ${errorDetail}`)
         trackUpdateFailure('install', errorDetail, {
           installLog: lines.slice(-5).join('\n')
         })
       }
 
-      // Clear the log after reading
       writeFileSync(logPath, '', 'utf-8')
     } catch {
       // Non-blocking: log read failure is not critical
     }
+
+    return surfacedInstallError
   }
 
   stop(): void {
@@ -1233,20 +963,25 @@ export class UpdateService {
       console.log(`${LOG_PREFIX} Manifest fetched: version=${manifest.version}, isNewer=${isNewer}`)
 
       if (!isNewer) {
-        if (this.downloadedUpdate && this.downloadedUpdate.manifest.version === manifest.version) {
+        if (
+          this.downloadedUpdate &&
+          this.downloadedUpdate.manifest.version === manifest.version &&
+          this.isWindowsUpdateReadyOnDisk(manifest)
+        ) {
           return this.setStatus({
             phase: 'downloaded',
             targetVersion: manifest.version,
             targetTag: manifest.tag,
             downloadedFileName: this.downloadedUpdate.manifest.artifactName,
             lastCheckedAt,
-            error: null,
+            error: this.getPreservedInstallFailureError(manifest.version),
             errorCode: null,
             downloadProgress: null
           })
         }
 
         this.downloadedUpdate = null
+        this.lastInstallFailure = null
         console.log(`${LOG_PREFIX} Already up-to-date`)
         trackUpdateEvent('update/check', { result: 'up-to-date', currentVersion: this.status.currentVersion })
         return this.setStatus({
@@ -1269,10 +1004,12 @@ export class UpdateService {
         targetVersion: manifest.version
       })
 
-      // If we already have this version downloaded and verified (e.g., recovered
-      // from a previous session), skip re-download and confirm downloaded state.
-      if (this.downloadedUpdate && this.downloadedUpdate.manifest.version === manifest.version) {
-        console.log(`${LOG_PREFIX} Update already downloaded, skipping re-download: ${manifest.version}`)
+      if (
+        this.downloadedUpdate &&
+        this.downloadedUpdate.manifest.version === manifest.version &&
+        this.isWindowsUpdateReadyOnDisk(manifest)
+      ) {
+        console.log(`${LOG_PREFIX} Update already downloaded and ready, skipping re-download: ${manifest.version}`)
         return this.setStatus({
           phase: 'downloaded',
           targetVersion: manifest.version,
@@ -1280,7 +1017,7 @@ export class UpdateService {
           downloadedFileName: this.downloadedUpdate.manifest.artifactName,
           bannerDismissed: false,
           lastCheckedAt,
-          error: null,
+          error: this.getPreservedInstallFailureError(manifest.version),
           errorCode: null,
           downloadProgress: null
         })
@@ -1288,10 +1025,6 @@ export class UpdateService {
 
       // DEV channel: stop at 'available' and wait for user to manually trigger download.
       if (this.status.currentChannel === 'dev') {
-        // Clear any stale downloaded update superseded by the newer available version.
-        // Without this, downloadedUpdate would reference an older version while
-        // the UI shows the newer version as "available", causing an inconsistency
-        // where requestRestartToUpdate() could install the wrong version.
         if (this.downloadedUpdate) {
           this.downloadedUpdate = null
         }
@@ -1310,21 +1043,23 @@ export class UpdateService {
         })
       }
 
-      // Daily/Stable channel: auto-download immediately.
-      return this.downloadUpdate(manifest, lastCheckedAt)
+      // Daily/Stable channel: auto-download (and background-stage on Windows) immediately.
+      return await this.downloadUpdate(manifest, lastCheckedAt)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      const errorCode = error instanceof DownloadError ? error.code : null
-      const failedPhase = this.status.phase === 'downloading' ? 'download' : 'check'
+      const errorCode = extractUpdateErrorCode(error)
+      const failedPhase =
+        this.status.phase === 'preparing'
+          ? 'prepare'
+          : this.status.phase === 'downloading'
+            ? 'download'
+            : 'check'
       console.error(`${LOG_PREFIX} Update ${failedPhase} failed: ${errorMessage}`)
       trackUpdateFailure(failedPhase, errorMessage, {
         currentVersion: this.status.currentVersion,
         targetVersion: this.status.targetVersion
       })
-      // If a previously downloaded update is still valid on disk, restore its
-      // state so the UI shows the correct (actually downloaded) version, not
-      // the version whose download just failed.
-      if (this.downloadedUpdate) {
+      if (this.downloadedUpdate && this.isWindowsUpdateReadyOnDisk(this.downloadedUpdate.manifest)) {
         return this.setStatus({
           phase: 'downloaded',
           targetVersion: this.downloadedUpdate.manifest.version,
@@ -1364,7 +1099,8 @@ export class UpdateService {
     }
 
     this.downloadedUpdate = await this.ensureDownloaded(manifest, onProgress)
-    console.log(`${LOG_PREFIX} Download complete: ${manifest.artifactName}`)
+    this.lastInstallFailure = null
+    console.log(`${LOG_PREFIX} Update ready: ${manifest.artifactName}`)
     trackUpdateEvent('update/downloaded', {
       targetVersion: manifest.version,
       artifactName: manifest.artifactName
@@ -1385,7 +1121,6 @@ export class UpdateService {
 
   /**
    * Manually trigger download of the available update (DEV channel only).
-   * Only valid when phase is 'available' and a pending manifest exists.
    */
   async downloadNow(): Promise<UpdateStatus> {
     if (this.status.phase !== 'available' || !this.pendingManifest) {
@@ -1399,9 +1134,10 @@ export class UpdateService {
       return await this.downloadUpdate(manifest, this.status.lastCheckedAt ?? Date.now())
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      const errorCode = error instanceof DownloadError ? error.code : null
-      console.error(`${LOG_PREFIX} Download failed: ${errorMessage}`)
-      trackUpdateFailure('download', errorMessage, {
+      const errorCode = extractUpdateErrorCode(error)
+      const failedPhase = this.getStatus().phase === 'preparing' ? 'prepare' : 'download'
+      console.error(`${LOG_PREFIX} Update ${failedPhase} failed: ${errorMessage}`)
+      trackUpdateFailure(failedPhase, errorMessage, {
         currentVersion: this.status.currentVersion,
         targetVersion: manifest.version
       })
@@ -1422,13 +1158,20 @@ export class UpdateService {
   }
 
   canInstallDownloadedUpdate(): boolean {
-    return canInstallUpdatesOnCurrentPlatform() && Boolean(this.downloadedUpdate)
+    if (!canInstallUpdatesOnCurrentPlatform() || !this.downloadedUpdate) {
+      return false
+    }
+    if (process.platform === 'win32') {
+      return this.isWindowsUpdateReadyOnDisk(this.downloadedUpdate.manifest)
+    }
+    return true
   }
 
   requestRestartToUpdate(): { success: boolean; error?: string } {
     if (!this.canInstallDownloadedUpdate()) {
       return { success: false, error: 'No downloaded update is ready to install.' }
     }
+    this.lastInstallFailure = null
     this.installRequested = true
     return { success: true }
   }
@@ -1437,20 +1180,30 @@ export class UpdateService {
     return this.installRequested
   }
 
-  installDownloadedUpdateOnQuit(): void {
+  installDownloadedUpdateOnQuit(options?: { relaunch?: boolean }): void {
+    if (this.quitInstallLaunched) return
     if (!this.downloadedUpdate) return
 
+    const relaunch = options?.relaunch ?? true
     const targetVersion = this.downloadedUpdate.manifest.version
-    console.log(`${LOG_PREFIX} Installing update on quit: ${this.status.currentVersion} -> ${targetVersion}`)
+
+    if (process.platform === 'win32' && !this.isWindowsUpdateReadyOnDisk(this.downloadedUpdate.manifest)) {
+      console.warn(`${LOG_PREFIX} Skipping Windows quit-time install because staged directory (_) is not ready.`)
+      return
+    }
+
+    this.quitInstallLaunched = true
+    console.log(`${LOG_PREFIX} Installing update on quit (relaunch=${relaunch}): ${this.status.currentVersion} -> ${targetVersion}`)
     trackUpdateEvent('update/installStart', {
       currentVersion: this.status.currentVersion,
-      targetVersion
+      targetVersion,
+      relaunch
     })
 
     if (process.platform === 'darwin') {
       this.installDownloadedUpdateOnQuitMacOS()
     } else if (process.platform === 'win32') {
-      this.installDownloadedUpdateOnQuitWindows()
+      this.installDownloadedUpdateOnQuitWindows(relaunch)
     }
   }
 
@@ -1544,65 +1297,95 @@ export class UpdateService {
     child.unref()
   }
 
-  private installDownloadedUpdateOnQuitWindows(): void {
+  private installDownloadedUpdateOnQuitWindows(relaunch: boolean): void {
     const installDir = resolveCurrentInstallPath()
-    if (!installDir) return
+    if (!installDir || !this.downloadedUpdate) return
 
-    // Use a short staging path for the detached runner script.
-    const stagingId = Date.now().toString(36)
-    const stagingRoot = join(process.env.TEMP || tmpdir(), `ou-${stagingId}`)
-    mkdirSync(stagingRoot, { recursive: true })
-    const scriptPath = join(stagingRoot, 'up.ps1')
+    const updatesRoot = resolveUpdatesRootPath()
     const logPath = resolveUpdateLogPath()
     const execPath = app.getPath('exe')
-    const markerPath = join(resolveUpdatesRootPath(), 'pending-update.json')
-    const lockPath = join(resolveUpdatesRootPath(), 'install.lock')
+    const markerPath = join(updatesRoot, 'pending-update.json')
+    const lockPath = join(updatesRoot, 'install.lock')
+    const errorReportPath = resolveLastInstallErrorPath(updatesRoot)
+    const { stageDir, backupDir } = getWindowsStagePaths(installDir)
+    const targetVersion = this.downloadedUpdate.manifest.version
+    const versionDownloadDir = join(updatesRoot, targetVersion)
+    const cleanupPaths = existsSync(versionDownloadDir) ? [versionDownloadDir] : []
 
-    // Pre-flight logging from Node.js side (appears in install.log)
-    appendToInstallLog(logPath, `Node.js: Preparing update install helper. PID=${process.pid}`)
-    appendToInstallLog(logPath, `Node.js: installDir=${installDir}`)
-    appendToInstallLog(logPath, `Node.js: installerPath=${this.downloadedUpdate!.artifactPath}`)
-    appendToInstallLog(logPath, `Node.js: stagingRoot=${stagingRoot}`)
+    const bundledUpdaterExePath = resolveBundledWindowsUpdaterExe(
+      app.isPackaged ? process.resourcesPath : null
+    )
+    if (!bundledUpdaterExePath) {
+      const msg = 'Bundled Windows GUI updater helper (onward-updater.exe) was not found.'
+      appendToInstallLog(logPath, `Node.js: Update install failed: ${msg}`)
+      console.error(`${LOG_PREFIX} ${msg}`)
+      return
+    }
 
-    // Write pending-update marker for startup recovery fallback.
-    // If the helper script fails to launch or is killed during Electron's
-    // shutdown, the next app startup will detect this marker and retry.
+    appendToInstallLog(
+      logPath,
+      `Node.js: Preparing Windows GUI updater. PID=${process.pid} target=${targetVersion} relaunch=${relaunch}`
+    )
+
     try {
       const marker: PendingUpdateInfo = {
         schemaVersion: PENDING_UPDATE_MARKER_SCHEMA_VERSION,
-        artifactPath: this.downloadedUpdate!.artifactPath,
-        artifactSha256: this.downloadedUpdate!.manifest.sha256,
-        artifactName: this.downloadedUpdate!.manifest.artifactName,
         installDir,
+        stageDir,
+        backupDir,
         execPath,
         logPath,
+        errorReportPath,
+        cleanupPaths,
         timestamp: Date.now(),
-        targetVersion: this.downloadedUpdate!.manifest.version,
+        targetVersion,
+        relaunch,
         attempts: 0
       }
       writePendingUpdateInfo(markerPath, marker)
-      appendToInstallLog(logPath, 'Node.js: Wrote pending-update marker.')
     } catch (err) {
       appendToInstallLog(logPath, `Node.js: Failed to write pending-update marker: ${err}`)
     }
 
-    const envSetStatements = buildEnvSetStatements()
-    const scriptContent = buildWindowsUpdateScript({
+    const plan: WindowsUpdaterPlan = {
       installDir,
+      stageDir,
+      backupDir,
       execPath,
-      installerPath: this.downloadedUpdate!.artifactPath,
-      installerSha256: this.downloadedUpdate!.manifest.sha256,
       parentPid: process.pid,
-      stagingRoot,
+      relaunch,
+      targetVersion,
       logPath,
       markerPath,
       lockPath,
-      targetVersion: this.downloadedUpdate!.manifest.version,
-      envSetStatements
+      errorReportPath,
+      cleanupPaths,
+      waitGraceMs: resolvePositiveEnvMs('ONWARD_UPDATER_WAIT_GRACE_MS', DEFAULT_WINDOWS_WAIT_GRACE_MS, 500, 120_000),
+      moveRetryMs: resolvePositiveEnvMs('ONWARD_UPDATER_MOVE_RETRY_MS', DEFAULT_WINDOWS_MOVE_RETRY_MS, 0, 60_000),
+      killLingeringProcesses: process.env.ONWARD_UPDATER_DISABLE_LINGERING_KILL !== '1',
+      env: collectRelaunchEnvEntries()
+    }
+
+    const spawnStart = Date.now()
+    const launched = launchWindowsGuiUpdater({
+      bundledUpdaterExePath,
+      plan
     })
 
-    writeFileSync(scriptPath, scriptContent, { encoding: 'utf-8' })
-    if (!launchWindowsUpdateScript({ stagingRoot, scriptPath, logPath })) {
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_UPDATER_SPAWN, {
+      strategy: 'win32-gui-exe',
+      platform: 'win32',
+      ok: launched.ok,
+      pid: launched.pid,
+      relaunch,
+      durationMs: Date.now() - spawnStart,
+      ...(launched.error ? { error: launched.error } : {})
+    })
+
+    if (launched.ok) {
+      appendToInstallLog(logPath, `Node.js: Launched onward-updater.exe (pid=${String(launched.pid)}).`)
+    } else {
+      appendToInstallLog(logPath, `Node.js: Failed to launch onward-updater.exe: ${launched.error}`)
       safeRemoveFile(markerPath)
     }
   }
@@ -1619,19 +1402,17 @@ export function getUpdateService(): UpdateService {
 
 /**
  * Called early during app startup (after initializeAppIdentity but before
- * createWindow). If the previous quit-time update script failed to run,
- * this detects the pending-update marker and retries the update.
- *
- * Returns true if a recovery update was launched and the caller should
- * exit immediately (the helper script will relaunch the app).
+ * createWindow). If the previous quit-time updater helper was killed before it
+ * could swap "_" into the installation directory, this detects the marker and
+ * launches onward-updater.exe with relaunch=true.
  */
 export function applyPendingUpdateOnStartup(): boolean {
   if (process.platform !== 'win32') return false
 
-  const markerPath = join(resolveUpdatesRootPath(), 'pending-update.json')
+  const updatesRoot = resolveUpdatesRootPath()
+  const markerPath = join(updatesRoot, 'pending-update.json')
   if (!existsSync(markerPath)) return false
 
-  let info: PendingUpdateInfo
   let rawMarker: unknown
   try {
     rawMarker = JSON.parse(readFileSync(markerPath, 'utf-8')) as unknown
@@ -1652,7 +1433,7 @@ export function applyPendingUpdateOnStartup(): boolean {
     safeRemoveFile(markerPath)
     return false
   }
-  info = validation.info
+  const info = validation.info
 
   const currentInstallDir = resolveCurrentInstallPath()
   const currentExecPath = app.getPath('exe')
@@ -1664,108 +1445,96 @@ export function applyPendingUpdateOnStartup(): boolean {
     return false
   }
 
-  if (basename(info.artifactPath) !== info.artifactName) {
-    appendToInstallLog(info.logPath, 'Node.js: Pending update marker artifact path does not match artifact name, removing marker.')
-    safeRemoveFile(markerPath)
-    return false
-  }
-
+  const appInfo = getAppInfo()
   let isTargetNewer = false
-  const { version: currentVersion } = getAppInfo()
   try {
-    isTargetNewer = compareVersions(info.targetVersion, currentVersion) > 0
+    isTargetNewer = compareVersions(info.targetVersion, appInfo.version) > 0
   } catch {
     appendToInstallLog(info.logPath, `Node.js: Pending update marker target version is invalid: ${info.targetVersion}`)
     safeRemoveFile(markerPath)
     return false
   }
 
-  // If current version already matches or exceeds the target, the update was applied.
   if (!isTargetNewer) {
-    console.log(`${LOG_PREFIX} Pending update target (${info.targetVersion}) is not newer than current (${currentVersion}), clearing marker.`)
+    console.log(`${LOG_PREFIX} Pending update target (${info.targetVersion}) is not newer than current (${appInfo.version}), clearing marker.`)
     safeRemoveFile(markerPath)
     return false
   }
 
-  // Skip if marker is too old (> 1 hour)
   if (Date.now() - info.timestamp > MAX_PENDING_UPDATE_MARKER_AGE_MS) {
-    console.log(`${LOG_PREFIX} Pending update marker is stale (${new Date(info.timestamp).toISOString()}), removing.`)
     appendToInstallLog(info.logPath, 'Node.js: Pending update marker is stale, removing marker.')
     safeRemoveFile(markerPath)
     return false
   }
 
   if (info.attempts >= MAX_PENDING_UPDATE_STARTUP_ATTEMPTS) {
-    console.log(`${LOG_PREFIX} Pending update startup recovery already attempted, removing marker.`)
     appendToInstallLog(info.logPath, 'Node.js: Startup recovery attempt limit reached, removing marker.')
     safeRemoveFile(markerPath)
     return false
   }
 
-  // Skip if the installer is gone (already cleaned up or never downloaded).
-  if (!existsSync(info.artifactPath)) {
-    console.log(`${LOG_PREFIX} Pending update artifact not found: ${info.artifactPath}, removing marker.`)
-    appendToInstallLog(info.logPath, `Node.js: Pending update artifact not found: ${info.artifactPath}`)
+  const inspection = inspectStagedWindowsUpdate({
+    installDir: currentInstallDir,
+    execPath: currentExecPath,
+    currentVersion: appInfo.version,
+    currentChannel: appInfo.releaseChannel,
+    currentArch: normalizeArch(process.arch)
+  })
+  if (inspection.state !== 'ready' || inspection.metadata.version !== info.targetVersion) {
+    appendToInstallLog(info.logPath, 'Node.js: Pending update staged directory (_) is missing or invalid, removing marker.')
     safeRemoveFile(markerPath)
     return false
   }
 
-  try {
-    const checksum = hashFileSha256(info.artifactPath)
-    if (checksum.toLowerCase() !== info.artifactSha256.toLowerCase()) {
-      console.log(`${LOG_PREFIX} Pending update artifact checksum mismatch, removing marker and artifact.`)
-      appendToInstallLog(info.logPath, `Node.js: Pending update artifact checksum mismatch: expected=${info.artifactSha256} actual=${checksum}`)
-      safeRemoveFile(info.artifactPath)
-      safeRemoveFile(markerPath)
-      return false
-    }
-  } catch (err) {
-    appendToInstallLog(info.logPath, `Node.js: Pending update artifact could not be verified: ${err}`)
+  const bundledUpdaterExePath = resolveBundledWindowsUpdaterExe(
+    app.isPackaged ? process.resourcesPath : null
+  )
+  if (!bundledUpdaterExePath) {
+    appendToInstallLog(info.logPath, 'Node.js: Startup recovery skipped because onward-updater.exe was not found.')
     safeRemoveFile(markerPath)
     return false
   }
-
-  console.log(`${LOG_PREFIX} Found pending update ${info.targetVersion}. Launching recovery update script.`)
-  appendToInstallLog(info.logPath, `Node.js: Startup recovery: launching update script for ${info.targetVersion}. PID=${process.pid}`)
 
   try {
     writePendingUpdateInfo(markerPath, {
       ...info,
       attempts: info.attempts + 1
     })
-  } catch (err) {
-    appendToInstallLog(info.logPath, `Node.js: Startup recovery: failed to update marker attempt count: ${err}`)
+  } catch {
     safeRemoveFile(markerPath)
     return false
   }
 
-  // Create a new staging directory and PowerShell script with the CURRENT PID
-  const stagingRoot = join(process.env.TEMP || tmpdir(), `ou-${Date.now().toString(36)}`)
-  mkdirSync(stagingRoot, { recursive: true })
-  const scriptPath = join(stagingRoot, 'up.ps1')
-  const lockPath = join(resolveUpdatesRootPath(), 'install.lock')
-
-  const scriptContent = buildWindowsUpdateScript({
+  const lockPath = join(updatesRoot, 'install.lock')
+  const plan: WindowsUpdaterPlan = {
     installDir: info.installDir,
+    stageDir: info.stageDir,
+    backupDir: info.backupDir,
     execPath: info.execPath,
-    installerPath: info.artifactPath,
-    installerSha256: info.artifactSha256,
     parentPid: process.pid,
-    stagingRoot,
+    relaunch: true,
+    targetVersion: info.targetVersion,
     logPath: info.logPath,
     markerPath,
     lockPath,
-    targetVersion: info.targetVersion,
-    envSetStatements: buildEnvSetStatements()
-  })
-  writeFileSync(scriptPath, scriptContent, 'utf-8')
+    errorReportPath: info.errorReportPath,
+    cleanupPaths: info.cleanupPaths,
+    waitGraceMs: resolvePositiveEnvMs('ONWARD_UPDATER_WAIT_GRACE_MS', DEFAULT_WINDOWS_WAIT_GRACE_MS, 500, 120_000),
+    moveRetryMs: resolvePositiveEnvMs('ONWARD_UPDATER_MOVE_RETRY_MS', DEFAULT_WINDOWS_MOVE_RETRY_MS, 0, 60_000),
+    killLingeringProcesses: process.env.ONWARD_UPDATER_DISABLE_LINGERING_KILL !== '1',
+    env: collectRelaunchEnvEntries()
+  }
 
-  if (!launchWindowsUpdateScript({ stagingRoot, scriptPath, logPath: info.logPath })) {
-    appendToInstallLog(info.logPath, 'Node.js: Startup recovery: failed to launch script.')
-    console.error(`${LOG_PREFIX} Startup recovery failed to launch.`)
+  const launched = launchWindowsGuiUpdater({
+    bundledUpdaterExePath,
+    plan
+  })
+  if (!launched.ok) {
+    appendToInstallLog(info.logPath, `Node.js: Startup recovery failed to launch onward-updater.exe: ${launched.error}`)
     safeRemoveFile(markerPath)
     return false
   }
-  appendToInstallLog(info.logPath, 'Node.js: Startup recovery: script launched successfully.')
+
+  appendToInstallLog(info.logPath, `Node.js: Startup recovery launched onward-updater.exe for ${info.targetVersion}.`)
   return true
 }

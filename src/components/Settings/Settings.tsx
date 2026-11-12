@@ -253,6 +253,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         return 'settings.update.statusValue.available'
       case 'downloading':
         return 'settings.update.statusValue.downloading'
+      case 'preparing':
+        return 'settings.update.statusValue.preparing'
       case 'downloaded':
         return 'settings.update.statusValue.downloaded'
       case 'up-to-date':
@@ -277,6 +279,8 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
         return 'settings.update.action.download'
       case 'downloading':
         return 'settings.update.action.downloading'
+      case 'preparing':
+        return 'settings.update.action.preparing'
       case 'downloaded':
         return 'settings.update.action.restart'
       default:
@@ -288,6 +292,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     effectiveUpdaterStatus.phase === 'unsupported' ||
     effectiveUpdaterStatus.phase === 'checking' ||
     effectiveUpdaterStatus.phase === 'downloading' ||
+    effectiveUpdaterStatus.phase === 'preparing' ||
     isCheckingForUpdate ||
     isRestartingForUpdate
 
@@ -395,8 +400,19 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
       }
       return null
     }
+    if (effectiveUpdaterStatus.phase === 'preparing') {
+      if (effectiveUpdaterStatus.targetVersion) {
+        return t('settings.update.detail.preparing', { version: effectiveUpdaterStatus.targetVersion })
+      }
+      return null
+    }
     if (effectiveUpdaterStatus.phase === 'downloaded' && effectiveUpdaterStatus.targetVersion) {
-      return t('settings.update.detail.targetVersion', { version: effectiveUpdaterStatus.targetVersion })
+      const targetLine = t('settings.update.detail.targetVersion', { version: effectiveUpdaterStatus.targetVersion })
+      const summarizedStatusError = summarizeUpdateError(effectiveUpdaterStatus.error)
+      if (summarizedStatusError) {
+        return `${targetLine} (${t('settings.update.detail.error', { error: summarizedStatusError })})`
+      }
+      return targetLine
     }
     if (effectiveUpdaterStatus.phase === 'unsupported') {
       return t('settings.update.detail.unsupported')
@@ -409,7 +425,7 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     return null
   }, [actionError, effectiveUpdaterStatus, formatUpdateTimestamp, t])
   const targetChannelValue = appInfo?.releaseChannel === 'stable' ? 'stable' : appInfo?.releaseChannel === 'dev' ? 'dev' : 'daily'
-  const isUpdateDetailError = Boolean(actionError) || effectiveUpdaterStatus?.phase === 'error'
+  const isUpdateDetailError = Boolean(actionError) || effectiveUpdaterStatus?.phase === 'error' || (effectiveUpdaterStatus?.phase === 'downloaded' && Boolean(effectiveUpdaterStatus.error))
   const isUpdateDetailSuccess = effectiveUpdaterStatus?.phase === 'up-to-date'
   const updateStatusLabel = t(updateStatusKey)
   const updateActionLabel = t(updateActionKey)
@@ -822,22 +838,22 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                       {updateDetailText && <div>{updateDetailText}</div>}
                     </div>
                   )}
-                  {effectiveUpdaterStatus?.phase === 'downloading' && effectiveUpdaterStatus.downloadProgress && (
+                  {((effectiveUpdaterStatus?.phase === 'downloading' && effectiveUpdaterStatus.downloadProgress) || effectiveUpdaterStatus?.phase === 'preparing') && (
                     <div className="settings-update-progress" data-testid="settings-update-progress">
                       <div className="settings-update-progress-track">
                         <div
                           className="settings-update-progress-fill"
                           style={{
-                            width: effectiveUpdaterStatus.downloadProgress.percent >= 0
+                            width: effectiveUpdaterStatus.phase === 'downloading' && effectiveUpdaterStatus.downloadProgress && effectiveUpdaterStatus.downloadProgress.percent >= 0
                               ? `${effectiveUpdaterStatus.downloadProgress.percent}%`
                               : '100%',
-                            ...(effectiveUpdaterStatus.downloadProgress.percent < 0
+                            ...(effectiveUpdaterStatus.phase === 'preparing' || (effectiveUpdaterStatus.downloadProgress && effectiveUpdaterStatus.downloadProgress.percent < 0)
                               ? { animation: 'settings-progress-indeterminate 1.5s ease-in-out infinite' }
                               : {})
                           }}
                         />
                       </div>
-                      {effectiveUpdaterStatus.downloadProgress.percent >= 0 && (
+                      {effectiveUpdaterStatus.phase === 'downloading' && effectiveUpdaterStatus.downloadProgress && effectiveUpdaterStatus.downloadProgress.percent >= 0 && (
                         <span className="settings-update-progress-pct">
                           {effectiveUpdaterStatus.downloadProgress.percent}%
                         </span>

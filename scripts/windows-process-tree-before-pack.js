@@ -8,7 +8,7 @@ module.exports = async context => {
   if (context.electronPlatformName !== 'win32') return
   if (process.platform !== 'win32') throw new Error('Windows native process snapshot packaging requires a Windows build host')
   const arch = Arch[context.arch]
-  for (const script of ['ensure-windows-process-tree.js', 'ensure-node-pty-native.js']) {
+  for (const script of ['ensure-windows-process-tree.js', 'ensure-node-pty-native.js', 'ensure-windows-updater.js']) {
     const result = spawnSync(process.execPath, [join(__dirname, script)], {
       env: { ...process.env, npm_config_arch: arch }, stdio: 'inherit', windowsHide: true
     })

@@ -324,6 +324,54 @@ export async function testSettingsUpdate(ctx: AutotestContext): Promise<TestResu
     })
     if (cancelled()) return results
 
+    const preparingReady = await applyMockStatus({
+      phase: 'preparing',
+      supported: true,
+      targetVersion,
+      targetTag,
+      downloadedFileName: 'Onward 2.zip',
+      lastCheckedAt: Date.now(),
+      error: null,
+      downloadProgress: null,
+      bannerDismissed: false
+    }, 'settings-update-preparing')
+    const preparingProgressReady = await waitFor(
+      'settings-update-preparing-progress',
+      () => Boolean(querySettingsUpdateProgress()),
+      1200,
+      40
+    )
+    const preparingState = getState()
+    const repeatWhilePreparing = await api.clickUpdateAction()
+    record('SU-07d-preparing-disables-action-and-shows-indeterminate-progress', preparingReady &&
+      preparingProgressReady &&
+      preparingState?.actionDisabled === true &&
+      preparingState.detailText?.includes(targetVersion) === true &&
+      repeatWhilePreparing === false &&
+      getState()?.actionCounts.checkNow === 1, {
+        ...(preparingState ?? {}),
+        repeatWhilePreparing,
+        hasProgressBar: Boolean(querySettingsUpdateProgress())
+      })
+    if (cancelled()) return results
+
+    const rollbackErrorReady = await applyMockStatus({
+      phase: 'downloaded',
+      supported: true,
+      targetVersion,
+      targetTag,
+      downloadedFileName: 'Onward 2.zip',
+      lastCheckedAt: Date.now(),
+      error: 'Rollback after file lock on resources/app.asar',
+      bannerDismissed: false
+    }, 'settings-update-downloaded-rollback-error')
+    const rollbackErrorState = getState()
+    record('SU-08b-downloaded-with-rollback-error-shows-error-and-enables-retry', rollbackErrorReady &&
+      rollbackErrorState?.actionDisabled === false &&
+      rollbackErrorState.detailText?.includes(targetVersion) === true &&
+      rollbackErrorState.detailText?.includes('Rollback after file lock') === true, rollbackErrorState ?? undefined)
+    if (cancelled()) return results
+
     const downloadedReady = await applyMockStatus({
       phase: 'downloaded',
       supported: true,

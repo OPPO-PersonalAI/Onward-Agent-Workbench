@@ -3,33 +3,37 @@
  * SPDX-FileCopyrightText: 2026 OPPO
  * SPDX-License-Identifier: Apache-2.0
  *
- * Windows auto-update end-to-end test.
+ * Windows seamless auto-update end-to-end test (VS Code background-staging architecture).
  *
- * Builds THREE release versions (old, A, B) and validates the full update
- * lifecycle with all verifications as hard assertions.
+ * Builds THREE release versions (OLD, A, B) and validates the full update
+ * lifecycle against a local simulated GitHub Releases + gh-pages + CDN server:
  *
- * Scenarios covered:
- *  S1. Version check + auto-download (daily channel)
- *  S2. Malformed pending-update marker is ignored and removed
- *  S3. Manifest switch: download A → switch manifest → download B (supersede)
- *  S4. Kill without restart → assert update NOT installed (safety)
- *  S5. Relaunch recovery: downloaded B recovered from disk, stale A cleaned up
- *  S6. Restart-to-update → new version launches, version confirmed
- *  S7. install.log written before relaunch, contains "installed successfully"
- *  S8. pending-update.json cleaned up after successful update
- *  S9. Downloaded installer cleaned up after installation
+ *  S1. Malformed pending-update markers (legacy v2 & broken v3) are ignored and removed
+ *  S2. Version check + auto-download via 302 CDN redirect + 206 Range resume + background "_" staging
+ *  S3. Manifest switch: stage A -> switch manifest -> stage B (in-place "_" supersede)
+ *  S4. Forced taskkill without graceful quit -> update NOT installed; relaunch recovers B from "_"
+ *  S5. File-lock fault injection during Restart-to-Update -> atomic rollback to OLD, "_" preserved,
+ *      error surfaced in updater status, subsequent retry succeeds without re-downloading
+ *  S6. Restart-to-Update swaps "_" via GUI onward-updater.exe, preserves Uninstall*.exe,
+ *      cleans "_", "_old", pending-update.json, and cached .zip, and boots into VERSION_B
+ *  S7. Normal graceful quit (POST /api/debug/app/quit without clicking Restart) silently applies
+ *      staged update with relaunch=false; next manual launch boots directly into VERSION_A
  *
  * Usage: node test/autotest/test-auto-update-windows-e2e.mjs
  */
 
-import * as http from 'http'
-import { createHash } from 'crypto'
+import { execSync, spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
-  cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync
-} from 'fs'
-import { dirname, join, resolve, sep } from 'path'
-import { fileURLToPath } from 'url'
-import { execSync } from 'child_process'
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   assert,
   fetchJson,
@@ -44,82 +48,105 @@ import {
   waitForLockFile,
   waitForUpdaterStatus
 } from './auto-update-test-lib.mjs'
+import {
+  createMockGitHubUpdateServer,
+  createZipFromUnpackedDir,
+  publishMockReleaseManifest
+} from './mock-github-update-server.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = join(__dirname, '..', '..')
 
-const OLD_TAG = 'v2.1.0-daily.20260413.1'
-const TAG_A = 'v2.1.0-daily.20260413.2'
-const TAG_B = 'v2.1.0-daily.20260413.3'
+const OLD_TAG = 'v2.1.0-daily.20261112.1'
+const TAG_A = 'v2.1.0-daily.20261112.2'
+const TAG_B = 'v2.1.0-daily.20261112.3'
 const OLD_VERSION = OLD_TAG.slice(1)
 const VERSION_A = TAG_A.slice(1)
 const VERSION_B = TAG_B.slice(1)
 const RELEASE_CHANNEL = 'daily'
-const ARCH = 'x64'
 const PLATFORM = 'windows'
 const PRODUCT_NAME = 'Onward 2'
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function sha256File(filePath) {
-  return createHash('sha256').update(readFileSync(filePath)).digest('hex')
-}
-
-function isPathInside(rootDir, filePath) {
-  const normalizedRoot = resolve(rootDir)
-  const normalizedFilePath = resolve(filePath)
-  const rootForPrefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`
-  const compareRoot = process.platform === 'win32' ? rootForPrefix.toLowerCase() : rootForPrefix
-  const compareFile = process.platform === 'win32' ? normalizedFilePath.toLowerCase() : normalizedFilePath
-  const compareExactRoot = process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot
-  return compareFile === compareExactRoot || compareFile.startsWith(compareRoot)
-}
-
-/**
- * Build a release version of the app.
- * Uses electron-vite + electron-builder directly (skips changelog/notices for speed).
- * Caches the output — if the directory already exists, the build is skipped.
- */
-function buildVersion(tag, fixturesRoot, options = {}) {
-  const version = tag.slice(1)
-  const outputDir = join(fixturesRoot, tag)
-  const installerArtifactName = `${PRODUCT_NAME}-${tag}-${PLATFORM}-${ARCH}.exe`
-  const installerFileName = installerArtifactName.replace(/ /g, '.')
-  const installerPath = join(fixturesRoot, installerFileName)
-  const needsInstaller = options.installer === true
-  if (existsSync(join(outputDir, `${PRODUCT_NAME}.exe`)) && (!needsInstaller || existsSync(installerPath))) {
-    console.log(`  [build] Reusing cached build: ${outputDir}`)
-    return { dir: outputDir, installerPath, installerFileName }
+function computeUpdaterSourceFingerprint() {
+  const hash = createHash('sha256')
+  const watchedFiles = [
+    'electron.vite.config.ts',
+    'resources/updater/win32/OnwardUpdater.cs',
+    'scripts/ensure-windows-updater.js',
+    'scripts/generate-update-manifest.js',
+    'electron/main/raw-fs.ts',
+    'electron/main/update-manifest-utils.ts',
+    'electron/main/windows-zip-extract.ts',
+    'electron/main/windows-update-stage-worker-entry.ts',
+    'electron/main/windows-update-staging.ts',
+    'electron/main/update-service.ts',
+    'electron/main/index.ts',
+    'electron/main/api-server.ts'
+  ]
+  for (const rel of watchedFiles) {
+    const abs = join(PROJECT_ROOT, rel)
+    if (existsSync(abs)) {
+      hash.update(rel)
+      hash.update(readFileSync(abs))
+    }
   }
+  return hash.digest('hex').slice(0, 16)
+}
 
-  console.log(`  [build] Building ${tag} (this may take several minutes) ...`)
+function ensureUpdaterHelperBuilt() {
+  execSync('node scripts/ensure-windows-updater.js', {
+    cwd: PROJECT_ROOT,
+    stdio: 'pipe'
+  })
+}
 
-  // Clean previous build output
+let viteBuiltThisRun = false
+
+function ensureElectronViteBundle() {
+  if (viteBuiltThisRun && existsSync(join(PROJECT_ROOT, 'out', 'main', 'index.js'))) {
+    return
+  }
+  console.log('  [build] Compiling electron-vite bundle...')
   rmSync(join(PROJECT_ROOT, 'out'), { recursive: true, force: true })
-  rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
-
-  // electron-vite build
+  ensureUpdaterHelperBuilt()
   execSync('pnpm exec electron-vite build', {
     cwd: PROJECT_ROOT,
     stdio: 'pipe',
     env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' }
   })
+  viteBuiltThisRun = true
+}
 
-  // electron-builder --dir with release metadata
+async function buildUnpackedAndZip(tag, fixturesRoot, options = {}) {
+  const version = tag.slice(1)
+  const channel = options.channel || RELEASE_CHANNEL
+  const outputDir = join(fixturesRoot, tag)
+  const zipFileName = `${PRODUCT_NAME}-${version}-${PLATFORM}-x64.zip`.replace(/ /g, '.')
+  const zipPath = join(fixturesRoot, zipFileName)
+  const needZip = options.zip === true
+
+  if (existsSync(join(outputDir, `${PRODUCT_NAME}.exe`)) && (!needZip || existsSync(zipPath))) {
+    console.log(`  [build] Reusing cached build: ${tag}`)
+    return { dir: outputDir, zipPath, zipFileName }
+  }
+
+  ensureElectronViteBundle()
+  console.log(`  [build] Packaging ${tag} (--dir) ...`)
+  rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
+  rmSync(outputDir, { recursive: true, force: true })
+
   const q = '"'
   const artifactName = `${PRODUCT_NAME}-${tag}-${PLATFORM}-\${arch}.\${ext}`
   const builderArgs = [
+    '--dir',
     '-c.appId=com.onward2.autoupdate.e2e',
     `${q}-c.artifactName=${artifactName}${q}`,
     `${q}-c.extraMetadata.version=${version}${q}`,
     '-c.extraMetadata.buildChannel=prod',
     `${q}-c.extraMetadata.tag=${tag}${q}`,
-    `-c.extraMetadata.releaseChannel=${RELEASE_CHANNEL}`,
+    `-c.extraMetadata.releaseChannel=${channel}`,
     `-c.extraMetadata.releaseOs=${PLATFORM}`,
-    '-c.npmRebuild=false',
-    ...(needsInstaller ? [] : ['--dir'])
+    '-c.npmRebuild=false'
   ].join(' ')
 
   execSync(`pnpm exec electron-builder ${builderArgs}`, {
@@ -130,405 +157,435 @@ function buildVersion(tag, fixturesRoot, options = {}) {
 
   mkdirSync(outputDir, { recursive: true })
   cpSync(join(PROJECT_ROOT, 'release', 'win-unpacked'), outputDir, { recursive: true })
-  console.log(`  [build] Built ${tag} → ${outputDir}`)
-  if (needsInstaller) {
-    const builtInstallerPath = join(PROJECT_ROOT, 'release', installerArtifactName)
-    assert(existsSync(builtInstallerPath), `Installer not found: ${builtInstallerPath}`)
-    cpSync(builtInstallerPath, installerPath)
+
+  if (needZip) {
+    rmSync(zipPath, { force: true })
+    console.log(`  [build] Compressing ${zipFileName} ...`)
+    await createZipFromUnpackedDir(outputDir, zipPath)
   }
-  return { dir: outputDir, installerPath, installerFileName }
+
+  return { dir: outputDir, zipPath, zipFileName }
 }
 
-function makeRelease(tag, build) {
-  return {
-    tag,
-    version: tag.slice(1),
-    dir: build.dir,
-    installerPath: build.installerPath,
-    installerFileName: build.installerFileName
+function compileLockHolderExe(outExePath) {
+  const winDir = process.env.WINDIR || 'C:\\Windows'
+  const cscPath = join(winDir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe')
+  assert(existsSync(cscPath), `csc.exe not found at ${cscPath}`)
+  const csPath = `${outExePath}.cs`
+  writeFileSync(
+    csPath,
+    `
+using System;
+using System.IO;
+using System.Threading;
+internal static class Program {
+  [STAThread]
+  private static int Main(string[] args) {
+    string targetFile = args[0];
+    string readyFile = args[1];
+    string releaseFile = args[2];
+    using (var fs = new FileStream(targetFile, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+      File.WriteAllText(readyFile, "locked");
+      var sw = System.Diagnostics.Stopwatch.StartNew();
+      while (!File.Exists(releaseFile) && sw.ElapsedMilliseconds < 45000) {
+        Thread.Sleep(50);
+      }
+    }
+    return 0;
   }
 }
-
-function createManifest(release, port) {
-  return {
-    channel: RELEASE_CHANNEL,
-    version: release.version,
-    tag: release.tag,
-    platform: PLATFORM,
-    arch: ARCH,
-    artifactName: release.installerFileName,
-    artifactUrl: `http://127.0.0.1:${port}/downloads/${encodeURIComponent(release.installerFileName)}`,
-    sha256: sha256File(release.installerPath),
-    releaseNotes: `Test update to ${release.version}`,
-    publishedAt: new Date().toISOString()
-  }
-}
-
-function createStaticServer(rootDir) {
-  const normalizedRoot = resolve(rootDir)
-  const server = http.createServer((req, res) => {
-    const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
-    let decodedPath
-    try {
-      decodedPath = decodeURIComponent(requestUrl.pathname)
-    } catch {
-      res.writeHead(400); res.end('Bad Request'); return
-    }
-    const relativePath = decodedPath.replace(/^\/+/, '')
-    const filePath = resolve(normalizedRoot, relativePath)
-
-    console.log(`  [HTTP] ${req.method} ${decodedPath}`)
-
-    if (!isPathInside(normalizedRoot, filePath)) {
-      res.writeHead(403); res.end('Forbidden'); return
-    }
-    if (!existsSync(filePath)) {
-      res.writeHead(404); res.end('Not Found'); return
-    }
-
-    const content = readFileSync(filePath)
-    const ct = filePath.endsWith('.json') ? 'application/json; charset=utf-8'
-      : filePath.endsWith('.zip') ? 'application/zip' : 'application/octet-stream'
-    res.writeHead(200, { 'Content-Type': ct, 'Content-Length': content.length })
-    res.end(content)
+`,
+    'utf-8'
+  )
+  const res = spawnSync(cscPath, ['/nologo', '/target:winexe', '/optimize+', `/out:${outExePath}`, csPath], {
+    encoding: 'utf-8',
+    windowsHide: true
   })
-
-  return {
-    server,
-    async listen() {
-      await new Promise((resolve, reject) => {
-        server.on('error', reject)
-        server.listen(0, '127.0.0.1', () => resolve())
-      })
-      const addr = server.address()
-      if (!addr || typeof addr === 'string') throw new Error('Server bind failed')
-      return addr.port
-    },
-    async close() {
-      await new Promise((resolve, reject) => {
-        server.close((e) => (e ? reject(e) : resolve()))
-      })
-    }
-  }
+  assert(res.status === 0, `Failed to compile LockHolder.exe: ${res.stdout}\n${res.stderr}`)
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 async function main() {
   if (process.platform !== 'win32') {
     throw new Error('This test is designed for Windows only.')
   }
 
-  console.log('=== Windows Auto-Update E2E Test ===\n')
+  console.log('=== Windows Seamless Auto-Update E2E Test ===\n')
 
-  // Runner-internal scratch root. Lives under `test/autotest/results/<suite>/`
-  // per CLAUDE.md's autotest layout rule — that prefix is gitignored, so the
-  // ~1.3 GB build cache (3 packaged app versions + installers) never shows up
-  // in `git status`. The per-run subtrees (`run/`, `update-root/`) are wiped
-  // each invocation; the `fixtures/` cache is preserved across runs so a
-  // repeat invocation finishes in ~3-5 min instead of rebuilding from source.
   const testRoot = join(PROJECT_ROOT, 'test', 'autotest', 'results', 'auto-update-windows-e2e')
   const fixturesRoot = join(testRoot, 'fixtures')
+  const fingerprintFile = join(fixturesRoot, '.build-fingerprint')
   const runRoot = join(testRoot, 'run')
-  const updateRoot = join(testRoot, 'update-root')
-  const downloadsRoot = join(updateRoot, 'downloads')
-  const manifestDir = join(updateRoot, 'updates', RELEASE_CHANNEL, PLATFORM, ARCH)
-  const manifestPath = join(manifestDir, 'latest.json')
+  const serverRoot = join(testRoot, 'mock-github-root')
+
+  mkdirSync(testRoot, { recursive: true })
+  rmSync(runRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  rmSync(serverRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+
+  const currentFingerprint = computeUpdaterSourceFingerprint()
+  const cachedFingerprint = existsSync(fingerprintFile) ? readFileSync(fingerprintFile, 'utf-8').trim() : ''
+  if (cachedFingerprint !== currentFingerprint) {
+    console.log(`[Cache] Updater source changed (${cachedFingerprint || 'none'} -> ${currentFingerprint}); refreshing cached builds...`)
+    rmSync(fixturesRoot, { recursive: true, force: true })
+  }
+  mkdirSync(fixturesRoot, { recursive: true })
+  mkdirSync(runRoot, { recursive: true })
+  mkdirSync(serverRoot, { recursive: true })
+
+  // ── Step 1: Build OLD, A, B ────────────────────────────────────────────
+  console.log('[Step 1] Preparing three packaged Windows app versions...')
+  const buildOld = await buildUnpackedAndZip(OLD_TAG, fixturesRoot, { zip: false })
+  const buildA = await buildUnpackedAndZip(TAG_A, fixturesRoot, { zip: true })
+  const buildB = await buildUnpackedAndZip(TAG_B, fixturesRoot, { zip: true })
+  writeFileSync(fingerprintFile, `${currentFingerprint}\n`, 'utf-8')
+  rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
+
+  // ── Step 2: Start Simulated GitHub Server ──────────────────────────────
+  console.log('\n[Step 2] Starting simulated GitHub Releases + CDN server...')
+  const mockServer = createMockGitHubUpdateServer(serverRoot, {
+    interruptFirstCdnStreamAfterBytes: 0
+  })
+
+  let appProcess = null
+  let markerProcess = null
+  let lockHolderChild = null
+  let latestLockData = null
+  let capturedInstallLog = ''
   const userDataDir = join(runRoot, 'user-data')
   const installLogPath = join(userDataDir, 'updates', 'install.log')
   const pendingMarkerPath = join(userDataDir, 'updates', 'pending-update.json')
 
-  // Ensure the scratch root exists before per-run wipes (rmSync on a missing
-  // path is a no-op, but the subsequent mkdirSync for fixturesRoot only
-  // creates testRoot transitively, so making it explicit keeps the intent clear).
-  mkdirSync(testRoot, { recursive: true })
-
-  // Clean per-run state; preserve fixture cache
-  rmSync(runRoot, { recursive: true, force: true })
-  rmSync(updateRoot, { recursive: true, force: true })
-
-  mkdirSync(fixturesRoot, { recursive: true })
-  mkdirSync(downloadsRoot, { recursive: true })
-  mkdirSync(manifestDir, { recursive: true })
-
-  // ── Step 1: Build three versions ───────────────────────────────────────
-
-  console.log('[Step 1] Building three app versions...')
-  const buildB = buildVersion(TAG_B, fixturesRoot, { installer: true })
-  rmSync(join(PROJECT_ROOT, 'out'), { recursive: true, force: true })
-  rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
-  const buildA = buildVersion(TAG_A, fixturesRoot, { installer: true })
-  rmSync(join(PROJECT_ROOT, 'out'), { recursive: true, force: true })
-  rmSync(join(PROJECT_ROOT, 'release'), { recursive: true, force: true })
-  const buildOld = buildVersion(OLD_TAG, fixturesRoot)
-
-  // Step 2: Prepare Windows installer artifacts.
-
-  console.log('\n[Step 2] Preparing Windows installer artifacts...')
-  const releaseA = makeRelease(TAG_A, buildA)
-  const releaseB = makeRelease(TAG_B, buildB)
-
-  cpSync(releaseA.installerPath, join(downloadsRoot, releaseA.installerFileName))
-  cpSync(releaseB.installerPath, join(downloadsRoot, releaseB.installerFileName))
-
-  // ── Step 3: Start HTTP server with manifest → A ────────────────────────
-
-  console.log('\n[Step 3] Starting local HTTP server (manifest → A)...')
-  const staticServer = createStaticServer(updateRoot)
-  let appProcess = null
-  let markerProcess = null
-  let latestLockData = null
-
-  let capturedInstallLog = ''
-
   try {
-    const port = await staticServer.listen()
-    const manifestA = createManifest(releaseA, port)
-    writeFileSync(manifestPath, `${JSON.stringify(manifestA, null, 2)}\n`, 'utf-8')
-    console.log(`  Server: http://127.0.0.1:${port}`)
+    const port = await mockServer.listen()
+    const manifestA = publishMockReleaseManifest({
+      serverRootDir: serverRoot,
+      port,
+      tag: TAG_A,
+      channel: RELEASE_CHANNEL,
+      zipArtifactPath: buildA.zipPath
+    })
+    console.log(`  Mock GitHub listening at http://127.0.0.1:${port}`)
 
-    const launchEnv = {
+    const baseLaunchEnv = {
       ONWARD_DEBUG: '1',
       ONWARD_USER_DATA_DIR: userDataDir,
       ONWARD_UPDATE_BASE_URL: `http://127.0.0.1:${port}/updates`,
       ONWARD_UPDATE_CHECK_INTERVAL_MS: '2000'
     }
 
-    // ── Step 4: Launch old version ────────────────────────────────────────
-
-    console.log('\n[Step 4] Launching old version...')
     const installDir = join(runRoot, 'app')
     cpSync(buildOld.dir, installDir, { recursive: true })
+    // Place an NSIS uninstaller sentinel to prove swaps preserve Uninstall*.exe
+    const uninstallerSentinelPath = join(installDir, 'Uninstall Onward 2.exe')
+    writeFileSync(uninstallerSentinelPath, 'nsis-uninstaller-sentinel', 'utf-8')
+
     const execPath = join(installDir, `${PRODUCT_NAME}.exe`)
-    assert(existsSync(execPath), `Executable not found: ${execPath}`)
+    const stageReadyMarkerPath = join(installDir, '_', '.onward-stage-ready.json')
 
-    // ── Step 4a: Invalid marker must not trap startup ────────────────────
+    // ── Step 3 (S1): Malformed pending-update markers must be ignored ────
+    console.log('\n[Step 3] Verifying malformed pending-update markers (v2 & invalid v3) are cleaned...')
+    for (const [label, badPayload] of [
+      ['v2-legacy', { schemaVersion: 2, artifactPath: 'C:\\missing.exe' }],
+      ['v3-invalid', { schemaVersion: 3, installDir: 'relative-path' }]
+    ]) {
+      const badDataDir = join(runRoot, `bad-marker-${label}`)
+      const badMarker = join(badDataDir, 'updates', 'pending-update.json')
+      mkdirSync(dirname(badMarker), { recursive: true })
+      writeFileSync(badMarker, JSON.stringify(badPayload), 'utf-8')
 
-    console.log('\n[Step 4a] Verifying malformed pending-update marker is ignored...')
-    const invalidMarkerUserDataDir = join(runRoot, 'invalid-marker-user-data')
-    const invalidMarkerPath = join(invalidMarkerUserDataDir, 'updates', 'pending-update.json')
-    mkdirSync(dirname(invalidMarkerPath), { recursive: true })
-    writeFileSync(invalidMarkerPath, JSON.stringify({
-      schemaVersion: 2,
-      artifactPath: 'missing.exe'
-    }), 'utf-8')
+      markerProcess = spawnApp(execPath, {
+        env: {
+          ...baseLaunchEnv,
+          ONWARD_USER_DATA_DIR: badDataDir,
+          ONWARD_UPDATE_BASE_URL: `http://127.0.0.1:${port}/updates-disabled`
+        }
+      })
+      const lock = await waitForLockFile(badDataDir, { timeoutMs: 60000 })
+      await waitForHealthVersion(lock.port, OLD_VERSION, { timeoutMs: 15000 })
+      assert(!existsSync(badMarker), `Invalid ${label} marker must be deleted on startup`)
+      await terminateProcessByPid(lock.pid, { stdio: 'pipe' }).catch(() => {})
+      await Promise.race([markerProcess.waitForExit(), sleep(10000)])
+      markerProcess = null
+    }
+    console.log('  Invalid markers safely cleaned ✓')
 
-    markerProcess = spawnApp(execPath, {
-      env: {
-        ...launchEnv,
-        ONWARD_USER_DATA_DIR: invalidMarkerUserDataDir
-      }
-    })
-    const invalidMarkerLockData = await waitForLockFile(invalidMarkerUserDataDir, { timeoutMs: 60000 })
-    await waitForHealthVersion(invalidMarkerLockData.port, OLD_VERSION, { timeoutMs: 15000 })
-    assert(!existsSync(invalidMarkerPath), 'Malformed pending-update marker should be removed during startup')
-    console.log(`  Malformed marker removed and app stayed launchable ✓`)
-    await terminateProcessByPid(invalidMarkerLockData.pid, { stdio: 'pipe' }).catch(() => {})
-    await Promise.race([
-      markerProcess.waitForExit(),
-      sleep(10000).then(() => { throw new Error('Invalid-marker smoke app did not exit within 10s after taskkill') })
-    ])
-    markerProcess = null
-
-    appProcess = spawnApp(execPath, { env: launchEnv })
+    // ── Step 4 (S2): Launch OLD, download A via 302 + 206 resume + "_" stage
+    console.log('\n[Step 4] Launching OLD version and staging update A...')
+    // Arm mid-stream socket drop right before Step 4 so Step 3 smoke apps do not consume it
+    mockServer.setInterruptFirstCdnStreamAfterBytes(2 * 1024 * 1024)
+    appProcess = spawnApp(execPath, { env: baseLaunchEnv })
     latestLockData = await waitForLockFile(userDataDir, { timeoutMs: 60000 })
-    console.log(`  App started (PID=${latestLockData.pid}, port=${latestLockData.port})`)
+    await waitForHealthVersion(latestLockData.port, OLD_VERSION, { timeoutMs: 15000 })
 
-    // ── Step 5: Verify old version ────────────────────────────────────────
-
-    console.log('\n[Step 5] Verifying current version...')
-    const health = await waitForHealthVersion(latestLockData.port, OLD_VERSION, { timeoutMs: 15000 })
-    console.log(`  Version: ${health.version} ✓`)
-
-    // ── Step 6: Download A ────────────────────────────────────────────────
-
-    console.log('\n[Step 6] Triggering update check (expecting A)...')
     await postJson(latestLockData.port, '/api/debug/updater/check')
-
-    const downloadedA = await waitForUpdaterStatus(
+    const statusA = await waitForUpdaterStatus(
       latestLockData.port,
       (s) => s.phase === 'downloaded' && s.targetVersion === VERSION_A,
-      { timeoutMs: 300000, description: `downloaded ${VERSION_A}` }
+      { timeoutMs: 240000, description: `downloaded & staged ${VERSION_A}` }
     )
-    console.log(`  Downloaded A: ${downloadedA.downloadedFileName} ✓`)
+    assert(statusA.downloadedFileName.endsWith('.zip'), `Expected .zip artifact, got ${statusA.downloadedFileName}`)
+    assert(mockServer.stats.redirectRequests >= 1, 'Expected 302 GitHub release redirect to be exercised')
+    assert(mockServer.stats.interruptedStreams >= 1 && mockServer.stats.rangeRequests >= 1, 'Expected 206 Range resume after mid-stream interruption')
+    assert(existsSync(stageReadyMarkerPath), 'Expected <installDir>\\_\\.onward-stage-ready.json to exist')
+    const stagedMetaA = JSON.parse(readFileSync(stageReadyMarkerPath, 'utf-8'))
+    assert(stagedMetaA.version === VERSION_A, `Expected staged version ${VERSION_A}, got ${stagedMetaA.version}`)
+    assert(stagedMetaA.sha256 === manifestA.archive.sha256, 'Staged SHA-256 mismatch for A')
+    console.log(`  Staged A in <installDir>\\_ (302 redirects=${mockServer.stats.redirectRequests}, 206 range resumes=${mockServer.stats.rangeRequests}) ✓`)
 
-    const filesAfterA = listUpdateFiles(userDataDir)
-    assert(filesAfterA.some((f) => f.endsWith('.exe')), 'Expected A installer on disk')
-    assert(!filesAfterA.some((f) => f.includes(VERSION_B)), 'B must not be present before manifest switch')
-    console.log(`  Only A on disk ✓`)
-
-    // ── Step 7: Manifest switch → B ───────────────────────────────────────
-
-    console.log('\n[Step 7] Switching manifest to B and waiting for re-check...')
-    const manifestB = createManifest(releaseB, port)
-    writeFileSync(manifestPath, `${JSON.stringify(manifestB, null, 2)}\n`, 'utf-8')
-
-    const downloadedB = await waitForUpdaterStatus(
+    // ── Step 5 (S3): Switch manifest to B -> supersede "_" in-place ──────
+    console.log('\n[Step 5] Publishing B manifest and verifying in-place "_" supersede...')
+    mockServer.setInterruptFirstCdnStreamAfterBytes(0)
+    const manifestB = publishMockReleaseManifest({
+      serverRootDir: serverRoot,
+      port,
+      tag: TAG_B,
+      channel: RELEASE_CHANNEL,
+      zipArtifactPath: buildB.zipPath
+    })
+    const statusB = await waitForUpdaterStatus(
       latestLockData.port,
       (s) => s.phase === 'downloaded' && s.targetVersion === VERSION_B,
-      { timeoutMs: 300000, description: `downloaded ${VERSION_B}` }
+      { timeoutMs: 240000, description: `downloaded & staged ${VERSION_B}` }
     )
-    assert(downloadedB.targetTag === TAG_B, 'Expected downloaded tag to match B')
-    console.log(`  Downloaded B: ${downloadedB.downloadedFileName} ✓`)
+    assert(statusB.targetTag === TAG_B, 'Expected targetTag B')
+    const stagedMetaB = JSON.parse(readFileSync(stageReadyMarkerPath, 'utf-8'))
+    assert(stagedMetaB.version === VERSION_B, `Expected "_" superseded to ${VERSION_B}, got ${stagedMetaB.version}`)
+    assert(stagedMetaB.sha256 === manifestB.archive.sha256, 'Staged SHA-256 mismatch for B')
+    console.log('  "_" superseded from A -> B ✓')
 
-    // B installer must be on disk
-    const filesAfterB = listUpdateFiles(userDataDir)
-    assert(filesAfterB.some((f) => f.includes(VERSION_B) && f.endsWith('.exe')), 'Expected B installer on disk')
-    // Note: A installer stays on disk until next startup cleanup (no runtime purge)
-    console.log(`  B installer on disk ✓`)
-
-    // Verify SHA-256 of B
-    const bInstaller = filesAfterB.find((f) => f.includes(VERSION_B) && f.endsWith('.exe'))
-    assert(bInstaller, 'B installer not found')
-    assert(sha256File(bInstaller) === manifestB.sha256, 'SHA-256 mismatch for B')
-    console.log(`  SHA-256 verified ✓`)
-
-    // ── Step 8: Safety check — kill without restart ──────────────────────
-
-    console.log('\n[Step 8] Safety check: terminate without restart...')
-    const killExitPromise = appProcess.waitForExit()
-    // taskkill /T /F may return non-zero when a child process already exited;
-    // we rely on waitForExit to confirm the main process is actually gone.
+    // ── Step 6 (S4): Forced kill must NOT apply; relaunch recovers "_" ───
+    console.log('\n[Step 6] Force-killing without graceful quit...')
+    const killExit = appProcess.waitForExit()
     await terminateProcessByPid(latestLockData.pid, { stdio: 'pipe' }).catch(() => {})
-    await Promise.race([
-      killExitPromise,
-      sleep(10000).then(() => { throw new Error('Process did not exit within 10s after taskkill') })
-    ])
-    assert(!existsSync(installLogPath), 'install.log must NOT exist after kill without restart')
-    console.log(`  install.log absent ✓`)
+    await Promise.race([killExit, sleep(10000)])
+    assert(!existsSync(installLogPath), 'install.log must NOT exist after forced kill')
+    assert(existsSync(stageReadyMarkerPath), '"_" must still hold B after forced kill')
+    console.log('  Forced kill did not trigger swap ✓')
 
-    // ── Step 9: Relaunch + verify recovery ───────────────────────────────
+    console.log('\n[Step 7] Relaunching OLD with rollback fault-injection env and verifying fast "_" recovery...')
+    // Create a file inside installDir that we will hold locked to test rollback
+    const lockedProbePath = join(installDir, 'zz-locked-probe.dll')
+    writeFileSync(lockedProbePath, 'live-dll-vOld', 'utf-8')
 
-    console.log('\n[Step 9] Relaunching old version...')
-    appProcess = spawnApp(execPath, { env: launchEnv })
+    const rollbackEnv = {
+      ...baseLaunchEnv,
+      ONWARD_UPDATER_MOVE_RETRY_MS: '800',
+      ONWARD_UPDATER_DISABLE_LINGERING_KILL: '1'
+    }
+    appProcess = spawnApp(execPath, { env: rollbackEnv })
     latestLockData = await waitForLockFile(userDataDir, {
       previousStartedAt: latestLockData.startedAt,
       timeoutMs: 60000
     })
-    console.log(`  Relaunched (PID=${latestLockData.pid}, port=${latestLockData.port})`)
-
-    // B should be recovered from disk (newest candidate)
-    const recovered = await waitForUpdaterStatus(
+    await waitForHealthVersion(latestLockData.port, OLD_VERSION, { timeoutMs: 15000 })
+    await waitForUpdaterStatus(
       latestLockData.port,
       (s) => s.phase === 'downloaded' && s.targetVersion === VERSION_B,
-      { timeoutMs: 120000, description: `recovery of ${VERSION_B}` }
+      { timeoutMs: 30000, description: `fast "_" startup recovery of ${VERSION_B}` }
     )
-    assert(recovered.targetVersion === VERSION_B, 'Expected B recovered')
-    console.log(`  B recovered from disk ✓`)
+    const filesAfterRecovery = listUpdateFiles(userDataDir)
+    assert(!filesAfterRecovery.some((f) => f.includes(VERSION_A) && f.endsWith('.zip')), 'Stale cached A .zip should be purged on startup')
+    console.log('  Instant "_" recovery & stale cache purge verified ✓')
 
-    // Startup cleanup should have removed the stale A installer
-    const filesAfterRelaunch = listUpdateFiles(userDataDir)
-    assert(!filesAfterRelaunch.some((f) => f.includes(VERSION_A) && f.endsWith('.exe')),
-      'Expected stale A installer to be cleaned up by startup recovery')
-    console.log(`  Stale A installer cleaned up ✓`)
+    // ── Step 8 (S5): Lock fault injection -> atomic rollback -> UI error ─
+    console.log('\n[Step 8] Injecting FileShare.Read lock and triggering Restart-to-Update (expecting atomic rollback)...')
+    const helperDir = join(runRoot, 'helpers')
+    mkdirSync(helperDir, { recursive: true })
+    const lockHolderExe = join(helperDir, 'LockHolder.exe')
+    compileLockHolderExe(lockHolderExe)
 
-    // ── Step 10: Restart-to-update ──────────────────────────────────────
+    const lockReadyFile = join(helperDir, 'lock-ready.txt')
+    const lockReleaseFile = join(helperDir, 'lock-release.txt')
+    lockHolderChild = spawn(lockHolderExe, [lockedProbePath, lockReadyFile, lockReleaseFile], {
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    await waitFor(() => existsSync(lockReadyFile), { timeoutMs: 10000, intervalMs: 50, description: 'LockHolder ready' })
 
-    console.log('\n[Step 10] Triggering restart-to-update...')
-    const restartExitPromise = appProcess.waitForExit()
-    const restartResult = await postJson(latestLockData.port, '/api/debug/updater/restart')
-    assert(restartResult.success === true, `Restart failed: ${restartResult.error}`)
-    console.log(`  Restart requested ✓`)
+    const preRollbackStartedAt = latestLockData.startedAt
+    const rollbackExitPromise = appProcess.waitForExit()
+    const rollbackRestartReq = await postJson(latestLockData.port, '/api/debug/updater/restart')
+    assert(rollbackRestartReq.success === true, 'Expected restart request to succeed')
+    await rollbackExitPromise
 
-    const oldExit = await restartExitPromise
-    console.log(`  Old process exited (code=${oldExit.code})`)
+    // Wait for onward-updater.exe to roll back and relaunch OLD_VERSION
+    const rolledBackLock = await waitForLockFile(userDataDir, {
+      previousStartedAt: preRollbackStartedAt,
+      timeoutMs: 90000
+    })
+    latestLockData = rolledBackLock
+    await waitForHealthVersion(latestLockData.port, OLD_VERSION, { timeoutMs: 20000 })
+    assert(existsSync(stageReadyMarkerPath), '"_" must remain intact after rollback')
+    assert(!existsSync(join(installDir, '_old')), '"_old" must be restored and removed after rollback')
 
-    // ── Step 11: Wait for new version ───────────────────────────────────
+    const statusAfterRollback = await waitForUpdaterStatus(
+      latestLockData.port,
+      (s) => s.phase === 'downloaded' && s.targetVersion === VERSION_B && Boolean(s.error),
+      { timeoutMs: 30000, description: 'rolled-back status with surfaced error and preserved downloaded state' }
+    )
+    console.log(`  Atomic rollback succeeded; surfaced error="${statusAfterRollback.error}" while keeping B staged ✓`)
 
-    console.log('\n[Step 11] Waiting for new version to launch...')
+    // Release file lock and retry Restart-to-Update without re-downloading!
+    console.log('\n[Step 9] Releasing lock and retrying Restart-to-Update on preserved "_" ...')
+    writeFileSync(lockReleaseFile, 'release', 'utf-8')
+    await waitFor(() => lockHolderChild.exitCode !== null, { timeoutMs: 10000, intervalMs: 50, description: 'LockHolder exit' })
+    lockHolderChild = null
+
+    const preSuccessStartedAt = latestLockData.startedAt
+    const retryRes = await postJson(latestLockData.port, '/api/debug/updater/restart')
+    assert(retryRes.success === true, `Retry restart failed: ${retryRes.error}`)
+
     capturedInstallLog = ''
-    const newLockData = await waitFor(
+    const updatedLockData = await waitFor(
       () => {
-        // Capture install.log while waiting (before new version clears it)
         if (existsSync(installLogPath)) {
           try {
             const content = readFileSync(installLogPath, 'utf-8').trim()
-            if (content.length > capturedInstallLog.length) {
-              capturedInstallLog = content
-            }
-          } catch { /* briefly locked */ }
+            if (content.length > capturedInstallLog.length) capturedInstallLog = content
+          } catch {
+            // ignore transient read contention
+          }
         }
         const lockFile = join(userDataDir, 'onward-api.lock')
         if (!existsSync(lockFile)) return null
         try {
           const data = JSON.parse(readFileSync(lockFile, 'utf-8'))
-          return Number(data.startedAt || 0) > latestLockData.startedAt ? data : null
-        } catch { return null }
+          return Number(data.startedAt || 0) > preSuccessStartedAt ? data : null
+        } catch {
+          return null
+        }
       },
-      { timeoutMs: 180000, intervalMs: 500, description: 'new version lock file' }
+      { timeoutMs: 120000, intervalMs: 300, description: 'updated VERSION_B lock file' }
     )
-    console.log(`  New process detected (PID=${newLockData.pid}, port=${newLockData.port})`)
+    latestLockData = updatedLockData
 
-    // ── Step 12: Verify new version ─────────────────────────────────────
+    // ── Step 10 (S6): Verify VERSION_B + post-install hygiene ────────────
+    const healthB = await waitForHealthVersion(latestLockData.port, VERSION_B, { timeoutMs: 30000 })
+    assert(healthB.version === VERSION_B, `Expected ${VERSION_B}, got ${healthB.version}`)
+    assert(capturedInstallLog.includes('Update installed successfully.'), `install.log missing success line:\n${capturedInstallLog}`)
+    assert(!existsSync(pendingMarkerPath), 'pending-update.json must be deleted after successful swap')
+    assert(!existsSync(join(installDir, '_')), '"_" must be consumed after swap')
+    assert(!existsSync(join(installDir, '_old')), '"_old" must be deleted after swap')
+    assert(readFileSync(uninstallerSentinelPath, 'utf-8') === 'nsis-uninstaller-sentinel', 'Uninstall Onward 2.exe must be preserved')
+    const remainingUpdateFiles = listUpdateFiles(userDataDir)
+    assert(!remainingUpdateFiles.some((f) => f.endsWith('.zip')), `Cached .zip must be cleaned up, found: ${remainingUpdateFiles.join(', ')}`)
+    console.log(`  Restart-to-Update booted ${VERSION_B} cleanly with zero leftover staging artifacts ✓`)
 
-    console.log('\n[Step 12] Verifying new version...')
-    const newHealth = await waitForHealthVersion(newLockData.port, VERSION_B, { timeoutMs: 30000 })
-    assert(newHealth.version === VERSION_B, `Expected ${VERSION_B}, got ${newHealth.version}`)
-    console.log(`  Version: ${newHealth.version} ✓`)
+    await terminateProcessByPid(latestLockData.pid, { stdio: 'pipe' }).catch(() => {})
+    await sleep(1000)
 
-    // install.log must indicate success
-    assert(capturedInstallLog.includes('installed successfully'),
-      `install.log does not indicate success:\n${capturedInstallLog}`)
-    console.log(`  install.log confirms success ✓`)
+    // ── Step 11 (S7): Normal Graceful Quit silent apply (relaunch=false) ─
+    console.log('\n[Step 11] Verifying normal graceful quit applies staged update silently (relaunch=false)...')
+    const quitInstallDir = join(runRoot, 'app-quit-mode')
+    const quitUserDataDir = join(runRoot, 'user-data-quit-mode')
+    const quitLogPath = join(quitUserDataDir, 'updates', 'install.log')
+    cpSync(buildOld.dir, quitInstallDir, { recursive: true })
+    const quitExecPath = join(quitInstallDir, `${PRODUCT_NAME}.exe`)
 
-    // pending-update.json must be cleaned up
-    assert(!existsSync(pendingMarkerPath), 'pending-update.json must be removed after successful update')
-    console.log(`  pending-update.json cleaned up ✓`)
+    publishMockReleaseManifest({
+      serverRootDir: serverRoot,
+      port,
+      tag: TAG_A,
+      channel: RELEASE_CHANNEL,
+      zipArtifactPath: buildA.zipPath
+    })
 
-    // Downloaded installers must be cleaned up
-    const finalFiles = listUpdateFiles(userDataDir)
-    assert(!finalFiles.some((f) => f.endsWith('.exe')),
-      `Expected all installers cleaned up, found: ${finalFiles.filter(f => f.endsWith('.exe')).join(', ')}`)
-    console.log(`  Downloaded installers cleaned up ✓`)
+    const quitEnv = {
+      ONWARD_DEBUG: '1',
+      ONWARD_USER_DATA_DIR: quitUserDataDir,
+      ONWARD_UPDATE_BASE_URL: `http://127.0.0.1:${port}/updates`,
+      ONWARD_UPDATE_CHECK_INTERVAL_MS: '2000'
+    }
 
-    // ── Cleanup ─────────────────────────────────────────────────────────
+    appProcess = spawnApp(quitExecPath, { env: quitEnv })
+    const quitInitialLock = await waitForLockFile(quitUserDataDir, { timeoutMs: 60000 })
+    await waitForHealthVersion(quitInitialLock.port, OLD_VERSION, { timeoutMs: 15000 })
+    await postJson(quitInitialLock.port, '/api/debug/updater/check')
+    await waitForUpdaterStatus(
+      quitInitialLock.port,
+      (s) => s.phase === 'downloaded' && s.targetVersion === VERSION_A,
+      { timeoutMs: 240000, description: `staged ${VERSION_A} for apply-on-quit` }
+    )
 
-    console.log('\n[Cleanup] Terminating new version...')
-    await terminateProcessByPid(newLockData.pid, { stdio: 'pipe' }).catch(() => {})
-    await waitFor(async () => {
-      try { await fetchJson(`http://127.0.0.1:${newLockData.port}/api/health`); return null }
-      catch { return true }
-    }, { timeoutMs: 15000, intervalMs: 500, description: 'new app shutdown' }).catch(() => {})
+    const quitExitPromise = appProcess.waitForExit()
+    await postJson(quitInitialLock.port, '/api/debug/app/quit')
+    await quitExitPromise
+    appProcess = null
 
-    // ── Summary ─────────────────────────────────────────────────────────
+    await waitFor(
+      () =>
+        !existsSync(join(quitInstallDir, '_')) &&
+        existsSync(quitLogPath) &&
+        readFileSync(quitLogPath, 'utf-8').includes('Update installed successfully.'),
+      { timeoutMs: 45000, intervalMs: 250, description: 'silent swap completion on normal quit' }
+    )
+
+    // Confirm app did NOT auto-relaunch during a 2.5s observation window
+    await sleep(2500)
+    const lockPathAfterQuit = join(quitUserDataDir, 'onward-api.lock')
+    if (existsSync(lockPathAfterQuit)) {
+      const maybeLock = JSON.parse(readFileSync(lockPathAfterQuit, 'utf-8'))
+      assert(
+        Number(maybeLock.startedAt || 0) <= quitInitialLock.startedAt,
+        'Normal graceful quit must NOT auto-relaunch the application'
+      )
+    }
+    console.log('  Silent apply on normal quit completed with zero auto-relaunch ✓')
+
+    // Manual next launch must boot directly into VERSION_A
+    appProcess = spawnApp(quitExecPath, { env: quitEnv })
+    const nextBootLock = await waitForLockFile(quitUserDataDir, {
+      previousStartedAt: quitInitialLock.startedAt,
+      timeoutMs: 60000
+    })
+    const nextBootHealth = await waitForHealthVersion(nextBootLock.port, VERSION_A, { timeoutMs: 20000 })
+    assert(nextBootHealth.version === VERSION_A, `Expected ${VERSION_A} on next boot, got ${nextBootHealth.version}`)
+    console.log(`  Next manual launch booted directly into ${VERSION_A} ✓`)
+
+    await terminateProcessByPid(nextBootLock.pid, { stdio: 'pipe' }).catch(() => {})
+    await Promise.race([appProcess.waitForExit(), sleep(10000)])
+    appProcess = null
 
     console.log('\n=== Test Results ===')
-    console.log(`  ✓ S1: Old version launched and reported ${OLD_VERSION}`)
-    console.log(`  ✓ S2: Malformed pending-update marker is removed without blocking startup`)
-    console.log(`  ✓ S3: Update check found A (${VERSION_A}) and downloaded it`)
-    console.log(`  ✓ S4: Manifest switch to B (${VERSION_B}), superseded A`)
-    console.log(`  ✓ S5: SHA-256 of B verified`)
-    console.log(`  ✓ S6: Kill without restart did NOT trigger install`)
-    console.log(`  ✓ S7: Relaunch recovered B from disk, stale A cleaned up`)
-    console.log(`  ✓ S8: Restart-to-update applied B successfully`)
-    console.log(`  ✓ S9: New version (${VERSION_B}) launched and confirmed`)
-    console.log(`  ✓ S10: install.log indicates success`)
-    console.log(`  ✓ S11: pending-update.json cleaned up`)
-    console.log(`  ✓ S12: All downloaded installers cleaned up`)
+    console.log(`  [PASS] S1: Malformed pending-update markers (v2 & v3) ignored and removed`)
+    console.log(`  [PASS] S2: 302 CDN redirect + 206 Range resume + background "_" staging (${VERSION_A})`)
+    console.log(`  [PASS] S3: Manifest switch A -> B superseded "_" in-place (${VERSION_B})`)
+    console.log(`  [PASS] S4: Forced kill left live install untouched; relaunch recovered "_" immediately`)
+    console.log(`  [PASS] S5: File-lock fault injection rolled back atomically, preserved "_", and surfaced UI error`)
+    console.log(`  [PASS] S6: Retry Restart-to-Update swapped "_" cleanly into ${VERSION_B} and preserved Uninstall*.exe`)
+    console.log(`  [PASS] S7: Normal graceful quit silently swapped "_" (relaunch=false) and next launch booted ${VERSION_A}`)
     console.log('\n=== PASS ===')
-
   } catch (error) {
-    console.error(`\n=== FAIL ===`)
-    console.error(`  ${error.message}`)
+    console.error('\n=== FAIL ===')
+    console.error(`  ${error instanceof Error ? error.stack || error.message : String(error)}`)
     if (existsSync(installLogPath)) {
       console.error(`\n--- install.log ---\n${readFileSync(installLogPath, 'utf-8')}\n--- end ---`)
     }
     if (capturedInstallLog) {
-      console.error(`\n--- captured install.log (during wait) ---\n${capturedInstallLog}\n--- end ---`)
-    }
-    if (latestLockData?.port) {
-      try {
-        const s = await fetchJson(`http://127.0.0.1:${latestLockData.port}/api/debug/updater/status`)
-        console.error(`\n--- updater status ---\n${JSON.stringify(s, null, 2)}\n--- end ---`)
-      } catch { /* unreachable */ }
+      console.error(`\n--- captured install.log ---\n${capturedInstallLog}\n--- end ---`)
     }
     process.exitCode = 1
   } finally {
+    if (lockHolderChild && lockHolderChild.exitCode === null) {
+      try {
+        lockHolderChild.kill()
+      } catch {
+        // ignore
+      }
+    }
+    if (latestLockData?.pid) {
+      await terminateProcessByPid(latestLockData.pid, { stdio: 'pipe' }).catch(() => {})
+    }
     if (markerProcess?.child) await stopChildProcess(markerProcess.child).catch(() => {})
     if (appProcess?.child) await stopChildProcess(appProcess.child).catch(() => {})
-    await staticServer.close().catch(() => {})
+    await mockServer.close().catch(() => {})
+    await sleep(500)
+    // Clean per-run directories while preserving fixtures cache for fast re-runs
+    try {
+      rmSync(runRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+      rmSync(serverRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+    } catch (cleanupErr) {
+      console.warn(`[Cleanup] Deferred scratch cleanup warning: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`)
+    }
   }
 }
 
