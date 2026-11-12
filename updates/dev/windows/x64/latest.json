@@ -1,17 +1,17 @@
 {
   "channel": "dev",
-  "version": "2.1.0-dev.20261112.3",
-  "tag": "v2.1.0-dev.20261112.3",
+  "version": "2.1.0-dev.20261112.4",
+  "tag": "v2.1.0-dev.20261112.4",
   "platform": "windows",
   "arch": "x64",
-  "artifactName": "Onward.2-v2.1.0-dev.20261112.3-windows-x64.exe",
-  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.3/Onward.2-v2.1.0-dev.20261112.3-windows-x64.exe",
-  "sha256": "3579f85e79fa94b192ed690a759834dbf039b0eb1b7d16546c5b3e0d7e5600d9",
+  "artifactName": "Onward.2-v2.1.0-dev.20261112.4-windows-x64.exe",
+  "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.4/Onward.2-v2.1.0-dev.20261112.4-windows-x64.exe",
+  "sha256": "6c0a1db6aa82a38d6aaf03192a39777b7874d9880d87b3eeeb4817b432ab7066",
   "archive": {
-    "artifactName": "Onward.2-v2.1.0-dev.20261112.3-windows-x64.zip",
-    "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.3/Onward.2-v2.1.0-dev.20261112.3-windows-x64.zip",
-    "sha256": "594a91019f214bdf3613f2c505359e3a6c899df3207219090b593639b9f09947"
+    "artifactName": "Onward.2-v2.1.0-dev.20261112.4-windows-x64.zip",
+    "artifactUrl": "https://github.com/OPPO-PersonalAI/Onward-Agent-Workbench/releases/download/v2.1.0-dev.20261112.4/Onward.2-v2.1.0-dev.20261112.4-windows-x64.zip",
+    "sha256": "09e8597bc2a651c0ef7639c10f93b57d538f0539d94a7a5d004cda17fd3894f5"
   },
-  "releaseNotes": "# Onward Dev Build v2.1.0-dev.20261112.3\n\nAutomated end-to-end verification baseline build (`dev` channel) for Windows seamless background auto-update.\n\n## New Features\n- Replace `yauzl` bundled `fd-slicer` reader with `RawFileRandomAccessReader` (`rawFs`) to eliminate multi-chunk deflate stream stalls on Node 22+ and Node 24+.\n- Bundle native Win32 GUI helper `onward-updater.exe` (`IMAGE_SUBSYSTEM_WINDOWS_GUI`) for silent atomic directory swap with automatic rollback.\n",
-  "publishedAt": "2026-11-12T04:49:03.444Z"
+  "releaseNotes": "# Onward Dev Build v2.1.0-dev.20261112.4\n\nAutomated end-to-end verification target build (`dev` channel) for Windows seamless background auto-update.\n\n## New Features\n- Verify live GitHub Pages dual-field Windows `latest.json` (`archive` `.zip` + primary `.exe`) and real GitHub Releases CDN `.zip` download.\n- Verify Restart-to-Update (`relaunch: true`) and Normal-Quit silent swap (`relaunch: false`) from `v2.1.0-dev.20261112.3` to `v2.1.0-dev.20261112.4`.\n",
+  "publishedAt": "2026-11-12T05:01:00.800Z"
 }
