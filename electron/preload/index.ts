@@ -1102,6 +1102,7 @@ export interface CurrentChangelogResult {
   entry?: ChangelogEntry
   html?: string
   content?: string
+  simulateUpgrade?: boolean
   reason?: ChangelogReadReason
   error?: string
 }

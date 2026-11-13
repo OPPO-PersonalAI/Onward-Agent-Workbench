@@ -1,0 +1,17 @@
+{
+  "entries": [
+    {
+      "tag": "v9.9.9-daily.20990101.1",
+      "version": "9.9.9-daily.20990101.1",
+      "channel": "daily",
+      "previousTag": "v9.9.1-daily.20980101.1",
+      "publishedAt": "2099-01-01T00:00:00.000Z",
+      "markdown": {
+        "en": "en/daily/v9.9.9-daily.20990101.1.md"
+      },
+      "html": {
+        "en": "html/en/daily/v9.9.9-daily.20990101.1.html"
+      }
+    }
+  ]
+}

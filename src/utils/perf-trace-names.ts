@@ -265,6 +265,7 @@ export const PERF_TRACE_EVENT = {
   RENDERER_GITHISTORY_DEFAULT_FILE_RESOLVED: 'renderer:githistory.default-file-resolved',
   RENDERER_SETTINGS_OPEN: 'renderer:settings.open',
   RENDERER_CHANGELOG_OPEN: 'renderer:changelog.open',
+  MAIN_CHANGELOG_READ: 'main:changelog.read',
 
   // ───────── Task drag-to-rearrange ─────────
   // Diagnostic breadcrumbs for "my Tasks jumped around / the order did not

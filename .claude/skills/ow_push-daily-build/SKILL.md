@@ -1,23 +1,23 @@
 ---
 name: ow_push-daily-build
-description: Push local commits, create a daily build tag, trigger GitHub Actions CI, and verify the entire release pipeline. Use this skill when the user asks to push and trigger a daily build, create a release tag, publish a daily build, or trigger a build.
+description: Push local commits, generate the bilingual animated Release Note Showcase, create a daily build tag, trigger GitHub Actions CI, and verify the entire release pipeline. Use this skill when the user asks to push and trigger a daily build, create a release tag, publish a daily build, or trigger a build.
 ---
 
 # Push and Trigger Daily Build
 
-Push local commits to `origin/master`, generate and confirm the release Change Log, create a versioned daily build tag, trigger GitHub Actions CI, and verify the full pipeline including GitHub Release artifacts and update manifests.
+Push local commits to `origin/master`, generate and confirm the bilingual animated Release Note Showcase (retaining only the single latest release in the repository and packaged app), create a versioned daily build tag, trigger GitHub Actions CI, and verify the full pipeline including GitHub Release artifacts and update manifests.
 
 ## User Input
 
 The user may provide:
 
 - **version** — The semver prefix for the tag (e.g., `2.1.0`, `2.2.0`, `3.0.0`). If omitted, detect the latest existing daily tag and reuse its version prefix.
-- **date** — The date stamp (e.g., `20260405`). If omitted, use today's date in `YYYYMMDD` format.
+- **date** — The date stamp (e.g., `20261112`). If omitted, use today's date in `YYYYMMDD` format.
 - **sequence** — The sequence number (e.g., `1`, `2`). If omitted, auto-detect: find existing tags for the same version+date and increment. Default to `1` if none exist.
 
 The resulting tag format depends on the chosen channel:
-- **Daily**: `v{VERSION}-daily.{DATE}.{SEQ}` — e.g., `v2.1.0-daily.20260405.1`
-- **Dev**: `v{VERSION}-dev.{DATE}.{SEQ}` — e.g., `v2.1.0-dev.20260405.1`
+- **Daily**: `v{VERSION}-daily.{DATE}.{SEQ}` — e.g., `v2.1.0-daily.20261112.1`
+- **Dev**: `v{VERSION}-dev.{DATE}.{SEQ}` — e.g., `v2.1.0-dev.20261112.1`
 
 ## Execution Flow
 
@@ -26,7 +26,7 @@ The resulting tag format depends on the chosen channel:
 **Before any other action**, ask the user which channel to publish to:
 
 > Which update channel should this build target?
-> - **Daily** — Production release. All daily-channel users will receive this update automatically.
+> - **Daily** — Production release. All daily-channel users will receive this update automatically, and the animated Release Note Showcase will auto-open on their first launch after upgrading.
 > - **Dev** — Development/debug build. Users must manually check and download. Use this for testing CI pipelines, auto-update flow debugging, or feature validation.
 
 If the user says dev/debug/test, set `CHANNEL=dev`. The tag prefix becomes `-dev.` instead of `-daily.`.
@@ -92,73 +92,95 @@ Acknowledge the decision, note in the session that the regression gate was skipp
 git tag -l "v*-daily.*" --sort=-version:refname | head -1
 
 # Find existing tags for the target date to determine sequence number
-git tag -l "v*-daily.{DATE}.*" --sort=-version:refname | head -1
+git tag -l "v*-{CHANNEL}.{DATE}.*" --sort=-version:refname | head -1
 ```
 
-If the user specified a version, use it. Otherwise, extract the version prefix from the latest daily tag (e.g., `2.1.0` from `v2.1.0-daily.20260402.1`).
+If the user specified a version, use it. Otherwise, extract the version prefix from the latest daily tag (e.g., `2.1.0` from `v2.1.0-daily.20261102.1`).
 
 If there are existing tags for the same version+date, increment the sequence number. Otherwise, start at `1`.
 
 Present the resolved tag to the user for confirmation before proceeding:
 
 > Channel: **{CHANNEL}**
-> Tag to create: `v2.1.0-{CHANNEL}.20260405.1`
+> Tag to create: `v2.1.0-{CHANNEL}.20261112.1`
 > Commits to push: 12
 > Proceed?
 
-### Phase 4: Generate Change Log Draft
+### Phase 4: Generate Bilingual Animated Release Note
 
-Before any push, tag, or release action, generate the Change Log draft for the resolved tag:
+Before any push, tag, or release action, synthesize the self-contained Web animated Release Note HTML (`resources/changelog/html/en/{CHANNEL}/{TAG}.html`) and its companion English Markdown (`resources/changelog/en/{CHANNEL}/{TAG}.md`) for `{TAG}`, pruning all older release-note files so `resources/changelog/` retains **only the single latest release**.
+
+#### Step 4.1: Bootstrap Draft & Inspect Commits
+
+Run the generator to create the initial 1-entry `resources/changelog/index.json` (which automatically prunes older release files) and inspect all commits since the nearest prior tag on the same channel:
 
 ```bash
 node scripts/generate-changelog.js --tag {TAG}
+git log {PREVIOUS_TAG}..HEAD --oneline
 ```
 
-This script writes the draft files:
+#### Step 4.2: Author the Markdown Summary and Self-Contained Animated HTML
 
-- `resources/changelog/en/daily/{TAG}.md`
-- `resources/changelog/index.json`
-- derived HTML assets under `resources/changelog/html/**`
+Do not leave raw Git commit subjects verbatim. Instead:
 
-The draft is always written in English, based on the current `HEAD` diff against the previous Daily tag. It is only a starting point.
-The HTML assets are generated automatically from the Markdown and should not be edited by hand.
-Before showing the draft to the user, inspect the generated English Markdown and ensure every user-facing Change Log title, heading, bullet item, and sentence starts with an uppercase letter. Fix lowercase initial letters in the Markdown draft, then regenerate derived HTML assets if any Markdown content changed.
+1. **Refine `resources/changelog/en/{CHANNEL}/{TAG}.md` (for GitHub Release & `latest.json` update manifests)**:
+   - Keep `# Onward Daily Build {TAG}` (or `# Onward Release {TAG}`), `Changes since \`{PREVIOUS_TAG}\`.`, `## New Features`, and `## Bug Fixes`.
+   - Polish each bullet into clear, user-facing English starting with an uppercase letter.
+2. **Author `resources/changelog/html/en/{CHANNEL}/{TAG}.html` (for the in-app VS Code-style Release Note modal)**:
+   - Begin the file with the sentinel comment `<!-- onward-rich-release-note -->` and wrap the body in `<div class="rn-showcase">...</div>` so `scripts/compile-changelog.js` preserves the custom animated HTML during builds.
+   - Include a `<header class="rn-hero">` banner and 3–5 `<section class="rn-card">` feature cards.
+   - **Self-contained Web animations & vector graphics (`.rn-stage`)**:
+     - Use inline `<style>` with CSS `@keyframes` and inline `<svg>` vector diagrams (`stroke-dasharray` + `stroke-dashoffset` flow pulses, gliding cards, glowing drop rings) using Onward theme CSS variables (`var(--bg-1)`, `var(--bg-2)`, `var(--text-1)`, `var(--accent)`, `var(--border)`).
+     - Zero external CDNs, remote fonts, or `http(s)` assets.
+   - **Mandatory bilingual (`zh-CN` + `en`) support**:
+     - Provide both `<div data-lang="zh-CN">...</div>` and `<div data-lang="en">...</div>` (or `<h2 data-lang="...">`, `<span data-lang="...">`) inside every hero, card header, and description. `ChangeLogModal` automatically scopes visibility via `.change-log-modal[data-locale="en" | "zh-CN"]`.
 
-After generation, **stop and ask the user to review the draft**. Do not continue automatically.
+#### Step 4.3: Verify Compilation, Pruning, and Lint Gates
 
-Show the generated file paths and explicitly request confirmation:
+```bash
+node scripts/compile-changelog.js
+pnpm lint:comments
+pnpm lint:sensitive
+```
 
-> Change Log draft generated for `{TAG}`.
-> Review the generated draft:
-> - `resources/changelog/en/daily/{TAG}.md`
-> Continue after confirmation?
+Confirm that `resources/changelog/index.json` contains only `{TAG}` and that all older `.md` / `.html` files under `resources/changelog/` have been pruned.
+
+#### Step 4.4: Pause for User Review (Mandatory Gate)
+
+Before committing or pushing, **stop and ask the user to review the Release Note**. Do not continue automatically.
+
+> Animated Release Note generated for `{TAG}`:
+> - In-App Animated Showcase HTML: `resources/changelog/html/en/{CHANNEL}/{TAG}.html`
+> - GitHub Release & Manifest Markdown: `resources/changelog/en/{CHANNEL}/{TAG}.md`
+> - Older release-note files have been pruned so `resources/changelog/` retains only `{TAG}`.
+>
+> Please review the animations, layout, and bilingual (`zh-CN` / `en`) copy. Proceed to commit and publish?
 
 Rules for this pause:
 
-- The user must have a chance to edit the English draft before release.
-- Do not push commits, create the tag, or publish anything before the user confirms.
-- If the user requests edits, apply them first and re-show the final draft state.
+- Do not commit, push, create the tag, or publish anything before the user explicitly confirms.
+- If the user requests copy or animation adjustments, update `resources/changelog/html/en/{CHANNEL}/{TAG}.html` (and `resources/changelog/en/{CHANNEL}/{TAG}.md` if applicable) and re-run `node scripts/compile-changelog.js`.
 
-### Phase 5: Commit Approved Change Log and Push
+### Phase 5: Commit Approved Release Note and Push
 
-After the user confirms the draft, ensure the Change Log files are included in git history before tagging:
+After the user confirms the Showcase, stage all additions and pruned deletions under `resources/changelog` before tagging:
 
 ```bash
 git status --short
-git add resources/changelog
+git add -A resources/changelog
 git commit -m "docs(changelog): add release notes for {TAG}"
 ```
 
 Notes:
 
 - The commit message must stay in English.
-- If the user prefers to fold the Change Log into an existing unreleased commit, follow that instruction instead.
+- If the user prefers to fold the Release Note into an existing unreleased commit, follow that instruction instead.
 - If `git status --short` shows unexpected unrelated changes, stop and ask before committing them.
 
 Then push local commits:
 
 ```bash
-git push origin master
+git push origin {BRANCH}
 ```
 
 ### Phase 6: Create and Push Tag
@@ -219,15 +241,16 @@ Verify the following conditions:
 Present a summary table:
 
 ```
-## Daily Build Release Complete
+## Daily Build Release Complete ({TAG})
 
 | Step | Status |
 |---|---|
 | Push code | {N} commits pushed |
+| Release Note Showcase | Bilingual animations validated (latest-only retained) |
 | Create tag {TAG} | done |
-| GitHub Actions build | arm64: Xm, x64: Xm |
-| GitHub Release | 4 artifacts |
-| Manifest update | arm64 + x64 |
+| GitHub Actions build | arm64: Xm, x64: Xm, win-x64: Xm |
+| GitHub Release | 6 artifacts |
+| Manifest update | macOS (arm64/x64) + Windows (x64) |
 | Download links | accessible |
 
 Release URL: https://github.com/OPPO-PersonalAI/Onward/releases/tag/{TAG}
@@ -243,12 +266,12 @@ The `package.json` version field (`2.0.1`) is only used for development builds a
 
 ## Error Handling
 
-- **Not on master**: Stop immediately. Do not push or tag from other branches.
+- **Not on master (Daily)**: Stop immediately. Do not push or tag daily builds from other branches.
 - **Dirty working tree**: Warn the user. They may want to commit first.
 - **Regression gate unanswered (Daily)**: Stop. Do not advance to Phase 3 until the user replies with the literal "run" or "skip".
-- **Regression gate failure (Daily)**: Stop before Phase 3. Surface the failing script names, the aggregate log path, and the relevant per-script logs under `/tmp`. Only proceed after a clean rerun or an explicit user override.
-- **Change Log draft missing**: Stop. Generate `resources/changelog/**` first.
-- **Change Log not yet confirmed**: Stop. Wait for explicit user approval before Phase 5.
+- **Regression gate failure (Daily)**: Stop before Phase 3. Surface the failing script names, the aggregate log path, and the relevant per-script logs under `test/full-regression-results/`. Only proceed after a clean rerun or an explicit user override.
+- **Release Note missing or invalid**: Stop. Author `resources/changelog/en/{CHANNEL}/{TAG}.md` and `resources/changelog/html/en/{CHANNEL}/{TAG}.html` and run `node scripts/compile-changelog.js` until valid.
+- **Release Note Showcase not yet confirmed**: Stop. Wait for explicit user approval before Phase 5.
 - **Push fails**: Check network and authentication. Show the error.
 - **Tag already exists**: Increment the sequence number or ask the user.
 - **CI build fails**: Show failed job logs. Do not proceed to verification.

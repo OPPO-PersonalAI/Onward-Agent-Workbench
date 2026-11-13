@@ -244,16 +244,6 @@ function writeFile(path, content) {
   writeFileSync(path, content, 'utf-8')
 }
 
-function readIndex(indexPath) {
-  if (!existsSync(indexPath)) {
-    return { entries: [] }
-  }
-  const parsed = JSON.parse(readFileSync(indexPath, 'utf-8'))
-  return Array.isArray(parsed.entries)
-    ? parsed
-    : { entries: [] }
-}
-
 function main() {
   const args = parseArgs(process.argv.slice(2))
   const tag = String(args.tag || '').trim()
@@ -279,7 +269,6 @@ function main() {
 
   writeFile(englishPath, buildEnglishMarkdown(tag, previousTag || null, sections))
 
-  const index = readIndex(indexPath)
   const publishedAt = new Date().toISOString()
   const nextEntry = {
     tag,
@@ -292,9 +281,9 @@ function main() {
     }
   }
 
-  const remainingEntries = index.entries.filter((entry) => entry && entry.tag !== tag)
+  // Retain only the single latest release entry; compileChangelogAssets prunes older files.
   const nextIndex = {
-    entries: [nextEntry, ...remainingEntries]
+    entries: [nextEntry]
   }
   writeFile(indexPath, `${JSON.stringify(nextIndex, null, 2)}\n`)
   compileChangelogAssets(changelogRoot)

@@ -290,6 +290,7 @@ Electron shortcut controller rather than invoking an action directly.
 | `MAIN_GPU_SOAK_THROTTLE_FLIP` | `main:gpu-soak.throttle-flip` | `i` | Same — the mid-park backgroundThrottling off/on flip (the machine-1 crash antecedent) fired. Tagged `cycle`. |
 | `MAIN_GPU_SOAK_CRASH_OBSERVED` | `main:gpu-soak.crash-observed` | `i` | Same — a GPU child-process-gone landed during a soak cycle (the reproducer scored a hit). Tagged `cycle`, `parkMs`. |
 | `MAIN_UPDATER_STATE_CHANGED` | `main:updater.state-changed` | `i` | `update-service.ts::setStatus` — updater phase transitions (hourly-scale; BUG-0002/0003 "after upgrade" correlation had no trace anchor). Tagged `fromPhase`, `toPhase`, `targetVersion`. |
+| `MAIN_CHANGELOG_READ` | `main:changelog.read` | `i` | `electron/main/changelog.ts::readCurrentChangelog` — IPC `changelog:get-current` resolution, tagged `tag`, `locale`, `success`, `format` (`html` \| `markdown` \| `none`), `reason?`. |
 
 #### Git Diff cache & freshness (Bug 1 / Bug 2)
 
@@ -871,7 +872,7 @@ Theme parsing, normalization, color conversion and precedence helpers are pure-d
 | `RENDERER_GITHISTORY_OPEN` | `renderer:githistory.open` | `i` | `src/App.tsx` dropdown `terminalGitHistory` branch |
 | `RENDERER_GITHISTORY_DEFAULT_FILE_RESOLVED` | `renderer:githistory.default-file-resolved` | `i` | `src/components/GitHistoryViewer/GitHistoryViewer.tsx` default-file effect — emitted via `perfTraceDiagnostic` (default-on in prod) when a commit's file list resolves WITHOUT auto-selecting a file (diff pane shows the placeholder instead of auto-expanding the first file). Payload `{ resolved: 'placeholder', fileCount }`. Breadcrumb for "Git History auto-expands a big file on entry again" reports. |
 | `RENDERER_SETTINGS_OPEN` | `renderer:settings.open` | `i` | `src/App.tsx` panel switcher |
-| `RENDERER_CHANGELOG_OPEN` | `renderer:changelog.open` | `i` | `src/App.tsx::handleToggleChangeLog` |
+| `RENDERER_CHANGELOG_OPEN` | `renderer:changelog.open` | `i` | `src/App.tsx::handleToggleChangeLog` and startup upgrade check — emitted via `perfTraceDiagnostic` (default-on in prod), tagged `trigger: 'manual' \| 'upgrade-check'`, `tag?`, `reason?`, `shouldAutoOpen?`. |
 | `RENDERER_SUBPAGE_FRESHNESS_CHECK` | `renderer:subpage.freshness-check` | `i` | `src/components/TerminalGrid/TerminalGrid.tsx::handleViewGitDiff` / `handleViewGitHistory` / Project Editor shortcut open path — fires once per subpage activation. Tagged `subpage: 'diff' \| 'history' \| 'editor'`, `cwd`, `reason: 'open' \| 'switch'`. Pairs with `MAIN_GIT_DIFF_CACHE_INVALIDATE { reason: 'force' }` on the main side for Git Diff. |
 | `RENDERER_CUSTOM_LAYOUT_APPLY` | `renderer:custom-layout.apply` | `i` (carries `durationMs`) | `TerminalGrid.tsx` layout-transition `useEffect` — fires once per `layoutMode` change after `displayLayoutMode` flips, or immediately when downsizing. Tagged `kind: 'preset' \| 'custom'`, `effectiveCount`, `previousCount`, `durationMs` so SQL queries can compare custom-apply latency to preset-apply latency. |
 | `RENDERER_CUSTOM_LAYOUT_EDITOR_OPEN` | `renderer:custom-layout.editor-open` | `i` | `CustomLayoutEditor.tsx` mount effect — fires when the editor opens (popover "+ New layout" or "Edit"). Tagged `mode: 'create' \| 'edit'`, `seedCellCount`. |

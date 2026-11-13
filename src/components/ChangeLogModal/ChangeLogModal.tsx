@@ -34,7 +34,8 @@ function getUnavailableMessage(
 }
 
 export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLogModalProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  const normalizedLocale: 'en' | 'zh-CN' = locale === 'zh-CN' ? 'zh-CN' : 'en'
   const isAutotest = Boolean(window.electronAPI?.debug?.autotest)
   const modalRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -118,8 +119,12 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
       isLoading: () => isLoading,
       getCurrentTag: () => currentTag,
       getRenderedText: () => {
-        const node = document.querySelector('.change-log-markdown')
-        return node?.textContent?.trim() || ''
+        const node = contentRef.current
+        if (!node) return ''
+        const clone = node.cloneNode(true) as HTMLElement
+        const hiddenLang = normalizedLocale === 'zh-CN' ? 'en' : 'zh-CN'
+        clone.querySelectorAll(`style, [data-lang="${hiddenLang}"]`).forEach((el) => el.remove())
+        return clone.textContent?.replace(/\s+/g, ' ').trim() || ''
       },
       getUnavailableState: () => {
         const stateNode = document.querySelector('.change-log-modal-state')
@@ -154,7 +159,7 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
         delete debugWindow.__onwardChangeLogDebug
       }
     }
-  }, [currentTag, isAutotest, isLoading, isOpen])
+  }, [currentTag, isAutotest, isLoading, isOpen, normalizedLocale])
 
   if (!isOpen) return null
 
@@ -182,6 +187,7 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
         role="dialog"
         aria-modal="true"
         aria-label={t('changeLog.title')}
+        data-locale={normalizedLocale}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="change-log-modal-header">

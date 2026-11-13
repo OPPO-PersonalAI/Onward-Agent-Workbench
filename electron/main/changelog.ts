@@ -7,9 +7,11 @@ import { app } from 'electron'
 import { existsSync, readFileSync } from 'fs'
 import { join, normalize, resolve, sep } from 'path'
 import { getAppInfo } from './app-info'
+import { performanceTrace } from './performance-trace'
+import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 
 export type ChangelogLocale = 'en' | 'zh-CN'
-export type ChangelogChannel = 'daily' | 'dev' | 'stable'
+export type ChangelogChannel = 'daily' | 'stable'
 export type ChangelogReadReason = 'no-tag' | 'index-missing' | 'entry-missing' | 'file-missing' | 'invalid-index' | 'read-failed'
 
 export interface ChangelogEntry {
@@ -39,6 +41,7 @@ export interface CurrentChangelogResult {
   entry?: ChangelogEntry
   html?: string
   content?: string
+  simulateUpgrade?: boolean
   reason?: ChangelogReadReason
   error?: string
 }
@@ -48,7 +51,7 @@ function normalizeLocale(value: string | null | undefined): ChangelogLocale {
 }
 
 function normalizeChannel(value: unknown): ChangelogChannel | null {
-  return value === 'daily' || value === 'dev' || value === 'stable' ? value : null
+  return value === 'daily' || value === 'stable' ? value : null
 }
 
 function getChangelogRoot(): string {
@@ -140,6 +143,12 @@ export function readCurrentChangelog(locale?: string | null): CurrentChangelogRe
   const currentTag = appInfo.tag
 
   if (!currentTag) {
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_READ, {
+      tag: null,
+      locale: requestedLocale,
+      success: false,
+      reason: 'no-tag'
+    })
     return {
       success: false,
       locale: requestedLocale,
@@ -153,17 +162,30 @@ export function readCurrentChangelog(locale?: string | null): CurrentChangelogRe
     index = readIndex()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    const reason: ChangelogReadReason = message.includes('invalid') ? 'invalid-index' : 'index-missing'
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_READ, {
+      tag: currentTag,
+      locale: requestedLocale,
+      success: false,
+      reason
+    })
     return {
       success: false,
       locale: requestedLocale,
       tag: currentTag,
-      reason: message.includes('invalid') ? 'invalid-index' : 'index-missing',
+      reason,
       error: message
     }
   }
 
   const entry = index.entries.find((item) => item.tag === currentTag)
   if (!entry) {
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_READ, {
+      tag: currentTag,
+      locale: requestedLocale,
+      success: false,
+      reason: 'entry-missing'
+    })
     return {
       success: false,
       locale: requestedLocale,
@@ -173,6 +195,7 @@ export function readCurrentChangelog(locale?: string | null): CurrentChangelogRe
   }
 
   const changelogRoot = getChangelogRoot()
+  const simulateUpgrade = process.env.ONWARD_SIMULATE_UPGRADE === '1'
   const htmlRelativePath = entry.html?.[requestedLocale] || entry.html?.en || null
   const markdownRelativePath = entry.markdown[requestedLocale] || entry.markdown.en
 
@@ -209,33 +232,55 @@ export function readCurrentChangelog(locale?: string | null): CurrentChangelogRe
   if (htmlRelativePath) {
     const htmlResult = resolveAndRead(htmlRelativePath)
     if (htmlResult.success) {
+      performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_READ, {
+        tag: currentTag,
+        locale: requestedLocale,
+        success: true,
+        format: 'html',
+        simulateUpgrade
+      })
       return {
         success: true,
         locale: requestedLocale,
         tag: currentTag,
         entry,
-        html: htmlResult.value
+        html: htmlResult.value,
+        ...(simulateUpgrade ? { simulateUpgrade: true } : {})
       }
     }
   }
 
   const markdownResult = resolveAndRead(markdownRelativePath)
-  if (markdownResult.success) {
+  if (!markdownResult.success) {
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_READ, {
+      tag: currentTag,
+      locale: requestedLocale,
+      success: false,
+      reason: markdownResult.reason
+    })
     return {
-      success: true,
+      success: false,
       locale: requestedLocale,
       tag: currentTag,
       entry,
-      content: markdownResult.value
+      reason: markdownResult.reason,
+      error: markdownResult.error
     }
   }
 
+  performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_READ, {
+    tag: currentTag,
+    locale: requestedLocale,
+    success: true,
+    format: 'markdown',
+    simulateUpgrade
+  })
   return {
-    success: false,
+    success: true,
     locale: requestedLocale,
     tag: currentTag,
     entry,
-    reason: markdownResult.reason,
-    error: markdownResult.error
+    content: markdownResult.value,
+    ...(simulateUpgrade ? { simulateUpgrade: true } : {})
   }
 }

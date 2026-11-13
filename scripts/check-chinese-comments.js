@@ -41,6 +41,7 @@ const ALLOWLIST = new Set([
   'src/autotest/test-prompt-sender.ts',
   'src/autotest/test-prompt-list.ts',
   'src/autotest/test-markdown-latex-preview.ts',
+  'src/autotest/test-change-log.ts',
   'test/unittest/prompt-input-shortcuts-main.test.mjs',
   'test/unittest/git-diff-hunk-actions.test.mts',
   'test/unittest/prompt-input-transaction.test.mts',
@@ -123,6 +124,8 @@ function isAllowlistedPath(relPath) {
   // in this file remain English per the repo rule; only the template
   // literals carry Chinese copy.
   if (relPath === 'scripts/metrics/build-metrics-report.mjs') return true
+  // Bilingual release-note HTML showcases and their autotest fixtures carry both en and zh-CN copy.
+  if (relPath.startsWith('resources/changelog/html/') || relPath.startsWith('test/autotest/fixtures/change-log/')) return true
   return false
 }
 

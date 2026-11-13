@@ -73,6 +73,10 @@ import {
   type PromptPanelPosition
 } from './utils/prompt-panel-layout'
 import { trackFeatureUse } from './telemetry/track-feature-use'
+import {
+  evaluateChangelogUpgrade,
+  LAST_SEEN_RELEASE_TAG_STORAGE_KEY
+} from './utils/changelog-upgrade'
 import './App.css'
 import './styles/form-controls.css'
 
@@ -635,6 +639,7 @@ function AppContent({
 
   const {
     settings,
+    isLoaded: settingsLoaded,
     getSettingsPanelWidth,
     setSettingsPanelWidth
   } = useSettings()
@@ -1417,7 +1422,9 @@ function AppContent({
     setShowChangeLog((previous) => {
       const next = !previous
       if (next) {
-        perfTrace(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, {})
+        perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, {
+          trigger: 'manual'
+        })
         setShowFeedbackModal(false)
       }
       return next
@@ -1428,7 +1435,10 @@ function AppContent({
     setShowChangeLog(false)
   }, [])
 
+  const upgradeCheckedTagRef = useRef<string | null>(null)
+
   useEffect(() => {
+    if (!settingsLoaded) return
     let active = true
     setChangeLogLoading(true)
     void window.electronAPI.changelog.getCurrent(locale)
@@ -1453,7 +1463,60 @@ function AppContent({
     return () => {
       active = false
     }
-  }, [locale])
+  }, [locale, settingsLoaded])
+
+  useEffect(() => {
+    if (!settingsLoaded || changeLogLoading) return
+    if (telemetryConsent !== true && telemetryConsent !== false) return
+    if (!changeLogResult) return
+
+    const currentTag = changeLogResult.tag
+    if (currentTag && upgradeCheckedTagRef.current === currentTag) return
+    if (currentTag) {
+      upgradeCheckedTagRef.current = currentTag
+    }
+
+    let storedLastSeenTag: string | null = null
+    try {
+      storedLastSeenTag = window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY)
+    } catch {
+      storedLastSeenTag = null
+    }
+
+    const isAutotest = window.electronAPI?.debug?.autotest === true
+    const autotestAllowAutoOpen = window.electronAPI?.debug?.autotestSuite === 'change-log'
+
+    const decision = evaluateChangelogUpgrade({
+      currentTag,
+      changelogAvailable: Boolean(
+        changeLogResult.success && (changeLogResult.html || changeLogResult.content)
+      ),
+      storedLastSeenTag,
+      simulateUpgrade: changeLogResult.simulateUpgrade,
+      isAutotest,
+      autotestAllowAutoOpen
+    })
+
+    if (decision.nextStoredTag) {
+      try {
+        window.localStorage.setItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY, decision.nextStoredTag)
+      } catch {
+        // Ignore storage write errors
+      }
+    }
+
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, {
+      trigger: 'upgrade-check',
+      tag: currentTag,
+      reason: decision.reason,
+      shouldAutoOpen: decision.shouldAutoOpen
+    })
+
+    if (decision.shouldAutoOpen && currentTag) {
+      setShowFeedbackModal(false)
+      setShowChangeLog(true)
+    }
+  }, [changeLogLoading, changeLogResult, settingsLoaded, telemetryConsent])
 
   const handleFeedbackToggle = useCallback(() => {
     setShowFeedbackModal((previous) => {
