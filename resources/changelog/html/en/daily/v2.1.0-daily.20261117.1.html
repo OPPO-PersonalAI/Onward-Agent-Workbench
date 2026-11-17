@@ -1,0 +1,670 @@
+<!-- onward-rich-release-note -->
+<div class="rn-showcase" data-release-note-showcase="true">
+  <style>
+    .rn-showcase {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Interactive radio tabs inside a stage */
+    .rn-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .rn-tab-radio {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .rn-tab-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--text-2);
+      background-color: var(--bg-2);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.16s ease;
+    }
+    .rn-tab-label:hover {
+      color: var(--text-1);
+      border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+    }
+
+    /* Scene 1: Prompt panel docking */
+    #rn-dock-left:checked ~ .rn-tabs label[for="rn-dock-left"],
+    #rn-dock-bottom:checked ~ .rn-tabs label[for="rn-dock-bottom"],
+    #rn-dock-right:checked ~ .rn-tabs label[for="rn-dock-right"] {
+      color: var(--accent);
+      background-color: color-mix(in srgb, var(--accent) 15%, var(--bg-1));
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+    }
+
+    .rn-dock-workbench {
+      position: relative;
+      height: 210px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    #rn-dock-left:checked ~ .rn-dock-workbench {
+      grid-template-columns: 165px 1fr;
+      grid-template-rows: 1fr;
+    }
+    #rn-dock-bottom:checked ~ .rn-dock-workbench {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 86px;
+    }
+    #rn-dock-right:checked ~ .rn-dock-workbench {
+      grid-template-columns: 1fr 165px;
+      grid-template-rows: 1fr;
+    }
+
+    .rn-dock-prompt-pane {
+      border-radius: 7px;
+      border: 1.5px solid var(--accent);
+      background-color: color-mix(in srgb, var(--accent) 10%, var(--bg-1));
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      animation: rnPulseGlow 3.2s ease-in-out infinite;
+    }
+    #rn-dock-bottom:checked ~ .rn-dock-workbench .rn-dock-prompt-pane {
+      order: 2;
+      flex-direction: row;
+      align-items: stretch;
+    }
+    #rn-dock-right:checked ~ .rn-dock-workbench .rn-dock-prompt-pane {
+      order: 2;
+    }
+
+    .rn-dock-subcol {
+      flex: 1;
+      border-radius: 5px;
+      border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+      background-color: color-mix(in srgb, var(--bg-2) 80%, transparent);
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-size: 11px;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    .rn-dock-subcol-title {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 10.5px;
+    }
+    .rn-dock-subcol-bar {
+      height: 5px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 30%, transparent));
+      animation: rnBarSweep 2.4s ease-in-out infinite;
+    }
+
+    .rn-dock-terminals {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .rn-dock-term-cell {
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background-color: var(--bg-2);
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      color: var(--text-3);
+    }
+    .rn-dock-term-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-2);
+      font-weight: 600;
+    }
+    .rn-dock-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: #22c55e;
+      box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+    }
+
+    /* Scene 2: Prompt attachments and @k references */
+    .rn-attach-stage {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .rn-attach-editor {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background-color: var(--bg-2);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+    }
+    .rn-chip-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .rn-img-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      background-color: color-mix(in srgb, var(--accent) 14%, var(--bg-1));
+      border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+      animation: rnChipFloat 2.8s ease-in-out infinite;
+    }
+    .rn-img-chip:nth-child(2) {
+      animation-delay: 0.4s;
+    }
+    .rn-mention-line {
+      color: var(--text-1);
+      line-height: 1.5;
+    }
+    .rn-mention-token {
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: var(--accent);
+      background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+      font-weight: 600;
+    }
+    .rn-caret {
+      display: inline-block;
+      width: 2px;
+      height: 13px;
+      vertical-align: -2px;
+      margin-left: 2px;
+      background-color: var(--accent);
+      animation: rnCaretBlink 1s steps(2, start) infinite;
+    }
+    .rn-send-preview {
+      margin-top: 2px;
+      padding: 7px 9px;
+      border-radius: 6px;
+      border: 1px dashed var(--border);
+      background-color: var(--bg-1);
+      color: var(--text-3);
+      font-size: 11px;
+      line-height: 1.55;
+      word-break: break-all;
+    }
+    .rn-send-preview-label {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--text-2);
+      font-weight: 600;
+    }
+    .rn-send-path {
+      color: var(--text-1);
+      animation: rnPathReveal 3.6s ease-in-out infinite;
+    }
+    .rn-mention-popup {
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+      background-color: var(--bg-2);
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11.5px;
+    }
+    .rn-mention-hint {
+      padding: 2px 8px 4px;
+      color: var(--text-3);
+      font-size: 10.5px;
+    }
+    .rn-mention-item {
+      padding: 5px 8px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--text-2);
+    }
+    .rn-mention-item.is-selected {
+      background-color: color-mix(in srgb, var(--accent) 18%, var(--bg-1));
+      color: var(--text-1);
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+      animation: rnRowPulse 2.6s ease-in-out infinite;
+    }
+
+    /* Scene 3: External file drop into a terminal pane */
+    .rn-drop-svg {
+      width: 100%;
+      height: auto;
+      max-height: 185px;
+      display: block;
+    }
+    .rn-drag-card {
+      animation: rnDragGlide 3.4s cubic-bezier(0.32, 0, 0.24, 1) infinite;
+    }
+    .rn-drop-ring {
+      animation: rnDropRingPulse 3.4s ease-in-out infinite;
+    }
+    .rn-flow-dash {
+      stroke-dasharray: 6 6;
+      animation: rnDashFlow 1.2s linear infinite;
+    }
+
+    /* Scene 4: Windows background update pipeline */
+    .rn-updater-svg {
+      width: 100%;
+      height: auto;
+      max-height: 165px;
+      display: block;
+    }
+    .rn-updater-packet {
+      stroke-dasharray: 8 8;
+      animation: rnDashFlow 1s linear infinite;
+    }
+
+    @keyframes rnPulseGlow {
+      0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 10%, transparent); }
+      50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+    }
+    @keyframes rnBarSweep {
+      0%, 100% { width: 42%; opacity: 0.7; }
+      50% { width: 92%; opacity: 1; }
+    }
+    @keyframes rnChipFloat {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-2px); }
+    }
+    @keyframes rnCaretBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    @keyframes rnRowPulse {
+      0%, 100% { transform: translateX(0); }
+      50% { transform: translateX(3px); }
+    }
+    @keyframes rnPathReveal {
+      0%, 20% { opacity: 0.35; }
+      45%, 85% { opacity: 1; }
+      100% { opacity: 0.35; }
+    }
+    @keyframes rnDragGlide {
+      0%, 15% { transform: translate(0px, 0px); opacity: 0.95; }
+      55%, 80% { transform: translate(235px, 6px); opacity: 1; }
+      95%, 100% { transform: translate(0px, 0px); opacity: 0.95; }
+    }
+    @keyframes rnDropRingPulse {
+      0%, 40% { stroke-opacity: 0.25; }
+      55%, 80% { stroke-opacity: 1; }
+      100% { stroke-opacity: 0.25; }
+    }
+    @keyframes rnDashFlow {
+      from { stroke-dashoffset: 24; }
+      to { stroke-dashoffset: 0; }
+    }
+
+    @media (max-width: 760px) {
+      .rn-attach-stage {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+
+  <!-- Hero banner -->
+  <header class="rn-hero">
+    <div class="rn-hero-kicker">
+      <span>ONWARD DAILY BUILD</span>
+      <span>·</span>
+      <span>v2.1.0-daily.20261117.1</span>
+    </div>
+    <div data-lang="zh-CN">
+      <h1>Onward 2.1.0 更新：Prompt 面板三向停靠、附件引用与 Windows 后台更新</h1>
+      <p>本次更新包含自 <code>v2.1.0-daily.20261102.1</code> 以来的全部改动：Prompt 面板可以停靠在左侧、底部或右侧；可以把截图和文件粘贴为附件，并用 <code>@1</code>、<code>@2</code> 在 Prompt 中引用；可以把系统中的文件直接拖进终端；Windows 版改为后台准备更新、无需安装向导。</p>
+    </div>
+    <div data-lang="en">
+      <h1>Onward 2.1.0: Prompt Panel Docking, Prompt Attachments &amp; Background Updates on Windows</h1>
+      <p>Everything new since <code>v2.1.0-daily.20261102.1</code>: dock the Prompt panel on the left, bottom, or right; paste screenshots and files as attachments and reference them with <code>@1</code>, <code>@2</code>; drag files from your OS straight into a terminal; and update on Windows in the background without an installer wizard.</p>
+    </div>
+    <div class="rn-hero-pills">
+      <span class="rn-pill"><span data-lang="zh-CN">4 项主要功能</span><span data-lang="en">4 major features</span></span>
+      <span class="rn-pill"><span data-lang="zh-CN">6 项问题修复</span><span data-lang="en">6 bug fixes</span></span>
+      <span class="rn-pill"><span data-lang="zh-CN">自 v2.1.0-daily.20261102.1 起</span><span data-lang="en">Since v2.1.0-daily.20261102.1</span></span>
+    </div>
+  </header>
+
+  <!-- Feature 1: Prompt panel docking -->
+  <section
+    id="rn-dock"
+    class="rn-card"
+    data-toc-id="rn-dock"
+    data-toc-title-en="Prompt Panel Docking"
+    data-toc-title-zh="Prompt 面板停靠位置"
+    data-toc-badge="LAYOUT"
+  >
+    <div class="rn-card-header">
+      <div>
+        <h2 data-lang="zh-CN">Prompt 面板可停靠在左侧、底部或右侧</h2>
+        <h2 data-lang="en">Dock the Prompt Panel on the Left, Bottom, or Right</h2>
+      </div>
+      <span class="rn-badge">LAYOUT</span>
+    </div>
+
+    <div data-lang="zh-CN">
+      <p>在 <strong>设置 → 常规 → Prompt 面板位置</strong> 中选择 <strong>左侧</strong>（默认）、<strong>底部</strong> 或 <strong>右侧</strong>。停靠在底部时，面板会变成横向三栏布局（<strong>历史记录 | 编辑器 | 发送目标</strong>），栏宽可以拖动调整。每个标签页会分别记住自己的面板尺寸；设置面板始终固定在左侧。</p>
+    </div>
+    <div data-lang="en">
+      <p>Choose <strong>Left</strong> (default), <strong>Bottom</strong>, or <strong>Right</strong> in <strong>Settings → General → Prompt panel position</strong>. When docked at the bottom, the panel becomes a three-column layout (<strong>History | Editor | Send targets</strong>) with draggable column dividers. Panel sizes are remembered per tab, and the Settings panel always stays on the left.</p>
+    </div>
+
+    <div class="rn-cues">
+      <span class="rn-cue"><span data-lang="zh-CN">设置 → 常规 → Prompt 面板位置</span><span data-lang="en">Settings → General → Prompt panel position</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">左侧 / 底部 / 右侧</span><span data-lang="en">Left / Bottom / Right</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">按标签页记住尺寸</span><span data-lang="en">Sizes remembered per tab</span></span>
+    </div>
+
+    <div class="rn-stage" data-stage="dock-workbench">
+      <input class="rn-tab-radio" type="radio" name="rn-dock-mode" id="rn-dock-left" />
+      <input class="rn-tab-radio" type="radio" name="rn-dock-mode" id="rn-dock-bottom" checked />
+      <input class="rn-tab-radio" type="radio" name="rn-dock-mode" id="rn-dock-right" />
+
+      <div class="rn-tabs">
+        <label class="rn-tab-label" for="rn-dock-left">
+          <span data-lang="zh-CN">左侧</span>
+          <span data-lang="en">Left</span>
+        </label>
+        <label class="rn-tab-label" for="rn-dock-bottom">
+          <span data-lang="zh-CN">底部（三栏）</span>
+          <span data-lang="en">Bottom (3 columns)</span>
+        </label>
+        <label class="rn-tab-label" for="rn-dock-right">
+          <span data-lang="zh-CN">右侧</span>
+          <span data-lang="en">Right</span>
+        </label>
+      </div>
+
+      <div class="rn-dock-workbench">
+        <div class="rn-dock-prompt-pane">
+          <div class="rn-dock-subcol">
+            <span class="rn-dock-subcol-title"><span data-lang="zh-CN">1. 历史记录</span><span data-lang="en">1. History</span></span>
+            <div class="rn-dock-subcol-bar"></div>
+          </div>
+          <div class="rn-dock-subcol">
+            <span class="rn-dock-subcol-title"><span data-lang="zh-CN">2. 编辑器</span><span data-lang="en">2. Editor</span></span>
+            <div class="rn-dock-subcol-bar"></div>
+          </div>
+          <div class="rn-dock-subcol">
+            <span class="rn-dock-subcol-title"><span data-lang="zh-CN">3. 发送目标</span><span data-lang="en">3. Send targets</span></span>
+            <div class="rn-dock-subcol-bar"></div>
+          </div>
+        </div>
+        <div class="rn-dock-terminals">
+          <div class="rn-dock-term-cell">
+            <div class="rn-dock-term-header">
+              <span>Task 1 · main</span>
+              <span class="rn-dock-dot"></span>
+            </div>
+            <span>$ git status</span>
+          </div>
+          <div class="rn-dock-term-cell">
+            <div class="rn-dock-term-header">
+              <span>Task 2 · feat/ui</span>
+              <span class="rn-dock-dot"></span>
+            </div>
+            <span>$ pnpm test:unit</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature 2: Prompt attachments and @k references -->
+  <section
+    id="rn-attachments"
+    class="rn-card"
+    data-toc-id="rn-attachments"
+    data-toc-title-en="Prompt Attachments & @ References"
+    data-toc-title-zh="Prompt 附件与 @ 引用"
+    data-toc-badge="PROMPT"
+  >
+    <div class="rn-card-header">
+      <div>
+        <h2 data-lang="zh-CN">粘贴截图和文件作为附件，用 <code>@1</code>、<code>@2</code> 在 Prompt 中引用</h2>
+        <h2 data-lang="en">Paste Screenshots &amp; Files as Attachments, Reference Them with <code>@1</code>, <code>@2</code></h2>
+      </div>
+      <span class="rn-badge">PROMPT</span>
+    </div>
+
+    <div data-lang="zh-CN">
+      <p>在 Prompt 编辑器里按 <code>Ctrl/Cmd+V</code> 粘贴截图或复制的文件，会生成按顺序编号的附件卡片（<code>@1</code>、<code>@2</code>……）。卡片可以预览、在光标处插入引用或移除，移除后其余附件会自动重新编号。输入 <code>@</code> 会弹出附件列表供选择。发送时，每个 <code>@k</code> 会被替换为对应附件的文件路径（按当前 Shell 需要加引号），没有被引用的附件路径会追加在末尾。另外，把文件从 Finder / 资源管理器拖进 Prompt 编辑器，会在光标处插入文件路径。</p>
+    </div>
+    <div data-lang="en">
+      <p>Press <code>Ctrl/Cmd+V</code> in the Prompt editor to paste a screenshot or copied files as numbered attachment cards (<code>@1</code>, <code>@2</code>, ...). Each card can be previewed, inserted at the cursor, or removed, and the remaining items are renumbered automatically. Type <code>@</code> to pick an attachment from a popup. When you send, every <code>@k</code> is replaced with that attachment's file path (quoted for the shell when needed), and attachments you did not reference are appended at the end. Dropping files from Finder or Explorer into the Prompt editor inserts their paths at the cursor.</p>
+    </div>
+
+    <div class="rn-cues">
+      <span class="rn-cue"><span data-lang="zh-CN">Ctrl/Cmd+V 粘贴附件</span><span data-lang="en">Ctrl/Cmd+V to attach</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">输入 @ 选择附件</span><span data-lang="en">Type @ to reference</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">发送时 @k 替换为路径</span><span data-lang="en">@k becomes a path on send</span></span>
+    </div>
+
+    <div class="rn-stage rn-attach-stage" data-stage="prompt-attachments">
+      <div class="rn-attach-editor">
+        <div class="rn-chip-strip">
+          <span class="rn-img-chip">@1 · 🖼 1440×900 ✕</span>
+          <span class="rn-img-chip">@2 · 📎 schema.sql ✕</span>
+        </div>
+        <div class="rn-mention-line">
+          <span data-lang="zh-CN">对比截图 <span class="rn-mention-token">@1</span> 和表结构 <span class="rn-mention-token">@2</span><span class="rn-caret"></span></span>
+          <span data-lang="en">Compare the screenshot <span class="rn-mention-token">@1</span> with the schema in <span class="rn-mention-token">@2</span><span class="rn-caret"></span></span>
+        </div>
+        <div class="rn-send-preview">
+          <span class="rn-send-preview-label"><span data-lang="zh-CN">发送到 Task 的内容：</span><span data-lang="en">Sent to the Task:</span></span>
+          <span data-lang="zh-CN">对比截图 <span class="rn-send-path">…/prompt-images/b7f2/item-1.png</span> 和表结构 <span class="rn-send-path">…/prompt-images/b7f2/item-2.sql</span></span>
+          <span data-lang="en">Compare the screenshot <span class="rn-send-path">…/prompt-images/b7f2/item-1.png</span> with the schema in <span class="rn-send-path">…/prompt-images/b7f2/item-2.sql</span></span>
+        </div>
+      </div>
+      <div class="rn-mention-popup" aria-label="Attachment reference popup preview">
+        <div class="rn-mention-hint">
+          <span data-lang="zh-CN">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+          <span data-lang="en">↑↓ select · Enter confirm · Esc close</span>
+        </div>
+        <div class="rn-mention-item is-selected">
+          <span>@1 · screenshot</span>
+          <span>PNG</span>
+        </div>
+        <div class="rn-mention-item">
+          <span>@2 · schema.sql</span>
+          <span>SQL</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature 3: External file drag-and-drop into terminal panes -->
+  <section
+    id="rn-terminal-drop"
+    class="rn-card"
+    data-toc-id="rn-terminal-drop"
+    data-toc-title-en="Drag Files into Terminals"
+    data-toc-title-zh="文件拖入终端"
+    data-toc-badge="TERMINAL"
+  >
+    <div class="rn-card-header">
+      <div>
+        <h2 data-lang="zh-CN">从 Finder / 资源管理器把文件直接拖进终端</h2>
+        <h2 data-lang="en">Drag Files and Folders from Finder or Explorer into Any Terminal</h2>
+      </div>
+      <span class="rn-badge">TERMINAL</span>
+    </div>
+
+    <div data-lang="zh-CN">
+      <p>把一个或多个文件、文件夹拖到任意终端窗格上，目标窗格会高亮显示；松开后路径会写入该终端，并且终端获得焦点。路径会按当前 Shell（Bash / Zsh、PowerShell 或 Cmd）的规则处理，只有包含空格或特殊字符时才加引号；多个路径之间用空格分隔，末尾留一个空格，方便继续输入参数。</p>
+    </div>
+    <div data-lang="en">
+      <p>Drag one or more files or folders onto any terminal pane. The pane under the cursor is highlighted, and on drop the paths are written into that terminal and it takes focus. Paths follow the rules of the active shell (Bash / Zsh, PowerShell, or Cmd) and are quoted only when they contain spaces or special characters. Multiple paths are separated by spaces with a trailing space, so you can keep typing arguments.</p>
+    </div>
+
+    <div class="rn-cues">
+      <span class="rn-cue"><span data-lang="zh-CN">支持文件和文件夹</span><span data-lang="en">Files and folders</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">按 Shell 规则加引号</span><span data-lang="en">Shell-aware quoting</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">拖放后终端获得焦点</span><span data-lang="en">Pane focused after drop</span></span>
+    </div>
+
+    <div class="rn-stage" data-stage="terminal-file-drop">
+      <svg class="rn-drop-svg" viewBox="0 0 680 160" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animation of a file dragged from the OS file manager into a terminal pane">
+        <!-- Left: OS file manager -->
+        <rect x="14" y="18" width="185" height="124" rx="9" fill="var(--bg-2)" stroke="var(--border)" stroke-width="1.5" />
+        <text x="30" y="42" fill="var(--text-2)" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">Finder / Explorer</text>
+        <rect x="28" y="56" width="156" height="32" rx="6" fill="var(--bg-1)" stroke="var(--border)" />
+        <text x="40" y="76" fill="var(--text-3)" font-family="IBM Plex Mono, monospace" font-size="10.5">📄 my report v2.pdf</text>
+
+        <!-- Dashed trajectory -->
+        <path class="rn-flow-dash" d="M 205 80 C 265 48, 320 48, 382 80" stroke="var(--accent)" stroke-width="2" fill="none" />
+
+        <!-- Right: target terminal pane -->
+        <rect class="rn-drop-ring" x="372" y="18" width="292" height="124" rx="9" fill="var(--bg-2)" stroke="var(--accent)" stroke-width="2" />
+        <text x="390" y="42" fill="var(--accent)" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="700">Task 2 · PowerShell</text>
+        <rect x="388" y="56" width="260" height="68" rx="6" fill="var(--bg-1)" stroke="var(--border)" />
+        <text x="400" y="82" fill="var(--text-2)" font-family="IBM Plex Mono, monospace" font-size="10.5">PS D:\Work&gt; 'D:\Docs\my report v2.pdf'</text>
+        <text x="400" y="106" fill="var(--text-3)" font-family="IBM Plex Mono, monospace" font-size="10">✓ Quoted because of the spaces</text>
+
+        <!-- Animated file card -->
+        <g class="rn-drag-card">
+          <rect x="150" y="60" width="148" height="34" rx="7" fill="var(--bg-1)" stroke="var(--accent)" stroke-width="1.8" />
+          <text x="164" y="81" fill="var(--text-1)" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">📄 my report v2.pdf</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Feature 4: Windows background auto-update -->
+  <section
+    id="rn-win-updater"
+    class="rn-card"
+    data-toc-id="rn-win-updater"
+    data-toc-title-en="Windows Background Update"
+    data-toc-title-zh="Windows 后台更新"
+    data-toc-badge="UPDATER"
+  >
+    <div class="rn-card-header">
+      <div>
+        <h2 data-lang="zh-CN">Windows 更新改为后台准备，不再弹出安装向导</h2>
+        <h2 data-lang="en">Windows Updates Are Prepared in the Background, No Installer Wizard</h2>
+      </div>
+      <span class="rn-badge">UPDATER</span>
+    </div>
+
+    <div data-lang="zh-CN">
+      <p>Windows 版的更新包现在会在后台下载并校验，然后在后台线程中解压到暂存目录，此时设置页会显示「正在准备更新」。准备好之后，有两种完成方式：点击 <strong>重启并更新</strong> 立即替换并重新启动；或者什么都不做，在正常退出应用时静默完成替换。替换由一个不带窗口的小程序 <code>onward-updater.exe</code> 执行，整个过程不会出现安装向导或命令行黑框；如果遇到文件被占用，会自动回滚到旧版本。</p>
+    </div>
+    <div data-lang="en">
+      <p>On Windows, the update archive is now downloaded and verified in the background, then unpacked into a staging directory on a background thread while Settings shows "Preparing update". Once it is ready, you can either click <strong>Restart to update</strong> to swap and relaunch right away, or simply keep working and let the swap happen silently when you quit the app. The swap is performed by a small windowless helper, <code>onward-updater.exe</code>, so no installer wizard or console window appears, and it rolls back automatically if any file is locked.</p>
+    </div>
+
+    <div class="rn-cues">
+      <span class="rn-cue"><span data-lang="zh-CN">后台下载与校验</span><span data-lang="en">Background download &amp; checksum</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">重启更新或退出时完成</span><span data-lang="en">Restart now or on quit</span></span>
+      <span class="rn-cue"><span data-lang="zh-CN">文件被占用时自动回滚</span><span data-lang="en">Auto rollback on locked files</span></span>
+    </div>
+
+    <div class="rn-stage" data-stage="windows-background-updater">
+      <svg class="rn-updater-svg" viewBox="0 0 680 132" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Windows background update pipeline">
+        <!-- Stage 1 -->
+        <rect x="12" y="20" width="192" height="92" rx="8" fill="var(--bg-2)" stroke="var(--border)" stroke-width="1.5" />
+        <text x="26" y="46" fill="var(--accent)" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="700">1. Download</text>
+        <text x="26" y="68" fill="var(--text-2)" font-family="IBM Plex Mono, monospace" font-size="10.5">.zip + SHA-256 check</text>
+        <text x="26" y="88" fill="var(--text-3)" font-family="IBM Plex Mono, monospace" font-size="10">In the background</text>
+
+        <line class="rn-updater-packet" x1="206" y1="66" x2="244" y2="66" stroke="var(--accent)" stroke-width="2.2" />
+
+        <!-- Stage 2 -->
+        <rect x="246" y="20" width="188" height="92" rx="8" fill="var(--bg-2)" stroke="var(--border)" stroke-width="1.5" />
+        <text x="260" y="46" fill="var(--accent)" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="700">2. Prepare</text>
+        <text x="260" y="68" fill="var(--text-2)" font-family="IBM Plex Mono, monospace" font-size="10.5">Unpack in a worker</text>
+        <text x="260" y="88" fill="var(--text-3)" font-family="IBM Plex Mono, monospace" font-size="10">"Preparing update"</text>
+
+        <line class="rn-updater-packet" x1="436" y1="66" x2="474" y2="66" stroke="var(--accent)" stroke-width="2.2" />
+
+        <!-- Stage 3 -->
+        <rect x="476" y="20" width="192" height="92" rx="8" fill="var(--bg-2)" stroke="var(--accent)" stroke-width="1.8" />
+        <text x="490" y="46" fill="var(--accent)" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="700">3. Swap</text>
+        <text x="490" y="68" fill="var(--text-1)" font-family="IBM Plex Mono, monospace" font-size="10.5">onward-updater.exe</text>
+        <text x="490" y="88" fill="var(--text-3)" font-family="IBM Plex Mono, monospace" font-size="10">Restart or on quit</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Section 5: More improvements and bug fixes -->
+  <section
+    id="rn-fixes"
+    class="rn-card"
+    data-toc-id="rn-fixes"
+    data-toc-title-en="More Improvements & Fixes"
+    data-toc-title-zh="更多改进与问题修复"
+    data-toc-badge="FIXES"
+  >
+    <div class="rn-card-header">
+      <div>
+        <h2 data-lang="zh-CN">更多改进与问题修复</h2>
+        <h2 data-lang="en">More Improvements &amp; Bug Fixes</h2>
+      </div>
+      <span class="rn-badge">FIXES</span>
+    </div>
+
+    <div class="rn-grid-2">
+      <div class="rn-mini-card">
+        <h3 data-lang="zh-CN">Prompt 编辑：保存快捷键与 Esc</h3>
+        <h3 data-lang="en">Prompt Editor: Save Shortcut &amp; Escape</h3>
+        <p data-lang="zh-CN">修复 Prompt 编辑器中 <code>Ctrl+S</code> / <code>Cmd+S</code> 保存快捷键的识别问题；编辑 Prompt 时按 <code>Esc</code> 不再丢弃正在编辑的内容。</p>
+        <p data-lang="en">Fixed the <code>Ctrl+S</code> / <code>Cmd+S</code> save shortcut in the Prompt editor. Pressing <code>Escape</code> while editing a prompt no longer discards your changes.</p>
+      </div>
+      <div class="rn-mini-card">
+        <h3 data-lang="zh-CN">Git Diff：选中文件与滚动位置</h3>
+        <h3 data-lang="en">Git Diff: Selection &amp; Scroll Position</h3>
+        <p data-lang="zh-CN">较慢的首次加载完成后，不会再取消你已经选中的文件（Windows 上较明显）；视图重建或折叠区域变化后，滚动位置保持不变；「跳到编辑器」按钮在后台刷新时不再闪烁。</p>
+        <p data-lang="en">A slow initial load no longer deselects a file you already picked (most visible on Windows). The scroll position is kept when the diff view is rebuilt or collapsed regions change, and the "Jump to Editor" button no longer flickers during background refreshes.</p>
+      </div>
+      <div class="rn-mini-card">
+        <h3 data-lang="zh-CN">升级后自动打开更新说明</h3>
+        <h3 data-lang="en">Release Notes Open After Upgrade</h3>
+        <p data-lang="zh-CN">升级到新版本后第一次启动时，会自动打开本页这样的更新说明，只展示最新一期。</p>
+        <p data-lang="en">The first launch after an upgrade automatically opens release notes like this page, showing only the latest release.</p>
+      </div>
+      <div class="rn-mini-card">
+        <h3 data-lang="zh-CN">Windows 退出更可靠</h3>
+        <h3 data-lang="en">More Reliable Quit on Windows</h3>
+        <p data-lang="zh-CN">退出流程为进程结束预留了更多时间，使应用在 Windows 上能更稳定地在限定时间内完成退出。</p>
+        <p data-lang="en">The quit sequence now reserves more time for process exit, so the app closes within its time limit more reliably on Windows.</p>
+      </div>
+    </div>
+  </section>
+</div>

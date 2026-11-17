@@ -1,16 +1,16 @@
 {
   "entries": [
     {
-      "tag": "v2.1.0-daily.20261112.1",
-      "version": "2.1.0-daily.20261112.1",
+      "tag": "v2.1.0-daily.20261117.1",
+      "version": "2.1.0-daily.20261117.1",
       "channel": "daily",
       "previousTag": "v2.1.0-daily.20261102.1",
-      "publishedAt": "2026-11-12T11:30:00.000Z",
+      "publishedAt": "2026-11-17T13:30:43.682Z",
       "markdown": {
-        "en": "en/daily/v2.1.0-daily.20261112.1.md"
+        "en": "en/daily/v2.1.0-daily.20261117.1.md"
       },
       "html": {
-        "en": "html/en/daily/v2.1.0-daily.20261112.1.html"
+        "en": "html/en/daily/v2.1.0-daily.20261117.1.html"
       }
     }
   ]
