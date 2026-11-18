@@ -43,6 +43,7 @@ import { isSameAppNavigation, openExternalUrlWithConfirm } from './external-link
 import { startApiServer, stopApiServer, getApiPort } from './api-server'
 import { tMain } from './localization'
 import { getUpdateService, applyPendingUpdateOnStartup } from './update-service'
+import { initializeChangelogStartup } from './changelog'
 import { getAppStateStorage } from './app-state-storage'
 import { collectQuitActivitySummary, warmQuitActivityScanner } from './quit-activity-scan'
 import { initializeSessionLedger, markSessionLedgerClean } from './session-ledger'
@@ -966,6 +967,7 @@ app.whenReady().then(async () => {
   const appInfo = earlyAppInfo
   htmlPreviewProtocolManager.register()
   performanceTrace.start()
+  if (gotTheSingleInstanceLock) initializeChangelogStartup(previousSessionVerdict)
   performanceTrace.startEventLoopMonitor()
   performanceTrace.initialize()
   // Post-ready on purpose — see registerSignalQuitHandlers' header: a

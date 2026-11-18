@@ -1026,6 +1026,8 @@ export interface CurrentChangelogResult {
 }
 
 export interface ChangelogAPI {
+  getStartupState: (legacyTag?: string | null) => Promise<import('../utils/changelog-upgrade').ReleaseNotesStartupState>
+  markShown: (tag: string) => Promise<{ success: boolean }>
   getCurrent: (locale?: string) => Promise<CurrentChangelogResult>
 }
 

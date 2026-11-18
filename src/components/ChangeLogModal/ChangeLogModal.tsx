@@ -19,6 +19,7 @@ interface ChangeLogModalProps {
   onClose: () => void
   result: CurrentChangelogResult | null
   isLoading: boolean
+  onShown?: (tag: string) => void
 }
 
 function getUnavailableMessage(
@@ -33,7 +34,7 @@ function getUnavailableMessage(
   return t('changeLog.unavailable.error')
 }
 
-export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLogModalProps) {
+export function ChangeLogModal({ isOpen, onClose, result, isLoading, onShown }: ChangeLogModalProps) {
   const { t, locale } = useI18n()
   const normalizedLocale: 'en' | 'zh-CN' = locale === 'zh-CN' ? 'zh-CN' : 'en'
   const isAutotest = Boolean(window.electronAPI?.debug?.autotest)
@@ -106,6 +107,37 @@ export function ChangeLogModal({ isOpen, onClose, result, isLoading }: ChangeLog
       disposeMermaidPanZoom(el)
     }
   }, [renderedHtml, t])
+
+  const reportedTagRef = useRef<string | null>(null)
+  useEffect(() => {
+    const tag = result?.tag
+    if (!isOpen || isLoading || !result?.success || !tag || !renderedHtml || !onShown) return
+    let firstFrame = 0
+    let secondFrame = 0
+    const schedule = () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+      if (document.visibilityState !== 'visible' || reportedTagRef.current === tag) return
+      // Two frames allow the visible content to paint before acknowledging it.
+      firstFrame = requestAnimationFrame(() => {
+        secondFrame = requestAnimationFrame(() => {
+          const content = contentRef.current
+          if (document.visibilityState !== 'visible' || !content?.isConnected || !content.textContent?.trim()) return
+          const bounds = content.getBoundingClientRect()
+          if (bounds.width <= 0 || bounds.height <= 0) return
+          reportedTagRef.current = tag
+          onShown(tag)
+        })
+      })
+    }
+    schedule()
+    document.addEventListener('visibilitychange', schedule)
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+      document.removeEventListener('visibilitychange', schedule)
+    }
+  }, [isOpen, isLoading, result, renderedHtml, onShown])
 
   const currentTag = result?.tag ?? null
   const unavailableMessage = getUnavailableMessage(result, t)

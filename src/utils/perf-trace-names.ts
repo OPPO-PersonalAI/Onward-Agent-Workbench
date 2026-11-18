@@ -266,6 +266,8 @@ export const PERF_TRACE_EVENT = {
   RENDERER_SETTINGS_OPEN: 'renderer:settings.open',
   RENDERER_CHANGELOG_OPEN: 'renderer:changelog.open',
   MAIN_CHANGELOG_READ: 'main:changelog.read',
+  MAIN_CHANGELOG_STATE: 'main:changelog.state',
+  RENDERER_CHANGELOG_SHOWN: 'renderer:changelog.shown',
 
   // ───────── Task drag-to-rearrange ─────────
   // Diagnostic breadcrumbs for "my Tasks jumped around / the order did not

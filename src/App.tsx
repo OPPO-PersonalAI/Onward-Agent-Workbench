@@ -74,7 +74,7 @@ import {
 } from './utils/prompt-panel-layout'
 import { trackFeatureUse } from './telemetry/track-feature-use'
 import {
-  evaluateChangelogUpgrade,
+  type ReleaseNotesStartupState,
   LAST_SEEN_RELEASE_TAG_STORAGE_KEY
 } from './utils/changelog-upgrade'
 import './App.css'
@@ -1436,6 +1436,41 @@ function AppContent({
   }, [])
 
   const upgradeCheckedTagRef = useRef<string | null>(null)
+  const [releaseNotesStartup, setReleaseNotesStartup] = useState<ReleaseNotesStartupState | null>(null)
+  const lastReleaseNotesGateRef = useRef<string | null>(null)
+  const [pageVisible, setPageVisible] = useState(document.visibilityState === 'visible')
+
+  useEffect(() => {
+    const onVisibility = () => setPageVisible(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    let legacyTag: string | null = null
+    try { legacyTag = window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY) } catch { /* Main-process history remains available. */ }
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, { trigger: 'startup-state-request' })
+    void window.electronAPI.changelog.getStartupState(legacyTag).then((startup) => {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, { trigger: 'startup-state-result', reason: startup.reason, pending: Boolean(startup.pendingTag) })
+      if (active) setReleaseNotesStartup(startup)
+    }).catch(() => {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, { trigger: 'startup-state-failed' })
+    })
+    return () => { active = false }
+  }, [])
+
+  const handleChangeLogShown = useCallback((tag: string) => {
+    if (releaseNotesStartup?.pendingTag !== tag) return
+    upgradeCheckedTagRef.current = tag
+    setReleaseNotesStartup(previous => previous ? { ...previous, pendingTag: null } : previous)
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_SHOWN, { phase: 'visible', tag })
+    void window.electronAPI.changelog.markShown(tag).then((result) => {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_SHOWN, { phase: 'acknowledged', tag, success: result.success })
+    }).catch(() => {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_SHOWN, { phase: 'acknowledge-failed', tag })
+    })
+  }, [releaseNotesStartup])
 
   useEffect(() => {
     if (!settingsLoaded) return
@@ -1466,57 +1501,32 @@ function AppContent({
   }, [locale, settingsLoaded])
 
   useEffect(() => {
-    if (!settingsLoaded || changeLogLoading) return
-    if (telemetryConsent !== true && telemetryConsent !== false) return
-    if (!changeLogResult) return
-
+    const gate = !isLoaded || !activeTab || !settingsLoaded ? 'workspace-loading'
+      : changeLogLoading ? 'content-loading'
+        : !pageVisible ? 'window-hidden'
+          : telemetryConsent !== true && telemetryConsent !== false ? 'consent'
+            : pendingDialog || showFeedbackModal ? 'other-dialog'
+              : !releaseNotesStartup ? 'startup-state-loading'
+                : !changeLogResult?.success || !(changeLogResult.html || changeLogResult.content) ? 'content-unavailable' : null
+    if (gate && releaseNotesStartup?.pendingTag && lastReleaseNotesGateRef.current !== gate) {
+      lastReleaseNotesGateRef.current = gate
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, { trigger: 'deferred', reason: gate })
+    }
+    if (gate || !changeLogResult || !releaseNotesStartup) return
     const currentTag = changeLogResult.tag
-    if (currentTag && upgradeCheckedTagRef.current === currentTag) return
-    if (currentTag) {
-      upgradeCheckedTagRef.current = currentTag
-    }
-
-    let storedLastSeenTag: string | null = null
-    try {
-      storedLastSeenTag = window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY)
-    } catch {
-      storedLastSeenTag = null
-    }
-
-    const isAutotest = window.electronAPI?.debug?.autotest === true
-    const autotestAllowAutoOpen = window.electronAPI?.debug?.autotestSuite === 'change-log'
-
-    const decision = evaluateChangelogUpgrade({
-      currentTag,
-      changelogAvailable: Boolean(
-        changeLogResult.success && (changeLogResult.html || changeLogResult.content)
-      ),
-      storedLastSeenTag,
-      simulateUpgrade: changeLogResult.simulateUpgrade,
-      isAutotest,
-      autotestAllowAutoOpen
-    })
-
-    if (decision.nextStoredTag) {
-      try {
-        window.localStorage.setItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY, decision.nextStoredTag)
-      } catch {
-        // Ignore storage write errors
-      }
-    }
-
+    if (!currentTag || upgradeCheckedTagRef.current === currentTag) return
+    const simulated = changeLogResult.simulateUpgrade === true
+    const suppressed = window.electronAPI?.debug?.autotest === true && window.electronAPI.debug.autotestSuite !== 'change-log'
+    if (suppressed && !simulated) return
+    if (!simulated && releaseNotesStartup.pendingTag !== currentTag) return
+    upgradeCheckedTagRef.current = currentTag
     perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_CHANGELOG_OPEN, {
-      trigger: 'upgrade-check',
-      tag: currentTag,
-      reason: decision.reason,
-      shouldAutoOpen: decision.shouldAutoOpen
+      trigger: 'upgrade-check', tag: currentTag,
+      reason: simulated ? 'simulated-upgrade' : releaseNotesStartup.reason, shouldAutoOpen: true
     })
-
-    if (decision.shouldAutoOpen && currentTag) {
-      setShowFeedbackModal(false)
-      setShowChangeLog(true)
-    }
-  }, [changeLogLoading, changeLogResult, settingsLoaded, telemetryConsent])
+    setShowChangeLog(true)
+  }, [isLoaded, activeTab, settingsLoaded, changeLogLoading, pageVisible, telemetryConsent, pendingDialog,
+    showFeedbackModal, releaseNotesStartup, changeLogResult])
 
   const handleFeedbackToggle = useCallback(() => {
     setShowFeedbackModal((previous) => {
@@ -2130,6 +2140,7 @@ function AppContent({
         onClose={handleCloseChangeLog}
         result={changeLogResult}
         isLoading={changeLogLoading}
+        onShown={releaseNotesStartup ? handleChangeLogShown : undefined}
       />
       <FeedbackModal isOpen={showFeedbackModal} onClose={handleCloseFeedbackModal} />
       <DownsizeConfirmDialog

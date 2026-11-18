@@ -20,7 +20,7 @@ import { getCodingAgentRuntimeInfo } from './coding-agent-runtime'
 import { getAppStateStorage, AppState } from './app-state-storage'
 import { isThreadpoolStalled, simulateThreadpoolStallForAutotest, getThreadpoolHealthSnapshot } from './threadpool-watchdog'
 import { getVisibilityHealthSnapshot } from './visibility-watchdog'
-import { readCurrentChangelog } from './changelog'
+import { readCurrentChangelog, getChangelogStartupState, markChangelogShown } from './changelog'
 import { getTelemetryService } from './telemetry/telemetry-service'
 import { getTelemetryConsent, setTelemetryConsent } from './telemetry/telemetry-consent'
 import { applyTerminalUserEnvVars, buildColorCapableTerminalEnv } from './terminal-env'
@@ -1731,6 +1731,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
     }
     return null
   })
+
+  ipcMain.handle(IPC.CHANGELOG_GET_STARTUP_STATE, (_event, legacyTag?: string) => getChangelogStartupState(legacyTag))
+  ipcMain.handle(IPC.CHANGELOG_MARK_SHOWN, (_event, tag: unknown) => markChangelogShown(tag))
 
   ipcMain.handle(IPC.CHANGELOG_GET_CURRENT, (_event, locale?: string) => {
     return readCurrentChangelog(locale)
@@ -3457,6 +3460,8 @@ async function runCleanupIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(IPC.DEBUG_SHELL_GET_LAST_EXTERNAL_URL)
   ipcMain.removeHandler(IPC.DEBUG_GIT_DIFF_GET_DEBUG_STATS)
   ipcMain.removeHandler(IPC.CHANGELOG_GET_CURRENT)
+  ipcMain.removeHandler(IPC.CHANGELOG_GET_STARTUP_STATE)
+  ipcMain.removeHandler(IPC.CHANGELOG_MARK_SHOWN)
   ipcMain.removeHandler(IPC.APP_GET_PDF_VIEWER_URL)
   ipcMain.removeHandler(IPC.BROWSER_GET_ZOOM_FACTOR)
   ipcMain.removeHandler(IPC.BROWSER_SET_ZOOM_FACTOR)

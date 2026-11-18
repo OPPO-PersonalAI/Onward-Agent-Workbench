@@ -7,8 +7,31 @@ import { app } from 'electron'
 import { existsSync, readFileSync } from 'fs'
 import { join, normalize, resolve, sep } from 'path'
 import { getAppInfo } from './app-info'
+import { ReleaseNotesStore } from './changelog-state'
+import type { PreviousSessionVerdict } from './session-ledger-core'
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
+
+let startupStore: ReleaseNotesStore | null = null
+
+export function initializeChangelogStartup(previous: PreviousSessionVerdict | null): void {
+  if (startupStore) return
+  const previousVersion = previous?.kind === 'clean' || previous?.kind === 'abnormal' ? previous.previous.appVersion : null
+  startupStore = new ReleaseNotesStore(
+    join(app.getPath('userData'), 'release-notes-state.json'), getAppInfo().tag, previousVersion,
+    detail => performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_STATE, detail)
+  )
+}
+
+export function getChangelogStartupState(legacyTag?: string | null) {
+  performanceTrace.record(PERF_TRACE_EVENT.MAIN_CHANGELOG_STATE, { action: 'query', legacyProvided: typeof legacyTag === 'string' })
+  if (!startupStore) throw new Error('Release notes startup state is not initialized.')
+  return startupStore.prepare(typeof legacyTag === 'string' ? legacyTag.slice(0, 128) : null)
+}
+
+export function markChangelogShown(tag: unknown) {
+  return startupStore?.markShown(tag) ?? { success: false }
+}
 
 export type ChangelogLocale = 'en' | 'zh-CN'
 export type ChangelogChannel = 'daily' | 'stable'

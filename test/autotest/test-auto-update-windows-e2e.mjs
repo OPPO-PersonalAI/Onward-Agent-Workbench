@@ -589,7 +589,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+const run = process.argv.includes('--release-notes')
+  ? () => import('./test-changelog-update-e2e.mjs').then(module => module.runReleaseNotesUpdateTest(process.argv[process.argv.indexOf('--release-notes') + 1]))
+  : main
+
+run().catch((error) => {
   console.error(`Fatal error: ${error instanceof Error ? error.stack || error.message : String(error)}`)
   process.exitCode = 1
 })

@@ -1108,6 +1108,8 @@ export interface CurrentChangelogResult {
 }
 
 export interface ChangelogAPI {
+  getStartupState: (legacyTag?: string | null) => Promise<import('../../src/utils/changelog-upgrade').ReleaseNotesStartupState>
+  markShown: (tag: string) => Promise<{ success: boolean }>
   getCurrent: (locale?: string) => Promise<CurrentChangelogResult>
 }
 
@@ -2463,6 +2465,8 @@ const appInfoAPI: AppInfoAPI = {
 }
 
 const changelogAPI: ChangelogAPI = {
+  getStartupState: (legacyTag) => ipcRenderer.invoke(IPC.CHANGELOG_GET_STARTUP_STATE, legacyTag),
+  markShown: (tag) => ipcRenderer.invoke(IPC.CHANGELOG_MARK_SHOWN, tag),
   getCurrent: (locale?: string) => {
     return ipcRenderer.invoke(IPC.CHANGELOG_GET_CURRENT, locale)
   }

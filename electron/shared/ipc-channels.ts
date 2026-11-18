@@ -63,6 +63,8 @@ export const IPC = {
 
   // changelog / clipboard
   CHANGELOG_GET_CURRENT: 'changelog:get-current',
+  CHANGELOG_GET_STARTUP_STATE: 'changelog:get-startup-state',
+  CHANGELOG_MARK_SHOWN: 'changelog:mark-shown',
   CLIPBOARD_PASTE_PROMPT: 'clipboard:paste-prompt',
   CLIPBOARD_READ_TEXT: 'clipboard:read-text',
   CLIPBOARD_READ_TERMINAL: 'clipboard:read-terminal',

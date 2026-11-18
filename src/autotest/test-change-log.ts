@@ -4,12 +4,10 @@
  */
 
 import type { AutotestContext, ChangeLogDebugApi, TestResult } from './types'
-import { LAST_SEEN_RELEASE_TAG_STORAGE_KEY } from '../utils/changelog-upgrade'
 
 const EXPECTED_EN_SNIPPET = 'Autotest fixture feature appears in the change log.'
 const EXPECTED_ZH_SNIPPET = '\u81ea\u52a8\u5316\u6d4b\u8bd5\u7279\u6027\u51fa\u73b0\u5728\u52a8\u6001\u66f4\u65b0\u753b\u62a5\u4e2d\u3002'
 const EXPECTED_TAG = 'v9.9.9-daily.20990101.1'
-const LEGACY_TAG = 'v9.9.1-daily.20980101.1'
 
 function queryChangeLogButton(): HTMLButtonElement | null {
   return document.querySelector('[data-testid="sidebar-change-log-button"]') as HTMLButtonElement | null
@@ -48,9 +46,26 @@ export async function testChangeLog(ctx: AutotestContext): Promise<TestResult[]>
     return await waitFor(label, () => !getApi()?.isOpen(), 4000, 50)
   }
 
+  const waitForAcknowledgement = async () => {
+    for (let attempt = 0; attempt < 80 && !cancelled(); attempt++) {
+      if ((await window.electronAPI.changelog.getStartupState()).pendingTag === null) return true
+      await sleep(50)
+    }
+    return false
+  }
+
   log(`change-log:start mode=${runMode}`)
 
-  if (runMode === 'upgrade-first-launch') {
+  if (runMode === 'missing-content') {
+    await waitFor('change-log-ready', () => Boolean(getApi()) && !getApi()?.isLoading(), 4000, 50)
+    const content = await window.electronAPI.changelog.getCurrent('en')
+    const state = await window.electronAPI.changelog.getStartupState()
+    record('CL-UPG-05-missing-content-keeps-pending', !content.success && !getApi()?.isOpen() && state.pendingTag === EXPECTED_TAG)
+    return results
+  }
+
+
+  if (runMode === 'upgrade-first-launch' || runMode === 'upgrade-en') {
     const debugApiReady = await waitFor('change-log-debug-api', () => Boolean(getApi()), 4000, 50)
     record('CL-UPG-00-debug-api-available', debugApiReady, { available: Boolean(getApi()) })
     if (!debugApiReady || cancelled()) return results
@@ -66,11 +81,14 @@ export async function testChangeLog(ctx: AutotestContext): Promise<TestResult[]>
     const text = api.getRenderedText()
     const modalLocale = document.querySelector('.change-log-modal')?.getAttribute('data-locale')
     const stageCount = document.querySelectorAll('.change-log-markdown .rn-stage, .change-log-markdown svg').length
+    const expectedLocale = runMode === 'upgrade-en' ? 'en' : 'zh-CN'
+    const expectedSnippet = expectedLocale === 'en' ? EXPECTED_EN_SNIPPET : EXPECTED_ZH_SNIPPET
+    const hiddenSnippet = expectedLocale === 'en' ? EXPECTED_ZH_SNIPPET : EXPECTED_EN_SNIPPET
     record(
       'CL-UPG-02-renders-latest-showcase-release',
       stageCount > 0 &&
         api.getCurrentTag() === EXPECTED_TAG &&
-        text.includes(EXPECTED_ZH_SNIPPET),
+        text.includes(expectedSnippet),
       {
         stageCount,
         currentTag: api.getCurrentTag(),
@@ -80,36 +98,34 @@ export async function testChangeLog(ctx: AutotestContext): Promise<TestResult[]>
     )
     record(
       'CL-UPG-02b-auto-follows-zh-cn-language-setting',
-      modalLocale === 'zh-CN' &&
-        text.includes(EXPECTED_ZH_SNIPPET) &&
-        !text.includes(EXPECTED_EN_SNIPPET),
+      modalLocale === expectedLocale &&
+        text.includes(expectedSnippet) &&
+        !text.includes(hiddenSnippet),
       {
         modalLocale,
-        hasZh: text.includes(EXPECTED_ZH_SNIPPET),
+        hasZh: text.includes(expectedSnippet),
         hasEn: text.includes(EXPECTED_EN_SNIPPET)
       }
     )
 
-    const storedTagAfterUpgrade = window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY)
-    record(
-      'CL-UPG-03-persists-latest-seen-tag',
-      storedTagAfterUpgrade === EXPECTED_TAG,
-      { storedTagAfterUpgrade }
-    )
+    record('CL-UPG-03-persists-shown-after-paint', await waitForAcknowledgement(), {
+      isOpen: getApi()?.isOpen() ?? false
+    })
+    // Exit with the modal still open: acknowledgement must not require a close.
     return results
   }
 
-  if (runMode === 'upgrade-second-launch') {
+  if (runMode === 'upgrade-second-launch' || runMode === 'downgrade') {
     const debugApiReady = await waitFor('change-log-debug-api', () => Boolean(getApi()), 4000, 50)
     record('CL-UPG-04a-debug-api-available', debugApiReady, { available: Boolean(getApi()) })
     if (!debugApiReady || cancelled()) return results
 
     await sleep(450)
-    const storedTag = window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY)
-    const stayedClosed = (getApi()?.isOpen() ?? false) === false && storedTag === EXPECTED_TAG
+    const startup = await window.electronAPI.changelog.getStartupState()
+    const stayedClosed = (getApi()?.isOpen() ?? false) === false && startup.pendingTag === null
     record('CL-UPG-04-relaunch-does-not-reopen', stayedClosed, {
       isOpen: getApi()?.isOpen() ?? false,
-      storedTag
+      startup
     })
     return results
   }
@@ -120,21 +136,9 @@ export async function testChangeLog(ctx: AutotestContext): Promise<TestResult[]>
       available: Boolean(getApi())
     })
 
-    const seededFreshTag = await waitFor(
-      'fresh-install-tag-seeded',
-      () => window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY) === EXPECTED_TAG,
-      4000,
-      50
-    )
-    await sleep(250)
-    record(
-      'CL-00b-fresh-install-does-not-auto-open',
-      seededFreshTag && (getApi()?.isOpen() ?? false) === false,
-      {
-        isOpen: getApi()?.isOpen() ?? false,
-        storedTag: window.localStorage.getItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY)
-      }
-    )
+    const startup = await window.electronAPI.changelog.getStartupState()
+    record('CL-00b-fresh-install-does-not-auto-open',
+      startup.reason === 'fresh-install' && startup.pendingTag === null && !getApi()?.isOpen(), { startup })
 
     const button = queryChangeLogButton()
     record('CL-01-sidebar-button-visible', Boolean(button), {
@@ -278,9 +282,7 @@ export async function testChangeLog(ctx: AutotestContext): Promise<TestResult[]>
       openAfterClose: getApi()?.isOpen() ?? false
     })
 
-    // Seed older release tag in localStorage so the next launch on this userData dir
-    // tests real multi-version upgrade auto-open (v9.9.1 -> v9.9.9)
-    window.localStorage.setItem(LAST_SEEN_RELEASE_TAG_STORAGE_KEY, LEGACY_TAG)
+
   } finally {
     if (getApi()?.isOpen()) {
       await closeChangeLog('change-log-cleanup-close', () => getApi()?.clickCloseButton() ?? false).catch(() => {})
