@@ -69,6 +69,7 @@ import {
   normalizePromptPanelBottomHeight,
   normalizePromptBottomHistoryWidth,
   normalizePromptBottomSenderWidth,
+  normalizePromptBottomAttachmentWidth,
   resolveMainContentLayout,
   type PromptPanelPosition
 } from './utils/prompt-panel-layout'
@@ -478,6 +479,10 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
     updateTabById(tab.id, { promptBottomSenderWidth: normalizePromptBottomSenderWidth(width) })
   }, [tab.id, updateTabById])
 
+  const handleBottomAttachmentWidthChange = useCallback((width: number) => {
+    updateTabById(tab.id, { promptBottomAttachmentWidth: normalizePromptBottomAttachmentWidth(width) })
+  }, [tab.id, updateTabById])
+
   const handleEditorDraftChange = useCallback((draft: EditorDraft | null) => {
     updateEditorDraftForTab(tab.id, draft)
   }, [tab.id, updateEditorDraftForTab])
@@ -564,6 +569,8 @@ const TabPromptNotebook = memo(function TabPromptNotebook({
       onBottomHistoryWidthChange={handleBottomHistoryWidthChange}
       bottomSenderWidth={normalizePromptBottomSenderWidth(tab.promptBottomSenderWidth)}
       onBottomSenderWidthChange={handleBottomSenderWidthChange}
+      bottomAttachmentWidth={normalizePromptBottomAttachmentWidth(tab.promptBottomAttachmentWidth)}
+      onBottomAttachmentWidthChange={handleBottomAttachmentWidthChange}
       prompts={prompts}
       onAddPrompt={onAddPrompt}
       onAddPinnedPrompt={onAddPinnedPrompt}

@@ -140,9 +140,9 @@ function harness(t, platform = 'darwin', initialSettings = legacy()) {
 const nextActions = h => ({ ...structuredClone(h.value.settings.promptInput), leader: 'Control+Alt+G', timeoutMs: 1750 })
 const tick = () => new Promise(resolveTick => setImmediate(resolveTick))
 
-test('PISC-01: an old bootstrap receives v10 defaults without changing unrelated preferences', t => {
+test('PISC-01: an old bootstrap receives v11 defaults without changing unrelated preferences', t => {
   const h = harness(t)
-  assert.equal(h.value.settings.version, 10)
+  assert.equal(h.value.settings.version, 11)
   assert.equal(h.value.settings.promptInput.leader, null)
   assert.equal(h.value.settings.promptInput.timeoutMs, 1500)
   assert.equal(h.value.settings.promptInput.actions.length, 5)

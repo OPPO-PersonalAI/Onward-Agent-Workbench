@@ -157,7 +157,8 @@ body.dragging-prompt * {
   width: auto;
   height: 100%;
   min-height: 0;
-  min-width: 240px;
+  /* Text area minimum (240) + action rail (48); see MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH. */
+  min-width: 288px;
   border-top: none;
 }
 
@@ -182,6 +183,125 @@ body.dragging-prompt * {
   flex: 1 1 auto;
   border-top: none;
   justify-content: space-between;
+}
+
+/* Editor body wrapper: transparent in left/right docks, so the attachment grid and the
+   inputs stay direct flex items of .prompt-editor exactly as before. */
+.prompt-editor-body {
+  display: contents;
+}
+
+/* Bottom dock: text inputs and a vertical attachment column side by side. */
+.prompt-notebook[data-dock-position="bottom"] .prompt-editor-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.prompt-notebook[data-dock-position="bottom"] .prompt-editor-body > .prompt-editor-inputs {
+  flex: 1 1 0%;
+  min-width: 240px;
+}
+
+.prompt-editor-attachment-resizer {
+  flex: 0 0 5px;
+  width: 5px;
+  position: relative;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.prompt-editor-attachment-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background-color: var(--border);
+}
+
+.prompt-editor-attachment-resizer:hover::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 2px;
+  background-color: var(--accent);
+}
+
+.prompt-editor-images-strip.is-column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  gap: 8px;
+  min-width: 96px;
+  min-height: 0;
+  max-height: none;
+  padding: 8px;
+  border-bottom: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.prompt-editor-images-strip.is-column .prompt-editor-image-card {
+  flex: 0 0 auto;
+}
+
+/* Bottom dock: a fixed 48px vertical icon rail at the right edge of the editor body
+   (width mirrors PROMPT_BOTTOM_ACTION_RAIL_WIDTH). The group sits at the bottom; the
+   leading auto margin (instead of justify-content: flex-end) keeps every button
+   reachable by scrolling when a short panel cannot fit them all. */
+.prompt-editor-actions.is-rail {
+  flex: 0 0 48px;
+  width: 48px;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 6px 0;
+  border-top: none;
+  border-left: 1px solid var(--border);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.prompt-editor-actions.is-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.prompt-editor-actions.is-rail .prompt-editor-color-picker {
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 6px;
+  margin: auto 0 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-editor-actions.is-rail .prompt-editor-color-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.prompt-editor-btn.is-icon {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.prompt-editor-btn-cancel.is-icon {
+  border: 1px solid var(--border-strong);
 }
 
 /* search box */

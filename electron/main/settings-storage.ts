@@ -15,7 +15,7 @@ import { getAvailableThemeIds, normalizeThemeSettings } from '../../src/themes/t
 import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, promptTargetSlot, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
-import { DEFAULT_PROMPT_PANEL_POSITION, normalizePromptPanelPosition, type PromptPanelPosition } from '../../src/utils/prompt-panel-layout'
+import { DEFAULT_PROMPT_PANEL_POSITION, isPromptPanelPosition, normalizePromptPanelPosition, resolveLoadedPromptPanelPosition, type PromptPanelPosition } from '../../src/utils/prompt-panel-layout'
 
 /**
  * Shortcut configuration
@@ -103,7 +103,8 @@ interface SettingsState {
 // v8: unified named themes with per-theme customization and Task overrides.
 // v9: retire Task color overrides; preserve Task fonts and theme-level colors.
 // v10: ordered Prompt input actions with an opt-in, user-defined leader.
-const CURRENT_VERSION = 10
+// v11: Prompt panel defaults to the bottom dock; profiles older than v11 move to bottom once.
+const CURRENT_VERSION = 11
 
 /** Settings panel default width */
 const DEFAULT_SETTINGS_PANEL_WIDTH = 400
@@ -197,6 +198,16 @@ class SettingsStorage {
         const data = readFileSync(this.storagePath, 'utf-8')
         const parsed = JSON.parse(data) as Partial<SettingsState>
         const normalized = this.validateState(parsed)
+        // Disk-only migration: renderer save snapshots must never re-trigger it.
+        const loadedPosition = resolveLoadedPromptPanelPosition(parsed.promptPanelPosition, parsed.version)
+        normalized.promptPanelPosition = loadedPosition.position
+        if (loadedPosition.migrated) {
+          performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_PANEL_POSITION_MIGRATED, {
+            fromVersion: parsed.version,
+            from: isPromptPanelPosition(parsed.promptPanelPosition) ? parsed.promptPanelPosition : 'unset',
+            to: loadedPosition.position
+          })
+        }
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, {
           reason: (parsed.version ?? 0) < CURRENT_VERSION ? 'migrated' : 'loaded', mode: normalized.theme.mode
         })

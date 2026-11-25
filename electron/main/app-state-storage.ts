@@ -25,11 +25,13 @@ import {
   DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
   DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
   DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+  DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
   normalizePromptPanelWidth,
   normalizePromptPanelRightWidth,
   normalizePromptPanelBottomHeight,
   normalizePromptBottomHistoryWidth,
-  normalizePromptBottomSenderWidth
+  normalizePromptBottomSenderWidth,
+  normalizePromptBottomAttachmentWidth
 } from '../../src/utils/prompt-panel-layout'
 
 /**
@@ -148,6 +150,7 @@ interface TabState {
   promptPanelBottomHeight?: number
   promptBottomHistoryWidth?: number
   promptBottomSenderWidth?: number
+  promptBottomAttachmentWidth?: number
   promptEditorHeight: number
   activeTerminalId: string | null
   terminals: PersistedTerminalState[]
@@ -391,6 +394,7 @@ function createDefaultTabState(id: string): TabState {
     promptPanelBottomHeight: DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
     promptBottomHistoryWidth: DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
     promptBottomSenderWidth: DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+    promptBottomAttachmentWidth: DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
     promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
     activeTerminalId: null,
     terminals: [],
@@ -545,6 +549,7 @@ class AppStateStorage {
       promptPanelBottomHeight: DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
       promptBottomHistoryWidth: DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
       promptBottomSenderWidth: DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+      promptBottomAttachmentWidth: DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
       promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
       activeTerminalId: legacyConfig?.activeTerminalId ?? null,
       terminals: migratedTerminals,
@@ -740,6 +745,7 @@ class AppStateStorage {
     const promptPanelBottomHeight = normalizePromptPanelBottomHeight(tab.promptPanelBottomHeight)
     const promptBottomHistoryWidth = normalizePromptBottomHistoryWidth(tab.promptBottomHistoryWidth)
     const promptBottomSenderWidth = normalizePromptBottomSenderWidth(tab.promptBottomSenderWidth)
+    const promptBottomAttachmentWidth = normalizePromptBottomAttachmentWidth(tab.promptBottomAttachmentWidth)
 
     // Handle migration from older versions: if there is a name field but no customName, try to extract the custom name
     let customName: string | null = null
@@ -776,6 +782,7 @@ class AppStateStorage {
       promptPanelBottomHeight,
       promptBottomHistoryWidth,
       promptBottomSenderWidth,
+      promptBottomAttachmentWidth,
       promptEditorHeight,
       activeTerminalId: tab.activeTerminalId ?? null,
       terminals,

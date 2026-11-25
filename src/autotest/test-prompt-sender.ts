@@ -376,6 +376,34 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     return activeNotebookElement()
   }
 
+  // Switch the dock through the real Settings UI (General page -> position -> Save).
+  const setDockPosition = async (position: 'left' | 'bottom') => {
+    if (activeNotebookElement()?.getAttribute('data-dock-position') === position) return true
+    document.querySelector<HTMLButtonElement>('[data-testid="sidebar-settings-button"]')?.click()
+    if (!await waitFor(`ps-dock-${position}-settings-open`, () => Boolean(window.__onwardSettingsDebug?.isOpen()), 4000, 40)) return false
+    const compact = document.querySelector<HTMLSelectElement>('[data-testid="settings-page-select"]')
+    if (compact?.getClientRects().length) changeField(compact, 'general')
+    else document.querySelector<HTMLButtonElement>('[data-testid="settings-tab-general"]')?.click()
+    const optionSelector = `[data-testid="settings-prompt-position-${position}"]`
+    if (!await waitFor(`ps-dock-${position}-option`, () => Boolean(document.querySelector(optionSelector)), 3000, 40)) return false
+    document.querySelector<HTMLButtonElement>(optionSelector)?.click()
+    await paintTurn()
+    document.querySelector<HTMLButtonElement>('[data-testid="settings-save"]')?.click()
+    const saved = await waitFor(`ps-dock-${position}-saved`,
+      () => document.querySelector('[data-testid="settings-save-status"]')?.getAttribute('data-state') === 'clean', 4000, 40)
+    document.querySelector<HTMLButtonElement>('[data-testid="sidebar-settings-button"]')?.click()
+    const closed = await waitFor(`ps-dock-${position}-settings-closed`, () => !window.__onwardSettingsDebug, 4000, 40)
+    if (!activeNotebookElement()) clickSidebarTitle('sidebar.promptNotebook')
+    const applied = await waitFor(`ps-dock-${position}-applied`,
+      () => activeNotebookElement()?.getAttribute('data-dock-position') === position, 3000, 40)
+    return saved && closed && applied
+  }
+
+  // PS-31..PS-33 lock the left/right-dock vertical stacking contract (sender at most half
+  // of the panel height, editor floor 180px). The default dock is bottom, where the three
+  // panes sit side by side instead, so these checks run explicitly on the left dock.
+  const leftDockPinned = cancelled() ? false : await setDockPosition('left')
+
   // PS-31: Terminals grid no longer has the legacy 140px hard cap
   if (!cancelled()) {
     const notebook = getLayoutNotebook()
@@ -414,7 +442,8 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
         && Number.isFinite(maxHeightPx)
         && Math.abs(maxHeightPx - ceiling) <= 2
       const maxHeightOk = maxHeightRule || maxHeightPxHalf
-      _assert('PS-32-sender-respects-50-percent-cap', withinCeiling && maxHeightOk, {
+      _assert('PS-32-sender-respects-50-percent-cap', leftDockPinned && withinCeiling && maxHeightOk, {
+        leftDockPinned,
         senderHeight,
         notebookHeight,
         ceiling,
@@ -437,13 +466,19 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
       const minHeightPx = parseFloat(minHeight)
       const minHeightOk = Number.isFinite(minHeightPx) && Math.abs(minHeightPx - 180) <= 1
       const shrinkOk = flexShrink === '1'
-      _assert('PS-33-editor-compressible-with-floor', minHeightOk && shrinkOk, {
+      _assert('PS-33-editor-compressible-with-floor', leftDockPinned && minHeightOk && shrinkOk, {
+        leftDockPinned,
         minHeight,
         flexShrink
       })
     } else {
       _assert('PS-33-editor-compressible-with-floor', false, { reason: 'editor element not found' })
     }
+  }
+
+  // Return to the default bottom dock so the remaining cases run on the shipped layout.
+  if (!cancelled() && leftDockPinned && !await setDockPosition('bottom')) {
+    _assert('PS-33-editor-compressible-with-floor', false, { reason: 'could not restore the default bottom dock' })
   }
 
   // PS-34: every card sits on the rectangle its Task occupies in the grid,
