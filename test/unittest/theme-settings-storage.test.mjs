@@ -160,10 +160,10 @@ test('TSS-11: clock snapshots are detached and exclude imported palettes and unr
   assert(h.storage.getThemeScheduleSnapshot().availableIds.has('import-clock'))
 })
 
-test('TSS-01: a genuinely new profile follows the OS and persists settings v10/theme v4 on its first save', () => {
+test('TSS-01: a genuinely new profile follows the OS and persists settings v11/theme v4 on its first save', () => {
   const h = createStorageHarness()
   const fresh = h.storage.get()
-  assert.equal(fresh.version, 10)
+  assert.equal(fresh.version, 11)
   assert.equal(fresh.theme.version, 4)
   assert.equal(fresh.theme.mode, 'system')
   assert.equal(fresh.theme.lightThemeId, 'light-modern')
@@ -190,7 +190,7 @@ test('TSS-02: a full save normalizes theme colors, discards retired fields and p
   const inputBefore = structuredClone(next)
   assert.equal(h.storage.save(next), true)
   const saved = h.storage.get()
-  assert.equal(saved.version, 10)
+  assert.equal(saved.version, 11)
   assert.equal(saved.theme.version, 4)
   assert.equal(saved.theme.themeId, 'dracula')
   assert.equal(saved.theme.overrides.dracula['terminal.background'], '#112233')
@@ -279,7 +279,7 @@ for (const globalKind of ['custom-colors', 'raw-null']) {
     }
     const h = createStorageHarness(raw)
     const migrated = h.storage.get()
-    assert.equal(migrated.version, 10)
+    assert.equal(migrated.version, 11)
     assert.equal(migrated.theme.version, 4)
     assert.equal(migrated.theme.themeId, 'onward-classic')
     assert.equal(migrated.theme.mode, 'manual')
@@ -359,7 +359,7 @@ test('TSS-09: settings v8/theme v2 migration preserves imports and theme colors 
   const before = structuredClone(raw)
   const h = createStorageHarness(raw)
   const migrated = h.storage.get()
-  assert.equal(migrated.version, 10)
+  assert.equal(migrated.version, 11)
   assert.equal(migrated.theme.version, 4)
   assert.equal(migrated.theme.themeId, 'custom-light')
   assert.equal(migrated.theme.lightThemeId, 'custom-light')
@@ -373,4 +373,39 @@ test('TSS-09: settings v8/theme v2 migration preserves imports and theme colors 
   assert.deepEqual(raw, before)
   assert.equal(h.storage.save(migrated), true)
   assert.deepEqual(createStorageHarness(h.disk()).storage.get(), h.storage.get())
+})
+
+const PROMPT_PANEL_MIGRATION_EVENT = 'main:prompt-panel.migrate-position'
+
+test('TSS-PP01: profiles older than v11 move the Prompt panel to bottom once; saves never re-migrate', () => {
+  for (const stored of ['left', 'right', 'bottom', undefined]) {
+    const legacy = { ...legacySettings(), version: 10 }
+    if (stored === undefined) delete legacy.promptPanelPosition
+    else legacy.promptPanelPosition = stored
+    const h = createStorageHarness(legacy)
+    assert.equal(h.storage.get().promptPanelPosition, 'bottom', `v10 ${String(stored)} loads as bottom`)
+    const migrations = h.traces.filter(entry => entry.name === PROMPT_PANEL_MIGRATION_EVENT)
+    assert.deepEqual(migrations.map(entry => entry.data), [{ fromVersion: 10, from: stored ?? 'unset', to: 'bottom' }])
+
+    // A renderer snapshot may still carry the pre-v11 schema number; the save path must keep the choice.
+    assert.equal(h.storage.save({ ...h.storage.get(), promptPanelPosition: 'left', version: 10 }), true)
+    assert.equal(h.storage.get().promptPanelPosition, 'left')
+    assert.equal(h.disk().version, 11)
+    assert.equal(h.disk().promptPanelPosition, 'left')
+
+    const reloaded = createStorageHarness(h.disk())
+    assert.equal(reloaded.storage.get().promptPanelPosition, 'left', 'The one-time move never repeats after a v11 save')
+    assert.equal(reloaded.traces.some(entry => entry.name === PROMPT_PANEL_MIGRATION_EVENT), false)
+  }
+})
+
+test('TSS-PP02: a new profile defaults to bottom and a v11 profile keeps its stored position', () => {
+  const fresh = createStorageHarness()
+  assert.equal(fresh.storage.get().promptPanelPosition, 'bottom')
+  assert.equal(fresh.traces.some(entry => entry.name === PROMPT_PANEL_MIGRATION_EVENT), false)
+  for (const stored of ['left', 'right', 'bottom']) {
+    const h = createStorageHarness({ ...legacySettings(), version: 11, promptPanelPosition: stored })
+    assert.equal(h.storage.get().promptPanelPosition, stored)
+    assert.equal(h.traces.some(entry => entry.name === PROMPT_PANEL_MIGRATION_EVENT), false)
+  }
 })

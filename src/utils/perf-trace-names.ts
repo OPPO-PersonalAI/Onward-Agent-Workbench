@@ -31,6 +31,9 @@ import { CLICK_PHASE_EVENT_NAMES } from './click-phase-event-names.ts'
 export const PERF_TRACE_EVENT = {
   // Configurable prompt input: low-frequency action and lifecycle breadcrumbs.
   MAIN_PROMPT_INPUT_SETTINGS: 'main:prompt-input.settings-changed',
+  MAIN_PROMPT_PANEL_POSITION_MIGRATED: 'main:prompt-panel.migrate-position',
+  RENDERER_PROMPT_PANEL_BOTTOM_RESIZE: 'renderer:prompt-panel.commit-bottom-resize',
+  RENDERER_PROMPT_PANEL_BOTTOM_COMPRESSION: 'renderer:prompt-panel.change-bottom-compression',
   MAIN_PROMPT_SHORTCUT: 'main:prompt-shortcut.state-changed',
   MAIN_WINDOW_SHORTCUT_DISPATCHED: 'main:window-shortcut.dispatched',
   RENDERER_WINDOW_SHORTCUT_RECEIVED: 'renderer:window-shortcut.received',

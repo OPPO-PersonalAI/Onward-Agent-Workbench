@@ -29,11 +29,13 @@ import {
   DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
   DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
   DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+  DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
   normalizePromptPanelWidth,
   normalizePromptPanelRightWidth,
   normalizePromptPanelBottomHeight,
   normalizePromptBottomHistoryWidth,
-  normalizePromptBottomSenderWidth
+  normalizePromptBottomSenderWidth,
+  normalizePromptBottomAttachmentWidth
 } from '../utils/prompt-panel-layout'
 
 export const normalizeProjectCwd = normalizeProjectCwdImpl
@@ -310,6 +312,7 @@ function createDefaultTabState(id: string): TabState {
     promptPanelBottomHeight: DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
     promptBottomHistoryWidth: DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
     promptBottomSenderWidth: DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
+    promptBottomAttachmentWidth: DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
     promptEditorHeight: DEFAULT_PROMPT_EDITOR_HEIGHT,
     activeTerminalId: null,
     terminals: [],
@@ -600,6 +603,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               promptPanelBottomHeight: normalizePromptPanelBottomHeight(tab.promptPanelBottomHeight),
               promptBottomHistoryWidth: normalizePromptBottomHistoryWidth(tab.promptBottomHistoryWidth),
               promptBottomSenderWidth: normalizePromptBottomSenderWidth(tab.promptBottomSenderWidth),
+              promptBottomAttachmentWidth: normalizePromptBottomAttachmentWidth(tab.promptBottomAttachmentWidth),
               promptEditorHeight: normalizePromptEditorHeight(
                 tab.promptEditorHeight ?? tab.editorDraft?.height ?? DEFAULT_PROMPT_EDITOR_HEIGHT
               ),
@@ -634,6 +638,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             || tab.promptPanelBottomHeight !== original.promptPanelBottomHeight
             || tab.promptBottomHistoryWidth !== original.promptBottomHistoryWidth
             || tab.promptBottomSenderWidth !== original.promptBottomSenderWidth
+            || tab.promptBottomAttachmentWidth !== original.promptBottomAttachmentWidth
             || tab.promptEditorHeight !== original.promptEditorHeight
             || original.promptInputMode !== undefined
             || original.promptInputModePreferenceVersion !== undefined

@@ -216,6 +216,8 @@ export interface TabState {
   promptBottomHistoryWidth?: number
   /** Right sender column width inside bottom-docked Prompt panel */
   promptBottomSenderWidth?: number
+  /** Attachment column width beside the editor text area inside bottom-docked Prompt panel */
+  promptBottomAttachmentWidth?: number
   /** Prompt editor height */
   promptEditorHeight: number
   /** Current active terminal ID */

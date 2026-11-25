@@ -56,13 +56,18 @@ import {
 
 import { createTerminalBatchResult, hasDeliveredTerminals } from '../../utils/terminal-batch'
 import {
+  computeBottomAttachmentResize,
   computeBottomHistoryResize,
   computeBottomSenderResize,
   computeOuterPanelResize,
+  DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
   DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
   DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
   DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
   DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
+  resolveBottomEditorMinWidth,
+  resolveBottomPanelLayout,
+  resolveBottomPanelMaxHeight,
   type PromptPanelPosition
 } from '../../utils/prompt-panel-layout'
 import { buildPromptTaskHistorySummary } from './promptTaskHistory'
@@ -71,6 +76,23 @@ import './PromptNotebook.css'
 
 type PromptColorFilter = 'red' | 'yellow' | 'green' | null
 const DEFAULT_INPUT_SETTINGS = createDefaultPromptInputSettings()
+
+// Icons for the bottom-dock action rail (add / save / cancel).
+const ACTION_ICON_ADD = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M7.25 2h1.5v5.25H14v1.5H8.75V14h-1.5V8.75H2v-1.5h5.25z" />
+  </svg>
+)
+const ACTION_ICON_SAVE = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M6.2 11.4 2.8 8l-1.06 1.06L6.2 13.5l8.06-8.06L13.2 4.38z" />
+  </svg>
+)
+const ACTION_ICON_CANCEL = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M4.1 3 8 6.9 11.9 3 13 4.1 9.1 8l3.9 3.9-1.1 1.1L8 9.1 4.1 13 3 11.9 6.9 8 3 4.1z" />
+  </svg>
+)
 
 // Lazily created by the autotest-only API. Any active tab can release the
 // captured tab's gate after a switch; ordinary application builds never use it.
@@ -110,6 +132,8 @@ interface PromptNotebookProps {
   onBottomHistoryWidthChange?: (width: number) => void
   bottomSenderWidth?: number
   onBottomSenderWidthChange?: (width: number) => void
+  bottomAttachmentWidth?: number
+  onBottomAttachmentWidthChange?: (width: number) => void
   // Tab prompt related
   prompts: Prompt[]
   onAddPrompt: (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>, targetTabId?: string) => void
@@ -198,6 +222,8 @@ export const PromptNotebook = memo(function PromptNotebook({
   onBottomHistoryWidthChange,
   bottomSenderWidth = DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
   onBottomSenderWidthChange,
+  bottomAttachmentWidth = DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
+  onBottomAttachmentWidthChange,
   prompts,
   onAddPrompt,
   onAddPinnedPrompt,
@@ -986,8 +1012,11 @@ export const PromptNotebook = memo(function PromptNotebook({
         bottomHeight,
         bottomHistoryWidth,
         bottomSenderWidth,
+        bottomAttachmentWidth,
         promptEditorHeight
-      })
+      }),
+      // Rendered bottom-dock geometry (stored values compressed to the live container).
+      getBottomLayout: () => ({ ...bottomLayoutRef.current })
     }
     ;(window as any).__onwardPromptNotebookDebug = api
     return () => {
@@ -1006,6 +1035,7 @@ export const PromptNotebook = memo(function PromptNotebook({
     bottomHeight,
     bottomHistoryWidth,
     bottomSenderWidth,
+    bottomAttachmentWidth,
     onAddPrompt,
     scheduleMap,
     tabId,
@@ -1548,19 +1578,95 @@ export const PromptNotebook = memo(function PromptNotebook({
 
   const notebookRef = useRef<HTMLDivElement>(null)
 
+  // Live size of the container the bottom-docked panel sits in. Stored dimensions are
+  // remembered pixels; the rendered geometry is derived from them and this size.
+  const [bottomContainerSize, setBottomContainerSize] = useState<{ width: number; height: number } | null>(null)
+  useLayoutEffect(() => {
+    if (position !== 'bottom' || hidden) return
+    const container = notebookRef.current?.parentElement
+    if (!container) return
+    const measure = () => {
+      const rect = container.getBoundingClientRect()
+      const next = { width: Math.round(rect.width), height: Math.round(rect.height) }
+      setBottomContainerSize(prev => (prev && prev.width === next.width && prev.height === next.height ? prev : next))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [position, hidden])
+
+  const hasEditorAttachments = editorImages.length > 0
+  const bottomMinEditorWidth = resolveBottomEditorMinWidth(hasEditorAttachments, bottomAttachmentWidth)
+  const bottomLayout = useMemo(() => resolveBottomPanelLayout({
+    containerWidth: bottomContainerSize?.width,
+    containerHeight: bottomContainerSize?.height,
+    storedHeight: bottomHeight,
+    storedHistoryWidth: bottomHistoryWidth,
+    storedSenderWidth: bottomSenderWidth,
+    minEditorWidth: bottomMinEditorWidth
+  }), [bottomContainerSize, bottomHeight, bottomHistoryWidth, bottomSenderWidth, bottomMinEditorWidth])
+  const bottomLayoutRef = useRef({ ...bottomLayout, containerWidth: 0, containerHeight: 0, minEditorWidth: bottomMinEditorWidth })
+  bottomLayoutRef.current = {
+    ...bottomLayout,
+    containerWidth: bottomContainerSize?.width ?? 0,
+    containerHeight: bottomContainerSize?.height ?? 0,
+    minEditorWidth: bottomMinEditorWidth
+  }
+
+  // Diagnostic breadcrumb on compression state transitions only (never per resize tick).
+  const bottomCompressionRef = useRef<{ width: boolean; height: boolean }>({ width: false, height: false })
+  useEffect(() => {
+    if (position !== 'bottom' || hidden) return
+    const prev = bottomCompressionRef.current
+    if (prev.width === bottomLayout.widthCompressed && prev.height === bottomLayout.heightCompressed) return
+    bottomCompressionRef.current = { width: bottomLayout.widthCompressed, height: bottomLayout.heightCompressed }
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_PANEL_BOTTOM_COMPRESSION, {
+      tabId,
+      widthCompressed: bottomLayout.widthCompressed,
+      heightCompressed: bottomLayout.heightCompressed,
+      containerWidth: bottomContainerSize?.width ?? 0,
+      containerHeight: bottomContainerSize?.height ?? 0,
+      storedHistoryWidth: bottomHistoryWidth,
+      storedSenderWidth: bottomSenderWidth,
+      storedHeight: bottomHeight,
+      renderedHistoryWidth: bottomLayout.historyWidth,
+      renderedSenderWidth: bottomLayout.senderWidth,
+      renderedHeight: bottomLayout.height,
+      minEditorWidth: bottomMinEditorWidth
+    })
+  }, [position, hidden, tabId, bottomLayout, bottomContainerSize, bottomHistoryWidth, bottomSenderWidth, bottomHeight, bottomMinEditorWidth])
+
+  const traceBottomResizeCommit = useCallback((target: 'height' | 'history' | 'sender' | 'attachment', value: number) => {
+    const current = bottomLayoutRef.current
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_PANEL_BOTTOM_RESIZE, {
+      tabId,
+      target,
+      value,
+      containerWidth: current.containerWidth,
+      containerHeight: current.containerHeight
+    })
+  }, [tabId])
+
   // Drag to adjust outer panel dimension (width in left/right, height in bottom)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     const startX = e.clientX
     const startY = e.clientY
     const startSize = position === 'bottom'
-      ? bottomHeight
+      ? bottomLayoutRef.current.height
       : position === 'right'
         ? rightWidth
         : width
     const bodyClass = position === 'bottom'
       ? 'resizing-prompt-panel-vertical'
       : 'resizing-prompt-panel'
+    const container = notebookRef.current?.parentElement
+    const maxSize = position === 'bottom'
+      ? resolveBottomPanelMaxHeight(container?.getBoundingClientRect().height)
+      : undefined
+    let lastSize = startSize
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const nextSize = computeOuterPanelResize({
@@ -1569,8 +1675,10 @@ export const PromptNotebook = memo(function PromptNotebook({
         startX,
         startY,
         clientX: moveEvent.clientX,
-        clientY: moveEvent.clientY
+        clientY: moveEvent.clientY,
+        maxSize
       })
+      lastSize = nextSize
       if (position === 'bottom') {
         onBottomHeightChange?.(nextSize)
       } else if (position === 'right') {
@@ -1584,20 +1692,35 @@ export const PromptNotebook = memo(function PromptNotebook({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.classList.remove(bodyClass)
+      if (position === 'bottom') traceBottomResizeCommit('height', lastSize)
     }
 
     document.body.classList.add(bodyClass)
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [position, width, rightWidth, bottomHeight, onWidthChange, onRightWidthChange, onBottomHeightChange])
+  }, [position, width, rightWidth, onWidthChange, onRightWidthChange, onBottomHeightChange, traceBottomResizeCommit])
+
+  // Interacting with a compressed bottom layout adopts what is on screen as the new memory,
+  // so the drag starts from the visible geometry instead of jumping to stored values.
+  const adoptRenderedBottomColumns = useCallback(() => {
+    const current = bottomLayoutRef.current
+    if (current.widthCompressed) {
+      onBottomHistoryWidthChange?.(current.historyWidth)
+      onBottomSenderWidthChange?.(current.senderWidth)
+    }
+    return current
+  }, [onBottomHistoryWidthChange, onBottomSenderWidthChange])
 
   // Drag left internal resizer in bottom 3-column mode (adjusts history column width)
   const handleBottomHistoryResizeMouseDown = useCallback((e: React.MouseEvent) => {
     if (position !== 'bottom') return
     e.preventDefault()
     const startX = e.clientX
-    const startWidth = bottomHistoryWidth
-    const currentSenderWidth = bottomSenderWidth
+    const current = adoptRenderedBottomColumns()
+    const startWidth = current.historyWidth
+    const currentSenderWidth = current.senderWidth
+    const minEditorWidth = current.minEditorWidth
+    let lastWidth = startWidth
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const containerWidth = notebookRef.current?.getBoundingClientRect().width
@@ -1606,8 +1729,10 @@ export const PromptNotebook = memo(function PromptNotebook({
         startX,
         clientX: moveEvent.clientX,
         containerWidth,
-        senderWidth: currentSenderWidth
+        senderWidth: currentSenderWidth,
+        minEditorWidth
       })
+      lastWidth = nextWidth
       onBottomHistoryWidthChange?.(nextWidth)
     }
 
@@ -1615,20 +1740,24 @@ export const PromptNotebook = memo(function PromptNotebook({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.classList.remove('resizing-prompt-panel')
+      traceBottomResizeCommit('history', lastWidth)
     }
 
     document.body.classList.add('resizing-prompt-panel')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [position, bottomHistoryWidth, bottomSenderWidth, onBottomHistoryWidthChange])
+  }, [position, adoptRenderedBottomColumns, onBottomHistoryWidthChange, traceBottomResizeCommit])
 
   // Drag right internal resizer in bottom 3-column mode (adjusts sender column width)
   const handleBottomSenderResizeMouseDown = useCallback((e: React.MouseEvent) => {
     if (position !== 'bottom') return
     e.preventDefault()
     const startX = e.clientX
-    const startWidth = bottomSenderWidth
-    const currentHistoryWidth = bottomHistoryWidth
+    const current = adoptRenderedBottomColumns()
+    const startWidth = current.senderWidth
+    const currentHistoryWidth = current.historyWidth
+    const minEditorWidth = current.minEditorWidth
+    let lastWidth = startWidth
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const containerWidth = notebookRef.current?.getBoundingClientRect().width
@@ -1637,8 +1766,10 @@ export const PromptNotebook = memo(function PromptNotebook({
         startX,
         clientX: moveEvent.clientX,
         containerWidth,
-        historyWidth: currentHistoryWidth
+        historyWidth: currentHistoryWidth,
+        minEditorWidth
       })
+      lastWidth = nextWidth
       onBottomSenderWidthChange?.(nextWidth)
     }
 
@@ -1646,19 +1777,24 @@ export const PromptNotebook = memo(function PromptNotebook({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.classList.remove('resizing-prompt-panel')
+      traceBottomResizeCommit('sender', lastWidth)
     }
 
     document.body.classList.add('resizing-prompt-panel')
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [position, bottomSenderWidth, bottomHistoryWidth, onBottomSenderWidthChange])
+  }, [position, adoptRenderedBottomColumns, onBottomSenderWidthChange, traceBottomResizeCommit])
+
+  const handleBottomAttachmentWidthCommit = useCallback((value: number) => {
+    traceBottomResizeCommit('attachment', value)
+  }, [traceBottomResizeCommit])
 
   const outerStyle = useMemo(() => {
     if (position === 'bottom') {
-      return { height: bottomHeight }
+      return { height: bottomLayout.height }
     }
     return { width: position === 'right' ? rightWidth : width }
-  }, [position, width, rightWidth, bottomHeight])
+  }, [position, width, rightWidth, bottomLayout.height])
 
   // Delete confirmation box shortcut
   useEffect(() => {
@@ -1758,7 +1894,7 @@ export const PromptNotebook = memo(function PromptNotebook({
         <div
           className="prompt-notebook-history-pane"
           data-testid="prompt-notebook-history-pane"
-          style={position === 'bottom' ? { width: bottomHistoryWidth } : undefined}
+          style={position === 'bottom' ? { width: bottomLayout.historyWidth } : undefined}
         >
           {/* search box */}
           <PromptSearch
@@ -1831,6 +1967,9 @@ export const PromptNotebook = memo(function PromptNotebook({
           tabId={tabId}
           activeTab={activeTab}
           dockPosition={position}
+          attachmentWidth={bottomAttachmentWidth}
+          onAttachmentWidthChange={onBottomAttachmentWidthChange}
+          onAttachmentWidthCommit={handleBottomAttachmentWidthCommit}
           draftToast={draftToast}
           onSubmit={handleSubmit}
           onUpdatePrompt={onUpdatePrompt}
@@ -1872,7 +2011,7 @@ export const PromptNotebook = memo(function PromptNotebook({
         <div
           className="prompt-notebook-sender-pane"
           data-testid="prompt-notebook-sender-pane"
-          style={position === 'bottom' ? { width: bottomSenderWidth } : undefined}
+          style={position === 'bottom' ? { width: bottomLayout.senderWidth } : undefined}
         >
           <PromptSender
             terminals={terminals}
@@ -2084,6 +2223,9 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   tabId,
   activeTab,
   dockPosition = 'left',
+  attachmentWidth = DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
+  onAttachmentWidthChange,
+  onAttachmentWidthCommit,
   draftToast,
   onSubmit,
   onUpdatePrompt,
@@ -2113,6 +2255,9 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   tabId: string
   activeTab: boolean
   dockPosition?: PromptPanelPosition
+  attachmentWidth?: number
+  onAttachmentWidthChange?: (width: number) => void
+  onAttachmentWidthCommit?: (width: number) => void
   draftToast: string | null
   onSubmit: (
     title: string,
@@ -3217,6 +3362,141 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     void handleRemoveImage(index)
   }, [handleRemoveImage])
 
+  const isBottomDock = dockPosition === 'bottom'
+  const editorBodyRef = useRef<HTMLDivElement>(null)
+
+  // Drag the divider between the text area and the attachment column (bottom dock only).
+  const handleAttachmentResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = attachmentWidth
+    let lastWidth = startWidth
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextWidth = computeBottomAttachmentResize({
+        startWidth,
+        startX,
+        clientX: moveEvent.clientX,
+        editorWidth: editorBodyRef.current?.getBoundingClientRect().width
+      })
+      lastWidth = nextWidth
+      onAttachmentWidthChange?.(nextWidth)
+    }
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove('resizing-prompt-panel')
+      onAttachmentWidthCommit?.(lastWidth)
+    }
+
+    document.body.classList.add('resizing-prompt-panel')
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }, [attachmentWidth, onAttachmentWidthChange, onAttachmentWidthCommit])
+
+  const attachmentStrip = (
+    <PromptAttachmentStrip
+      images={images}
+      layout={isBottomDock ? 'column' : 'grid'}
+      columnWidth={isBottomDock ? attachmentWidth : undefined}
+      onOpenPreview={handleOpenImagePreview}
+      onInsertToken={handleInsertImageToken}
+      onRemove={handleRemoveImageClick}
+    />
+  )
+
+  // Left/right docks: a footer row with text buttons. Bottom dock: a fixed-width vertical
+  // icon rail at the right edge of the editor body; labels move into tooltips.
+  const cancelLabel = t('common.cancel')
+  const saveLabel = t('common.save')
+  const saveAsNewLabel = t('promptNotebook.saveAsNew')
+  const addToHistoryLabel = t('promptEditor.addToHistory')
+  const saveShortcutTitle = t('promptNotebook.shortcutTitle', { shortcut: saveShortcutLabel })
+  const saveAsShortcutTitle = t('promptNotebook.shortcutTitle', { shortcut: saveAsShortcutLabel })
+  const actionBtnClass = isBottomDock ? 'prompt-editor-btn is-icon' : 'prompt-editor-btn'
+  const actionsBar = (
+    <div
+      className={isBottomDock ? 'prompt-editor-actions is-rail' : 'prompt-editor-actions'}
+      data-layout={isBottomDock ? 'rail' : 'row'}
+      data-testid="prompt-editor-actions"
+    >
+      <div
+        className="prompt-editor-color-picker"
+        role="group"
+        aria-label={t('promptEditor.colorPickerLabel')}
+      >
+        {PROMPT_COLORS.map(({ key, hex }) => {
+          const label = editingPrompt
+            ? t(`promptEditor.saveWith.${key}`)
+            : t(`promptEditor.addWith.${key}`)
+          return (
+            <button
+              key={key}
+              type="button"
+              className={`prompt-editor-color-btn prompt-editor-color-btn-${key}`}
+              style={{ ['--color' as string]: hex } as React.CSSProperties}
+              disabled={!hasContent}
+              onClick={() => editingPrompt ? handleSaveWithColor(key) : handleSubmit(key)}
+              title={label}
+              aria-label={label}
+            >
+              <span className="prompt-editor-color-dot" />
+            </button>
+          )
+        })}
+      </div>
+      {editingPrompt ? (
+        <>
+          <button
+            type="button"
+            className={`${actionBtnClass} prompt-editor-btn-cancel`}
+            data-action="cancel"
+            onClick={handleCancel}
+            title={cancelLabel}
+            aria-label={cancelLabel}
+          >
+            {isBottomDock ? ACTION_ICON_CANCEL : cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={`${actionBtnClass} prompt-editor-btn-submit`}
+            data-action="save"
+            onClick={() => handleSave(false)}
+            disabled={!hasContent}
+            title={isBottomDock ? `${saveLabel}\n${saveShortcutTitle}` : saveShortcutTitle}
+            aria-label={saveLabel}
+          >
+            {isBottomDock ? ACTION_ICON_SAVE : saveLabel}
+          </button>
+          <button
+            type="button"
+            className={`${actionBtnClass} prompt-editor-btn-submit`}
+            data-action="save-as-new"
+            onClick={() => handleSave(true)}
+            disabled={!hasContent}
+            title={isBottomDock ? `${saveAsNewLabel}\n${saveAsShortcutTitle}` : saveAsShortcutTitle}
+            aria-label={saveAsNewLabel}
+          >
+            {isBottomDock ? ACTION_ICON_ADD : saveAsNewLabel}
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className={`${actionBtnClass} prompt-editor-btn-submit`}
+          data-action="add-to-history"
+          onClick={() => handleSubmit()}
+          disabled={!hasContent}
+          title={isBottomDock ? addToHistoryLabel : undefined}
+          aria-label={addToHistoryLabel}
+        >
+          {isBottomDock ? ACTION_ICON_ADD : addToHistoryLabel}
+        </button>
+      )}
+    </div>
+  )
+
   return (
     <div
       className={isFileDropTarget ? 'prompt-editor is-file-drop-target' : 'prompt-editor'}
@@ -3236,13 +3516,11 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         <div className="prompt-editor-draft-toast" role="status">{draftToast}</div>
       )}
 
-      <PromptAttachmentStrip
-        images={images}
-        onOpenPreview={handleOpenImagePreview}
-        onInsertToken={handleInsertImageToken}
-        onRemove={handleRemoveImageClick}
-      />
-
+      {/* Left/right docks keep the grid above the inputs. The bottom dock lays the inputs
+          and a vertical attachment column side by side. Slot positions stay fixed so the
+          contenteditable node is never remounted when the dock position changes. */}
+      <div className="prompt-editor-body" ref={editorBodyRef}>
+      {!isBottomDock && attachmentStrip}
       <div className="prompt-editor-inputs">
         <PromptAttachmentMentionMenu
           menu={mentionMenu}
@@ -3276,6 +3554,16 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
           onContextMenu={handleEditorContextMenu}
         />
       </div>
+      {isBottomDock && images.length > 0 && (
+        <div
+          className="prompt-editor-attachment-resizer"
+          data-testid="prompt-bottom-resizer-attachments"
+          onMouseDown={handleAttachmentResizeMouseDown}
+        />
+      )}
+      {isBottomDock && attachmentStrip}
+      {isBottomDock && actionsBar}
+      </div>
       {ctxMenu && (
         <PromptEditorContextMenu
           position={{ x: ctxMenu.x, y: ctxMenu.y }}
@@ -3307,68 +3595,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         onClose={closeImagePreview}
       />
 
-      <div className="prompt-editor-actions">
-        <div
-          className="prompt-editor-color-picker"
-          role="group"
-          aria-label={t('promptEditor.colorPickerLabel')}
-        >
-          {PROMPT_COLORS.map(({ key, hex }) => {
-            const label = editingPrompt
-              ? t(`promptEditor.saveWith.${key}`)
-              : t(`promptEditor.addWith.${key}`)
-            return (
-              <button
-                key={key}
-                type="button"
-                className={`prompt-editor-color-btn prompt-editor-color-btn-${key}`}
-                style={{ ['--color' as string]: hex } as React.CSSProperties}
-                disabled={!hasContent}
-                onClick={() => editingPrompt ? handleSaveWithColor(key) : handleSubmit(key)}
-                title={label}
-                aria-label={label}
-              >
-                <span className="prompt-editor-color-dot" />
-              </button>
-            )
-          })}
-        </div>
-        {editingPrompt ? (
-          <>
-            <button
-              className="prompt-editor-btn prompt-editor-btn-cancel"
-              onClick={handleCancel}
-              title={t('common.cancel')}
-            >
-              {t('common.cancel')}
-            </button>
-            <button
-              className="prompt-editor-btn prompt-editor-btn-submit"
-              onClick={() => handleSave(false)}
-              disabled={!hasContent}
-              title={t('promptNotebook.shortcutTitle', { shortcut: saveShortcutLabel })}
-            >
-              {t('common.save')}
-            </button>
-            <button
-              className="prompt-editor-btn prompt-editor-btn-submit"
-              onClick={() => handleSave(true)}
-              disabled={!hasContent}
-              title={t('promptNotebook.shortcutTitle', { shortcut: saveAsShortcutLabel })}
-            >
-              {t('promptNotebook.saveAsNew')}
-            </button>
-          </>
-        ) : (
-          <button
-            className="prompt-editor-btn prompt-editor-btn-submit"
-            onClick={() => handleSubmit()}
-            disabled={!hasContent}
-          >
-            {t('promptEditor.addToHistory')}
-          </button>
-        )}
-      </div>
+      {!isBottomDock && actionsBar}
     </div>
   )
 })

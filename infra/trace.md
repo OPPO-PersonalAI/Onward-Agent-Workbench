@@ -236,6 +236,14 @@ focused-owner native input/blur/read-only focus adapters are gated by
 `ONWARD_AUTOTEST=1` and exempt. The native adapter still enters the instrumented
 Electron shortcut controller rather than invoking an action directly.
 
+### Prompt panel bottom dock (main and renderer)
+
+| Constant | Name | Phase | Emitted at |
+|---|---|---|---|
+| `MAIN_PROMPT_PANEL_POSITION_MIGRATED` | `main:prompt-panel.migrate-position` | `i` | `settings-storage.ts::load()`: a profile saved by a settings schema older than v11 is moved to the bottom dock once. Payload `fromVersion`, `from` (stored position or `unset`), `to`. Disk load only; renderer save snapshots never re-trigger it. |
+| `RENDERER_PROMPT_PANEL_BOTTOM_RESIZE` | `renderer:prompt-panel.commit-bottom-resize` | `i` | `PromptNotebook.tsx`: mouse-up of a bottom-dock drag. `target` is `height` / `history` / `sender` / `attachment`; payload carries the committed px `value` and the live container size. One event per drag, never per mouse move. |
+| `RENDERER_PROMPT_PANEL_BOTTOM_COMPRESSION` | `renderer:prompt-panel.change-bottom-compression` | `i` | `PromptNotebook.tsx`: the rendered bottom layout enters or leaves display-only compression (container narrower/shorter than the remembered widths/height). Payload: `widthCompressed`, `heightCompressed`, container size, stored and rendered px, editor minimum. Emitted on state transitions only, not per resize tick. |
+
 ### 2.1 Main process (pid=1, tid=1)
 
 #### Lifecycle

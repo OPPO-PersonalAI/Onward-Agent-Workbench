@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { mkdir, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { eventually, saveSettingsPage } from './themes-ui-driver-support.mjs'
+import { promptPanelBottomChecks } from './prompt-panel-bottom-checks.mjs'
 
 const TRIALS = 5
 const live = h => h.page.evaluate(() => window.electronAPI.settings.load())
@@ -161,19 +162,25 @@ export async function settingsSaveChecks(h) {
     await searchHit.click()
     await h.page.locator('[data-settings-target="promptPanelPosition"]').waitFor({ state: 'visible' })
 
-    // 2. Verify Segmented Control radio semantics, draft dirty state, and Discard
+    // 2. Verify the bottom default, Segmented Control radio semantics, draft dirty state, and Discard
     const leftBtn = h.page.getByTestId('settings-prompt-position-left')
     const bottomBtn = h.page.getByTestId('settings-prompt-position-bottom')
     const rightBtn = h.page.getByTestId('settings-prompt-position-right')
-    assert.equal(await leftBtn.getAttribute('aria-checked'), 'true')
-    assert.equal(await bottomBtn.getAttribute('aria-checked'), 'false')
+    assert.equal((await live(h)).promptPanelPosition, 'bottom', 'Prompt panel defaults to the bottom dock')
+    assert.equal(await leftBtn.getAttribute('aria-checked'), 'false')
+    assert.equal(await bottomBtn.getAttribute('aria-checked'), 'true')
     assert.equal(await rightBtn.getAttribute('aria-checked'), 'false')
 
-    await bottomBtn.click()
-    assert.equal(await bottomBtn.getAttribute('aria-checked'), 'true')
-    assert.equal((await live(h)).promptPanelPosition ?? 'left', 'left', 'Uncommitted draft must not mutate live setting')
-    await h.page.getByTestId('settings-discard').click()
+    await leftBtn.click()
     assert.equal(await leftBtn.getAttribute('aria-checked'), 'true')
+    assert.equal((await live(h)).promptPanelPosition, 'bottom', 'Uncommitted draft must not mutate live setting')
+    await h.page.getByTestId('settings-discard').click()
+    assert.equal(await bottomBtn.getAttribute('aria-checked'), 'true')
+
+    // Commit LEFT so the remaining steps walk left -> right -> bottom -> left.
+    await leftBtn.click()
+    await saveSettingsPage(h.page)
+    assert.equal((await live(h)).promptPanelPosition, 'left')
 
     // Helper to ensure PromptNotebook is open and Settings is closed
     const ensurePromptOpen = async () => {
@@ -363,6 +370,7 @@ export async function settingsSaveChecks(h) {
     assert.equal((await live(h)).promptPanelPosition, 'left')
     await ensurePromptOpen()
     const finalDims = await h.page.evaluate(() => window.__onwardPromptNotebookDebug.getPanelDimensions())
-    assert.deepEqual(finalDims, bottomDimsAfter, 'All 5 independent panel dimensions must persist across position switches')
+    assert.deepEqual(finalDims, bottomDimsAfter, 'All independent panel dimensions must persist across position switches')
   })
+  await promptPanelBottomChecks(h)
 }

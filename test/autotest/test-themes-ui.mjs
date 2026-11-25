@@ -1740,6 +1740,14 @@ async function migration(h) {
   await boot(h, 'light')
   await grid(h, 2)
   let migrated
+  await h.case('TH-MIG-00-legacy-profile-moves-prompt-panel-to-bottom-once', async () => {
+    // The legacy fixture predates settings v11, so the Prompt panel moves to the bottom dock once.
+    const legacy = JSON.parse(await readFile(path.join(h.fixture, 'legacy-settings.json'), 'utf8'))
+    assert(legacy.version < 11, 'Fixture is an older settings schema')
+    const live = await h.page.evaluate(() => window.electronAPI.settings.load())
+    assert.equal(live.promptPanelPosition, 'bottom')
+    assert.equal(live.version, 11)
+  })
   await h.case('TH-MIG-01-old-profile-preserves-classic-raw-defaults', async () => {
     const state = await h.state()
     assert.equal(state.settings.mode, 'manual')
@@ -1765,6 +1773,17 @@ async function migration(h) {
     await endDraft(h, 'cancel')
     assert.equal((await h.state()).settings.classic.presetId, 'graphite')
     assert.equal((await snapshot(h)).body.background, '#101012')
+  })
+  await h.case('TH-MIG-03-prompt-panel-choice-after-migration-survives-restart', async () => {
+    await h.openSettings('general')
+    await h.page.getByTestId('settings-prompt-position-right').click()
+    await saveSettingsPage(h.page)
+    assert.equal((await h.diskSettings()).promptPanelPosition, 'right')
+    assert.equal((await h.diskSettings()).version, 11)
+    await h.stop(true)
+    await boot(h, 'dark')
+    const live = await h.page.evaluate(() => window.electronAPI.settings.load())
+    assert.equal(live.promptPanelPosition, 'right', 'The one-time move never repeats for a v11 profile')
   })
 }
 

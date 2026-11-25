@@ -6,9 +6,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  computeBottomAttachmentResize,
   computeBottomHistoryResize,
   computeBottomSenderResize,
   computeOuterPanelResize,
+  DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
   DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH,
   DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH,
   DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT,
@@ -16,28 +18,40 @@ import {
   DEFAULT_PROMPT_PANEL_RIGHT_WIDTH,
   DEFAULT_PROMPT_PANEL_WIDTH,
   isPromptPanelPosition,
-  MAX_PROMPT_BOTTOM_HISTORY_WIDTH,
-  MAX_PROMPT_BOTTOM_SENDER_WIDTH,
-  MAX_PROMPT_PANEL_BOTTOM_HEIGHT,
   MAX_PROMPT_PANEL_WIDTH,
+  MIN_PROMPT_BOTTOM_ATTACHMENT_WIDTH,
   MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH,
+  MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH,
   MIN_PROMPT_BOTTOM_HISTORY_WIDTH,
   MIN_PROMPT_BOTTOM_SENDER_WIDTH,
   MIN_PROMPT_PANEL_BOTTOM_HEIGHT,
+  MIN_PROMPT_BOTTOM_TERMINAL_AREA_HEIGHT,
   MIN_PROMPT_PANEL_WIDTH,
+  normalizePromptBottomAttachmentWidth,
   normalizePromptBottomHistoryWidth,
   normalizePromptBottomSenderWidth,
   normalizePromptPanelBottomHeight,
   normalizePromptPanelPosition,
   normalizePromptPanelRightWidth,
   normalizePromptPanelWidth,
+  PROMPT_BOTTOM_ACTION_RAIL_WIDTH,
+  PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH,
+  PROMPT_BOTTOM_COLUMN_RESIZER_WIDTH,
+  PROMPT_BOTTOM_DIMENSION_SANITY_MAX,
+  PROMPT_PANEL_BOTTOM_DEFAULT_SETTINGS_VERSION,
   PROMPT_PANEL_POSITIONS,
+  resolveBottomEditorMinWidth,
+  resolveBottomPanelLayout,
+  resolveBottomPanelMaxHeight,
+  resolveLoadedPromptPanelPosition,
   resolveMainContentLayout
 } from '../../src/utils/prompt-panel-layout.ts'
 
-test('PPL-U01: position type guard and normalizer accept only left, bottom, right and fall back to left', () => {
+const COLUMN_RESIZERS = 2 * PROMPT_BOTTOM_COLUMN_RESIZER_WIDTH
+
+test('PPL-U01: position type guard and normalizer accept only left, bottom, right and fall back to bottom', () => {
   assert.deepEqual(PROMPT_PANEL_POSITIONS, ['left', 'bottom', 'right'])
-  assert.equal(DEFAULT_PROMPT_PANEL_POSITION, 'left')
+  assert.equal(DEFAULT_PROMPT_PANEL_POSITION, 'bottom')
 
   for (const pos of ['left', 'bottom', 'right'] as const) {
     assert.equal(isPromptPanelPosition(pos), true)
@@ -46,7 +60,7 @@ test('PPL-U01: position type guard and normalizer accept only left, bottom, righ
 
   for (const invalid of ['top', 'center', '', null, undefined, 0, 123, {}, [], true, Symbol('left')]) {
     assert.equal(isPromptPanelPosition(invalid), false, `Expected false for ${String(invalid)}`)
-    assert.equal(normalizePromptPanelPosition(invalid), 'left', `Expected fallback 'left' for ${String(invalid)}`)
+    assert.equal(normalizePromptPanelPosition(invalid), 'bottom', `Expected fallback 'bottom' for ${String(invalid)}`)
   }
 })
 
@@ -68,23 +82,31 @@ test('PPL-U02: dimension normalizers preserve valid ranges [min, max] including 
   assert.equal(normalizePromptPanelRightWidth(100), MIN_PROMPT_PANEL_WIDTH)
   assert.equal(normalizePromptPanelRightWidth(1400), MAX_PROMPT_PANEL_WIDTH)
 
-  // Bottom height: default 240, min 160, max 600
+  // Bottom-dock dimensions: no fixed design maximum. Values above the former caps
+  // (600 / 640 / 600) survive a load; only corrupt values beyond the sanity ceiling clamp.
   assert.equal(normalizePromptPanelBottomHeight(undefined), DEFAULT_PROMPT_PANEL_BOTTOM_HEIGHT)
   assert.equal(normalizePromptPanelBottomHeight(180), 180)
   assert.equal(normalizePromptPanelBottomHeight(100), MIN_PROMPT_PANEL_BOTTOM_HEIGHT)
-  assert.equal(normalizePromptPanelBottomHeight(800), MAX_PROMPT_PANEL_BOTTOM_HEIGHT)
+  assert.equal(normalizePromptPanelBottomHeight(800), 800)
+  assert.equal(normalizePromptPanelBottomHeight(99999), PROMPT_BOTTOM_DIMENSION_SANITY_MAX)
 
-  // Bottom history width: default 280, min 180, max 640
   assert.equal(normalizePromptBottomHistoryWidth(undefined), DEFAULT_PROMPT_BOTTOM_HISTORY_WIDTH)
   assert.equal(normalizePromptBottomHistoryWidth(210), 210)
   assert.equal(normalizePromptBottomHistoryWidth(120), MIN_PROMPT_BOTTOM_HISTORY_WIDTH)
-  assert.equal(normalizePromptBottomHistoryWidth(900), MAX_PROMPT_BOTTOM_HISTORY_WIDTH)
+  assert.equal(normalizePromptBottomHistoryWidth(900), 900)
+  assert.equal(normalizePromptBottomHistoryWidth(1600), 1600)
+  assert.equal(normalizePromptBottomHistoryWidth(99999), PROMPT_BOTTOM_DIMENSION_SANITY_MAX)
 
-  // Bottom sender width: default 240, min 180, max 600
   assert.equal(normalizePromptBottomSenderWidth(undefined), DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH)
   assert.equal(normalizePromptBottomSenderWidth(200), 200)
   assert.equal(normalizePromptBottomSenderWidth(90), MIN_PROMPT_BOTTOM_SENDER_WIDTH)
-  assert.equal(normalizePromptBottomSenderWidth(900), MAX_PROMPT_BOTTOM_SENDER_WIDTH)
+  assert.equal(normalizePromptBottomSenderWidth(900), 900)
+  assert.equal(normalizePromptBottomSenderWidth(-5), DEFAULT_PROMPT_BOTTOM_SENDER_WIDTH)
+
+  assert.equal(normalizePromptBottomAttachmentWidth(undefined), DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH)
+  assert.equal(normalizePromptBottomAttachmentWidth('160'), DEFAULT_PROMPT_BOTTOM_ATTACHMENT_WIDTH)
+  assert.equal(normalizePromptBottomAttachmentWidth(40), MIN_PROMPT_BOTTOM_ATTACHMENT_WIDTH)
+  assert.equal(normalizePromptBottomAttachmentWidth(300), 300)
 })
 
 test('PPL-U03: outer panel resize calculator applies position-specific drag sign and clamping', () => {
@@ -133,9 +155,20 @@ test('PPL-U03: outer panel resize calculator applies position-specific drag sign
     computeOuterPanelResize({ position: 'bottom', startSize: 240, startX: 500, startY: 600, clientX: 500, clientY: 900 }),
     MIN_PROMPT_PANEL_BOTTOM_HEIGHT
   )
+  // No fixed 600 cap: without a live ceiling only the sanity bound applies ...
   assert.equal(
-    computeOuterPanelResize({ position: 'bottom', startSize: 240, startX: 500, startY: 600, clientX: 500, clientY: 50 }),
-    MAX_PROMPT_PANEL_BOTTOM_HEIGHT
+    computeOuterPanelResize({ position: 'bottom', startSize: 240, startX: 500, startY: 900, clientX: 500, clientY: 50 }),
+    240 + 850
+  )
+  // ... and with a live ceiling (container height minus the Task area minimum) that wins.
+  assert.equal(
+    computeOuterPanelResize({ position: 'bottom', startSize: 240, startX: 500, startY: 900, clientX: 500, clientY: 50, maxSize: 700 }),
+    700
+  )
+  // Left/right keep their fixed 900px maximum even with a larger live ceiling.
+  assert.equal(
+    computeOuterPanelResize({ position: 'left', startSize: 320, startX: 320, startY: 0, clientX: 2000, clientY: 0, maxSize: 3000 }),
+    MAX_PROMPT_PANEL_WIDTH
   )
 })
 
@@ -149,11 +182,11 @@ test('PPL-U04: bottom 3-column inner resizers clamp to min/max and preserve cent
     computeBottomHistoryResize({ startWidth: 280, startX: 280, clientX: 50, containerWidth: 1200, senderWidth: 240 }),
     MIN_PROMPT_BOTTOM_HISTORY_WIDTH
   )
-  // In a narrow 800px container with senderWidth=240 and MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH=240,
-  // max history width is 800 - 240 - 240 = 320
+  // In a narrow 800px container the ceiling is what remains after the sender column,
+  // both column resizers and the center editor minimum (text area + action rail).
   assert.equal(
     computeBottomHistoryResize({ startWidth: 280, startX: 280, clientX: 600, containerWidth: 800, senderWidth: 240 }),
-    800 - 240 - MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH
+    800 - COLUMN_RESIZERS - 240 - MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH
   )
 
   // Sender column (right resizer): dragging left (-clientX) widens sender; dragging right (+clientX) narrows sender
@@ -165,11 +198,127 @@ test('PPL-U04: bottom 3-column inner resizers clamp to min/max and preserve cent
     computeBottomSenderResize({ startWidth: 240, startX: 960, clientX: 1100, containerWidth: 1200, historyWidth: 280 }),
     MIN_PROMPT_BOTTOM_SENDER_WIDTH
   )
-  // In a narrow 800px container with historyWidth=280, max sender width is 800 - 280 - 240 = 280
   assert.equal(
     computeBottomSenderResize({ startWidth: 240, startX: 560, clientX: 200, containerWidth: 800, historyWidth: 280 }),
-    800 - 280 - MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH
+    800 - COLUMN_RESIZERS - 280 - MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH
   )
+})
+
+test('PPL-U06: bottom side columns have no fixed maximum (former 640 / 600 caps removed)', () => {
+  // A 2560px container lets History grow far past 640.
+  assert.equal(
+    computeBottomHistoryResize({ startWidth: 280, startX: 280, clientX: 1280, containerWidth: 2560, senderWidth: 240 }),
+    1280
+  )
+  assert.equal(
+    computeBottomSenderResize({ startWidth: 240, startX: 2000, clientX: 1100, containerWidth: 2560, historyWidth: 280 }),
+    1140
+  )
+  // The live ceiling still protects the editor minimum, including a wider minimum when
+  // attachments are present.
+  const minWithAttachments = resolveBottomEditorMinWidth(true, 200)
+  assert.equal(
+    computeBottomHistoryResize({ startWidth: 280, startX: 0, clientX: 5000, containerWidth: 2560, senderWidth: 240, minEditorWidth: minWithAttachments }),
+    2560 - COLUMN_RESIZERS - 240 - minWithAttachments
+  )
+})
+
+test('PPL-U07: editor minimum width always reserves the action rail, and the attachment column only when attachments exist', () => {
+  // The icon action rail is a fixed 48px column next to the 240px text area minimum.
+  assert.equal(PROMPT_BOTTOM_ACTION_RAIL_WIDTH, 48)
+  assert.equal(MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH, MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH + PROMPT_BOTTOM_ACTION_RAIL_WIDTH)
+  assert.equal(resolveBottomEditorMinWidth(false, 400), MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH)
+  assert.equal(
+    resolveBottomEditorMinWidth(true, 150),
+    MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH + PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH + 150
+  )
+  // A stored width below the column minimum reserves the minimum column instead.
+  assert.equal(
+    resolveBottomEditorMinWidth(true, 10),
+    MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH + PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH + MIN_PROMPT_BOTTOM_ATTACHMENT_WIDTH
+  )
+})
+
+test('PPL-U08: attachment column resize grows leftward and keeps the text area minimum plus the action rail', () => {
+  // Dragging the left edge left (-clientX) widens the column.
+  assert.equal(computeBottomAttachmentResize({ startWidth: 120, startX: 900, clientX: 840, editorWidth: 800 }), 180)
+  // Dragging right narrows it down to its minimum.
+  assert.equal(computeBottomAttachmentResize({ startWidth: 120, startX: 900, clientX: 1000, editorWidth: 800 }), MIN_PROMPT_BOTTOM_ATTACHMENT_WIDTH)
+  // Ceiling: editor body width minus resizer minus text area minimum minus action rail.
+  assert.equal(
+    computeBottomAttachmentResize({ startWidth: 120, startX: 900, clientX: 0, editorWidth: 800 }),
+    800 - PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH - MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH - PROMPT_BOTTOM_ACTION_RAIL_WIDTH
+  )
+})
+
+test('PPL-U09: rendered bottom layout compresses on a narrow container without rewriting stored values', () => {
+  const stored = { storedHeight: 300, storedHistoryWidth: 900, storedSenderWidth: 500 }
+
+  // Wide container: stored values render unchanged.
+  const wide = resolveBottomPanelLayout({ ...stored, containerWidth: 2400, containerHeight: 1200 })
+  assert.deepEqual(wide, { height: 300, historyWidth: 900, senderWidth: 500, widthCompressed: false, heightCompressed: false })
+
+  // Narrow container: side columns give up space in proportion to their slack above
+  // their minimums, and the editor keeps exactly its minimum.
+  const narrow = resolveBottomPanelLayout({ ...stored, containerWidth: 1000, containerHeight: 1200 })
+  assert.equal(narrow.widthCompressed, true)
+  assert.equal(narrow.historyWidth + narrow.senderWidth + MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH, 1000 - COLUMN_RESIZERS)
+  const historySlack = 900 - MIN_PROMPT_BOTTOM_HISTORY_WIDTH
+  const senderSlack = 500 - MIN_PROMPT_BOTTOM_SENDER_WIDTH
+  const giveUp = (900 + 500 + MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH) - (1000 - COLUMN_RESIZERS)
+  assert.equal(narrow.historyWidth, Math.round(900 - historySlack * giveUp / (historySlack + senderSlack)))
+  assert.equal(narrow.senderWidth, Math.round(500 - senderSlack * giveUp / (historySlack + senderSlack)))
+
+  // Container restored: the remembered geometry comes back unchanged (inputs untouched).
+  assert.deepEqual(resolveBottomPanelLayout({ ...stored, containerWidth: 2400, containerHeight: 1200 }), wide)
+
+  // Very narrow container: columns floor at their minimums.
+  const tiny = resolveBottomPanelLayout({ ...stored, containerWidth: 500, containerHeight: 1200 })
+  assert.equal(tiny.historyWidth, MIN_PROMPT_BOTTOM_HISTORY_WIDTH)
+  assert.equal(tiny.senderWidth, MIN_PROMPT_BOTTOM_SENDER_WIDTH)
+
+  // Before the first measurement (no container) nothing is compressed.
+  assert.deepEqual(resolveBottomPanelLayout(stored), { height: 300, historyWidth: 900, senderWidth: 500, widthCompressed: false, heightCompressed: false })
+
+  // Attachments raise the editor minimum, which compresses the side columns further.
+  const withAttachments = resolveBottomPanelLayout({ ...stored, containerWidth: 1800, containerHeight: 1200, minEditorWidth: resolveBottomEditorMinWidth(true, 300) })
+  assert.equal(withAttachments.widthCompressed, true)
+  assert.equal(withAttachments.historyWidth + withAttachments.senderWidth + resolveBottomEditorMinWidth(true, 300), 1800 - COLUMN_RESIZERS)
+})
+
+test('PPL-U10: bottom height has no fixed cap and is clamped only by the live Task-area minimum', () => {
+  assert.equal(resolveBottomPanelMaxHeight(undefined), undefined)
+  assert.equal(resolveBottomPanelMaxHeight(1000), 1000 - MIN_PROMPT_BOTTOM_TERMINAL_AREA_HEIGHT)
+  // Never below the panel's own minimum.
+  assert.equal(resolveBottomPanelMaxHeight(200), MIN_PROMPT_PANEL_BOTTOM_HEIGHT)
+
+  const tall = resolveBottomPanelLayout({ storedHeight: 700, storedHistoryWidth: 280, storedSenderWidth: 240, containerWidth: 1600, containerHeight: 1200 })
+  assert.equal(tall.height, 700, 'Heights above the former 600px cap render when they fit')
+  assert.equal(tall.heightCompressed, false)
+
+  const short = resolveBottomPanelLayout({ storedHeight: 700, storedHistoryWidth: 280, storedSenderWidth: 240, containerWidth: 1600, containerHeight: 600 })
+  assert.equal(short.height, 600 - MIN_PROMPT_BOTTOM_TERMINAL_AREA_HEIGHT)
+  assert.equal(short.heightCompressed, true)
+})
+
+test('PPL-U11: loaded dock position migrates profiles older than the bottom-default schema exactly once', () => {
+  assert.equal(PROMPT_PANEL_BOTTOM_DEFAULT_SETTINGS_VERSION, 11)
+  // Older profiles: every stored position (and an absent one) moves to bottom.
+  for (const stored of ['left', 'right', 'bottom', undefined, 'bogus']) {
+    for (const version of [1, 7, 10]) {
+      assert.deepEqual(resolveLoadedPromptPanelPosition(stored, version), { position: 'bottom', migrated: true }, `${String(stored)}@v${version}`)
+    }
+  }
+  // Current and newer profiles: the stored choice is respected.
+  for (const version of [11, 12]) {
+    assert.deepEqual(resolveLoadedPromptPanelPosition('left', version), { position: 'left', migrated: false })
+    assert.deepEqual(resolveLoadedPromptPanelPosition('right', version), { position: 'right', migrated: false })
+    assert.deepEqual(resolveLoadedPromptPanelPosition('bottom', version), { position: 'bottom', migrated: false })
+    assert.deepEqual(resolveLoadedPromptPanelPosition('bogus', version), { position: 'bottom', migrated: false })
+  }
+  // No numeric version (fresh or unreadable profile): normalized, never flagged as migrated.
+  assert.deepEqual(resolveLoadedPromptPanelPosition('left', undefined), { position: 'left', migrated: false })
+  assert.deepEqual(resolveLoadedPromptPanelPosition(undefined, '10'), { position: 'bottom', migrated: false })
 })
 
 test('PPL-U05: resolveMainContentLayout enforces Settings left-fixed row invariant regardless of promptPanelPosition', () => {

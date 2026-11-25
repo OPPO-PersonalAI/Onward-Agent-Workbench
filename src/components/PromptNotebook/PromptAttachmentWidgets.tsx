@@ -24,17 +24,23 @@ export interface PromptAttachmentMentionMenuState {
 
 export interface PromptAttachmentStripProps {
   images: readonly PromptImageAttachment[]
+  /** 'grid' (default): 3-column grid above the inputs. 'column': one card per row beside the inputs. */
+  layout?: 'grid' | 'column'
+  /** Width of the vertical column when `layout === 'column'`. */
+  columnWidth?: number
   onOpenPreview: (index: number) => void
   onInsertToken: (index: number) => void
   onRemove: (index: number) => void
 }
 
 /**
- * Top 3-column responsive grid displaying pasted attachments (`@1`, `@2`, `@3`...)
- * at the top of the Prompt Editor.
+ * Pasted attachments (`@1`, `@2`, `@3`...) of the Prompt Editor: a 3-column grid above
+ * the inputs (left/right docks) or a vertically scrolling column beside them (bottom dock).
  */
 export const PromptAttachmentStrip = React.memo(function PromptAttachmentStrip({
   images,
+  layout = 'grid',
+  columnWidth,
   onOpenPreview,
   onInsertToken,
   onRemove
@@ -44,7 +50,10 @@ export const PromptAttachmentStrip = React.memo(function PromptAttachmentStrip({
 
   return (
     <div
-      className="prompt-editor-images-strip"
+      className={layout === 'column' ? 'prompt-editor-images-strip is-column' : 'prompt-editor-images-strip'}
+      data-layout={layout}
+      data-testid="prompt-editor-images-strip"
+      style={layout === 'column' && typeof columnWidth === 'number' ? { width: columnWidth } : undefined}
       role="region"
       aria-label={t('promptEditor.images.aria')}
     >

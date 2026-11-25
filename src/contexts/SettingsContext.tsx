@@ -79,7 +79,7 @@ function createDefaultShortcuts(): ShortcutConfig {
  */
 function createDefaultSettings(): SettingsState {
   return {
-    version: 10,
+    version: 11,
     shortcuts: createDefaultShortcuts(),
     promptInput: createDefaultPromptInputSettings(),
     terminalStyles: {},
@@ -154,7 +154,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     const bootstrap = (window as unknown as { onwardThemeBootstrap?: { settings: SettingsState } }).onwardThemeBootstrap?.settings
     return bootstrap ? {
       ...bootstrap,
-      version: Math.max(10, bootstrap.version ?? 0),
+      version: Math.max(11, bootstrap.version ?? 0),
       promptInput: normalizePromptInputSettings(bootstrap.promptInput),
       promptPanelPosition: normalizePromptPanelPosition(bootstrap.promptPanelPosition)
     } : null
@@ -246,7 +246,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
           perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'load-send' })
           perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'load-send' })
           const loadedSettings = await window.electronAPI.settings.load()
-          const normalized = { ...loadedSettings, version: Math.max(10, loadedSettings.version ?? 0),
+          const normalized = { ...loadedSettings, version: Math.max(11, loadedSettings.version ?? 0),
             theme: normalizeThemeSettings(loadedSettings.theme), promptInput: normalizePromptInputSettings(loadedSettings.promptInput),
             promptPanelPosition: normalizePromptPanelPosition(loadedSettings.promptPanelPosition) }
           settingsRef.current = normalized

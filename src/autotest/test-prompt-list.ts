@@ -182,10 +182,11 @@ export async function testPromptList(ctx: AutotestContext): Promise<TestResult[]
   if (!cancelled()) {
     const promptElement = document.querySelector(`[data-prompt-id="${createdPrompt.id}"]`) as HTMLElement | null
     promptElement?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }))
+    // Bottom-dock rail buttons are icon-only; their accessible label lives in aria-label.
     const saveAsNewLabelReady = await waitFor('pl-save-as-new-label', () => {
       const labels = Array.from(document.querySelectorAll(
         '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
-      )).map((button) => button.textContent?.trim() ?? '')
+      )).map((button) => (button.getAttribute('aria-label') ?? button.textContent)?.trim() ?? '')
       return (
         (labels.includes('Add') || labels.includes('\u6dfb\u52a0')) &&
         !labels.includes('Save as new item') &&
@@ -194,7 +195,7 @@ export async function testPromptList(ctx: AutotestContext): Promise<TestResult[]
     }, 3000, 80)
     const editButtonLabels = Array.from(document.querySelectorAll(
       '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
-    )).map((button) => button.textContent?.trim() ?? '')
+    )).map((button) => (button.getAttribute('aria-label') ?? button.textContent)?.trim() ?? '')
     record('PL-11-save-as-new-button-label', Boolean(promptElement && saveAsNewLabelReady), {
       buttonLabels: editButtonLabels
     })
@@ -241,7 +242,7 @@ export async function testPromptList(ctx: AutotestContext): Promise<TestResult[]
       const cancelBtnFallback = Array.from(document.querySelectorAll(
         '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
       )).find((button) => {
-        const label = button.textContent?.trim()
+        const label = (button.getAttribute('aria-label') ?? button.textContent)?.trim()
         return label === 'Cancel' || label === '\u53d6\u6d88'
       }) as HTMLButtonElement | undefined
       cancelBtnFallback?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
@@ -348,7 +349,7 @@ export async function testPromptList(ctx: AutotestContext): Promise<TestResult[]
     const cancelBtnAfter15 = Array.from(document.querySelectorAll(
       '.prompt-notebook:not(.prompt-notebook-hidden) .prompt-editor[data-prompt-editing="true"] .prompt-editor-btn'
     )).find((button) => {
-      const label = button.textContent?.trim()
+      const label = (button.getAttribute('aria-label') ?? button.textContent)?.trim()
       return label === 'Cancel' || label === '\u53d6\u6d88'
     }) as HTMLButtonElement | undefined
     cancelBtnAfter15?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
