@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- SPDX-FileCopyrightText: 2026 OPPO -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>底部停靠 Prompt 面板 · 发送区重排交互稿</title>
+<style>
+:root {
+  /* Document chrome */
+  --pg-bg: #0e0f11;
+  --pg-card: #16171a;
+  --pg-card-2: #1b1c20;
+  --pg-line: #2a2b31;
+  --pg-text: #e6e6ea;
+  --pg-dim: #a3a3ad;
+  --pg-faint: #74747e;
+  --pg-acc: #7aa2f7;
+  --pg-good: #9ece6a;
+  --pg-warn: #e0af68;
+  --pg-bad: #f7768e;
+  --pg-vio: #bb9af7;
+  --toc-w: 250px;
+  /* App theme tokens copied from src/App.css (dark) */
+  --bg-1: #161618;
+  --bg-2: #1c1c1f;
+  --panel: #212124;
+  --border: #2c2c30;
+  --border-strong: #3a3a40;
+  --text-1: #e8e8ec;
+  --text-2: #b4b4bc;
+  --text-3: #8a8a94;
+  --accent: #8b8f98;
+  --rainbow-1: #5DADE2;
+  --rainbow-2: #2E56A5;
+  --rainbow-3: #E42328;
+  --rainbow-4: #F68C23;
+  --rainbow-5: #FFD100;
+  --rainbow-6: #1B9E4B;
+}
+html { scroll-behavior: auto; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--pg-bg);
+  color: var(--pg-text);
+  font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+a { color: var(--pg-acc); }
+code, kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+code { background: #1f2026; border: 1px solid #2b2c33; border-radius: 4px; padding: 0 4px; }
+kbd { background: #23242a; border: 1px solid #3a3b44; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+
+/* ---------- TOC ---------- */
+nav.toc {
+  position: fixed; top: 0; left: 0; bottom: 0; width: var(--toc-w);
+  overflow-y: auto; background: #111215; border-right: 1px solid var(--pg-line);
+  padding: 22px 12px 30px;
+}
+nav.toc .brand { font-size: 13px; font-weight: 600; color: var(--pg-text); padding: 0 10px 4px; }
+nav.toc .sub { font-size: 11.5px; color: var(--pg-faint); padding: 0 10px 14px; border-bottom: 1px solid var(--pg-line); margin-bottom: 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; }
+nav.toc li { margin: 1px 0; }
+nav.toc a {
+  display: block; padding: 4px 10px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
+  color: var(--pg-dim); text-decoration: none; font-size: 13px; line-height: 1.5;
+}
+nav.toc a:hover { color: var(--pg-text); background: #1a1b20; }
+nav.toc a.active { color: var(--pg-acc); border-left-color: var(--pg-acc); background: rgba(122,162,247,.10); }
+nav.toc a.l2 { padding-left: 24px; font-size: 12.5px; }
+nav.toc .grp { font-size: 11px; color: var(--pg-faint); letter-spacing: .06em; padding: 12px 10px 4px; }
+
+main { margin-left: var(--toc-w); padding: 30px 44px 90px; max-width: 1180px; }
+@media (max-width: 960px) {
+  nav.toc { display: none; }
+  main { margin-left: 0; padding: 20px; }
+}
+
+section { scroll-margin-top: 16px; padding-top: 6px; margin-bottom: 38px; }
+.playground section { scroll-margin-top: 150px; }
+h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .01em; }
+h2 { font-size: 20px; margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--pg-line); }
+h2 .no { color: var(--pg-acc); margin-right: 8px; font-variant-numeric: tabular-nums; }
+h3 { font-size: 15.5px; margin: 20px 0 8px; color: #d7d9e4; }
+p { margin: 8px 0; }
+.lead { color: var(--pg-dim); margin: 0 0 18px; }
+.muted { color: var(--pg-dim); }
+.faint { color: var(--pg-faint); }
+
+/* ---------- Components ---------- */
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  font-size: 12.5px; border: 1px solid var(--pg-line); background: var(--pg-card); color: var(--pg-dim);
+}
+.pill b { color: var(--pg-text); font-weight: 600; }
+.pill.acc { border-color: rgba(122,162,247,.45); color: var(--pg-acc); background: rgba(122,162,247,.08); }
+.pill.good { border-color: rgba(158,206,106,.45); color: var(--pg-good); background: rgba(158,206,106,.08); }
+.pill.warn { border-color: rgba(224,175,104,.45); color: var(--pg-warn); background: rgba(224,175,104,.08); }
+.pill.bad { border-color: rgba(247,118,142,.45); color: var(--pg-bad); background: rgba(247,118,142,.08); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
+.card-doc { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: 10px; padding: 12px 14px; }
+.card-doc h4 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.card-doc p, .card-doc li { font-size: 13px; color: var(--pg-dim); }
+.card-doc ul { margin: 4px 0 0; padding-left: 18px; }
+.card-doc.good { border-left: 3px solid var(--pg-good); }
+.card-doc.warn { border-left: 3px solid var(--pg-warn); }
+.card-doc.bad { border-left: 3px solid var(--pg-bad); }
+.card-doc.acc { border-left: 3px solid var(--pg-acc); }
+
+.callout { border: 1px solid var(--pg-line); border-left: 3px solid var(--pg-acc); background: #14161c; border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 13.5px; }
+.callout.warn { border-left-color: var(--pg-warn); background: #1a1712; }
+.callout.good { border-left-color: var(--pg-good); background: #131812; }
+.callout .t { font-weight: 600; margin-bottom: 2px; }
+
+table.tbl { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+table.tbl th, table.tbl td { border: 1px solid var(--pg-line); padding: 7px 10px; text-align: left; vertical-align: top; }
+table.tbl th { background: #17181d; color: #cfd2de; font-weight: 600; }
+table.tbl td { background: #121317; color: var(--pg-dim); }
+table.tbl td.c { text-align: center; }
+table.tbl tr.rec td { background: #141a24; }
+.y { color: var(--pg-good); font-weight: 600; }
+.m { color: var(--pg-warn); font-weight: 600; }
+.n { color: var(--pg-bad); font-weight: 600; }
+
+details.fold { border: 1px solid var(--pg-line); border-radius: 8px; background: var(--pg-card); padding: 8px 12px; margin: 10px 0; }
+details.fold summary { cursor: pointer; color: #cfd2de; font-weight: 600; font-size: 13.5px; }
+
+/* Flow diagram */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 14px 0; }
+.flow .step { flex: 1 1 170px; background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; color: var(--pg-dim); position: relative; }
+.flow .step b { display: block; color: var(--pg-text); font-size: 13px; margin-bottom: 2px; }
+.flow .step .h { font-size: 11.5px; color: var(--pg-acc); font-variant-numeric: tabular-nums; }
+.flow .arrow { flex: 0 0 26px; display: flex; align-items: center; justify-content: center; color: var(--pg-faint); font-size: 16px; }
+.flow .step.last { border-color: rgba(247,118,142,.5); }
+
+/* Decision list */
+ol.decide { padding-left: 0; list-style: none; counter-reset: q; }
+ol.decide > li { counter-increment: q; background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: 10px; padding: 12px 14px 12px 52px; margin: 10px 0; position: relative; }
+ol.decide > li::before { content: "Q" counter(q); position: absolute; left: 12px; top: 12px; width: 30px; height: 22px; border-radius: 6px; background: rgba(122,162,247,.15); color: var(--pg-acc); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+ol.decide .q { font-weight: 600; color: var(--pg-text); }
+ol.decide .opts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+ol.decide .rec { color: var(--pg-good); font-size: 13px; }
+
+/* ---------- Control bar ---------- */
+.playground { position: relative; }
+.ctrl {
+  position: sticky; top: 0; z-index: 30;
+  background: rgba(14,15,17,.97); border: 1px solid var(--pg-line); border-radius: 10px;
+  padding: 10px 14px; margin: 0 0 18px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35);
+}
+.ctrl .g { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--pg-dim); }
+.ctrl .g > span.k { color: var(--pg-faint); }
+.seg-ctl { display: inline-flex; border: 1px solid var(--pg-line); border-radius: 7px; overflow: hidden; }
+.seg-ctl button { background: transparent; border: 0; color: var(--pg-dim); font: inherit; font-size: 12px; padding: 3px 9px; cursor: pointer; }
+.seg-ctl button + button { border-left: 1px solid var(--pg-line); }
+.seg-ctl button:hover { background: #1c1d23; color: var(--pg-text); }
+.seg-ctl button.on { background: rgba(122,162,247,.18); color: var(--pg-acc); font-weight: 600; }
+.ctrl input[type=range] { width: 130px; accent-color: var(--pg-acc); }
+.ctrl .val { color: var(--pg-text); font-variant-numeric: tabular-nums; min-width: 46px; }
+
+/* ---------- Mock frame ---------- */
+.mock { margin: 12px 0 6px; overflow-x: auto; padding-bottom: 2px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.metrics .pill { font-size: 12px; padding: 1px 9px; }
+.mock-caption { font-size: 12px; color: var(--pg-faint); margin-top: -2px; }
+
+/* ===================================================================
+   App mock. Sizes mirror src/components/PromptNotebook/PromptNotebook.css
+   (34px task rows, 6px gaps, 8px sender padding, 24px action swatches).
+   =================================================================== */
+.dock {
+  position: relative; display: flex; height: var(--h); min-width: 760px;
+  background: var(--bg-1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  font: 12px/1.3 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  color: var(--text-2);
+}
+.dock.solo { min-width: 0; width: calc(var(--sw) + 2px); flex: 0 0 auto; }
+.dock button { font: inherit; color: inherit; cursor: pointer; }
+.dock svg { display: block; }
+
+.d-hist { flex: 0 0 176px; display: flex; flex-direction: column; min-width: 0; background: var(--bg-1); }
+.d-hist .hh { padding: 7px 9px; border-bottom: 1px solid var(--border); color: var(--text-3); font-size: 11px; display: flex; justify-content: space-between; }
+.d-hist .hi { display: flex; gap: 7px; align-items: flex-start; padding: 6px 9px; border-bottom: 1px solid #222226; }
+.d-hist .hi.editing { background: color-mix(in srgb, var(--accent) 14%, var(--bg-1)); }
+.d-hist .hi i { flex: 0 0 7px; height: 7px; border-radius: 50%; margin-top: 4px; background: var(--c, transparent); box-shadow: inset 0 0 0 1px var(--b, transparent); }
+.d-hist .hi div { min-width: 0; }
+.d-hist .hi b { display: block; color: var(--text-1); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.d-hist .hi span { display: block; color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.d-split { flex: 0 0 5px; position: relative; background: var(--bg-1); }
+.d-split::before { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border); }
+
+.d-editor { flex: 1 1 0; min-width: 240px; display: flex; background: var(--bg-2); }
+.d-inputs { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.d-title { padding: 8px 10px 6px; color: var(--text-3); border-bottom: 1px solid #26262a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.d-title.filled { color: var(--text-1); }
+.d-text { flex: 1; padding: 8px 10px; color: var(--text-1); white-space: pre-wrap; overflow: hidden; font-size: 12.5px; line-height: 1.55; }
+.d-rail { flex: 0 0 48px; width: 48px; border-left: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 0; overflow: hidden; }
+.d-rail .dots { display: flex; flex-direction: column; gap: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.d-rail .dotb { width: 28px; height: 28px; }
+.d-rail .abtn { width: 32px; height: 32px; padding: 0; justify-content: center; border-radius: 8px; }
+
+/* Sender column: a size container so rows can react to both width and height. */
+.sender {
+  flex: 0 0 var(--sw); width: var(--sw); min-height: 0; overflow: hidden; position: relative;
+  display: flex; flex-direction: column; padding: 8px; background: var(--panel);
+  container: sender / size;
+}
+
+/* Task selector grid */
+.grid {
+  --track: 34px;
+  display: grid; position: relative;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows), var(--track));
+  grid-auto-rows: var(--track);
+  gap: 6px; align-content: start; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+}
+.tcard {
+  container: tcard / size;
+  display: flex; align-items: center; min-height: 0; overflow: hidden; cursor: pointer;
+  padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text-2);
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.tcard:hover { border-color: var(--t); }
+.tcard.sel { border-color: var(--t); background: color-mix(in srgb, var(--t) 12%, var(--bg-2)); color: var(--text-1); }
+
+/* Legacy (current) label: full title, or the number when the slot is narrow. */
+.l-nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.l-ix { display: none; flex: 1; text-align: center; font-variant-numeric: tabular-nums; }
+@container tcard (max-width: 44px) {
+  .l-nm { display: none; }
+  .l-ix { display: block; }
+}
+
+/* Style 2 (wrap): name wraps; the number is a small inline prefix. */
+.w {
+  width: 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere; line-height: 1.3;
+}
+.ix { color: var(--text-3); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.w .ix { margin-right: 4px; }
+.tcard.sel .ix { color: var(--t); filter: brightness(1.25); }
+
+/* Style 1 (stack): number line + name line. */
+.s { width: 100%; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+.s .ix { line-height: 1.2; }
+.s .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+.s .nm.un { color: var(--text-3); font-style: italic; }
+@container tcard (min-width: 64px) { .s .ix::before { content: 'Task '; } }
+
+.only-ix { display: none; width: 100%; text-align: center; font-variant-numeric: tabular-nums; }
+@container tcard (max-width: 60px) { .w, .s .nm { font-size: 11px; } }
+@container tcard (max-width: 26px) {
+  .w, .s { display: none; }
+  .only-ix { display: block; }
+}
+@container tcard (min-height: 46px) {
+  .w { -webkit-line-clamp: 3; }
+  .s .nm { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+}
+@container tcard (min-height: 62px) { .w { -webkit-line-clamp: 4; } }
+@container tcard (max-height: 24px) {
+  .w { -webkit-line-clamp: 1; }
+  .s { flex-direction: row; align-items: baseline; gap: 4px; }
+  .s .ix::before { content: ''; }
+}
+
+/* Rows below the grid */
+.hist-row { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; flex-wrap: wrap; }
+.hist-row.nowrap { flex-wrap: nowrap; }
+.hist-row .grow { flex: 1 1 0; }
+.hist-row .btns { display: flex; gap: 4px; margin-left: auto; }
+.push { margin-top: auto; }
+.dotb {
+  width: 26px; height: 26px; padding: 0; flex: 0 0 auto; border-radius: 6px; border: 1px solid transparent; background: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.dotb i { width: 12px; height: 12px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px var(--bg-2); }
+.dotb:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.abtn {
+  height: 26px; padding: 0 9px; flex: 0 0 auto; border-radius: 7px; border: 1px solid transparent; background: transparent;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.abtn.pri { background: color-mix(in srgb, var(--accent) 30%, var(--panel)); color: var(--text-1); }
+.abtn.pri:hover { background: color-mix(in srgb, var(--accent) 44%, var(--panel)); }
+.abtn.ghost { border-color: var(--border-strong); color: var(--text-2); }
+.abtn.ghost:hover { border-color: var(--accent); color: var(--text-1); }
+.abtn.icon { width: 26px; padding: 0; justify-content: center; }
+@container sender (max-width: 215px) {
+  .hist-row .abtn .lbl { display: none; }
+  .hist-row .abtn:not(.icon) { width: 26px; padding: 0; justify-content: center; }
+}
+.divider { flex: 0 0 1px; height: 1px; background: var(--border); }
+
+/* Segmented "add" control (version B) */
+.segc { display: flex; flex: 1 1 auto; min-width: 0; height: 28px; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+.segc button { border: 0; background: transparent; height: 100%; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.segc button + button { border-left: 1px solid var(--border-strong); }
+.segc .main {
+  container: segmain / inline-size;
+  flex: 1 1 auto; min-width: 28px; gap: 5px; padding: 0 8px; white-space: nowrap; overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 26%, var(--panel)); color: var(--text-1);
+}
+.segc .main:hover { background: color-mix(in srgb, var(--accent) 42%, var(--panel)); }
+.segc .main .in { display: inline-flex; align-items: center; gap: 5px; }
+@container segmain (max-width: 56px) { .segc .main .lbl { display: none; } }
+.segc .sd { flex: 0 0 26px; }
+.segc .sd i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.segc .sd:hover { background: color-mix(in srgb, var(--c) 22%, transparent); }
+
+/* Send row */
+.send-row { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.mini { display: grid; grid-template-columns: repeat(var(--cols), 3px); grid-auto-rows: 6px; gap: 2px; padding-left: 2px; flex: 0 0 auto; }
+.mini span { border-radius: 2px; background: color-mix(in srgb, var(--text-3) 22%, transparent); }
+.mini span.on { background: color-mix(in srgb, var(--accent) 44%, white 8%); }
+.qa { display: flex; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 4px 3px; }
+.qa button {
+  flex: 1 0 24px; min-width: 24px; height: 24px; padding: 0; border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--c) 42%, var(--border)); background: color-mix(in srgb, var(--c) 12%, var(--panel));
+  display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1;
+}
+.qa button:hover { border-color: var(--c); background: color-mix(in srgb, var(--c) 25%, var(--panel)); }
+
+/* Section captions (version C) */
+.cap { display: flex; justify-content: space-between; align-items: baseline; flex: 0 0 auto; font-size: 10.5px; color: var(--text-3); letter-spacing: .02em; }
+.cap b { color: var(--text-2); font-weight: 600; }
+
+/* ---- Per-version layout ---- */
+.v-cur { justify-content: space-between; }
+.v-cur .grid { --track: 34px; flex: 0 1 auto; margin-bottom: 12px; }
+
+.v-a { gap: 8px; }
+.v-a .grid { --track: 44px; flex: 0 1 auto; }
+
+.v-b { gap: 8px; }
+.v-b .grid { --track: minmax(44px, 60px); flex: 1 1 auto; }
+
+.v-c { gap: 4px; }
+.v-c .grid { --track: minmax(42px, 56px); flex: 1 1 auto; margin-bottom: 4px; }
+.v-c .hist-row { margin-bottom: 4px; }
+.v-c .mini { display: none; }
+
+.v-d { gap: 8px; }
+.v-d .grid { --track: minmax(44px, 1fr); flex: 1 1 auto; max-height: calc(var(--rows) * 96px + (var(--rows) - 1) * 6px); }
+
+/* Short panel: cards fall back to one line; C drops its captions. */
+@container sender (max-height: 219px) {
+  .dock .v-c .cap { display: none; }
+  .dock .v-c .mini { display: grid; }
+}
+@container sender (max-height: 175px) {
+  .dock .v-a .grid, .dock .v-b .grid, .dock .v-c .grid, .dock .v-d .grid { --track: 30px; }
+}
+
+/* Annotation overlays (static baseline only) */
+.anno { position: absolute; border: 2px dashed var(--pg-bad); border-radius: 8px; pointer-events: none; z-index: 5; }
+.anno.warn { border-color: var(--pg-warn); }
+.anno.acc { border-color: var(--pg-acc); }
+.anno span {
+  position: absolute; left: 6px; top: 6px; font: 600 11px/1.4 -apple-system, "PingFang SC", sans-serif; color: #111;
+  background: var(--pg-bad); padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+}
+.anno.warn span { background: var(--pg-warn); }
+.anno.acc span { background: var(--pg-acc); top: auto; bottom: -22px; left: 0; }
+
+/* Card style matrix */
+.matrix-wrap { overflow-x: auto; margin: 12px 0; }
+.matrix { width: 100%; min-width: 900px; border-collapse: collapse; table-layout: fixed; }
+.matrix th, .matrix td { border: 1px solid var(--pg-line); padding: 10px; vertical-align: middle; }
+.matrix th { background: #17181d; font-size: 12.5px; color: #cfd2de; text-align: left; }
+.matrix td.lab { font-size: 12.5px; color: var(--pg-dim); }
+.matrix td.lab b { color: var(--pg-text); display: block; }
+.mrow { display: flex; gap: 6px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--text-2); background: var(--panel); padding: 8px; border-radius: 8px; width: max-content; }
+.mrow .tcard { flex: 0 0 auto; }
+
+.solo-row { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; margin: 12px 0; }
+.solo-item { display: flex; flex-direction: column; gap: 6px; }
+.solo-item .cap2 { font-size: 12px; color: var(--pg-dim); }
+.solo-item .cap2 b { color: var(--pg-text); }
+
+/* Meta */
+.meta-grid { display: grid; grid-template-columns: 160px 1fr; gap: 4px 14px; font-size: 13px; }
+.meta-grid div:nth-child(odd) { color: var(--pg-faint); }
+footer.note { color: var(--pg-faint); font-size: 12px; margin-top: 24px; }
+</style>
+</head>
+<body>
+
+<nav class="toc" aria-label="目录">
+  <div class="brand">发送区重排交互稿</div>
+  <div class="sub">底部停靠 Prompt 面板 · v1</div>
+  <ol>
+    <li><a href="#overview">1. 概览</a></li>
+    <li><a href="#current">2. 现状复盘</a></li>
+    <li><a href="#opinion">3. 我的看法</a></li>
+    <li><a href="#constraints">4. 设计约束</a></li>
+    <li><a href="#cards">5. 卡片两行样式</a></li>
+    <li class="grp">交互稿（可调参数）</li>
+    <li><a class="l2" href="#baseline">6.0 基线：现状</a></li>
+    <li><a class="l2" href="#v-a">6.1 方案 A · 直接上移</a></li>
+    <li><a class="l2" href="#v-b">6.2 方案 B · 分段按钮</a></li>
+    <li><a class="l2" href="#v-c">6.3 方案 C · 分区标题</a></li>
+    <li><a class="l2" href="#v-d">6.4 方案 D · 卡片撑满</a></li>
+    <li class="grp">分析与决策</li>
+    <li><a href="#compare">7. 四版对比</a></li>
+    <li><a href="#compress">8. 面板变矮时的让位顺序</a></li>
+    <li><a href="#peers">9. 同类产品参考</a></li>
+    <li><a href="#decide">10. 需要你决定的事</a></li>
+    <li><a href="#impact">11. 落地影响预估</a></li>
+    <li><a href="#meta">12. 文档信息</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ============================== 1 ============================== -->
+<section id="overview">
+  <h1>底部停靠 Prompt 面板 · 发送区重排交互稿</h1>
+  <p class="lead">目标：把发送区（右侧 Task 列）里那块一直空着的区域用起来。三个颜色点和「添加到历史」从编辑区右侧的 48px 竖栏，搬到发送区、放在 5 个快捷发送按钮上面；Task 卡片的名称改成两行显示。</p>
+  <div class="pills">
+    <span class="pill bad">现状：默认尺寸下发送区约 <b>&nbsp;100px&nbsp;</b> 空白，接近一半</span>
+    <span class="pill good">编辑区去掉竖栏后，文本区 <b>&nbsp;+48px&nbsp;</b></span>
+    <span class="pill acc"><b>4</b>&nbsp;版布局 × <b>2</b>&nbsp;种卡片样式</span>
+    <span class="pill acc">我的推荐：<b>&nbsp;方案 B + 样式 ②</b></span>
+    <span class="pill good">最终选定：<b>&nbsp;方案 D + 样式 ①</b>（2026-11-25）</span>
+  </div>
+  <div class="callout good">
+    <div class="t">决定（v2）</div>
+    选定 <strong>方案 D（卡片撑满）+ 样式 ①（序号 + 名称）</strong>。编辑状态的取消 / 保存 / 另存为新一起搬到发送区；左右停靠保持不变。实现细节：卡片每行在 30～96px 之间等高撑满；名称随卡片高度显示 1～4 行；卡片很矮时序号和名称并成一行；卡片很窄时只显示序号。
+  </div>
+  <div class="callout">
+    <div class="t">怎么看这份稿子</div>
+    第 6 节的交互稿是<strong>真的可以操作</strong>的：顶部的控制条能调面板高度、发送区宽度、Task 数量、新建 / 编辑状态、界面语言和卡片样式，4 个方案同时跟着变。每个稿子下面有实时测量：<span class="pill bad" style="font-size:11.5px;padding:0 7px">发送区空白</span>、<span class="pill" style="font-size:11.5px;padding:0 7px">文本区宽度</span>，以及「Task 区需要滚动」「有控件被挤出」这类警告。鼠标悬停在按钮上能看到提示文字。
+  </div>
+</section>
+
+<!-- ============================== 2 ============================== -->
+<section id="current">
+  <h2><span class="no">2</span>现状复盘</h2>
+  <p>下面是按现有 CSS 尺寸复刻的现状，条件和你的截图一致：面板高 240px、发送区宽 240px、8 个 Task（4 列 × 2 行）。</p>
+  <div class="mock" id="mock-static-current" data-version="cur" data-static='{"h":240,"sw":240,"n":8,"mode":"new","lang":"zh","card":"auto"}' data-annotate="1"></div>
+  <div class="metrics" data-for="mock-static-current"></div>
+  <div class="cards">
+    <div class="card-doc bad">
+      <h4>① 发送区空白</h4>
+      <p>发送区用 <code>justify-content: space-between</code> 把 Task 网格推到顶、快捷按钮推到底，中间约 100px 没有任何内容。面板拉得越高，空白越大。</p>
+    </div>
+    <div class="card-doc warn">
+      <h4>② 48px 竖栏占用编辑区宽度</h4>
+      <p>三个颜色点 + 「添加」按钮单独占了一条 48px 宽的竖栏（<code>PROMPT_BOTTOM_ACTION_RAIL_WIDTH</code>），编辑区最小宽度因此是 240 + 48 = 288px。</p>
+    </div>
+    <div class="card-doc warn">
+      <h4>③ 卡片太窄，只显示序号</h4>
+      <p>8 个 Task 排成 4 列时，每张卡片内容区只有约 37px，小于 44px 的阈值，于是名称被换成序号（<code>@container task-slot (max-width: 44px)</code>）。名称只能靠悬停提示看到。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 3 ============================== -->
+<section id="opinion">
+  <h2><span class="no">3</span>我的看法</h2>
+  <p><strong>整体同意这个方向。</strong>我觉得它解决了三个实际问题，但有几处细节需要在设计时处理好，否则会带来新的困扰。</p>
+  <h3>同意的理由</h3>
+  <div class="cards">
+    <div class="card-doc good"><h4>空间真的被浪费了</h4><p>默认尺寸下发送区将近一半是空的。把一行按钮挪进来，加上卡片增高，基本能填满。</p></div>
+    <div class="card-doc good"><h4>编辑区变宽</h4><p>竖栏去掉后，文本区多出 48px，编辑区最小宽度从 288px 降到 240px，窄窗口下更从容。</p></div>
+    <div class="card-doc good"><h4>操作的位置更统一</h4><p>「存进历史」和「发给 Task」都是在回答同一个问题：<em>写好的这段文字往哪儿去</em>。左边写，右边决定去向，分工更清楚。</p></div>
+  </div>
+  <h3>需要注意的地方</h3>
+  <div class="cards">
+    <div class="card-doc warn"><h4>1. 颜色点的含义容易被误解</h4><p>发送区原来只有「发给 Task」的按钮。三个颜色点单独放过去，可能被理解成 Task 的颜色、或某种发送方式。所以需要把它们和「添加到历史」在视觉上绑成一组，并和发送按钮隔开（这就是方案 B 的出发点）。</p></div>
+    <div class="card-doc warn"><h4>2. 编辑状态有 6 个控件</h4><p>编辑已有 Prompt 时，这一行要放 3 个颜色点 + 取消 + 保存 + 另存为新。240px 宽可以放成一行；发送区最窄是 180px，这时只能显示图标或者换行。</p></div>
+    <div class="card-doc warn"><h4>3. 面板高度可以调</h4><p>空白只在默认高度及以上才出现，面板最矮可以到 160px。必须规定好面板变矮时谁先让位，保证按钮永远能点到（见第 8 节）。</p></div>
+    <div class="card-doc warn"><h4>4. 名称显示不全，主要是因为卡片太窄</h4><p>4 列、240px 宽时，卡片内容宽约 37px，一行只能放 5～6 个英文字母，两行大约 10～12 个。比只显示序号好很多，但像 <code>Onward-Agent-Workbench</code> 这样的长名字仍然会被截断。</p></div>
+    <div class="card-doc warn"><h4>5. 序号要保留</h4><p>代码注释里写明了序号和 <kbd>Cmd</kbd>+数字 快捷键是对应的。两行样式里序号不能丢，至少要以小号前缀的形式保留。</p></div>
+    <div class="card-doc warn"><h4>6. 误点的风险</h4><p>「存进历史」没有副作用，随时可以删；「发送」发出去就收不回。两行挨得近了以后，需要留出间距或分隔线，按钮样式也要明显不同（颜色点 / 中性按钮 vs 彩色发送块）。</p></div>
+  </div>
+</section>
+
+<!-- ============================== 4 ============================== -->
+<section id="constraints">
+  <h2><span class="no">4</span>设计约束（每个方案都必须满足）</h2>
+  <table class="tbl">
+    <tr><th style="width:190px">约束</th><th>具体数值 / 要求</th><th style="width:240px">来源</th></tr>
+    <tr><td>发送区宽度</td><td>默认 240px，最小 180px，可以拖得很宽</td><td><code>prompt-panel-layout.ts</code></td></tr>
+    <tr><td>面板高度</td><td>没有上限；Task 区最少保留 160px</td><td><code>MIN_PROMPT_BOTTOM_TERMINAL_AREA_HEIGHT</code></td></tr>
+    <tr><td>Task 数量 / 布局</td><td>预设 1 / 2 / 4 / 6 / 8 个（1×1、2×1、2×2、3×2、4×2），也支持自定义布局（行数可能更多）。选择器是 Task 网格的缩小模型，行列和形状必须一致</td><td><code>task-selector-geometry.ts</code></td></tr>
+    <tr><td>编辑状态</td><td>新建：3 个颜色点 + 添加到历史；编辑：3 个颜色点 + 取消 + 保存 + 另存为新</td><td><code>PromptNotebook.tsx</code> actionsBar</td></tr>
+    <tr><td>双语</td><td>en / zh-CN 文字长度不同，两种语言下都不能溢出或被挤掉</td><td>CLAUDE.md 多语言规则</td></tr>
+    <tr><td>可访问性</td><td>只显示图标的按钮保留 <code>aria-label</code> 和悬停提示；序号对应 <kbd>Cmd</kbd>+数字</td><td>现有实现</td></tr>
+    <tr><td>左 / 右停靠</td><td>不受影响，继续用文字按钮的底部操作栏</td><td>本次范围外</td></tr>
+    <tr><td>已有的问题（不在本次范围）</td><td>发送区 180px 宽时，5 个快捷发送按钮本来就放不下，现在是靠横向滚动；交互稿里最后一个按钮被截掉的样子就是这个原因，和本次改动无关</td><td><code>.prompt-action-rail</code> 的 <code>overflow-x: auto</code></td></tr>
+  </table>
+</section>
+
+<!-- ============================== 5 ============================== -->
+<section id="cards">
+  <h2><span class="no">5</span>卡片两行样式</h2>
+  <p>「两行显示」有两种做法，下面在同样的卡片宽度下并排比较。每格放 2 张卡：左边是已选中、名字很长的 Task；右边是没有自定义名称的 Task。中文名称的效果可以在第 6 节的交互稿里看（6 号 Task「前端重构」）。卡片宽度是按真实布局算出来的。</p>
+  <div class="cards">
+    <div class="card-doc acc"><h4>样式 ① 序号 + 名称</h4><p>第一行是序号（宽度够时显示成 <code>Task 1</code>），第二行是名称，单行加省略号。序号最醒目，和 <kbd>Cmd</kbd>+数字 对应得最直接。没有自定义名称时第二行显示「未命名」，这是一处<strong>新增文案</strong>。</p></div>
+    <div class="card-doc acc"><h4>样式 ② 名称折两行</h4><p>名称本身折成两行，序号以小号前缀放在名称前面（选中时用 Task 的颜色）。能看到的名称字符最多，最贴近你说的「名称两行」。卡片更高时自动放宽到 3～4 行。</p></div>
+  </div>
+  <div class="matrix-wrap"><table class="matrix">
+    <colgroup><col style="width:170px"><col><col><col></colgroup>
+    <thead><tr><th>卡片宽度（对应的布局）</th><th>现状（34px 高）</th><th>样式 ①（44px 高）</th><th>样式 ②（44px 高）</th></tr></thead>
+    <tbody id="card-matrix"></tbody>
+  </table></div>
+  <div class="callout warn"><div class="t">要提前说明的一点</div>宽度只有 36px 的那一行（180px 宽 + 8 个 Task），卡片内容宽约 22px，两种样式都放不下名字，只能回到只显示序号。这时问题出在宽度上，增加行数解决不了。</div>
+</section>
+
+<!-- ============================== 6 ============================== -->
+<div class="playground">
+  <div class="ctrl" id="ctrl">
+    <div class="g"><span class="k">面板高度</span><input type="range" id="ctl-h" min="160" max="360" step="10" value="240"><span class="val" id="ctl-h-val">240px</span></div>
+    <div class="g"><span class="k">发送区宽度</span><div class="seg-ctl" data-key="sw"><button data-val="180">180</button><button data-val="240" class="on">240</button><button data-val="320">320</button></div></div>
+    <div class="g"><span class="k">Task 数</span><div class="seg-ctl" data-key="n"><button data-val="1">1</button><button data-val="2">2</button><button data-val="4">4</button><button data-val="6">6</button><button data-val="8" class="on">8</button></div></div>
+    <div class="g"><span class="k">状态</span><div class="seg-ctl" data-key="mode"><button data-val="new" class="on">新建</button><button data-val="edit">编辑已有 Prompt</button></div></div>
+    <div class="g"><span class="k">界面语言</span><div class="seg-ctl" data-key="lang"><button data-val="zh" class="on">中文</button><button data-val="en">English</button></div></div>
+    <div class="g"><span class="k">卡片样式</span><div class="seg-ctl" data-key="card"><button data-val="auto" class="on">跟随方案</button><button data-val="stack">① 序号+名称</button><button data-val="wrap">② 名称两行</button></div></div>
+  </div>
+
+  <section id="baseline">
+    <h2><span class="no">6.0</span>基线：现状</h2>
+    <p class="muted">用于对照。调控制条时它也会跟着变，可以看到面板越高空白越大。</p>
+    <div class="mock" id="mock-cur" data-version="cur" data-live="1"></div>
+    <div class="metrics" data-for="mock-cur"></div>
+  </section>
+
+  <section id="v-a">
+    <h2><span class="no">6.1</span>方案 A · 直接上移（按你的原始思路）</h2>
+    <p>竖栏去掉。发送区从上到下是：Task 网格 → 「颜色点 ··· 添加到历史」一行 → 分隔线 → 快捷发送。卡片固定 44px 高、名称两行；按钮两行贴着底部，剩余的空白留在网格和按钮之间。</p>
+    <div class="mock" id="mock-a" data-version="a" data-live="1"></div>
+    <div class="metrics" data-for="mock-a"></div>
+    <div class="cards">
+      <div class="card-doc good"><h4>优点</h4><ul><li>最直接，改动量最小</li><li>按钮位置固定在底部，不随 Task 数量跳动</li><li>「添加到历史」宽度够时显示文字，比纯图标好找</li></ul></div>
+      <div class="card-doc warn"><h4>不足</h4><ul><li>面板高于默认值时空白仍然存在（卡片不长高）</li><li>颜色点和「添加」之间只靠位置关联，第一次用的人未必看得出颜色点是「带颜色添加」</li></ul></div>
+    </div>
+  </section>
+
+  <section id="v-b">
+    <h2><span class="no">6.2</span>方案 B · 分段按钮（推荐）</h2>
+    <p>把「添加到历史」和三个颜色点合成<strong>一个分段按钮</strong>：<code>[ + 添加到历史 | ● | ● | ● ]</code>。主体是普通添加，右边三格是「带颜色添加」。编辑状态下主体变成「✓ 保存」，取消和另存为新放在两侧。卡片可以从 44px 长到 60px，名称最多显示三行。</p>
+    <div class="mock" id="mock-b" data-version="b" data-live="1"></div>
+    <div class="metrics" data-for="mock-b"></div>
+    <div class="cards">
+      <div class="card-doc good"><h4>优点</h4><ul><li>一眼能看出颜色点是「添加」的不同方式，降低误解</li><li>分段按钮的外框把它和下面彩色的发送块明显区分开</li><li>卡片随高度长高，空白最少，又不会像 D 那样过度拉伸</li><li>180px 最窄时主体自动只显示图标，编辑态 6 个控件仍在一行内</li></ul></div>
+      <div class="card-doc warn"><h4>不足</h4><ul><li>比 A 多一个新的控件样式（分段按钮），CSS 稍多</li><li>每个颜色格只有 26px 宽，比现在的 28px 小一点</li></ul></div>
+    </div>
+  </section>
+
+  <section id="v-c">
+    <h2><span class="no">6.3</span>方案 C · 分区标题</h2>
+    <p>在 B / A 的基础上，给三个区加小标题：「发送目标 · 已选 2/8」「存入历史」「发送」。已选数量写进标题后，右下角的小格子示意图就不需要了。面板矮于约 235px 时标题自动隐藏，小格子示意图重新出现。</p>
+    <div class="mock" id="mock-c" data-version="c" data-live="1"></div>
+    <div class="metrics" data-for="mock-c"></div>
+    <div class="cards">
+      <div class="card-doc good"><h4>优点</h4><ul><li>结构最清楚，新用户最容易理解每一块是干什么的</li><li>「已选 2/8」比小格子示意图更直观</li></ul></div>
+      <div class="card-doc bad"><h4>不足</h4><ul><li>标题占掉约 45px 高度，在默认高度下几乎刚好放下，稍矮就要隐藏</li><li>标题时有时无，界面会跳动</li><li>引入 3～4 条<strong>新文案</strong>（需要中英文）</li></ul></div>
+    </div>
+  </section>
+
+  <section id="v-d">
+    <h2><span class="no">6.4</span>方案 D · 卡片撑满</h2>
+    <p>按钮两行和 A 一样，但 Task 网格把剩下的高度全部吃掉（每行最高 96px），名称最多 4 行。空白最少，卡片也最好点。</p>
+    <div class="mock" id="mock-d" data-version="d" data-live="1"></div>
+    <div class="metrics" data-for="mock-d"></div>
+    <div class="cards">
+      <div class="card-doc good"><h4>优点</h4><ul><li>空白几乎为零</li><li>卡片大，好点，名称显示得最全</li></ul></div>
+      <div class="card-doc bad"><h4>不足</h4><ul><li>违背了现有代码里有意保留的原则：选择器是 Task 网格的「缩小模型」，<em>1 个 Task 时不应该被放大成一个占半个面板的大块</em>（<code>.prompt-sender-terminals</code> 的注释）。把 Task 数切到 1 或 2 就能看到这个问题</li><li>卡片大小随面板高度变化，视觉上不够稳定</li></ul></div>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== 7 ============================== -->
+<section id="compare">
+  <h2><span class="no">7</span>四版对比</h2>
+  <table class="tbl">
+    <tr><th>维度</th><th>A 直接上移</th><th>B 分段按钮</th><th>C 分区标题</th><th>D 卡片撑满</th></tr>
+    <tr><td>默认尺寸下的空白</td><td class="c"><span class="m">中</span></td><td class="c"><span class="y">少</span></td><td class="c"><span class="y">少</span></td><td class="c"><span class="y">几乎没有</span></td></tr>
+    <tr><td>面板拉高后的空白</td><td class="c"><span class="n">变多</span></td><td class="c"><span class="m">卡片长到 60px 后变多</span></td><td class="c"><span class="m">同 B</span></td><td class="c"><span class="y">很少</span></td></tr>
+    <tr><td>颜色点含义是否清楚</td><td class="c"><span class="m">一般</span></td><td class="c"><span class="y">清楚</span></td><td class="c"><span class="y">清楚（靠标题）</span></td><td class="c"><span class="m">一般</span></td></tr>
+    <tr><td>「存历史」与「发送」区分度</td><td class="c"><span class="y">有分隔线</span></td><td class="c"><span class="y">外框 + 间距</span></td><td class="c"><span class="y">标题</span></td><td class="c"><span class="m">只有间距</span></td></tr>
+    <tr><td>编辑态（6 个控件）</td><td class="c"><span class="y">一行，180px 时换行</span></td><td class="c"><span class="y">始终一行</span></td><td class="c"><span class="y">同 A</span></td><td class="c"><span class="y">同 A</span></td></tr>
+    <tr><td>面板很矮（160px）</td><td class="c"><span class="y">网格滚动，按钮可见</span></td><td class="c"><span class="y">同 A</span></td><td class="c"><span class="m">标题消失，界面有跳动</span></td><td class="c"><span class="y">同 A</span></td></tr>
+    <tr><td>1～2 个 Task 时的观感</td><td class="c"><span class="y">正常</span></td><td class="c"><span class="y">正常</span></td><td class="c"><span class="y">正常</span></td><td class="c"><span class="n">卡片过大</span></td></tr>
+    <tr><td>新增文案</td><td class="c">无</td><td class="c">无</td><td class="c"><span class="m">3～4 条</span></td><td class="c">无</td></tr>
+    <tr><td>改动量</td><td class="c"><span class="y">小</span></td><td class="c"><span class="y">小～中</span></td><td class="c"><span class="m">中</span></td><td class="c"><span class="y">小</span></td></tr>
+    <tr class="rec"><td><strong>综合</strong></td><td class="c">可以作为保守方案</td><td class="c"><strong class="y">推荐</strong></td><td class="c">偏重</td><td class="c">不推荐</td></tr>
+  </table>
+  <h3>实测：不同面板高度下发送区的空白（px）</h3>
+  <p class="muted">条件：8 个 Task、发送区宽 240px、新建状态、中文。数据是用无头浏览器打开本页，逐个高度测出来的，和交互稿下方的实时测量一致。</p>
+  <table class="tbl">
+    <tr><th>面板高度</th><th class="c">160</th><th class="c">180</th><th class="c">200</th><th class="c">240（默认）</th><th class="c">300</th><th class="c">360</th></tr>
+    <tr><td>现状</td><td class="c">24</td><td class="c">44</td><td class="c">64</td><td class="c"><span class="n">104</span></td><td class="c"><span class="n">164</span></td><td class="c"><span class="n">224</span></td></tr>
+    <tr><td>A 直接上移</td><td class="c">0 <span class="m">（Task 区滚动）</span></td><td class="c">13</td><td class="c">5</td><td class="c"><span class="m">45</span></td><td class="c"><span class="n">105</span></td><td class="c"><span class="n">165</span></td></tr>
+    <tr class="rec"><td>B 分段按钮</td><td class="c">0</td><td class="c">20</td><td class="c">0</td><td class="c"><span class="y">20</span></td><td class="c"><span class="m">80</span></td><td class="c"><span class="n">140</span></td></tr>
+    <tr><td>C 分区标题</td><td class="c">0</td><td class="c">20</td><td class="c">0</td><td class="c"><span class="y">0</span></td><td class="c"><span class="y">34</span></td><td class="c"><span class="m">94</span></td></tr>
+    <tr><td>D 卡片撑满</td><td class="c">2</td><td class="c">22</td><td class="c">0</td><td class="c"><span class="y">0</span></td><td class="c"><span class="y">10</span></td><td class="c"><span class="m">70</span></td></tr>
+  </table>
+  <div class="callout warn"><div class="t">从数据看出的问题</div>在默认高度（240px）下，B 的空白从 104px 降到 20px。但面板拉到 300px 以上时，B 的卡片已经到了 60px 上限，空白又会变多（360px 时还有 140px）。如果你平时会把面板拉得很高，可以考虑把 B 的卡片上限放宽（比如 80px），或者干脆采用 D 的「撑满」，但要接受 1～2 个 Task 时卡片偏大的问题。这一点放在第 10 节的 Q3 里由你决定。</div>
+  <p class="muted">卡片样式（① / ②）和布局方案是两个独立的选择，可以任意组合。我推荐 <strong>B + ②</strong>：② 正是「名称两行」，序号以小号前缀保留；B 让颜色点的含义一目了然。</p>
+</section>
+
+<!-- ============================== 8 ============================== -->
+<section id="compress">
+  <h2><span class="no">8</span>面板变矮时的让位顺序</h2>
+  <p>原则：<strong>按钮永远可见、永远能点；先压缩卡片，最后才让 Task 网格滚动。</strong>下面以方案 B、8 个 Task、240px 宽为例。</p>
+  <div class="flow">
+    <div class="step"><span class="h">≥ 约 220px</span><b>卡片到上限</b>卡片 60px，名称最多 3 行；面板再高，多出来的部分才会留白</div>
+    <div class="arrow">→</div>
+    <div class="step"><span class="h">约 190～220px</span><b>卡片随高度变化</b>卡片在 44～60px 之间，名称 2～3 行</div>
+    <div class="arrow">→</div>
+    <div class="step"><span class="h">&lt; 约 190px</span><b>卡片退回一行</b>卡片 30px，序号和名称在同一行，和现在差不多</div>
+    <div class="arrow">→</div>
+    <div class="step last"><span class="h">160px（最矮）</span><b>仍然放得下</b>8 个 Task 刚好放下；只有行数更多的自定义布局才会让 Task 网格滚动，按钮两行始终固定在底部</div>
+  </div>
+  <div class="solo-row" id="solo-row"></div>
+  <p class="faint">这里的阈值（约 190px / 235px）是按 8 个 Task、两行网格算的。实现时会按实际行数计算，不会写死。</p>
+</section>
+
+<!-- ============================== 9 ============================== -->
+<section id="peers">
+  <h2><span class="no">9</span>同类产品参考</h2>
+  <p>按项目规则，设计前查了成熟产品和平台规范的做法。下面每条都标了可信度：<span class="pill good" style="font-size:11.5px;padding:0 7px">原文</span> 表示直接读到了官方页面原文；<span class="pill warn" style="font-size:11.5px;padding:0 7px">摘要</span> 表示来自检索结果的转述，没有逐字核对；<span class="pill bad" style="font-size:11.5px;padding:0 7px">未查到</span> 表示没有找到可靠资料。</p>
+  <table class="tbl">
+    <tr><th style="width:190px">问题</th><th>别人怎么做</th><th style="width:250px">对本次设计的意义</th></tr>
+    <tr>
+      <td>主操作和它的变体怎么组合</td>
+      <td><span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Windows 的 SplitButton：一半立即执行主操作，另一半弹出更多选项，两部分可以分别点击。<br>
+        <span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Apple HIG：每个视图里醒目的按钮保持一到两个；用<em>样式</em>而不是<em>尺寸</em>区分首选项，尺寸相同的一组按钮表示它们是并列选项。<br>
+        <span class="pill warn" style="font-size:11px;padding:0 6px">摘要</span> GitHub Primer 的 ButtonGroup：一组里最多一个 primary，放在末尾；按钮组加 <code>role="toolbar"</code> 后辅助技术才把它当成一组。</td>
+      <td>支持方案 B 把「添加」和颜色点做成一组。区别是：我们的颜色格是<strong>直接执行</strong>的，不是弹出菜单，所以更接近「按钮组」而不是严格意义上的 SplitButton。实现时给这一组加 <code>role="group"</code> 和组标签（现在的颜色选择器已经有）。</td>
+    </tr>
+    <tr>
+      <td>「本地保存」和「发送」该放一起还是分开</td>
+      <td><span class="pill bad" style="font-size:11px;padding:0 6px">未查到</span> 没有找到任何资料直接讨论这个问题；GitHub 评论按钮、Gmail / Slack 定时发送、Copilot Chat / Cursor 输入栏的具体布局都没有查到原文。<br>
+        <span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Windows 按钮指南：动作很多时，先用复选框 / 单选框让用户选，再用一个命令按钮统一执行。</td>
+      <td>没有现成的先例，分开还是合并要靠我们自己判断。后一条和「先选 Task、再点发送」的结构一致，说明发送区现在的结构本身是合理的。</td>
+    </tr>
+    <tr>
+      <td>终端产品怎么选「发给哪些 pane」</td>
+      <td><span class="pill good" style="font-size:11px;padding:0 6px">原文</span> iTerm2 的 Broadcast Input：在菜单里选范围（仅当前 / 当前 tab 全部 / 所有 tab），也可以逐个 pane 开关；正在接收的 pane 本身显示红色条纹背景。<br>
+        <span class="pill warn" style="font-size:11px;padding:0 6px">摘要</span> Windows Terminal 1.19 和 Warp 也是「选范围 + 快捷键」，没有集中的目标列表。<br>
+        <span class="pill bad" style="font-size:11px;padding:0 6px">未查到</span> tmux、WezTerm、Wave。</td>
+      <td>查到的终端产品都没有「目标小格子」这种选择器，所以<strong>格子里怎么显示名称没有先例可以照搬</strong>，只能按通用的按钮文字规则来定。</td>
+    </tr>
+    <tr>
+      <td>长名称放不进小格子</td>
+      <td><span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Windows 按钮指南：文字放不下时，建议加宽按钮或加高按钮并让文字折行，没有提到用省略号。<br>
+        <span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Apple HIG（macOS）：需要两行文字时使用高度可变的按钮；上下排列的按钮保持相同高度。<br>
+        <span class="pill good" style="font-size:11px;padding:0 6px">原文</span> VS Code 的 <code>wrapTabs</code> 是让整排 tab 折成多行，不是让单个 tab 内的文字折行。<br>
+        <span class="pill bad" style="font-size:11px;padding:0 6px">未查到</span> 「太窄就只显示编号」这种做法的书面依据。</td>
+      <td>支持样式 ②（名称折行），也支持所有卡片同一行高（我们的网格每行等高）。现在的「太窄就换成序号」没有找到出处，但作为最窄时的退路仍然合理。</td>
+    </tr>
+    <tr>
+      <td>点击区域和颜色</td>
+      <td><span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Apple HIG 无障碍页：macOS 控件默认 28×28pt，最小 20×20pt（按钮页另写着点击区域至少 44×44pt，两处说法不一致）。<br>
+        <span class="pill good" style="font-size:11px;padding:0 6px">原文</span> Apple HIG：不要只靠颜色传达信息，要加形状或文字，特别是考虑红绿色弱。<br>
+        <span class="pill bad" style="font-size:11px;padding:0 6px">未查到</span> Windows Fluent 的最小点击区域原文。</td>
+      <td>颜色格 26px、发送块 24px，都在 macOS 最小值以上。颜色点只靠颜色区分是<strong>现有的问题</strong>，这次不改，但目前要靠悬停提示和 <code>aria-label</code> 补充。如果你在意，可以单独排一项改进。</td>
+    </tr>
+  </table>
+  <details class="fold">
+    <summary>来源链接</summary>
+    <ul>
+      <li>Microsoft · Buttons（SplitButton、按钮文字规则）：<a href="https://learn.microsoft.com/en-us/windows/apps/design/controls/buttons">learn.microsoft.com/en-us/windows/apps/design/controls/buttons</a></li>
+      <li>Apple HIG · Buttons：<a href="https://developer.apple.com/design/human-interface-guidelines/buttons">developer.apple.com/design/human-interface-guidelines/buttons</a></li>
+      <li>Apple HIG · Accessibility：<a href="https://developer.apple.com/design/human-interface-guidelines/accessibility">developer.apple.com/design/human-interface-guidelines/accessibility</a></li>
+      <li>GitHub Primer · ButtonGroup：<a href="https://primer.style/product/components/button-group/guidelines">primer.style/product/components/button-group/guidelines</a></li>
+      <li>iTerm2 · Menu Items（Broadcast Input）：<a href="https://iterm2.com/documentation-menu-items.html">iterm2.com/documentation-menu-items.html</a></li>
+      <li>Windows Terminal Preview 1.19：<a href="https://devblogs.microsoft.com/commandline/windows-terminal-preview-1-19-release/">devblogs.microsoft.com/commandline/windows-terminal-preview-1-19-release</a></li>
+      <li>Warp · Synchronized Inputs：<a href="https://docs.warp.dev/terminal/entry/synchronized-inputs">docs.warp.dev/terminal/entry/synchronized-inputs</a></li>
+      <li>VS Code · User Interface（wrapTabs）：<a href="https://code.visualstudio.com/docs/getstarted/userinterface">code.visualstudio.com/docs/getstarted/userinterface</a></li>
+    </ul>
+  </details>
+</section>
+
+<!-- ============================== 10 ============================== -->
+<section id="decide">
+  <h2><span class="no">10</span>需要你决定的事</h2>
+  <ol class="decide">
+    <li>
+      <div class="q">用哪一版布局？</div>
+      <div class="opts"><span class="pill">A 直接上移</span><span class="pill good">B 分段按钮（推荐）</span><span class="pill">C 分区标题</span><span class="pill">D 卡片撑满</span><span class="pill">组合（比如 B 加上 C 的「已选 2/8」）</span></div>
+      <div class="rec">推荐 B：空白最少、颜色点含义最清楚、没有新增文案，最窄宽度下也不会挤。</div>
+    </li>
+    <li>
+      <div class="q">卡片用哪种两行样式？</div>
+      <div class="opts"><span class="pill">① 序号 + 名称</span><span class="pill good">② 名称两行（推荐）</span></div>
+      <div class="rec">推荐 ②：就是「名称两行」，能看到的名字最多；序号以小号前缀保留，<kbd>Cmd</kbd>+数字 的对应关系不丢。</div>
+    </li>
+    <li>
+      <div class="q">卡片要不要随面板高度长高？</div>
+      <div class="opts"><span class="pill">固定 44px（A）</span><span class="pill good">最高 60px（B / C，推荐）</span><span class="pill">最高 80px（面板常拉得很高时）</span><span class="pill">撑满（D）</span></div>
+      <div class="rec">推荐 60px：默认高度下刚好填满，名称三行够用。如果你平时把面板拉到 300px 以上，选 80px 更合适（见第 7 节的实测表）。</div>
+    </li>
+    <li>
+      <div class="q">编辑状态下的「取消 / 保存 / 另存为新」也一起搬到发送区吗？</div>
+      <div class="opts"><span class="pill good">一起搬（推荐）</span><span class="pill">只搬新建状态的按钮</span></div>
+      <div class="rec">推荐一起搬：只搬一半的话，编辑区还得保留 48px 竖栏，省下的宽度就没了。</div>
+    </li>
+    <li>
+      <div class="q">左 / 右停靠保持不变？</div>
+      <div class="opts"><span class="pill good">保持不变（推荐）</span><span class="pill">也一起改</span></div>
+      <div class="rec">左右停靠时发送区在下方、横向很宽，没有这块空白问题。</div>
+    </li>
+  </ol>
+  <div class="callout good">
+    <div class="t">你回复以后我会做什么</div>
+    按你选的组合实现，并且按项目规则一起交付：单元测试（布局计算，比如编辑区最小宽度从 288px 改成 240px）+ 自动化测试（在现有的 <code>run-themes-draft</code> 里改写 SP-UI06 等用例，覆盖中英文、180/240px 宽、160px 高、编辑态）+ 诊断 trace 埋点 + 测试索引更新。最后编译开发版，打开给你实际体验。<br>
+    如果这几版都不满意，告诉我哪里不对，我再出一轮稿子。
+  </div>
+</section>
+
+<!-- ============================== 11 ============================== -->
+<section id="impact">
+  <h2><span class="no">11</span>落地影响预估（以 B + ② 为例）</h2>
+  <table class="tbl">
+    <tr><th style="width:300px">文件</th><th>改动</th></tr>
+    <tr><td><code>src/components/PromptNotebook/PromptNotebook.tsx</code></td><td>底部停靠时不再在编辑区渲染竖栏；把「添加 / 颜色 / 保存 / 取消」这组操作交给发送区渲染（相关状态 <code>hasContent</code>、<code>editingPrompt</code> 和处理函数需要从编辑器组件暴露出来）</td></tr>
+    <tr><td><code>src/components/PromptNotebook/PromptSender.tsx</code></td><td>卡片改成两行结构；在网格和快捷按钮之间加入一个操作行的位置</td></tr>
+    <tr><td><code>src/components/PromptNotebook/PromptNotebook.css</code></td><td>删除 <code>.is-rail</code> 相关样式；新增分段按钮、两行卡片、按高度压缩的容器查询</td></tr>
+    <tr><td><code>src/utils/prompt-panel-layout.ts</code></td><td>编辑区最小宽度去掉 48px 竖栏：288px → 240px</td></tr>
+    <tr><td><code>test/unittest/prompt-panel-layout.test.mts</code></td><td>更新 PPL-U 系列中涉及竖栏宽度的断言</td></tr>
+    <tr><td><code>src/autotest/test-prompt-sender.ts</code> 等</td><td>SP-UI06（竖栏）改写为「发送区操作行」；SP-UI09 的顺序断言去掉竖栏</td></tr>
+    <tr><td><code>test/README.md</code></td><td>同步 § 2 测试索引中「底部停靠」那一行的描述</td></tr>
+  </table>
+  <p class="muted">这次是界面布局调整，不涉及缓存、IPC、线程模型等需要另外确认的策略问题；左右停靠的代码路径不变。</p>
+</section>
+
+<!-- ============================== 12 ============================== -->
+<section id="meta">
+  <h2><span class="no">12</span>文档信息</h2>
+  <div class="meta-grid">
+    <div>生成分支</div><div><code>master</code></div>
+    <div>对应提交</div><div><code>bcb4f38</code>（含 <code>3a385a3</code> feat(prompt-panel): refine the bottom dock and make it the default）</div>
+    <div>应用版本</div><div><code>2.0.1</code></div>
+    <div>文档版本</div><div>v2</div>
+  </div>
+  <h3>更新记录（只追加，不改写）</h3>
+  <table class="tbl">
+    <tr><th style="width:70px">版本</th><th style="width:110px">日期</th><th style="width:90px">分支</th><th>内容</th></tr>
+    <tr><td>v1</td><td>2026-11-25</td><td>master</td><td>初版：现状复盘、4 版可交互布局稿（A–D）、两种卡片两行样式、面板变矮时的让位顺序、待决策清单、落地影响预估</td></tr>
+    <tr><td>v2</td><td>2026-11-25</td><td>master</td><td>记录决定：方案 D + 样式 ①，编辑状态按钮一起搬迁，左右停靠不变；补充实现采用的卡片行高（30～96px）与名称行数规则</td></tr>
+  </table>
+  <footer class="note">交互稿的尺寸取自 <code>PromptNotebook.css</code> / <code>PromptActionButton.css</code> / <code>prompt-panel-layout.ts</code>，颜色取自 <code>App.css</code> 暗色主题。稿子只用于讨论布局，细节样式以实现为准。</footer>
+</section>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Data ----------
+  var TASKS = [
+    { name: 'Onward-Agent-Workbench' }, { name: 'master' }, { name: null }, { name: 'api-server' },
+    { name: 'docs-site' }, { name: '前端重构' }, { name: null }, { name: 'release-notes' }
+  ];
+  var SELECTED = { 0: true, 3: true };
+  var PRESETS = { 1: [1, 1], 2: [2, 1], 4: [2, 2], 6: [3, 2], 8: [4, 2] };
+  var COLORS = [{ k: 'red', hex: '#e74c3c' }, { k: 'yellow', hex: '#f1c40f' }, { k: 'green', hex: '#27ae60' }];
+  var QA = [
+    { e: '🚀', c: 'var(--rainbow-2)', k: 'sendAndExecute' },
+    { e: '⚡', c: 'var(--rainbow-6)', k: 'execute' },
+    { e: '📤', c: 'var(--rainbow-1)', k: 'send' },
+    { e: '📣', c: 'var(--rainbow-3)', k: 'sendAll' },
+    { e: '⏳', c: 'var(--rainbow-5)', k: 'queue' }
+  ];
+  var I18N = {
+    zh: {
+      add: '添加到历史', save: '保存', cancel: '取消', saveAsNew: '添加',
+      addWith: { red: '标记为红色并加入历史', yellow: '标记为黄色并加入历史', green: '标记为绿色并加入历史' },
+      saveWith: { red: '保存并标记为红色', yellow: '保存并标记为黄色', green: '保存并标记为绿色' },
+      qa: { sendAndExecute: '发送并执行', execute: '执行', send: '发送', sendAll: '全部发送并执行', queue: '排队发送' },
+      dbl: '双击编辑名称', unnamed: '未命名',
+      capTargets: '发送目标', capHistory: '存入历史', capSend: '发送到所选 Task',
+      selected: function (a, b) { return '已选 ' + a + '/' + b; },
+      titlePh: '标题（可选）', histHead: '历史', histCount: '5 条',
+      text: '帮我检查 PromptNotebook 底部停靠的布局逻辑，\n确认 180px 宽时按钮不会被挤出可视区域。\n\n要求：\n1. 先写能复现的测试\n2. 再改代码，中英文都要验证',
+      hist: [
+        { t: '重构 Git Diff 缓存层', p: '先确认失效粒度和触发时机…', c: '#e74c3c' },
+        { t: '补全 Windows 测试', p: '对照 .sh 补齐 .ps1…', c: null },
+        { t: '整理发布说明', p: '按 daily 渠道格式输出…', c: '#f1c40f' },
+        { t: '排查终端卡顿', p: '先抓 trace 再分析热点…', c: '#27ae60' },
+        { t: 'Review 本周提交', p: '只看正确性问题…', c: null }
+      ]
+    },
+    en: {
+      add: 'Add to history', save: 'Save', cancel: 'Cancel', saveAsNew: 'Add',
+      addWith: { red: 'Add with red tag', yellow: 'Add with yellow tag', green: 'Add with green tag' },
+      saveWith: { red: 'Save with red tag', yellow: 'Save with yellow tag', green: 'Save with green tag' },
+      qa: { sendAndExecute: 'Send and execute', execute: 'Execute', send: 'Send', sendAll: 'Send all and execute', queue: 'Queue' },
+      dbl: 'Double-click to edit name', unnamed: 'Unnamed',
+      capTargets: 'Targets', capHistory: 'Save to history', capSend: 'Send to selected',
+      selected: function (a, b) { return a + '/' + b + ' selected'; },
+      titlePh: 'Title (optional)', histHead: 'History', histCount: '5 items',
+      text: 'Check the bottom-dock layout logic in PromptNotebook\nand confirm no button is pushed out at 180px.\n\nRequirements:\n1. Write a failing repro test first\n2. Then fix it and verify both languages',
+      hist: [
+        { t: 'Refactor the Git Diff cache', p: 'Confirm invalidation scope first…', c: '#e74c3c' },
+        { t: 'Finish Windows tests', p: 'Mirror every .sh in .ps1…', c: null },
+        { t: 'Draft release notes', p: 'Follow the daily channel format…', c: '#f1c40f' },
+        { t: 'Investigate terminal lag', p: 'Capture a trace before guessing…', c: '#27ae60' },
+        { t: 'Review this week’s commits', p: 'Correctness issues only…', c: null }
+      ]
+    }
+  };
+  var DEFAULT_CARD = { cur: 'legacy', a: 'wrap', b: 'wrap', c: 'stack', d: 'wrap' };
+  var IC = {
+    add: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.25 2h1.5v5.25H14v1.5H8.75V14h-1.5V8.75H2v-1.5h5.25z"/></svg>',
+    save: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.2 11.4 2.8 8l-1.06 1.06L6.2 13.5l8.06-8.06L13.2 4.38z"/></svg>',
+    cancel: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.1 3 8 6.9 11.9 3 13 4.1 9.1 8l3.9 3.9-1.1 1.1L8 9.1 4.1 13 3 11.9 6.9 8 3 4.1z"/></svg>'
+  };
+
+  var S = { h: 240, sw: 240, n: 8, mode: 'new', lang: 'zh', card: 'auto' };
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  // ---------- Pieces ----------
+  function cardHTML(i, style, L, extraStyle) {
+    var t = TASKS[i], n = i + 1, name = t.name;
+    var full = name ? 'Task ' + n + ': ' + name : 'Task ' + n;
+    var inner;
+    if (style === 'legacy') {
+      inner = '<span class="l-nm">' + esc(full) + '</span><span class="l-ix">' + n + '</span>';
+    } else if (style === 'stack') {
+      inner = '<div class="s"><span class="ix">' + n + '</span><span class="nm' + (name ? '' : ' un') + '">' +
+        esc(name || L.unnamed) + '</span></div><span class="only-ix">' + n + '</span>';
+    } else {
+      inner = '<div class="w">' + (name ? '<span class="ix">' + n + '</span>' : '') + esc(name || ('Task ' + n)) +
+        '</div><span class="only-ix">' + n + '</span>';
+    }
+    return '<div class="tcard' + (SELECTED[i] ? ' sel' : '') + '" style="--t:var(--rainbow-' + ((i % 6) + 1) + ');' +
+      (extraStyle || '') + '" title="' + esc(full + '\n' + L.dbl) + '">' + inner + '</div>';
+  }
+
+  function gridHTML(n, style, L) {
+    var p = PRESETS[n], out = '';
+    for (var i = 0; i < n; i++) out += cardHTML(i, style, L);
+    return '<div class="grid" style="--cols:' + p[0] + ';--rows:' + p[1] + '">' + out + '</div>';
+  }
+
+  function miniHTML(n) {
+    var p = PRESETS[n], out = '';
+    for (var i = 0; i < n; i++) out += '<span' + (SELECTED[i] ? ' class="on"' : '') + '></span>';
+    return '<div class="mini" style="--cols:' + p[0] + '" aria-hidden="true">' + out + '</div>';
+  }
+
+  function qaHTML(L) {
+    return '<div class="qa">' + QA.map(function (q) {
+      return '<button style="--c:' + q.c + '" title="' + esc(L.qa[q.k]) + '" aria-label="' + esc(L.qa[q.k]) + '">' + q.e + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function dotsHTML(L, mode) {
+    return COLORS.map(function (c) {
+      var label = mode === 'edit' ? L.saveWith[c.k] : L.addWith[c.k];
+      return '<button class="dotb" style="--c:' + c.hex + '" title="' + esc(label) + '" aria-label="' + esc(label) + '"><i></i></button>';
+    }).join('');
+  }
+
+  function histRowPlain(L, mode, cls) {
+    var dots = dotsHTML(L, mode);
+    if (mode === 'new') {
+      return '<div class="hist-row ' + (cls || '') + '">' + dots + '<span class="grow"></span>' +
+        '<button class="abtn pri" title="' + esc(L.add) + '" aria-label="' + esc(L.add) + '">' + IC.add + '<span class="lbl">' + esc(L.add) + '</span></button></div>';
+    }
+    return '<div class="hist-row ' + (cls || '') + '">' + dots + '<span class="grow"></span>' +
+      '<span class="btns"><button class="abtn ghost icon" title="' + esc(L.cancel) + '" aria-label="' + esc(L.cancel) + '">' + IC.cancel + '</button>' +
+      '<button class="abtn pri" title="' + esc(L.save) + '" aria-label="' + esc(L.save) + '">' + IC.save + '<span class="lbl">' + esc(L.save) + '</span></button>' +
+      '<button class="abtn ghost icon" title="' + esc(L.saveAsNew) + '" aria-label="' + esc(L.saveAsNew) + '">' + IC.add + '</button></span></div>';
+  }
+
+  function histRowSegmented(L, mode) {
+    var sd = COLORS.map(function (c) {
+      var label = mode === 'edit' ? L.saveWith[c.k] : L.addWith[c.k];
+      return '<button class="sd" style="--c:' + c.hex + '" title="' + esc(label) + '" aria-label="' + esc(label) + '"><i></i></button>';
+    }).join('');
+    if (mode === 'new') {
+      return '<div class="hist-row nowrap"><div class="segc"><button class="main" title="' + esc(L.add) + '" aria-label="' + esc(L.add) + '"><span class="in">' +
+        IC.add + '<span class="lbl">' + esc(L.add) + '</span></span></button>' + sd + '</div></div>';
+    }
+    return '<div class="hist-row nowrap">' +
+      '<button class="abtn ghost icon" title="' + esc(L.cancel) + '" aria-label="' + esc(L.cancel) + '">' + IC.cancel + '</button>' +
+      '<div class="segc"><button class="main" title="' + esc(L.save) + '" aria-label="' + esc(L.save) + '"><span class="in">' + IC.save +
+      '<span class="lbl">' + esc(L.save) + '</span></span></button>' + sd + '</div>' +
+      '<button class="abtn ghost icon" title="' + esc(L.saveAsNew) + '" aria-label="' + esc(L.saveAsNew) + '">' + IC.add + '</button></div>';
+  }
+
+  function railHTML(L, mode) {
+    var dots = COLORS.map(function (c) {
+      var label = mode === 'edit' ? L.saveWith[c.k] : L.addWith[c.k];
+      return '<button class="dotb" style="--c:' + c.hex + '" title="' + esc(label) + '"><i></i></button>';
+    }).join('');
+    var btns = mode === 'new'
+      ? '<button class="abtn pri" title="' + esc(L.add) + '">' + IC.add + '</button>'
+      : '<button class="abtn ghost" title="' + esc(L.cancel) + '">' + IC.cancel + '</button>' +
+        '<button class="abtn pri" title="' + esc(L.save) + '">' + IC.save + '</button>' +
+        '<button class="abtn pri" title="' + esc(L.saveAsNew) + '">' + IC.add + '</button>';
+    return '<div class="d-rail"><div class="dots">' + dots + '</div>' + btns + '</div>';
+  }
+
+  function senderHTML(v, o, L, style) {
+    var n = o.n, sel = 0;
+    for (var i = 0; i < n; i++) if (SELECTED[i]) sel++;
+    var grid = gridHTML(n, style, L);
+    var sendRow = '<div class="send-row">' + miniHTML(n) + qaHTML(L) + '</div>';
+    var body;
+    if (v === 'cur') {
+      body = grid + sendRow;
+    } else if (v === 'a') {
+      body = grid + histRowPlain(L, o.mode, 'push') + '<div class="divider"></div>' + sendRow;
+    } else if (v === 'b') {
+      body = grid + histRowSegmented(L, o.mode) + sendRow;
+    } else if (v === 'c') {
+      body = '<div class="cap"><b>' + esc(L.capTargets) + '</b><span>' + esc(L.selected(sel, n)) + '</span></div>' + grid +
+        '<div class="cap"><b>' + esc(L.capHistory) + '</b></div>' + histRowSegmented(L, o.mode) +
+        '<div class="cap"><b>' + esc(L.capSend) + '</b></div>' + sendRow;
+    } else {
+      body = grid + histRowPlain(L, o.mode, 'push') + sendRow;
+    }
+    return '<div class="sender v-' + v + '">' + body + '</div>';
+  }
+
+  function histColHTML(L, mode) {
+    var items = L.hist.map(function (h, idx) {
+      var dot = h.c ? '--c:' + h.c : '--b:#45454c';
+      return '<div class="hi' + (mode === 'edit' && idx === 0 ? ' editing' : '') + '"><i style="' + dot + '"></i><div><b>' +
+        esc(h.t) + '</b><span>' + esc(h.p) + '</span></div></div>';
+    }).join('');
+    return '<div class="d-hist"><div class="hh"><span>' + esc(L.histHead) + '</span><span>' + esc(L.histCount) + '</span></div>' + items + '</div>';
+  }
+
+  function editorHTML(L, mode, withRail) {
+    var title = mode === 'edit'
+      ? '<div class="d-title filled">' + esc(L.hist[0].t) + '</div>'
+      : '<div class="d-title">' + esc(L.titlePh) + '</div>';
+    return '<div class="d-editor"><div class="d-inputs">' + title + '<div class="d-text">' + esc(L.text) + '</div></div>' +
+      (withRail ? railHTML(L, mode) : '') + '</div>';
+  }
+
+  function dockHTML(v, o, solo) {
+    var L = I18N[o.lang];
+    var style = v === 'cur' ? 'legacy' : (o.card === 'auto' ? DEFAULT_CARD[v] : o.card);
+    var sender = senderHTML(v, o, L, style);
+    if (solo) return '<div class="dock solo" style="--h:' + o.h + 'px;--sw:' + o.sw + 'px">' + sender + '</div>';
+    return '<div class="dock" style="--h:' + o.h + 'px;--sw:' + o.sw + 'px">' + histColHTML(L, o.mode) +
+      '<div class="d-split"></div>' + editorHTML(L, o.mode, v === 'cur') + '<div class="d-split"></div>' + sender + '</div>';
+  }
+
+  // ---------- Measurement ----------
+  function measure(mockEl) {
+    var dock = mockEl.querySelector('.dock');
+    var sender = dock.querySelector('.sender');
+    var cs = getComputedStyle(sender);
+    var inner = sender.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    var gap = parseFloat(cs.rowGap) || 0;
+    var kids = Array.prototype.filter.call(sender.children, function (k) { return getComputedStyle(k).display !== 'none'; });
+    var used = 0, scroll = false;
+    kids.forEach(function (k) {
+      var ks = getComputedStyle(k);
+      if (!k.classList.contains('push')) used += parseFloat(ks.marginTop) + parseFloat(ks.marginBottom);
+      if (k.classList.contains('grid')) {
+        var bottom = 0;
+        Array.prototype.forEach.call(k.children, function (c) { bottom = Math.max(bottom, c.offsetTop + c.offsetHeight); });
+        if (k.scrollHeight > k.clientHeight + 1) scroll = true;
+        used += Math.min(k.clientHeight, bottom);
+      } else {
+        used += k.offsetHeight;
+      }
+    });
+    used += gap * Math.max(0, kids.length - 1);
+    var blank = Math.max(0, Math.round(inner - used));
+    var pct = inner > 0 ? Math.round(blank / inner * 100) : 0;
+    var clipped = sender.scrollHeight > sender.clientHeight + 1;
+    var inputs = dock.querySelector('.d-inputs');
+    var out = [];
+    var cls = blank > 40 ? 'bad' : blank > 16 ? 'warn' : 'good';
+    out.push('<span class="pill ' + cls + '">发送区空白 <b>' + blank + 'px</b>（' + pct + '%）</span>');
+    if (inputs) out.push('<span class="pill">文本区宽度 <b>' + Math.round(inputs.getBoundingClientRect().width) + 'px</b></span>');
+    var card = sender.querySelector('.tcard');
+    if (card) out.push('<span class="pill">卡片 <b>' + Math.round(card.offsetWidth) + '×' + Math.round(card.offsetHeight) + '</b></span>');
+    if (scroll) out.push('<span class="pill warn">Task 区需要滚动</span>');
+    if (clipped) out.push('<span class="pill bad">有控件被挤出</span>');
+    var m = document.querySelector('.metrics[data-for="' + mockEl.id + '"]');
+    if (m) m.innerHTML = out.join('');
+  }
+
+  // ---------- Annotations (static baseline) ----------
+  function annotate(mockEl) {
+    var dock = mockEl.querySelector('.dock');
+    Array.prototype.forEach.call(dock.querySelectorAll('.anno'), function (a) { a.remove(); });
+    var d = dock.getBoundingClientRect();
+    function box(r, cls, label) {
+      var el = document.createElement('div');
+      el.className = 'anno ' + cls;
+      el.style.left = (r.left - d.left) + 'px';
+      el.style.top = (r.top - d.top) + 'px';
+      el.style.width = r.width + 'px';
+      el.style.height = r.height + 'px';
+      el.innerHTML = '<span>' + label + '</span>';
+      dock.appendChild(el);
+    }
+    var sender = dock.querySelector('.sender').getBoundingClientRect();
+    var grid = dock.querySelector('.sender .grid').getBoundingClientRect();
+    var send = dock.querySelector('.sender .send-row').getBoundingClientRect();
+    var rail = dock.querySelector('.d-rail').getBoundingClientRect();
+    box({ left: sender.left + 8, top: grid.bottom + 30, width: sender.width - 16, height: Math.max(8, send.top - grid.bottom - 38) }, '', '① 空白：没有内容');
+    box({ left: rail.left + 2, top: rail.top + 4, width: rail.width - 4, height: rail.height - 8 }, 'warn', '②');
+    box({ left: grid.left - 3, top: grid.top - 3, width: grid.width + 6, height: grid.height + 6 }, 'acc', '③ 太窄，只剩序号');
+  }
+
+  // ---------- Card style matrix ----------
+  function renderMatrix() {
+    var L = I18N.zh;
+    var rows = [
+      { w: 108, t: '108px', d: '2 列 · 240px 宽（4 个 Task）' },
+      { w: 70, t: '70px', d: '3 列 · 240px 宽（6 个 Task）' },
+      { w: 51, t: '51px', d: '4 列 · 240px 宽（8 个 Task，默认）' },
+      { w: 36, t: '36px', d: '4 列 · 180px 宽（最窄）' }
+    ];
+    var idx = [0, 2];
+    var html = rows.map(function (r) {
+      function cell(style, h) {
+        return '<td><div class="mrow">' + idx.map(function (i) {
+          return cardHTML(i, style, L, 'width:' + r.w + 'px;height:' + h + 'px;');
+        }).join('') + '</div></td>';
+      }
+      return '<tr><td class="lab"><b>' + r.t + '</b>' + r.d + '</td>' + cell('legacy', 34) + cell('stack', 44) + cell('wrap', 44) + '</tr>';
+    }).join('');
+    document.getElementById('card-matrix').innerHTML = html;
+  }
+
+  // ---------- Compression demo ----------
+  function renderSolo() {
+    var hs = [320, 205, 180, 160];
+    var labels = ['卡片 60px（上限）', '卡片随高度变化', '卡片退回一行', '最矮，仍然放得下'];
+    var row = document.getElementById('solo-row');
+    row.innerHTML = hs.map(function (h, i) {
+      return '<div class="solo-item"><div class="cap2"><b>' + h + 'px</b> · ' + labels[i] + '</div><div class="mock" id="solo-' + h + '" style="margin:0">' +
+        dockHTML('b', { h: h, sw: 240, n: 8, mode: 'new', lang: 'zh', card: 'wrap' }, true) + '</div></div>';
+    }).join('');
+  }
+
+  // ---------- Render loop ----------
+  function renderLive() {
+    Array.prototype.forEach.call(document.querySelectorAll('.mock[data-live]'), function (el) {
+      el.innerHTML = dockHTML(el.getAttribute('data-version'), S, false);
+    });
+    requestAnimationFrame(function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.mock[data-live]'), measure);
+    });
+  }
+
+  function renderStatic() {
+    Array.prototype.forEach.call(document.querySelectorAll('.mock[data-static]'), function (el) {
+      var o = JSON.parse(el.getAttribute('data-static'));
+      el.innerHTML = dockHTML(el.getAttribute('data-version'), o, false);
+    });
+    requestAnimationFrame(function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.mock[data-static]'), function (el) {
+        measure(el);
+        if (el.getAttribute('data-annotate')) annotate(el);
+      });
+    });
+  }
+
+  // ---------- Controls ----------
+  Array.prototype.forEach.call(document.querySelectorAll('.seg-ctl'), function (group) {
+    var key = group.getAttribute('data-key');
+    group.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) return;
+      Array.prototype.forEach.call(group.querySelectorAll('button'), function (x) { x.classList.toggle('on', x === b); });
+      var v = b.getAttribute('data-val');
+      S[key] = (key === 'sw' || key === 'n') ? parseInt(v, 10) : v;
+      renderLive();
+    });
+  });
+  var range = document.getElementById('ctl-h');
+  range.addEventListener('input', function () {
+    S.h = parseInt(range.value, 10);
+    document.getElementById('ctl-h-val').textContent = S.h + 'px';
+    renderLive();
+  });
+
+  // ---------- TOC highlight ----------
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var secs = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+  function onScroll() {
+    var cur = secs[0];
+    secs.forEach(function (s) { if (s && s.getBoundingClientRect().top < 170) cur = s; });
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 2) cur = secs[secs.length - 1];
+    links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === '#' + cur.id); });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  var resizeTimer = 0;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { renderStatic(); renderLive(); }, 120);
+  });
+
+  renderMatrix();
+  renderSolo();
+  renderStatic();
+  renderLive();
+  onScroll();
+})();
+</script>
+</body>
+</html>
