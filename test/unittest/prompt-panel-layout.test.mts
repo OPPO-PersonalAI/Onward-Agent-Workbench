@@ -34,7 +34,6 @@ import {
   normalizePromptPanelPosition,
   normalizePromptPanelRightWidth,
   normalizePromptPanelWidth,
-  PROMPT_BOTTOM_ACTION_RAIL_WIDTH,
   PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH,
   PROMPT_BOTTOM_COLUMN_RESIZER_WIDTH,
   PROMPT_BOTTOM_DIMENSION_SANITY_MAX,
@@ -44,7 +43,8 @@ import {
   resolveBottomPanelLayout,
   resolveBottomPanelMaxHeight,
   resolveLoadedPromptPanelPosition,
-  resolveMainContentLayout
+  resolveMainContentLayout,
+  resolvePromptEditorActionsPlacement
 } from '../../src/utils/prompt-panel-layout.ts'
 
 const COLUMN_RESIZERS = 2 * PROMPT_BOTTOM_COLUMN_RESIZER_WIDTH
@@ -223,10 +223,10 @@ test('PPL-U06: bottom side columns have no fixed maximum (former 640 / 600 caps 
   )
 })
 
-test('PPL-U07: editor minimum width always reserves the action rail, and the attachment column only when attachments exist', () => {
-  // The icon action rail is a fixed 48px column next to the 240px text area minimum.
-  assert.equal(PROMPT_BOTTOM_ACTION_RAIL_WIDTH, 48)
-  assert.equal(MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH, MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH + PROMPT_BOTTOM_ACTION_RAIL_WIDTH)
+test('PPL-U07: editor minimum width is the text area alone, plus the attachment column only when attachments exist', () => {
+  // The editor actions live in the Task sender column, so no rail width is reserved.
+  assert.equal(MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH, 240)
+  assert.equal(MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH, MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH)
   assert.equal(resolveBottomEditorMinWidth(false, 400), MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH)
   assert.equal(
     resolveBottomEditorMinWidth(true, 150),
@@ -239,15 +239,15 @@ test('PPL-U07: editor minimum width always reserves the action rail, and the att
   )
 })
 
-test('PPL-U08: attachment column resize grows leftward and keeps the text area minimum plus the action rail', () => {
+test('PPL-U08: attachment column resize grows leftward and keeps the text area minimum', () => {
   // Dragging the left edge left (-clientX) widens the column.
   assert.equal(computeBottomAttachmentResize({ startWidth: 120, startX: 900, clientX: 840, editorWidth: 800 }), 180)
   // Dragging right narrows it down to its minimum.
   assert.equal(computeBottomAttachmentResize({ startWidth: 120, startX: 900, clientX: 1000, editorWidth: 800 }), MIN_PROMPT_BOTTOM_ATTACHMENT_WIDTH)
-  // Ceiling: editor body width minus resizer minus text area minimum minus action rail.
+  // Ceiling: editor body width minus resizer minus text area minimum.
   assert.equal(
     computeBottomAttachmentResize({ startWidth: 120, startX: 900, clientX: 0, editorWidth: 800 }),
-    800 - PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH - MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH - PROMPT_BOTTOM_ACTION_RAIL_WIDTH
+    800 - PROMPT_BOTTOM_ATTACHMENT_RESIZER_WIDTH - MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH
   )
 })
 
@@ -350,4 +350,15 @@ test('PPL-U05: resolveMainContentLayout enforces Settings left-fixed row invaria
       terminalOrder: 2
     })
   }
+})
+
+test('PPL-U12: editor actions render as a footer in side docks and in the Task sender row in the bottom dock', () => {
+  // Decision table: dock position x whether the sender column has mounted its row.
+  assert.equal(resolvePromptEditorActionsPlacement('left', false), 'footer')
+  assert.equal(resolvePromptEditorActionsPlacement('left', true), 'footer')
+  assert.equal(resolvePromptEditorActionsPlacement('right', false), 'footer')
+  assert.equal(resolvePromptEditorActionsPlacement('right', true), 'footer')
+  assert.equal(resolvePromptEditorActionsPlacement('bottom', true), 'sender-row')
+  // First commit after switching to the bottom dock: nothing renders until the row exists.
+  assert.equal(resolvePromptEditorActionsPlacement('bottom', false), 'awaiting-slot')
 })

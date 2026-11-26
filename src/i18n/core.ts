@@ -584,6 +584,8 @@ const en = {
   // Replaced the former bare `doubleClickToRename` hint, which said what the
   // card does but not which Task it is.
   'promptSender.taskCardTitle': '{{name}}\nDouble-click to edit name',
+  'promptSender.taskPosition': 'Task {{index}}',
+  'promptSender.unnamedTask': 'Unnamed',
   'promptSender.selectTerminalFirst': 'Select at least one terminal first',
   'promptSender.action.send': 'send',
   'promptSender.action.execute': 'execute',
@@ -2192,6 +2194,8 @@ const zhCN: LocaleTranslations = {
 
   'promptSender.noTerminals': '暂无终端',
   'promptSender.taskCardTitle': '{{name}}\n双击编辑名称',
+  'promptSender.taskPosition': 'Task {{index}}',
+  'promptSender.unnamedTask': '未命名',
   'promptSender.selectTerminalFirst': '请先选择一个终端',
   'promptSender.action.send': '发送',
   'promptSender.action.execute': '执行',

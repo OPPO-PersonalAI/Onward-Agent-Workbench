@@ -18,6 +18,10 @@
 #   TLM-11  Task numbers follow POSITION, not the terminal.
 #   TLM-12  The dropdown's Rearrange item arms a menu-triggered session.
 #   TLM-13  ESC leaves rearrange mode and unmasks the grid.
+#   TLM-14  The Prompt panel's Task selector follows the layout switch.
+#   TLM-15  The Task selector follows a drag reorder.
+#   TLM-19  Bottom dock: with two Task rows the selector cards fill the
+#           sender column's free height (equal 30-96px rows) and all label.
 #
 # Pure-function semantics (LayoutMode union, validator) are covered by
 # test/unittest/task-layout-utils.test.mts, and the rearrange list/geometry

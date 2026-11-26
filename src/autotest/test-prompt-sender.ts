@@ -476,6 +476,24 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     }
   }
 
+  // PS-33b: side docks keep the one-line card label and the editor footer row; the
+  // bottom-dock pieces (stacked label, actions row in the sender column) are absent.
+  if (!cancelled()) {
+    const notebook = getLayoutNotebook()
+    const card = notebook?.querySelector<HTMLElement>('.prompt-sender-terminal') ?? null
+    const actions = notebook?.querySelector<HTMLElement>('[data-testid="prompt-editor-actions"]') ?? null
+    const detail = {
+      leftDockPinned,
+      inlineName: Boolean(card?.querySelector('.prompt-sender-terminal-name')),
+      stacked: Boolean(card?.querySelector('.prompt-sender-terminal-stack')),
+      senderSlot: Boolean(notebook?.querySelector('[data-testid="prompt-sender-editor-actions-slot"]')),
+      actionsLayout: actions?.getAttribute('data-layout') ?? null,
+      actionsInEditor: Boolean(actions?.closest('.prompt-editor'))
+    }
+    _assert('PS-33b-side-dock-keeps-inline-label-and-footer', leftDockPinned && detail.inlineName && !detail.stacked
+      && !detail.senderSlot && detail.actionsLayout === 'row' && detail.actionsInEditor, detail)
+  }
+
   // Return to the default bottom dock so the remaining cases run on the shipped layout.
   if (!cancelled() && leftDockPinned && !await setDockPosition('bottom')) {
     _assert('PS-33-editor-compressible-with-floor', false, { reason: 'could not restore the default bottom dock' })
@@ -551,19 +569,21 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
     )
   }
 
-  // PS-36: a slot too narrow for a name shows the Task's position number
-  // instead. Both branches are asserted from a real layout pass — the grid is
-  // temporarily forced narrow and then wide, because the panel width alone
-  // cannot reach both sides of the threshold in one run. The override is
-  // reverted before the assertion returns.
+  // PS-36: bottom dock (stacked label). A slot too narrow for a name keeps only the
+  // position number; a wide slot shows "Task N" above the name. Both branches are
+  // asserted from a real layout pass — the grid is temporarily forced narrow and then
+  // wide, because the panel width alone cannot reach both sides of the threshold in
+  // one run. The override is reverted before the assertion returns.
   if (!cancelled()) {
     const senderGrid = senderGridElement()
     const firstCard = senderGrid?.querySelector<HTMLElement>('.prompt-sender-terminal') ?? null
-    const name = firstCard?.querySelector<HTMLElement>('.prompt-sender-terminal-name') ?? null
-    const index = firstCard?.querySelector<HTMLElement>('.prompt-sender-terminal-index') ?? null
-    if (senderGrid && firstCard && name && index) {
+    const stack = firstCard?.querySelector<HTMLElement>('.prompt-sender-terminal-stack') ?? null
+    const numberOnly = firstCard?.querySelector<HTMLElement>('.prompt-sender-terminal-number-only') ?? null
+    const positionLong = firstCard?.querySelector<HTMLElement>('.prompt-sender-terminal-position-long') ?? null
+    if (senderGrid && firstCard && stack && numberOnly && positionLong) {
       const originalWidth = senderGrid.style.width
       const restored: boolean[] = []
+      const shown = (element: HTMLElement) => window.getComputedStyle(element).display !== 'none'
       const measure = async (width: string) => {
         senderGrid.style.width = width
         // Two frames: one for the style change to land, one for the container
@@ -571,19 +591,24 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
         await paintTurn()
         return {
           cardWidth: Math.round(firstCard.getBoundingClientRect().width),
-          nameShown: window.getComputedStyle(name).display !== 'none',
-          indexShown: window.getComputedStyle(index).display !== 'none'
+          stackShown: shown(stack),
+          numberOnlyShown: shown(numberOnly),
+          longPositionShown: shown(positionLong)
         }
       }
-      // 40px is under the 44px content-box threshold even for a ONE-column
-      // layout (6px padding + 1px border each side), so the narrow branch is
-      // reachable whatever layout the suite inherited; 640px clears it for
-      // every layout up to 4 columns.
+      // 30px leaves at most 16px of content box even for a ONE-column layout (6px
+      // padding + 1px border each side), well under the 26px number-only threshold;
+      // 640px gives every layout up to 4 columns more than the 64px "Task N" width.
       await repeat('PS-36-narrow-slot-shows-position-number', async () => {
         try {
-          const narrow = await measure('40px')
+          const narrow = await measure('30px')
           const wide = await measure('640px')
-          return { ok: !narrow.nameShown && narrow.indexShown && wide.nameShown && !wide.indexShown, narrow, wide }
+          return {
+            ok: !narrow.stackShown && narrow.numberOnlyShown
+              && wide.stackShown && !wide.numberOnlyShown && wide.longPositionShown,
+            narrow,
+            wide
+          }
         } finally {
           senderGrid.style.width = originalWidth
           await paintTurn()
@@ -599,8 +624,166 @@ export async function testPromptSender(ctx: AutotestContext): Promise<TestResult
         widthAfterRestore: Math.round(firstCard.getBoundingClientRect().width)
       })
     } else {
-      _assert('PS-36-narrow-slot-shows-position-number', false, { reason: 'card or labels not found' })
+      _assert('PS-36-narrow-slot-shows-position-number', false, { reason: 'card or stacked label not found' })
     }
+  }
+
+  // PS-46: the stacked label follows the card height — number and name on one line on
+  // a short card, the number above the name from ~40px, and a real name wrapping onto up
+  // to four lines on a tall card. PS-46a: the localized placeholder of an unnamed Task
+  // never wraps. The card is renamed through its own double-click editor to reach both
+  // states; row heights are forced through inline styles. Both are reverted (PS-46b).
+  if (!cancelled()) {
+    const senderGrid = senderGridElement()
+    // A custom layout may give a card two rows; probe a single-row card so the forced
+    // row height is the card height.
+    const cards = Array.from(senderGrid?.querySelectorAll<HTMLElement>('.prompt-sender-terminal') ?? [])
+    const probeCard = cards.find(card => readGridArea(card).rowSpan === 1) ?? cards[0] ?? null
+    const labelOf = () => probeCard?.querySelector<HTMLElement>('.prompt-sender-terminal-label') ?? null
+    const initialLabel = labelOf()
+    if (senderGrid && probeCard && initialLabel) {
+      const probeName = 'Onward-Agent-Workbench-autotest'
+      const initialName = initialLabel.classList.contains('is-unnamed') ? '' : (initialLabel.textContent ?? '').trim()
+      const keys = ['width', 'maxHeight', 'gridTemplateRows', 'gridAutoRows'] as const
+      const original = Object.fromEntries(keys.map(key => [key, senderGrid.style[key]])) as Record<typeof keys[number], string>
+      const resetStyles = async () => {
+        for (const key of keys) senderGrid.style[key] = original[key]
+        await paintTurn()
+      }
+      const rename = async (name: string) => {
+        probeCard.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+        if (!await waitFor('ps-46-rename-input', () => Boolean(probeCard.querySelector('.prompt-sender-terminal-input')), 2000, 20)) return false
+        const field = probeCard.querySelector<HTMLInputElement>('.prompt-sender-terminal-input')!
+        changeField(field, name)
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
+        return waitFor('ps-46-rename-applied', () => {
+          const label = labelOf()
+          if (!label) return false
+          return name ? !label.classList.contains('is-unnamed') && label.textContent?.trim() === name : label.classList.contains('is-unnamed')
+        }, 3000, 40)
+      }
+      const measureAt = async (rowPx: number) => {
+        senderGrid.style.width = '640px'
+        senderGrid.style.maxHeight = 'none'
+        senderGrid.style.gridTemplateRows = `repeat(var(--task-slot-rows, 1), ${rowPx}px)`
+        senderGrid.style.gridAutoRows = `${rowPx}px`
+        await paintTurn()
+        const label = labelOf()
+        const stack = probeCard.querySelector<HTMLElement>('.prompt-sender-terminal-stack')
+        const labelStyle = label ? window.getComputedStyle(label) : null
+        return {
+          cardHeight: Math.round(probeCard.getBoundingClientRect().height),
+          direction: stack ? window.getComputedStyle(stack).flexDirection : null,
+          whiteSpace: labelStyle?.whiteSpace ?? null,
+          clamp: labelStyle?.getPropertyValue('-webkit-line-clamp').trim() ?? null
+        }
+      }
+      const probe = async () => ({ short: await measureAt(30), medium: await measureAt(44), tall: await measureAt(90) })
+      type Probe = Awaited<ReturnType<typeof probe>>
+      const sharedShape = (p: Probe) => p.short.cardHeight === 30 && p.short.direction === 'row'
+        && p.medium.cardHeight === 44 && p.medium.direction === 'column' && p.medium.whiteSpace === 'nowrap'
+        && p.tall.cardHeight === 90 && p.tall.direction === 'column'
+      let nameRestored = false
+      try {
+        const unnamedReady = initialName === '' || await rename('')
+        await repeat('PS-46a-placeholder-label-stays-on-one-line', async () => {
+          try {
+            const p = await probe()
+            return { ok: unnamedReady && sharedShape(p) && p.tall.whiteSpace === 'nowrap', ...p }
+          } finally {
+            await resetStyles()
+          }
+        })
+        const namedReady = await rename(probeName)
+        await repeat('PS-46-stacked-label-follows-card-height', async () => {
+          try {
+            const p = await probe()
+            return { ok: namedReady && sharedShape(p) && p.tall.whiteSpace === 'normal' && p.tall.clamp === '4', ...p }
+          } finally {
+            await resetStyles()
+          }
+        })
+      } finally {
+        await resetStyles()
+        nameRestored = await rename(initialName)
+      }
+      const stylesRestored = keys.every(key => senderGrid.style[key] === original[key])
+      _assert('PS-46b-overrides-and-name-reverted', stylesRestored && nameRestored, {
+        stylesRestored,
+        nameRestored,
+        initialName,
+        label: labelOf()?.textContent?.trim() ?? null
+      })
+    } else {
+      _assert('PS-46-stacked-label-follows-card-height', false, { reason: 'card or stacked label not found' })
+    }
+  }
+
+  // PS-47: bottom dock — the Task cards fill the free height (each row between 30 and
+  // 96px) and the editor actions row sits between the cards and the send buttons.
+  if (!cancelled()) {
+    const notebook = activeNotebookElement()
+    const portaled = await waitFor('ps-editor-actions-in-sender', () => Boolean(notebook?.querySelector(
+      '[data-testid="prompt-sender-editor-actions-slot"] [data-testid="prompt-editor-actions"]')), 3000, 40)
+    await paintTurn()
+    const grid = senderGridElement()
+    const slot = notebook?.querySelector<HTMLElement>('[data-testid="prompt-sender-editor-actions-slot"]') ?? null
+    const send = notebook?.querySelector<HTMLElement>('.prompt-sender-actions') ?? null
+    const editor = notebook?.querySelector<HTMLElement>('.prompt-editor') ?? null
+    const inputs = notebook?.querySelector<HTMLElement>('.prompt-editor-inputs') ?? null
+    if (portaled && grid && slot && send && editor && inputs) {
+      const g = grid.getBoundingClientRect()
+      const sl = slot.getBoundingClientRect()
+      const se = send.getBoundingClientRect()
+      const tracks = window.getComputedStyle(grid).gridTemplateRows.trim().split(/\s+/).map(Number.parseFloat)
+      const gap = Number.parseFloat(window.getComputedStyle(grid).rowGap) || 0
+      const used = tracks.reduce((sum, track) => sum + track, 0) + gap * Math.max(0, tracks.length - 1)
+      const capped = tracks.some(track => track >= 95.5)
+      const overflowing = grid.scrollHeight > grid.clientHeight + 1
+      const detail = {
+        tracks,
+        gridHeight: Math.round(g.height),
+        used: Math.round(used),
+        capped,
+        overflowing,
+        gridToRow: Math.round(sl.top - g.bottom),
+        rowToSend: Math.round(se.top - sl.bottom),
+        textAreaToEditorRight: Math.round(editor.getBoundingClientRect().right - inputs.getBoundingClientRect().right)
+      }
+      const tracksInRange = tracks.length > 0 && tracks.every(track => track >= 29.5 && track <= 96.5)
+      // Uncapped and not scrolling: the rows consume the whole grid box, and the grid box
+      // reaches the actions row (only the 8px column gap in between).
+      const fills = capped || overflowing || (Math.abs(used - g.height) <= 2 && detail.gridToRow <= 10)
+      _assert('PS-47-bottom-cards-fill-and-actions-row-sits-above-send-buttons',
+        tracksInRange && fills && detail.gridToRow >= -1 && detail.rowToSend >= -1 && Math.abs(detail.textAreaToEditorRight) <= 2, detail)
+    } else {
+      _assert('PS-47-bottom-cards-fill-and-actions-row-sits-above-send-buttons', false, { reason: 'sender row not found', portaled })
+    }
+  }
+
+  // PS-48: the name line shows the Task's own name, or the localized placeholder for a
+  // Task without one; the number line is the 1-based slot position.
+  if (!cancelled()) {
+    const cards = Array.from(senderGridElement()?.querySelectorAll<HTMLElement>('.prompt-sender-terminal') ?? [])
+    const titles = (getApi()?.getTerminalCards() ?? []).map(card => card.title)
+    const unnamedText = translated('promptSender.unnamedTask')
+    const rows = cards.map((card, index) => {
+      const label = card.querySelector<HTMLElement>('.prompt-sender-terminal-label')
+      const short = card.querySelector<HTMLElement>('.prompt-sender-terminal-position-short')
+      const named = /^Task \d+: (.+)$/.exec(titles[index] ?? '')
+      const expected = named ? named[1].trim() : unnamedText
+      return {
+        index,
+        title: titles[index] ?? null,
+        label: label?.textContent?.trim() ?? null,
+        unnamedClass: Boolean(label?.classList.contains('is-unnamed')),
+        position: short?.textContent?.trim() ?? null,
+        ok: label?.textContent?.trim() === expected
+          && Boolean(label?.classList.contains('is-unnamed')) === !named
+          && short?.textContent?.trim() === String(index + 1)
+      }
+    })
+    _assert('PS-48-stacked-label-name-or-placeholder', rows.length > 0 && rows.length === titles.length && rows.every(row => row.ok), { rows })
   }
 
   const openSettings = async (page: 'general' | 'shortcuts' = 'shortcuts') => {

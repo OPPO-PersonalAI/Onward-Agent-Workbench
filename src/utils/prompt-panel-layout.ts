@@ -39,10 +39,12 @@ export const MIN_PROMPT_BOTTOM_SENDER_WIDTH = 180
 
 /** Minimum width of the text input area inside the bottom-docked editor column. */
 export const MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH = 240
-/** Fixed width of the vertical icon action rail at the right edge of the bottom-docked editor. */
-export const PROMPT_BOTTOM_ACTION_RAIL_WIDTH = 48
-/** Minimum width of the whole bottom-docked editor column without attachments: text area + action rail. */
-export const MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH = MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH + PROMPT_BOTTOM_ACTION_RAIL_WIDTH
+/**
+ * Minimum width of the whole bottom-docked editor column without attachments. The
+ * editor actions live in the Task sender column (see `resolvePromptEditorActionsPlacement`),
+ * so the column is the text area alone.
+ */
+export const MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH = MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH
 /** Width of each vertical column resizer between History | Editor | Sender. */
 export const PROMPT_BOTTOM_COLUMN_RESIZER_WIDTH = 5
 
@@ -200,10 +202,9 @@ function isPositiveFinite(value: unknown): value is number {
 }
 
 /**
- * Minimum width the center editor column needs. The action rail is always present at
- * the right edge. With attachments present the attachment column (plus its resizer)
- * also sits beside the text area, so the text area still keeps
- * `MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH`.
+ * Minimum width the center editor column needs. With attachments present the
+ * attachment column (plus its resizer) sits beside the text area, so the text area
+ * still keeps `MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH`.
  */
 export function resolveBottomEditorMinWidth(hasAttachments: boolean, attachmentWidth: number): number {
   if (!hasAttachments) return MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH
@@ -276,15 +277,14 @@ export interface BottomAttachmentResizeParams {
   startWidth: number
   startX: number
   clientX: number
-  /** Current width of the editor column body (text area + resizer + attachment column + action rail). */
+  /** Current width of the editor column body (text area + resizer + attachment column). */
   editorWidth?: number
 }
 
 /**
  * Compute the attachment column width inside the bottom-docked editor.
  * Dragged on its left edge: moving left increases width (`startX - clientX`).
- * The text area to its left always keeps `MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH`,
- * and the action rail to its right keeps its fixed width.
+ * The text area to its left always keeps `MIN_PROMPT_BOTTOM_CENTER_EDITOR_WIDTH`.
  */
 export function computeBottomAttachmentResize(params: BottomAttachmentResizeParams): number {
   const { startWidth, startX, clientX, editorWidth } = params
@@ -421,4 +421,22 @@ export function resolveMainContentLayout(
     promptOrder: 1,
     terminalOrder: 2
   }
+}
+
+/**
+ * Where the editor actions (color tags, add / cancel / save / save-as-new) render.
+ * - `footer`: left/right docks keep the text-button row below the inputs.
+ * - `sender-row`: the bottom dock renders them in the Task sender column, between
+ *   the Task cards and the send buttons.
+ * - `awaiting-slot`: bottom dock, but the sender column has not mounted its row yet
+ *   (first commit after a dock switch); nothing renders until it arrives.
+ */
+export type PromptEditorActionsPlacement = 'footer' | 'sender-row' | 'awaiting-slot'
+
+export function resolvePromptEditorActionsPlacement(
+  position: PromptPanelPosition,
+  senderRowAvailable: boolean
+): PromptEditorActionsPlacement {
+  if (position !== 'bottom') return 'footer'
+  return senderRowAvailable ? 'sender-row' : 'awaiting-slot'
 }

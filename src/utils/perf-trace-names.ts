@@ -34,6 +34,7 @@ export const PERF_TRACE_EVENT = {
   MAIN_PROMPT_PANEL_POSITION_MIGRATED: 'main:prompt-panel.migrate-position',
   RENDERER_PROMPT_PANEL_BOTTOM_RESIZE: 'renderer:prompt-panel.commit-bottom-resize',
   RENDERER_PROMPT_PANEL_BOTTOM_COMPRESSION: 'renderer:prompt-panel.change-bottom-compression',
+  RENDERER_PROMPT_PANEL_EDITOR_ACTIONS_PLACEMENT: 'renderer:prompt-panel.place-editor-actions',
   MAIN_PROMPT_SHORTCUT: 'main:prompt-shortcut.state-changed',
   MAIN_WINDOW_SHORTCUT_DISPATCHED: 'main:window-shortcut.dispatched',
   RENDERER_WINDOW_SHORTCUT_RECEIVED: 'renderer:window-shortcut.received',

@@ -157,8 +157,8 @@ body.dragging-prompt * {
   width: auto;
   height: 100%;
   min-height: 0;
-  /* Text area minimum (240) + action rail (48); see MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH. */
-  min-width: 288px;
+  /* Text area minimum; see MIN_PROMPT_BOTTOM_EDITOR_COLUMN_WIDTH. */
+  min-width: 240px;
   border-top: none;
 }
 
@@ -177,12 +177,15 @@ body.dragging-prompt * {
   overflow: hidden;
 }
 
+/* Bottom dock: the Task cards take the free height; the editor actions row and the send
+   buttons stay pinned to the bottom of the column. */
 .prompt-notebook[data-dock-position="bottom"] .prompt-sender {
   max-height: none;
   height: 100%;
   flex: 1 1 auto;
   border-top: none;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 /* Editor body wrapper: transparent in left/right docks, so the attachment grid and the
@@ -251,53 +254,88 @@ body.dragging-prompt * {
   flex: 0 0 auto;
 }
 
-/* Bottom dock: a fixed 48px vertical icon rail at the right edge of the editor body
-   (width mirrors PROMPT_BOTTOM_ACTION_RAIL_WIDTH). The group sits at the bottom; the
-   leading auto margin (instead of justify-content: flex-end) keeps every button
-   reachable by scrolling when a short panel cannot fit them all. */
-.prompt-editor-actions.is-rail {
-  flex: 0 0 48px;
-  width: 48px;
-  box-sizing: border-box;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  min-height: 0;
-  padding: 6px 0;
-  border-top: none;
-  border-left: 1px solid var(--border);
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.prompt-editor-actions.is-rail::-webkit-scrollbar {
-  display: none;
-}
-
-.prompt-editor-actions.is-rail .prompt-editor-color-picker {
-  flex-direction: column;
-  flex-shrink: 0;
-  gap: 6px;
-  margin: auto 0 0;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-
-.prompt-editor-actions.is-rail .prompt-editor-color-btn {
-  width: 28px;
-  height: 28px;
-}
-
-.prompt-editor-btn.is-icon {
+/* Bottom dock: the editor actions are portaled into the Task sender column (between the
+   Task cards and the send buttons). Color tags on the left, buttons right-aligned; the
+   button group wraps onto its own line when the column is too narrow for both. */
+.prompt-sender-editor-actions-slot {
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
+  /* Takes the free space only when the Task cards have hit their height cap. */
+  margin-top: auto;
+}
+
+.prompt-editor-actions.is-sender-row {
+  flex-wrap: wrap;
+  gap: 4px;
   padding: 0;
-  border-radius: 8px;
+  border-top: none;
+}
+
+.prompt-editor-actions.is-sender-row .prompt-editor-color-picker {
+  gap: 4px;
+  margin-right: 0;
+}
+
+.prompt-editor-actions.is-sender-row .prompt-editor-color-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.prompt-editor-actions-buttons {
+  /* Own container so the labels react to the room actually left beside the tags. */
+  container: prompt-editor-actions-buttons / inline-size;
+  flex: 1 1 auto;
+  min-width: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+/* Editing shows three buttons; keep room for all of them or wrap the group. */
+.prompt-editor-actions.is-sender-row[data-editing="true"] .prompt-editor-actions-buttons {
+  min-width: calc(3 * 26px + 2 * 4px);
+}
+
+.prompt-editor-btn.is-icon,
+.prompt-editor-btn.is-labeled {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.prompt-editor-btn.is-icon {
+  width: 26px;
+}
+
+.prompt-editor-btn.is-labeled {
+  min-width: 26px;
+  max-width: 100%;
+  padding: 0 9px;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.prompt-editor-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ~120px fits the longer (English) label with its icon; below that keep the icon only.
+   The label stays in the tooltip and aria-label. */
+@container prompt-editor-actions-buttons (max-width: 127px) {
+  .prompt-editor-btn.is-labeled {
+    width: 26px;
+    padding: 0;
+  }
+
+  .prompt-editor-btn-label {
+    display: none;
+  }
 }
 
 .prompt-editor-btn-cancel.is-icon {
@@ -1890,6 +1928,153 @@ body.resizing-editor-height * {
   }
 
   .prompt-sender-terminal-index {
+    display: block;
+  }
+}
+
+/*
+ * Bottom dock: the Task cards fill the free height of the sender column. Rows stay
+ * equal, so a row-spanning custom cell still reads as double height. They shrink to
+ * 30px before the grid scrolls, and stop growing at 96px so a one- or two-Task layout
+ * does not turn into one oversized block (the leftover goes above the actions row).
+ */
+.prompt-notebook[data-dock-position="bottom"] .prompt-sender-terminals {
+  --task-slot-row-min: 30px;
+  --task-slot-row-max: 96px;
+  grid-template-rows: repeat(var(--task-slot-rows, 1), minmax(var(--task-slot-row-min), 1fr));
+  grid-auto-rows: minmax(var(--task-slot-row-min), 1fr);
+  flex: 1 1 auto;
+  margin-bottom: 0;
+  max-height: calc(var(--task-slot-rows, 1) * var(--task-slot-row-max) + (var(--task-slot-rows, 1) - 1) * var(--task-slot-gap));
+}
+
+/* Height-aware cards: the stacked label below reacts to the card height too. */
+.prompt-notebook[data-dock-position="bottom"] .prompt-sender-terminal {
+  container-type: size;
+}
+
+/* Stacked label (bottom dock): position number, then the Task's own name. */
+.prompt-sender-terminal-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  cursor: default;
+  user-select: none;
+}
+
+.prompt-sender-terminal-position {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prompt-sender-terminal.is-selected .prompt-sender-terminal-position,
+.prompt-sender-terminal.is-leader-target .prompt-sender-terminal-position {
+  color: color-mix(in srgb, var(--t-color, var(--accent)) 70%, var(--text-1));
+}
+
+.prompt-sender-terminal-position-long {
+  display: none;
+}
+
+.prompt-sender-terminal-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+/* The placeholder stays on one line (ellipsis when narrow): broken mid-word it reads as
+   noise. The higher specificity also beats the wrapping rules in the container queries. */
+.prompt-sender-terminal-label.is-unnamed {
+  display: block;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  -webkit-line-clamp: none;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.prompt-sender-terminal-number-only {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  cursor: default;
+  user-select: none;
+}
+
+/*
+ * Stacked-label size variants. Content box = card minus 6px padding + 1px border per
+ * side horizontally, 4px + 1px vertically. Thresholds:
+ *   width >= 64px  -> "Task N" instead of "N"
+ *   width <= 60px  -> name at the smaller font
+ *   width <= 26px  -> number only (8 Tasks in the 180px minimum column)
+ *   height <= 29px -> number and name on one line (two lines need ~30px)
+ *   height >= 46 / 62 / 78px -> the name may wrap onto 2 / 3 / 4 lines
+ */
+@container task-slot (min-width: 64px) {
+  .prompt-sender-terminal-position-long {
+    display: inline;
+  }
+
+  .prompt-sender-terminal-position-short {
+    display: none;
+  }
+}
+
+@container task-slot (max-width: 60px) {
+  .prompt-sender-terminal-label {
+    font-size: var(--font-xs);
+  }
+}
+
+@container task-slot (max-height: 29px) {
+  .prompt-sender-terminal-stack {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 4px;
+  }
+}
+
+@container task-slot (min-height: 46px) {
+  .prompt-sender-terminal-label {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+  }
+}
+
+@container task-slot (min-height: 62px) {
+  .prompt-sender-terminal-label {
+    -webkit-line-clamp: 3;
+  }
+}
+
+@container task-slot (min-height: 78px) {
+  .prompt-sender-terminal-label {
+    -webkit-line-clamp: 4;
+  }
+}
+
+@container task-slot (max-width: 26px) {
+  .prompt-sender-terminal-stack {
+    display: none;
+  }
+
+  .prompt-sender-terminal-number-only {
     display: block;
   }
 }

@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, memo, startTransition } from 'react'
+import { createPortal } from 'react-dom'
 import { Prompt, PromptSendRecord } from '../../types/electron'
 import type { TerminalBatchResult, TerminalInfo } from '../../types/prompt'
 import type { ResolvedLayout } from '../../utils/layout-mode'
@@ -68,6 +69,7 @@ import {
   resolveBottomEditorMinWidth,
   resolveBottomPanelLayout,
   resolveBottomPanelMaxHeight,
+  resolvePromptEditorActionsPlacement,
   type PromptPanelPosition
 } from '../../utils/prompt-panel-layout'
 import { buildPromptTaskHistorySummary } from './promptTaskHistory'
@@ -77,7 +79,7 @@ import './PromptNotebook.css'
 type PromptColorFilter = 'red' | 'yellow' | 'green' | null
 const DEFAULT_INPUT_SETTINGS = createDefaultPromptInputSettings()
 
-// Icons for the bottom-dock action rail (add / save / cancel).
+// Icons for the bottom-dock editor actions in the Task sender column (add / save / cancel).
 const ACTION_ICON_ADD = (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
     <path d="M7.25 2h1.5v5.25H14v1.5H8.75V14h-1.5V8.75H2v-1.5h5.25z" />
@@ -368,6 +370,9 @@ export const PromptNotebook = memo(function PromptNotebook({
     await navigator.clipboard.writeText(text)
   }, [])
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null)
+  // Bottom dock: the row inside the Task sender column that hosts the editor actions.
+  // Set by PromptSender's ref callback; null in left/right docks.
+  const [editorActionsSlot, setEditorActionsSlot] = useState<HTMLDivElement | null>(null)
   const [appendContent, setAppendContent] = useState('')
   const [editorContent, setEditorContent] = useState('')
   const [editorTitle, setEditorTitle] = useState('')
@@ -1997,6 +2002,7 @@ export const PromptNotebook = memo(function PromptNotebook({
           ctxCurrentCwd={editorCwd}
           ctxCurrentBranch={editorBranch}
           ctxCurrentTaskTitle={editorTaskTitle}
+          editorActionsSlot={position === 'bottom' ? editorActionsSlot : null}
         />
 
         {position === 'bottom' && (
@@ -2029,6 +2035,8 @@ export const PromptNotebook = memo(function PromptNotebook({
             notice={inputNotice}
             onTerminalRename={onTerminalRename}
             onChangeWorkDir={onChangeWorkDir}
+            cardLabelLayout={position === 'bottom' ? 'stacked' : 'inline'}
+            editorActionsSlotRef={position === 'bottom' ? setEditorActionsSlot : undefined}
           />
         </div>
       </div>
@@ -2250,7 +2258,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   ctxSendToTask,
   ctxCurrentCwd,
   ctxCurrentBranch,
-  ctxCurrentTaskTitle
+  ctxCurrentTaskTitle,
+  editorActionsSlot = null
 }: {
   tabId: string
   activeTab: boolean
@@ -2290,6 +2299,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   ctxCurrentCwd: string | null
   ctxCurrentBranch: string | null
   ctxCurrentTaskTitle: string | null
+  /** Bottom dock: the Task sender row the editor actions are portaled into. */
+  editorActionsSlot?: HTMLElement | null
 }) {
   const { t } = useI18n()
   const [title, setTitle] = useState('')
@@ -3406,19 +3417,76 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
     />
   )
 
-  // Left/right docks: a footer row with text buttons. Bottom dock: a fixed-width vertical
-  // icon rail at the right edge of the editor body; labels move into tooltips.
+  // Left/right docks: a footer row with text buttons below the inputs. Bottom dock: a
+  // compact row portaled into the Task sender column, between the Task cards and the
+  // send buttons; the primary action keeps a text label while the row is wide enough.
   const cancelLabel = t('common.cancel')
   const saveLabel = t('common.save')
   const saveAsNewLabel = t('promptNotebook.saveAsNew')
   const addToHistoryLabel = t('promptEditor.addToHistory')
   const saveShortcutTitle = t('promptNotebook.shortcutTitle', { shortcut: saveShortcutLabel })
   const saveAsShortcutTitle = t('promptNotebook.shortcutTitle', { shortcut: saveAsShortcutLabel })
-  const actionBtnClass = isBottomDock ? 'prompt-editor-btn is-icon' : 'prompt-editor-btn'
+  const iconBtnClass = isBottomDock ? 'prompt-editor-btn is-icon' : 'prompt-editor-btn'
+  const labeledBtnClass = isBottomDock ? 'prompt-editor-btn is-labeled' : 'prompt-editor-btn'
+  const withIcon = (icon: React.ReactNode, label: string) => (
+    <>
+      {icon}
+      <span className="prompt-editor-btn-label">{label}</span>
+    </>
+  )
+  const actionButtons = editingPrompt ? (
+    <>
+      <button
+        type="button"
+        className={`${iconBtnClass} prompt-editor-btn-cancel`}
+        data-action="cancel"
+        onClick={handleCancel}
+        title={cancelLabel}
+        aria-label={cancelLabel}
+      >
+        {isBottomDock ? ACTION_ICON_CANCEL : cancelLabel}
+      </button>
+      <button
+        type="button"
+        className={`${labeledBtnClass} prompt-editor-btn-submit`}
+        data-action="save"
+        onClick={() => handleSave(false)}
+        disabled={!hasContent}
+        title={isBottomDock ? `${saveLabel}\n${saveShortcutTitle}` : saveShortcutTitle}
+        aria-label={saveLabel}
+      >
+        {isBottomDock ? withIcon(ACTION_ICON_SAVE, saveLabel) : saveLabel}
+      </button>
+      <button
+        type="button"
+        className={`${iconBtnClass} prompt-editor-btn-submit`}
+        data-action="save-as-new"
+        onClick={() => handleSave(true)}
+        disabled={!hasContent}
+        title={isBottomDock ? `${saveAsNewLabel}\n${saveAsShortcutTitle}` : saveAsShortcutTitle}
+        aria-label={saveAsNewLabel}
+      >
+        {isBottomDock ? ACTION_ICON_ADD : saveAsNewLabel}
+      </button>
+    </>
+  ) : (
+    <button
+      type="button"
+      className={`${labeledBtnClass} prompt-editor-btn-submit`}
+      data-action="add-to-history"
+      onClick={() => handleSubmit()}
+      disabled={!hasContent}
+      title={isBottomDock ? addToHistoryLabel : undefined}
+      aria-label={addToHistoryLabel}
+    >
+      {isBottomDock ? withIcon(ACTION_ICON_ADD, addToHistoryLabel) : addToHistoryLabel}
+    </button>
+  )
   const actionsBar = (
     <div
-      className={isBottomDock ? 'prompt-editor-actions is-rail' : 'prompt-editor-actions'}
-      data-layout={isBottomDock ? 'rail' : 'row'}
+      className={isBottomDock ? 'prompt-editor-actions is-sender-row' : 'prompt-editor-actions'}
+      data-layout={isBottomDock ? 'sender-row' : 'row'}
+      data-editing={editingPrompt ? 'true' : undefined}
       data-testid="prompt-editor-actions"
     >
       <div
@@ -3446,56 +3514,20 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
           )
         })}
       </div>
-      {editingPrompt ? (
-        <>
-          <button
-            type="button"
-            className={`${actionBtnClass} prompt-editor-btn-cancel`}
-            data-action="cancel"
-            onClick={handleCancel}
-            title={cancelLabel}
-            aria-label={cancelLabel}
-          >
-            {isBottomDock ? ACTION_ICON_CANCEL : cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={`${actionBtnClass} prompt-editor-btn-submit`}
-            data-action="save"
-            onClick={() => handleSave(false)}
-            disabled={!hasContent}
-            title={isBottomDock ? `${saveLabel}\n${saveShortcutTitle}` : saveShortcutTitle}
-            aria-label={saveLabel}
-          >
-            {isBottomDock ? ACTION_ICON_SAVE : saveLabel}
-          </button>
-          <button
-            type="button"
-            className={`${actionBtnClass} prompt-editor-btn-submit`}
-            data-action="save-as-new"
-            onClick={() => handleSave(true)}
-            disabled={!hasContent}
-            title={isBottomDock ? `${saveAsNewLabel}\n${saveAsShortcutTitle}` : saveAsShortcutTitle}
-            aria-label={saveAsNewLabel}
-          >
-            {isBottomDock ? ACTION_ICON_ADD : saveAsNewLabel}
-          </button>
-        </>
-      ) : (
-        <button
-          type="button"
-          className={`${actionBtnClass} prompt-editor-btn-submit`}
-          data-action="add-to-history"
-          onClick={() => handleSubmit()}
-          disabled={!hasContent}
-          title={isBottomDock ? addToHistoryLabel : undefined}
-          aria-label={addToHistoryLabel}
-        >
-          {isBottomDock ? ACTION_ICON_ADD : addToHistoryLabel}
-        </button>
-      )}
+      {isBottomDock ? <div className="prompt-editor-actions-buttons">{actionButtons}</div> : actionButtons}
     </div>
   )
+
+  // Portal target for the bottom dock. Until the sender column mounts its row (the
+  // first commit after a dock switch) nothing renders; the ref callback re-renders.
+  const actionsPlacement = resolvePromptEditorActionsPlacement(dockPosition, editorActionsSlot !== null)
+  useEffect(() => {
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_PANEL_EDITOR_ACTIONS_PLACEMENT, {
+      tabId,
+      dock: dockPosition,
+      placement: actionsPlacement
+    })
+  }, [tabId, dockPosition, actionsPlacement])
 
   return (
     <div
@@ -3562,8 +3594,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         />
       )}
       {isBottomDock && attachmentStrip}
-      {isBottomDock && actionsBar}
       </div>
+      {actionsPlacement === 'sender-row' && editorActionsSlot && createPortal(actionsBar, editorActionsSlot)}
       {ctxMenu && (
         <PromptEditorContextMenu
           position={{ x: ctxMenu.x, y: ctxMenu.y }}
@@ -3595,7 +3627,7 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
         onClose={closeImagePreview}
       />
 
-      {!isBottomDock && actionsBar}
+      {actionsPlacement === 'footer' && actionsBar}
     </div>
   )
 })

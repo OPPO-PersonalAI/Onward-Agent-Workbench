@@ -145,6 +145,70 @@ export async function testTaskLayout(ctx: AutotestContext): Promise<TestResult[]
     record('TLM-14-task-selector-mirrors-layout', false, { reason: 'grid-never-flipped-to-eight' })
   }
 
+  // ── TLM-19: bottom dock — with two Task rows the selector cards fill the free
+  // height of the sender column ──
+  // Rows are equal `minmax(30px, 1fr)` tracks capped at 96px. At the default 240px
+  // panel two rows land well under the cap, so the strict branch applies: the tracks
+  // consume the whole grid box and the grid reaches the editor actions row (only the
+  // 8px column gap in between). Every card must render its label (stacked, or the
+  // number alone in a very narrow column). This suite starts with the Prompt panel
+  // closed: open it through the sidebar for the measurement and close it again so the
+  // later file-drop cases see the same Task area as before.
+  if (flippedToEight) {
+    const visibleNotebook = () => document.querySelector<HTMLElement>('.prompt-notebook:not(.prompt-notebook-hidden)')
+    const promptButton = () => document.querySelector<HTMLButtonElement>('[data-testid="sidebar-prompt-button"]')
+    const openedForCheck = !visibleNotebook()
+    if (openedForCheck) {
+      promptButton()?.click()
+      await waitFor('prompt-panel-open-for-selector-fill', () => visibleNotebook() !== null, 4000, 60)
+    }
+    const measureSelector = () => {
+      const notebook = document.querySelector<HTMLElement>('.prompt-notebook:not(.prompt-notebook-hidden)')
+      const grid = notebook?.querySelector<HTMLElement>('.prompt-sender-terminals') ?? null
+      const slot = notebook?.querySelector<HTMLElement>('[data-testid="prompt-sender-editor-actions-slot"]') ?? null
+      if (!notebook || !grid || !slot) return null
+      const gridStyle = window.getComputedStyle(grid)
+      const tracks = gridStyle.gridTemplateRows.trim().split(/\s+/).map(Number.parseFloat)
+      const gap = Number.parseFloat(gridStyle.rowGap) || 0
+      const gridRect = grid.getBoundingClientRect()
+      const cards = Array.from(grid.querySelectorAll<HTMLElement>('.prompt-sender-terminal'))
+      const shown = (element: Element | null) => element !== null && window.getComputedStyle(element).display !== 'none'
+      return {
+        dock: notebook.getAttribute('data-dock-position'),
+        tracks,
+        used: Math.round(tracks.reduce((sum, track) => sum + track, 0) + gap * Math.max(0, tracks.length - 1)),
+        gridHeight: Math.round(gridRect.height),
+        gridToRow: Math.round(slot.getBoundingClientRect().top - gridRect.bottom),
+        overflowing: grid.scrollHeight > grid.clientHeight + 1,
+        cards: cards.length,
+        labelled: cards.filter(card => shown(card.querySelector('.prompt-sender-terminal-stack'))
+          || shown(card.querySelector('.prompt-sender-terminal-number-only'))).length
+      }
+    }
+    const fillReady = await waitFor(
+      'task-selector-fills-sender-column',
+      () => {
+        const m = measureSelector()
+        return m !== null && m.cards === 8 && m.tracks.length === 2
+      },
+      8000,
+      120
+    )
+    const m = measureSelector()
+    const tracks = m?.tracks ?? []
+    const equalRows = tracks.length === 2 && Math.abs(tracks[0] - tracks[1]) <= 1
+    const uncapped = tracks.length > 0 && tracks.every(track => track >= 29.5 && track < 95.5)
+    const fills = m !== null && !m.overflowing && Math.abs(m.used - m.gridHeight) <= 2 && m.gridToRow >= -1 && m.gridToRow <= 10
+    let restored = true
+    if (openedForCheck) {
+      promptButton()?.click()
+      restored = await waitFor('prompt-panel-closed-after-selector-fill', () => visibleNotebook() === null, 4000, 60)
+    }
+    record('TLM-19-bottom-selector-cards-fill-sender-column',
+      fillReady && m?.dock === 'bottom' && equalRows && uncapped && fills && m?.labelled === 8 && restored,
+      { ...(m ?? { reason: 'selector-not-found' }), equalRows, uncapped, fills, openedForCheck, restored })
+  }
+
   // ── TLM-04: switching back to single shrinks the grid ──
   // We just expanded to 8; clicking Single (1) requests a downsize from 8
   // current Tasks to 1. The downsize dialog should appear (because

@@ -19,6 +19,7 @@ import {
   taskSelectorGeometrySignature,
   type TaskSelectorSlot
 } from '../../utils/task-selector-geometry'
+import { getTaskCardLabel } from '../../utils/task-card-label'
 
 /** How many rainbow accent slots App.css defines (`--rainbow-1`..`--rainbow-6`). */
 const RAINBOW_SLOT_COUNT = 6
@@ -44,6 +45,17 @@ interface PromptSenderProps {
   notice: { text: string; error: boolean } | null
   onTerminalRename: (id: string, newTitle: string) => void
   onChangeWorkDir?: (terminalIds: string[], directory: string) => void
+  /**
+   * `inline` (left/right docks): one line, the full title, or the position
+   * number when the slot is too narrow. `stacked` (bottom dock): the position
+   * number above the Task's own name; cards fill the free height.
+   */
+  cardLabelLayout?: 'inline' | 'stacked'
+  /**
+   * Bottom dock: receives the row between the Task cards and the send buttons.
+   * The editor portals its actions (color tags, add / save / cancel) into it.
+   */
+  editorActionsSlotRef?: (element: HTMLDivElement | null) => void
 }
 
 /** Inline grid placement for one mirrored slot. */
@@ -69,7 +81,9 @@ export const PromptSender = memo(function PromptSender({
   onAction,
   isSubmitting,
   notice,
-  onTerminalRename
+  onTerminalRename,
+  cardLabelLayout = 'inline',
+  editorActionsSlotRef
 }: PromptSenderProps) {
   const { t } = useI18n()
   const selectedTerminals = useMemo(() => new Set(selectedIds), [selectedIds])
@@ -403,38 +417,24 @@ export const PromptSender = memo(function PromptSender({
                   placeholder={`Task ${index + 1}`}
                 />
               ) : (
-                <>
-                  {/*
-                    A slot too narrow for a name shows the Task's position
-                    number instead: a truncated "Tas…" identifies nothing,
-                    while the number is the same handle Cmd+N uses. The swap
-                    is a container query on the card itself, so it tracks the
-                    real slot width rather than the panel width — measured
-                    crossover for an 8-Task 4x2 layout is a panel around
-                    250-280px; the 320px default keeps names.
-                  */}
-                  <span
-                    className="prompt-sender-terminal-name"
-                    title={t('promptSender.taskCardTitle', {
-                      name: terminal.title || `Task ${index + 1}`
-                    })}
-                  >
-                    {terminal.title || `Task ${index + 1}`}
-                  </span>
-                  <span
-                    className="prompt-sender-terminal-index"
-                    title={t('promptSender.taskCardTitle', {
-                      name: terminal.title || `Task ${index + 1}`
-                    })}
-                  >
-                    {index + 1}
-                  </span>
-                </>
+                <TaskCardLabelView
+                  terminal={terminal}
+                  index={index}
+                  layout={cardLabelLayout}
+                />
               )}
             </div>
           ))
         )}
       </div>
+
+      {editorActionsSlotRef && (
+        <div
+          ref={editorActionsSlotRef}
+          className="prompt-sender-editor-actions-slot"
+          data-testid="prompt-sender-editor-actions-slot"
+        />
+      )}
 
       <div className="prompt-sender-actions">
         {terminals.length > 0 && (
@@ -492,5 +492,64 @@ export const PromptSender = memo(function PromptSender({
       )}
 
     </div>
+  )
+})
+
+/**
+ * Label inside one Task card. Every size variant is a container query on the
+ * card itself, so resizing the panel never re-renders React; all spans stay in
+ * the DOM and only their display changes.
+ */
+const TaskCardLabelView = memo(function TaskCardLabelView({
+  terminal,
+  index,
+  layout
+}: {
+  terminal: TerminalInfo
+  index: number
+  layout: 'inline' | 'stacked'
+}) {
+  const { t } = useI18n()
+  const label = getTaskCardLabel(terminal, index)
+  const tooltip = t('promptSender.taskCardTitle', { name: label.title })
+  if (layout === 'stacked') {
+    // Bottom dock: position number on top (`Task N` once the card is wide
+    // enough), the Task's own name below — wrapping onto more lines as the card
+    // grows taller, folding into one line on a short card. A slot too narrow
+    // for even a short name keeps only the number, the Cmd+N handle.
+    return (
+      <>
+        <span className="prompt-sender-terminal-stack" title={tooltip}>
+          <span className="prompt-sender-terminal-position">
+            <span className="prompt-sender-terminal-position-long">
+              {t('promptSender.taskPosition', { index: label.position })}
+            </span>
+            <span className="prompt-sender-terminal-position-short">{label.position}</span>
+          </span>
+          <span className={label.name ? 'prompt-sender-terminal-label' : 'prompt-sender-terminal-label is-unnamed'}>
+            {label.name ?? t('promptSender.unnamedTask')}
+          </span>
+        </span>
+        <span className="prompt-sender-terminal-number-only" title={tooltip}>{label.position}</span>
+      </>
+    )
+  }
+  return (
+    <>
+      {/*
+        A slot too narrow for a name shows the Task's position number
+        instead: a truncated "Tas…" identifies nothing, while the number is
+        the same handle Cmd+N uses. The swap is a container query on the card
+        itself, so it tracks the real slot width rather than the panel width —
+        measured crossover for an 8-Task 4x2 layout is a panel around
+        250-280px; the 320px default keeps names.
+      */}
+      <span className="prompt-sender-terminal-name" title={tooltip}>
+        {label.title}
+      </span>
+      <span className="prompt-sender-terminal-index" title={tooltip}>
+        {label.position}
+      </span>
+    </>
   )
 })

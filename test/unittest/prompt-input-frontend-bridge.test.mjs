@@ -138,6 +138,8 @@ function harness(t, autotest = true, traceEnabled = false) {
   const translate = key => key
   const boundaries = new Map([
     ['react', react],
+    // Portals render in place: the fake renderer has no separate DOM container.
+    ['react-dom', { createPortal: node => node }],
     [resolve(ROOT, 'src/components/Settings/ShortcutInput.tsx'), { setRecordingSuspended: value => { suspensions.push(value); return suspendHook?.(value) ?? Promise.resolve() } }],
     [resolve(ROOT, 'src/contexts/PromptActionsContext.tsx'), { usePromptActions: () => actions, usePromptInputTabState: () => inputState }],
     [resolve(ROOT, 'src/contexts/SettingsContext.tsx'), { useSettings: () => ({ settings: {} }) }],
