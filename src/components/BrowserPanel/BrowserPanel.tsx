@@ -8,6 +8,7 @@ import { useI18n } from '../../i18n/useI18n'
 import { useSubpageEscape } from '../../hooks/useSubpageEscape'
 import { perfTrace } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { formatAcceleratorDisplay } from '../../utils/shortcut-display'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import {
   formatHtmlPreviewZoomPercent,
@@ -422,7 +423,9 @@ export function BrowserPanel({
     }
   }, [getScrollState, handleNavigate, handleReload, isOpen, isViewReady, onAutoRefreshChange, onClose, runAutoRefreshTick, stepZoom, zoomFactor])
 
-  const modifierLabel = window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'
+  const zoomOutShortcut = formatAcceleratorDisplay('CommandOrControl+-', window.electronAPI.platform)
+  const zoomResetShortcut = formatAcceleratorDisplay('CommandOrControl+0', window.electronAPI.platform)
+  const zoomInShortcut = formatAcceleratorDisplay('CommandOrControl++', window.electronAPI.platform)
   const zoomPercent = formatHtmlPreviewZoomPercent(zoomFactor)
   const autoRefreshActive = clampAutoRefreshIntervalMs(autoRefreshIntervalMs) != null
   const autoRefreshBadge = autoRefreshActive ? formatAutoRefreshInterval(autoRefreshIntervalMs as number) : ''
@@ -470,11 +473,11 @@ export function BrowserPanel({
             </button>
           </div>
           <div className="browser-panel-zoom-controls" aria-label={t('browserPanel.zoomControls')}>
-            <button className="browser-panel-nav-btn browser-panel-zoom-btn browser-panel-zoom-out-btn" onClick={() => void stepZoom('out', 'toolbar')} disabled={zoomFactor <= HTML_PREVIEW_MIN_ZOOM_FACTOR} title={t('browserPanel.zoomOut', { key: `${modifierLabel}+-` })}>
+            <button className="browser-panel-nav-btn browser-panel-zoom-btn browser-panel-zoom-out-btn" onClick={() => void stepZoom('out', 'toolbar')} disabled={zoomFactor <= HTML_PREVIEW_MIN_ZOOM_FACTOR} title={t('browserPanel.zoomOut', { key: zoomOutShortcut })}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 7.25h10v1.5H3v-1.5Z" /></svg>
             </button>
-            <button className="browser-panel-zoom-level-btn" onClick={() => void stepZoom('reset', 'toolbar')} title={t('browserPanel.zoomReset', { key: `${modifierLabel}+0` })}>{zoomPercent}</button>
-            <button className="browser-panel-nav-btn browser-panel-zoom-btn browser-panel-zoom-in-btn" onClick={() => void stepZoom('in', 'toolbar')} disabled={zoomFactor >= HTML_PREVIEW_MAX_ZOOM_FACTOR} title={t('browserPanel.zoomIn', { key: `${modifierLabel}++` })}>
+            <button className="browser-panel-zoom-level-btn" onClick={() => void stepZoom('reset', 'toolbar')} title={t('browserPanel.zoomReset', { key: zoomResetShortcut })}>{zoomPercent}</button>
+            <button className="browser-panel-nav-btn browser-panel-zoom-btn browser-panel-zoom-in-btn" onClick={() => void stepZoom('in', 'toolbar')} disabled={zoomFactor >= HTML_PREVIEW_MAX_ZOOM_FACTOR} title={t('browserPanel.zoomIn', { key: zoomInShortcut })}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.25 3h1.5v4.25H13v1.5H8.75V13h-1.5V8.75H3v-1.5h4.25V3Z" /></svg>
             </button>
           </div>

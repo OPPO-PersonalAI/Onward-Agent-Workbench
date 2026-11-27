@@ -2304,7 +2304,7 @@ function SettingsProviderWithHandler() {
       }
       case 'switchTab': {
         // Switch to the specified Tab and restore terminal focus
-        if (action.index <= state.tabs.length) {
+        if (action.index >= 1 && action.index <= state.tabs.length) {
           const targetTab = state.tabs[action.index - 1]
           if (targetTab) {
             // Conditionally close Settings based on the target tab's pre-Settings panel context.
@@ -2320,6 +2320,36 @@ function SettingsProviderWithHandler() {
             })
           }
         }
+        break
+      }
+      case 'switchPrevTab':
+      case 'switchNextTab':
+      case 'switchLastTab': {
+        if (state.tabs.length <= 1) break
+        const currentIndex = state.tabs.findIndex(t => t.id === state.activeTabId)
+        const baseIndex = currentIndex >= 0 ? currentIndex : 0
+        const targetIndex = action.type === 'switchPrevTab'
+          ? (baseIndex - 1 + state.tabs.length) % state.tabs.length
+          : action.type === 'switchNextTab'
+            ? (baseIndex + 1) % state.tabs.length
+            : state.tabs.length - 1
+        const targetTab = state.tabs[targetIndex]
+        if (targetTab && targetTab.id !== state.activeTabId) {
+          void tryCloseSettingsOnSwitch(targetTab.id, targetTab.activePanel).then(allowed => {
+            if (!allowed) return
+            switchTab(targetTab.id)
+            const terminalId = targetTab.activeTerminalId
+            if (terminalId) {
+              setLastFocusOwner('terminal')
+              setLastFocusedTerminalId(terminalId)
+              requestTerminalFocus(terminalId, 'shortcut-activated')
+            }
+          })
+        }
+        break
+      }
+      case 'searchTabs': {
+        window.dispatchEvent(new CustomEvent('onward:tab-bar-search-open'))
         break
       }
       case 'activateAndFocusPrompt': {

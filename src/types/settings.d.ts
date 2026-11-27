@@ -9,8 +9,10 @@ import type { ThemeSettings } from './theme'
 import type { AppLocale } from '../i18n/core'
 import type { PromptInputSettings } from '../utils/prompt-input'
 import type { PromptPanelPosition } from '../utils/prompt-panel-layout'
+import type { TabBarLayoutMode } from '../utils/tab-bar-layout'
+import type { SwitchTabShortcutKey } from '../utils/tab-shortcuts'
 
-export type { PromptPanelPosition }
+export type { PromptPanelPosition, TabBarLayoutMode, SwitchTabShortcutKey }
 
 // Shortcut configuration
 export interface ShortcutConfig {
@@ -23,13 +25,19 @@ export interface ShortcutConfig {
   focusTerminal6: string | null
   focusTerminal7: string | null
   focusTerminal8: string | null
-  // Tab switching shortcuts (6)
+  // Tab switching shortcuts (1..N dynamic; 1..6 preserved for legacy compatibility)
   switchTab1: string | null
   switchTab2: string | null
   switchTab3: string | null
   switchTab4: string | null
   switchTab5: string | null
   switchTab6: string | null
+  [key: SwitchTabShortcutKey]: string | null | undefined
+  // Companion tab navigation shortcuts
+  switchPrevTab: string | null
+  switchNextTab: string | null
+  switchLastTab: string | null
+  searchTabs: string | null
   // Global shortcuts
   activateAndFocusPrompt: string | null
 
@@ -94,6 +102,8 @@ export interface SettingsState {
   terminalMacOptionIsMeta?: boolean
   /** Docking position of the Prompt Notebook panel relative to the Task area ('left' | 'bottom' | 'right'). Default 'left'. */
   promptPanelPosition?: PromptPanelPosition
+  /** Tab bar overflow layout ('scroll' | 'rows-2' | 'rows-3' | 'rows-4'). Default 'scroll'. */
+  tabBarLayout?: TabBarLayoutMode
   updatedAt: number
 }
 
@@ -103,6 +113,10 @@ export type { ThemeSettings }
 export type ShortcutAction =
   | { type: 'focusTerminal'; index: number }
   | { type: 'switchTab'; index: number }
+  | { type: 'switchPrevTab' }
+  | { type: 'switchNextTab' }
+  | { type: 'switchLastTab' }
+  | { type: 'searchTabs' }
   | { type: 'activateAndFocusPrompt' }
   | { type: 'addToHistory' }
   | { type: 'focusPromptEditor' }

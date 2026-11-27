@@ -11,6 +11,7 @@ import { useI18n } from '../../i18n/useI18n'
 import { perfTrace } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { computeMenuPosition, computeSubmenuLayout, shouldDismissMenuOnScroll } from '../../utils/popup-position'
+import { formatAcceleratorDisplay } from '../../utils/shortcut-display'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import './PromptEditorContextMenu.css'
 
@@ -289,9 +290,10 @@ export function PromptEditorContextMenu({
     }
   }, [onClose])
 
-  const cutLabel = isMac ? '⌘X' : 'Ctrl+X'
-  const copyLabel = isMac ? '⌘C' : 'Ctrl+C'
-  const pasteLabel = isMac ? '⌘V' : 'Ctrl+V'
+  const displayPlatform = isMac ? 'darwin' : 'win32'
+  const cutLabel = formatAcceleratorDisplay('CommandOrControl+X', displayPlatform)
+  const copyLabel = formatAcceleratorDisplay('CommandOrControl+C', displayPlatform)
+  const pasteLabel = formatAcceleratorDisplay('CommandOrControl+V', displayPlatform)
 
   const focusBack = useCallback(() => {
     requestAnimationFrame(() => {

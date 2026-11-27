@@ -45,8 +45,7 @@ export const normalizeProjectCwd = normalizeProjectCwdImpl
  */
 const DRAFT_SAVE_DEBOUNCE_MS = 300
 
-/** Maximum number of tabs */
-const MAX_TABS = 6
+/** Tabs have no upper bound; minimum of 1 tab is enforced when closing. */
 
 /** Automatic cleaning interval (24 hours) */
 const AUTO_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -845,23 +844,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Get the currently active Tab
   const activeTab = state.tabs.find(t => t.id === state.activeTabId) || null
 
-  // Check if new Tab can be created
-  const canCreateTab = useCallback((): boolean => {
-    return state.tabs.length < MAX_TABS
-  }, [state.tabs.length])
+  // Tabs have no upper bound; kept on context for backwards compatibility.
+  const canCreateTab = useCallback((): boolean => true, [])
 
   // Tab operation
   const createTab = useCallback((): boolean => {
-    if (!canCreateTab()) {
-      return false
-    }
     if (DEBUG_APP_STATE) {
       perfCountersRef.current.createTab += 1
     }
     updateState(prev => {
-      if (prev.tabs.length >= MAX_TABS) {
-        return prev
-      }
       const newTabId = generateId()
       const newTab = createDefaultTabState(newTabId)
       return {
@@ -870,10 +861,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         tabs: [...prev.tabs, newTab]
       }
     })
-    // Tab was created (cap check already passed above).
     trackFeatureUse('tab-create')
     return true
-  }, [updateState, canCreateTab])
+  }, [updateState])
 
   const closeTab = useCallback((tabId: string): boolean => {
     if (DEBUG_APP_STATE) {

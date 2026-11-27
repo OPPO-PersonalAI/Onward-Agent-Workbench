@@ -343,7 +343,7 @@ export async function testProjectEditorHtmlPreview(ctx: AutotestContext): Promis
     buttonText: navReloadButtonText
   })
   const navReloadButtonTitle = document.querySelector('.project-editor-html-nav-reload-btn')?.getAttribute('title') ?? ''
-  const expectedRefreshShortcut = window.electronAPI.platform === 'darwin' ? '⌘R' : 'Ctrl+R'
+  const expectedRefreshShortcut = window.electronAPI.platform === 'darwin' ? '⌘ R' : 'Ctrl R'
   const navReloadShortcutTitleOk = navReloadButtonTitle.includes(expectedRefreshShortcut)
   record('PHTML-06c-nav-reload-title-shows-shortcut', navReloadShortcutTitleOk, {
     title: navReloadButtonTitle,

@@ -161,6 +161,8 @@ export function createHarness(platform, options = {}) {
   const core = load(path.join(ROOT, 'src/utils/prompt-input.ts'))
   const { PromptInputShortcuts } = load(path.join(ROOT, 'electron/main/prompt-input-shortcuts.ts'))
   const { windowShortcutKey } = load(path.join(ROOT, 'src/utils/shortcut-key.ts'))
+  const { buildWindowShortcutLookup } = load(path.join(ROOT, 'src/utils/tab-shortcuts.ts'))
+  const { normalizeAccelerator } = load(path.join(ROOT, 'electron/main/reserved-shortcuts.ts'))
   const { IPC } = load(path.join(ROOT, 'electron/shared/ipc-channels.ts'))
   const { PERF_TRACE_EVENT } = load(path.join(ROOT, 'src/utils/perf-trace-names.ts'))
   const data = [], copied = [], actions = [], promptEvents = [], routes = [], textReads = []
@@ -179,7 +181,11 @@ export function createHarness(platform, options = {}) {
   const shortcuts = namedFunction('electron/main/settings-storage.ts', 'createDefaultShortcuts')()
   if (options.hostShortcut) shortcuts.focusPromptEditor = options.hostShortcut
   const setup = namedFunction('electron/main/ipc-handlers.ts', 'setupWindowShortcuts', {
-    promptInputShortcuts: controller, windowShortcutSnapshot: shortcuts, windowShortcutKey,
+    promptInputShortcuts: controller,
+    windowShortcutSnapshot: shortcuts,
+    windowShortcutLookup: buildWindowShortcutLookup(shortcuts, normalizeAccelerator),
+    normalizeAccelerator,
+    windowShortcutKey,
     performanceTrace: { record() {} }, PERF_TRACE_EVENT, IPC
   })
   setup(window)

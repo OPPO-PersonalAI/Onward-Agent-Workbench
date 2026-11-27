@@ -980,12 +980,19 @@ export interface ShortcutConfig {
   focusTerminal4: string | null
   focusTerminal5: string | null
   focusTerminal6: string | null
+  focusTerminal7: string | null
+  focusTerminal8: string | null
   switchTab1: string | null
   switchTab2: string | null
   switchTab3: string | null
   switchTab4: string | null
   switchTab5: string | null
   switchTab6: string | null
+  [key: `switchTab${number}`]: string | null | undefined
+  switchPrevTab: string | null
+  switchNextTab: string | null
+  switchLastTab: string | null
+  searchTabs: string | null
   activateAndFocusPrompt: string | null
   addToHistory: string | null
   focusPromptEditor: string | null
@@ -1015,6 +1022,10 @@ export interface GlobalTerminalStyle {
 export type ShortcutAction =
   | { type: 'focusTerminal'; index: number }
   | { type: 'switchTab'; index: number }
+  | { type: 'switchPrevTab' }
+  | { type: 'switchNextTab' }
+  | { type: 'switchLastTab' }
+  | { type: 'searchTabs' }
   | { type: 'activateAndFocusPrompt' }
   | { type: 'addToHistory' }
   | { type: 'focusPromptEditor' }

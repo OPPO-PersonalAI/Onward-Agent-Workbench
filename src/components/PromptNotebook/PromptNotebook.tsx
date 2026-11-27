@@ -15,6 +15,7 @@ import { createDefaultPromptInputSettings, resolvePromptTargets, shouldClearProm
 import { formatPromptInputFailureDetails } from '../../utils/prompt-input-labels'
 import { isAnyModalOpen } from '../../utils/modal-dismiss'
 import { buildAccelerator } from '../../utils/keyboard'
+import { formatAcceleratorDisplay } from '../../utils/shortcut-display'
 import { performanceTrace } from '../../utils/performance-trace'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
@@ -2645,8 +2646,8 @@ const PromptEditorWithAppend = memo(function PromptEditorWithAppend({
   }), [registerDraftController, tabId, readContent, writeTitle, writeImages, writeContent])
   const platform = window.electronAPI?.platform ?? 'darwin'
   const isMac = platform === 'darwin'
-  const saveShortcutLabel = isMac ? '⌘S' : 'Ctrl+S'
-  const saveAsShortcutLabel = isMac ? '⌘⇧S' : 'Ctrl+Shift+S'
+  const saveShortcutLabel = formatAcceleratorDisplay('CommandOrControl+S', platform)
+  const saveAsShortcutLabel = formatAcceleratorDisplay('CommandOrControl+Shift+S', platform)
 
   const saveShortcut = 'CommandOrControl+S'
   const saveAsShortcut = 'CommandOrControl+Shift+S'

@@ -16,6 +16,8 @@ import { performanceTrace } from './performance-trace'
 import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, normalizePromptShortcut, promptTargetSlot, validatePromptInputSettings, type PromptInputSettings } from '../../src/utils/prompt-input'
 import { DEFAULT_PROMPT_PANEL_POSITION, isPromptPanelPosition, normalizePromptPanelPosition, resolveLoadedPromptPanelPosition, type PromptPanelPosition } from '../../src/utils/prompt-panel-layout'
+import { DEFAULT_TAB_BAR_LAYOUT, normalizeTabBarLayout, type TabBarLayoutMode } from '../../src/utils/tab-bar-layout'
+import { extractDynamicSwitchTabEntries, type SwitchTabShortcutKey } from '../../src/utils/tab-shortcuts'
 
 /**
  * Shortcut configuration
@@ -30,13 +32,19 @@ interface ShortcutConfig {
   focusTerminal6: string | null
   focusTerminal7: string | null
   focusTerminal8: string | null
-  // Tab switching shortcuts (6) - window-level
+  // Tab switching shortcuts (1..N dynamic; 1..6 preserved for legacy compatibility) - window-level
   switchTab1: string | null
   switchTab2: string | null
   switchTab3: string | null
   switchTab4: string | null
   switchTab5: string | null
   switchTab6: string | null
+  [key: SwitchTabShortcutKey]: string | null | undefined
+  // Companion tab navigation shortcuts - window-level
+  switchPrevTab: string | null
+  switchNextTab: string | null
+  switchLastTab: string | null
+  searchTabs: string | null
   // Global shortcuts
   activateAndFocusPrompt: string | null
   // Window-level shortcuts
@@ -94,6 +102,7 @@ interface SettingsState {
   performanceDiagnosticsEnabled: boolean
   terminalMacOptionIsMeta?: boolean
   promptPanelPosition: PromptPanelPosition
+  tabBarLayout: TabBarLayoutMode
   updatedAt: number
 }
 
@@ -139,6 +148,10 @@ function createDefaultShortcuts(): ShortcutConfig {
     switchTab4: null,
     switchTab5: null,
     switchTab6: null,
+    switchPrevTab: null,
+    switchNextTab: null,
+    switchLastTab: null,
+    searchTabs: null,
     activateAndFocusPrompt: null,
     addToHistory: null,
     focusPromptEditor: null,
@@ -171,6 +184,7 @@ function createDefaultSettingsState(): SettingsState {
     performanceDiagnosticsEnabled: false,
     terminalMacOptionIsMeta: false,
     promptPanelPosition: DEFAULT_PROMPT_PANEL_POSITION,
+    tabBarLayout: DEFAULT_TAB_BAR_LAYOUT,
     updatedAt: Date.now()
   }
 }
@@ -228,36 +242,49 @@ class SettingsStorage {
     }
   }
 
+  private validateShortcuts(raw: Partial<ShortcutConfig> | undefined): ShortcutConfig {
+    const dynamicTabs = extractDynamicSwitchTabEntries(
+      raw as Record<string, unknown> | undefined,
+      value => this.validateShortcut(value)
+    )
+    return {
+      focusTerminal1: this.validateShortcut(raw?.focusTerminal1),
+      focusTerminal2: this.validateShortcut(raw?.focusTerminal2),
+      focusTerminal3: this.validateShortcut(raw?.focusTerminal3),
+      focusTerminal4: this.validateShortcut(raw?.focusTerminal4),
+      focusTerminal5: this.validateShortcut(raw?.focusTerminal5),
+      focusTerminal6: this.validateShortcut(raw?.focusTerminal6),
+      focusTerminal7: this.validateShortcut(raw?.focusTerminal7),
+      focusTerminal8: this.validateShortcut(raw?.focusTerminal8),
+      switchTab1: this.validateShortcut(raw?.switchTab1),
+      switchTab2: this.validateShortcut(raw?.switchTab2),
+      switchTab3: this.validateShortcut(raw?.switchTab3),
+      switchTab4: this.validateShortcut(raw?.switchTab4),
+      switchTab5: this.validateShortcut(raw?.switchTab5),
+      switchTab6: this.validateShortcut(raw?.switchTab6),
+      ...dynamicTabs,
+      switchPrevTab: this.validateShortcut(raw?.switchPrevTab),
+      switchNextTab: this.validateShortcut(raw?.switchNextTab),
+      switchLastTab: this.validateShortcut(raw?.switchLastTab),
+      searchTabs: this.validateShortcut(raw?.searchTabs),
+      activateAndFocusPrompt: this.validateShortcut(raw?.activateAndFocusPrompt),
+      addToHistory: this.validateShortcut(raw?.addToHistory),
+      focusPromptEditor: this.validateShortcut(raw?.focusPromptEditor),
+      terminalGitDiff: this.validateShortcut(raw?.terminalGitDiff),
+      terminalGitHistory: this.validateShortcut(raw?.terminalGitHistory),
+      terminalChangeWorkDir: this.validateShortcut(raw?.terminalChangeWorkDir),
+      terminalOpenWorkDir: this.validateShortcut(raw?.terminalOpenWorkDir),
+      terminalProjectEditor: this.validateShortcut(raw?.terminalProjectEditor),
+      viewGitDiff: this.validateShortcut(raw?.viewGitDiff)
+    }
+  }
+
   /**
    * Validate settings state to ensure all fields are present and valid
    */
   private validateState(state: Partial<SettingsState> & { version?: number }): SettingsState {
     // Validate shortcut configuration
-    const shortcuts: ShortcutConfig = {
-      focusTerminal1: this.validateShortcut(state.shortcuts?.focusTerminal1),
-      focusTerminal2: this.validateShortcut(state.shortcuts?.focusTerminal2),
-      focusTerminal3: this.validateShortcut(state.shortcuts?.focusTerminal3),
-      focusTerminal4: this.validateShortcut(state.shortcuts?.focusTerminal4),
-      focusTerminal5: this.validateShortcut(state.shortcuts?.focusTerminal5),
-      focusTerminal6: this.validateShortcut(state.shortcuts?.focusTerminal6),
-      focusTerminal7: this.validateShortcut(state.shortcuts?.focusTerminal7),
-      focusTerminal8: this.validateShortcut(state.shortcuts?.focusTerminal8),
-      switchTab1: this.validateShortcut(state.shortcuts?.switchTab1),
-      switchTab2: this.validateShortcut(state.shortcuts?.switchTab2),
-      switchTab3: this.validateShortcut(state.shortcuts?.switchTab3),
-      switchTab4: this.validateShortcut(state.shortcuts?.switchTab4),
-      switchTab5: this.validateShortcut(state.shortcuts?.switchTab5),
-      switchTab6: this.validateShortcut(state.shortcuts?.switchTab6),
-      activateAndFocusPrompt: this.validateShortcut(state.shortcuts?.activateAndFocusPrompt),
-      addToHistory: this.validateShortcut(state.shortcuts?.addToHistory),
-      focusPromptEditor: this.validateShortcut(state.shortcuts?.focusPromptEditor),
-      terminalGitDiff: this.validateShortcut(state.shortcuts?.terminalGitDiff),
-      terminalGitHistory: this.validateShortcut(state.shortcuts?.terminalGitHistory),
-      terminalChangeWorkDir: this.validateShortcut(state.shortcuts?.terminalChangeWorkDir),
-      terminalOpenWorkDir: this.validateShortcut(state.shortcuts?.terminalOpenWorkDir),
-      terminalProjectEditor: this.validateShortcut(state.shortcuts?.terminalProjectEditor),
-      viewGitDiff: this.validateShortcut(state.shortcuts?.viewGitDiff)
-    }
+    const shortcuts: ShortcutConfig = this.validateShortcuts(state.shortcuts)
 
     // Verify terminal style configuration
     const terminalStyles: Record<string, TerminalStyleConfig> = {}
@@ -327,7 +354,7 @@ class SettingsStorage {
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'selector-conflict-recovered' })
     }
     const leaderError = validatePromptInputSettings({ ...promptInput, actions: [] }, [
-      ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+      ...Object.values(shortcuts).map(v => v ?? null), ...Object.values(RESERVED_SHORTCUTS).flat()
     ], process.platform, [shortcuts.activateAndFocusPrompt])
     if (leaderError) {
       promptInput.leader = null
@@ -368,6 +395,7 @@ class SettingsStorage {
       performanceDiagnosticsEnabled,
       terminalMacOptionIsMeta: state.terminalMacOptionIsMeta === true,
       promptPanelPosition: normalizePromptPanelPosition(state.promptPanelPosition),
+      tabBarLayout: normalizeTabBarLayout(state.tabBarLayout),
       updatedAt: state.updatedAt ?? Date.now()
     }
   }
@@ -489,7 +517,7 @@ class SettingsStorage {
       const promptInput = settings.promptInput ?? previous.promptInput
       const shortcuts = settings.shortcuts ?? previous.shortcuts
       const error = validatePromptInputSettings(promptInput, [
-        ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+        ...Object.values(shortcuts).map(v => v ?? null), ...Object.values(RESERVED_SHORTCUTS).flat()
       ], process.platform, [shortcuts.activateAndFocusPrompt])
       if (error) {
         performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'save-invalid', error })
@@ -506,6 +534,13 @@ class SettingsStorage {
         updatedAt: Date.now()
       }
       this.persist(true)
+      if (previous.tabBarLayout !== this.state.tabBarLayout) {
+        performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_TAB_BAR_LAYOUT, {
+          from: previous.tabBarLayout,
+          to: this.state.tabBarLayout,
+          source: 'save'
+        })
+      }
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_THEME_SETTINGS, { reason: 'saved', mode: this.state.theme.mode, ok: true })
       performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, {
         reason: 'saved', actions: this.state.promptInput.actions.length,
@@ -534,7 +569,7 @@ class SettingsStorage {
         const promptInput = partial.promptInput ?? previous.promptInput
         const shortcuts = { ...previous.shortcuts, ...partial.shortcuts }
         const error = validatePromptInputSettings(promptInput, [
-          ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+          ...Object.values(shortcuts).map(v => v ?? null), ...Object.values(RESERVED_SHORTCUTS).flat()
         ], process.platform, [shortcuts.activateAndFocusPrompt])
         if (error) {
           performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_INPUT_SETTINGS, { reason: 'update-invalid', error })
@@ -546,10 +581,10 @@ class SettingsStorage {
         this.state.promptInput = normalizePromptInputSettings(partial.promptInput)
       }
       if (partial.shortcuts) {
-        this.state.shortcuts = {
+        this.state.shortcuts = this.validateShortcuts({
           ...this.state.shortcuts,
           ...partial.shortcuts
-        }
+        })
       }
       if (partial.gitDiffFontSize !== undefined) {
         if (partial.gitDiffFontSize === null) {
@@ -586,6 +621,18 @@ class SettingsStorage {
       }
       if (partial.promptPanelPosition !== undefined) {
         this.state.promptPanelPosition = normalizePromptPanelPosition(partial.promptPanelPosition)
+      }
+      if (partial.tabBarLayout !== undefined) {
+        const nextLayout = normalizeTabBarLayout(partial.tabBarLayout)
+        if (nextLayout !== this.state.tabBarLayout) {
+          const prevLayout = this.state.tabBarLayout
+          this.state.tabBarLayout = nextLayout
+          performanceTrace.record(PERF_TRACE_EVENT.MAIN_SETTINGS_TAB_BAR_LAYOUT, {
+            from: prevLayout,
+            to: nextLayout,
+            source: 'update'
+          })
+        }
       }
       this.state.updatedAt = Date.now()
       this.persist(true)

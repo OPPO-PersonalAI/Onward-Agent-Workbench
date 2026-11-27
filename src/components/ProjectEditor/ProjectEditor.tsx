@@ -21,6 +21,7 @@ import { useI18n } from '../../i18n/useI18n'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { perfTrace, perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { formatAcceleratorDisplay } from '../../utils/shortcut-display'
 import { shouldRetainProjectEditorViewOnClose } from './utils/projectEditorCloseRetention'
 import { isPreviewWorkPending, shouldRevealSettledPreview } from './utils/previewRestoreSettle'
 import { isMarkdownSessionCacheContentHit } from './utils/markdownSessionCachePeek'
@@ -2351,7 +2352,7 @@ export function ProjectEditor({
     return withHtmlPreviewReloadKey(htmlPreviewUrl, htmlPreviewReloadKey)
   }, [htmlPreviewReloadKey, htmlPreviewUrl, isHtmlPreviewVisible])
   const htmlPreviewZoomPercent = useMemo(() => formatHtmlPreviewZoomPercent(htmlPreviewZoomFactor), [htmlPreviewZoomFactor])
-  const htmlPreviewRefreshShortcutLabel = window.electronAPI.platform === 'darwin' ? '⌘R' : 'Ctrl+R'
+  const htmlPreviewRefreshShortcutLabel = formatAcceleratorDisplay('CommandOrControl+R', window.electronAPI.platform)
   const htmlPreviewNav = useMemo(() => deriveHtmlPreviewNavButtonState({
     ready: Boolean(htmlReaderState?.ready && !htmlReaderState.error),
     canGoBack: htmlReaderState?.canGoBack ?? false,
@@ -10801,7 +10802,7 @@ export function ProjectEditor({
                   setTimeout(() => globalSearchInputRef.current?.focus(), 0)
                 }}
                 title={t('projectEditor.sidebarSearchTooltip', {
-                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}+Shift+F`
+                  key: formatAcceleratorDisplay('CommandOrControl+Shift+F', window.electronAPI.platform)
                 })}
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -11691,10 +11692,10 @@ export function ProjectEditor({
                                 type="button"
                                 className="project-editor-preview-refresh-btn project-editor-html-zoom-btn project-editor-html-zoom-out-btn"
                                 title={t('projectEditor.htmlPreviewZoomOut', {
-                                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}+-`
+                                  key: formatAcceleratorDisplay('CommandOrControl+-', window.electronAPI.platform)
                                 })}
                                 aria-label={t('projectEditor.htmlPreviewZoomOut', {
-                                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}+-`
+                                  key: formatAcceleratorDisplay('CommandOrControl+-', window.electronAPI.platform)
                                 })}
                                 disabled={htmlPreviewZoomFactor <= HTML_PREVIEW_MIN_ZOOM_FACTOR}
                                 onClick={() => void stepHtmlPreviewZoom('out', 'toolbar')}
@@ -11707,7 +11708,7 @@ export function ProjectEditor({
                                 type="button"
                                 className="project-editor-html-zoom-level-btn"
                                 title={t('projectEditor.htmlPreviewZoomReset', {
-                                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}+0`
+                                  key: formatAcceleratorDisplay('CommandOrControl+0', window.electronAPI.platform)
                                 })}
                                 aria-label={t('projectEditor.htmlPreviewZoomLevel', {
                                   percent: htmlPreviewZoomPercent
@@ -11720,10 +11721,10 @@ export function ProjectEditor({
                                 type="button"
                                 className="project-editor-preview-refresh-btn project-editor-html-zoom-btn project-editor-html-zoom-in-btn"
                                 title={t('projectEditor.htmlPreviewZoomIn', {
-                                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}++`
+                                  key: formatAcceleratorDisplay('CommandOrControl++', window.electronAPI.platform)
                                 })}
                                 aria-label={t('projectEditor.htmlPreviewZoomIn', {
-                                  key: `${window.electronAPI.platform === 'darwin' ? '⌘' : 'Ctrl'}++`
+                                  key: formatAcceleratorDisplay('CommandOrControl++', window.electronAPI.platform)
                                 })}
                                 disabled={htmlPreviewZoomFactor >= HTML_PREVIEW_MAX_ZOOM_FACTOR}
                                 onClick={() => void stepHtmlPreviewZoom('in', 'toolbar')}

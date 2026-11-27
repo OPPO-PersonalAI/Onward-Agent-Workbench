@@ -6,12 +6,13 @@
 import type { SettingsState } from '../types/settings'
 import { normalizePromptShortcut, promptTargetSlot } from './prompt-input.ts'
 import { isPromptPanelPosition, normalizePromptPanelPosition } from './prompt-panel-layout.ts'
+import { isTabBarLayoutMode, normalizeTabBarLayout } from './tab-bar-layout.ts'
 import { RESERVED_SHORTCUTS } from '../../electron/main/reserved-shortcuts.ts'
 
 export const SETTINGS_EDITABLE_PAGES = ['general', 'appearance', 'fonts', 'shortcuts'] as const
 export type SettingsEditablePage = typeof SETTINGS_EDITABLE_PAGES[number]
 export const SETTINGS_PAGE_FIELDS = {
-  general: ['language', 'performanceDiagnosticsEnabled', 'telemetryConsent', 'terminalMacOptionIsMeta', 'promptPanelPosition'],
+  general: ['language', 'performanceDiagnosticsEnabled', 'telemetryConsent', 'terminalMacOptionIsMeta', 'promptPanelPosition', 'tabBarLayout'],
   appearance: ['theme'],
   fonts: ['terminalStyles', 'globalTerminalStyle', 'gitDiffFontSize'],
   shortcuts: ['shortcuts', 'promptInput']
@@ -43,7 +44,9 @@ export function selectSettingsPage(settings: SettingsState, page: SettingsEditab
       ? settings[key] === true
       : key === 'promptPanelPosition'
         ? normalizePromptPanelPosition(settings[key])
-        : settings[key]
+        : key === 'tabBarLayout'
+          ? normalizeTabBarLayout(settings[key])
+          : settings[key]
   ]))
 }
 
@@ -82,6 +85,7 @@ export function isSettingsPageCommit(value: unknown): value is SettingsPageCommi
       const entry = part[field]
       if (field === 'language') return entry === 'en' || entry === 'zh-CN'
       if (field === 'promptPanelPosition') return isPromptPanelPosition(entry)
+      if (field === 'tabBarLayout') return isTabBarLayoutMode(entry)
       if (field === 'performanceDiagnosticsEnabled' || field === 'terminalMacOptionIsMeta') return typeof entry === 'boolean'
       if (field === 'telemetryConsent') return entry === null || typeof entry === 'boolean'
       if (field === 'gitDiffFontSize') return entry === null || typeof entry === 'number' && Number.isFinite(entry)

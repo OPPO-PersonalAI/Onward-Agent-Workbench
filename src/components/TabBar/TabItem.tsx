@@ -7,8 +7,11 @@ import React, { useState, useRef, useEffect } from 'react'
 import { useI18n } from '../../i18n/useI18n'
 
 interface TabItemProps {
+  tabId: string
+  tabIndex: number
   name: string
   customName: string | null
+  shortcutDisplay?: string | null
   isActive: boolean
   isOnly: boolean
   isDragOver?: boolean
@@ -24,8 +27,11 @@ interface TabItemProps {
 }
 
 export function TabItem({
+  tabId,
+  tabIndex,
   name,
   customName,
+  shortcutDisplay,
   isActive,
   isOnly,
   isDragOver,
@@ -105,9 +111,14 @@ export function TabItem({
     isDragging && 'dragging'
   ].filter(Boolean).join(' ')
 
+  const tooltip = shortcutDisplay ? `${name} (${shortcutDisplay})` : name
+
   return (
     <div
       className={tabClassName}
+      data-tab-id={tabId}
+      data-tab-index={tabIndex}
+      title={tooltip}
       onClick={handleClick}
       draggable={!isEditing}
       onDragStart={handleDragStart}

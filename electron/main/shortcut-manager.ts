@@ -18,6 +18,10 @@ import { PERF_TRACE_EVENT } from '../../src/utils/perf-trace-names'
 type ShortcutAction =
   | { type: 'focusTerminal'; index: number }
   | { type: 'switchTab'; index: number }
+  | { type: 'switchPrevTab' }
+  | { type: 'switchNextTab' }
+  | { type: 'switchLastTab' }
+  | { type: 'searchTabs' }
   | { type: 'activateAndFocusPrompt' }
   | { type: 'addToHistory' }
   | { type: 'focusPromptEditor' }
@@ -262,7 +266,7 @@ class ShortcutManager {
   /**
    * Check whether shortcuts conflict with existing settings
    */
-  checkConflict(accelerator: string, excludeKey?: keyof ShortcutConfig): string | null {
+  checkConflict(accelerator: string, excludeKey?: string): string | null {
     if (!accelerator) return null
 
     const reservedKey = findReservedShortcutKey(accelerator)
@@ -277,7 +281,7 @@ class ShortcutManager {
     for (const [key, value] of Object.entries(shortcuts)) {
       if (!value || key === excludeKey) continue
       if (normalizeAccelerator(value) === normalized) {
-        return key as keyof ShortcutConfig
+        return key
       }
     }
 

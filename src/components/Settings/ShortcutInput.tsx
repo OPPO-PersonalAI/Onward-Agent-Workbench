@@ -8,9 +8,12 @@ import { useI18n } from '../../i18n/useI18n'
 import type { TranslationKey } from '../../i18n/core'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { normalizePromptShortcut, promptShortcutFromKey } from '../../utils/prompt-input'
+import { formatPromptShortcutLabel } from '../../utils/prompt-input-labels'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
+import { formatAcceleratorDisplay } from '../../utils/shortcut-display'
 import { shortcutKeyFromCode } from '../../utils/shortcut-key'
+import { parseSwitchTabShortcutKey } from '../../utils/tab-shortcuts'
 import { settingsDraftShortcutConflict } from '../../utils/settings-page'
 import { useSettingsDraft, useSettingsDraftEditor } from './SettingsDraft'
 
@@ -77,41 +80,6 @@ function keyEventToAccelerator(e: KeyboardEvent): string | null {
 
   keys.push(mainKey)
   return keys.join('+')
-}
-
-// Convert Accelerator format to display format
-function acceleratorToDisplay(accelerator: string | null): string {
-  if (!accelerator) return ''
-
-  const platform = window.electronAPI?.platform || 'darwin'
-  const isMac = platform === 'darwin'
-
-  const parts = accelerator.split('+')
-  const displayParts = parts.map(part => {
-    const mappings: Record<string, string> = {
-      'CommandOrControl': isMac ? '\u2318' : 'Ctrl',
-      'Command': '\u2318',
-      'Control': 'Ctrl',
-      'Ctrl': 'Ctrl',
-      'Alt': isMac ? '\u2325' : 'Alt',
-      'Option': '\u2325',
-      'Shift': isMac ? '\u21E7' : 'Shift',
-      'Meta': isMac ? '\u2318' : 'Win',
-      'Space': '\u2423',
-      'Enter': '\u21B5',
-      'Tab': '\u21E5',
-      'Backspace': '\u232B',
-      'Delete': '\u2326',
-      'Escape': 'Esc',
-      'Up': '\u2191',
-      'Down': '\u2193',
-      'Left': '\u2190',
-      'Right': '\u2192'
-    }
-    return mappings[part] || part
-  })
-
-  return displayParts.join(isMac ? '' : '+')
 }
 
 export function ShortcutInput({
@@ -307,10 +275,13 @@ export function ShortcutInput({
   }, [stopRecording])
   useEffect(() => { if (disabled) stopRecording('disabled') }, [disabled, stopRecording])
 
+  const platform = window.electronAPI?.platform || 'darwin'
   const displayValue = isPreparing ? t('promptInput.recording.preparing') : isRecording
     ? t(mode === 'shortcut' ? 'settings.shortcut.prompt' : 'promptInput.recording.prompt')
     : value
-      ? mode === 'shortcut' ? acceleratorToDisplay(value) : value
+      ? mode === 'shortcut'
+        ? formatAcceleratorDisplay(value, platform)
+        : formatPromptShortcutLabel(value, platform) || value
       : (placeholder || t('settings.shortcut.notSet'))
 
   const inputClassName = [
@@ -363,6 +334,10 @@ export function ShortcutInput({
 
 // Get the display label for the shortcut
 function getShortcutLabel(key: string, t: ReturnType<typeof useI18n>['t']): string {
+  const tabIndex = parseSwitchTabShortcutKey(key)
+  if (tabIndex !== null) {
+    return t('settings.shortcut.switchTab', { index: tabIndex })
+  }
   const labels: Record<string, string> = {
     focusTerminal1: t('settings.shortcut.focusTask', { index: 1 }),
     focusTerminal2: t('settings.shortcut.focusTask', { index: 2 }),
@@ -372,12 +347,10 @@ function getShortcutLabel(key: string, t: ReturnType<typeof useI18n>['t']): stri
     focusTerminal6: t('settings.shortcut.focusTask', { index: 6 }),
     focusTerminal7: t('settings.shortcut.focusTask', { index: 7 }),
     focusTerminal8: t('settings.shortcut.focusTask', { index: 8 }),
-    switchTab1: t('settings.shortcut.switchTab', { index: 1 }),
-    switchTab2: t('settings.shortcut.switchTab', { index: 2 }),
-    switchTab3: t('settings.shortcut.switchTab', { index: 3 }),
-    switchTab4: t('settings.shortcut.switchTab', { index: 4 }),
-    switchTab5: t('settings.shortcut.switchTab', { index: 5 }),
-    switchTab6: t('settings.shortcut.switchTab', { index: 6 }),
+    switchPrevTab: t('settings.shortcut.switchPrevTab'),
+    switchNextTab: t('settings.shortcut.switchNextTab'),
+    switchLastTab: t('settings.shortcut.switchLastTab'),
+    searchTabs: t('settings.shortcut.searchTabs'),
     activateAndFocusPrompt: t('settings.shortcut.togglePrompt'),
     addToHistory: t('settings.shortcut.addToHistory'),
     focusPromptEditor: t('settings.shortcut.focusPromptEditor'),

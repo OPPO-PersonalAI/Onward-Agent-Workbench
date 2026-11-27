@@ -19,12 +19,32 @@ import type { ShortcutConfig, TerminalStyleConfig, GlobalTerminalStyle } from '.
 import type { AppInfo, DownloadErrorCode, UpdatePhase, UpdaterStatus } from '../../types/electron.d.ts'
 import type { TranslationKey } from '../../i18n/core'
 import { useI18n } from '../../i18n/useI18n'
+import { useAppState } from '../../hooks/useAppState'
 import { trackFeatureUse } from '../../telemetry/track-feature-use'
 import { perfTraceDiagnostic } from '../../utils/perf-trace'
 import { PERF_TRACE_EVENT } from '../../utils/perf-trace-names'
 import { SETTINGS_PAGES, PAGE_LABELS, searchSettings, nextSettingsTab, type SettingsPage } from './settings-navigation'
 import { resizedSettingsWidth } from './settings-panel-width'
 import { normalizePromptPanelPosition, PROMPT_PANEL_POSITIONS, type PromptPanelPosition } from '../../utils/prompt-panel-layout'
+import {
+  clampTabBarRows,
+  DEFAULT_CUSTOM_TAB_BAR_ROWS,
+  getTabBarMaxRows,
+  isPresetTabBarLayout,
+  MAX_TAB_BAR_ROWS,
+  MIN_TAB_BAR_ROWS,
+  normalizeTabBarLayout,
+  TAB_BAR_PRESET_LAYOUTS,
+  tabBarRowsLayout,
+  type TabBarLayoutMode,
+  type TabBarPresetLayoutMode
+} from '../../utils/tab-bar-layout'
+import {
+  applyShortcutDraftUpdate,
+  clearDormantSwitchTabDraft,
+  listDormantSwitchTabEntries,
+  switchTabShortcutKey
+} from '../../utils/tab-shortcuts'
 import './Settings.css'
 
 interface SettingsProps {
@@ -84,16 +104,23 @@ const SHORTCUT_GROUPS: { titleKey: TranslationKey; descriptionKey?: TranslationK
   },
   {
     titleKey: 'settings.group.tabSwitch',
-    items: [
-      { key: 'switchTab1', labelKey: 'settings.shortcut.switchTab', labelParams: { index: 1 } },
-      { key: 'switchTab2', labelKey: 'settings.shortcut.switchTab', labelParams: { index: 2 } },
-      { key: 'switchTab3', labelKey: 'settings.shortcut.switchTab', labelParams: { index: 3 } },
-      { key: 'switchTab4', labelKey: 'settings.shortcut.switchTab', labelParams: { index: 4 } },
-      { key: 'switchTab5', labelKey: 'settings.shortcut.switchTab', labelParams: { index: 5 } },
-      { key: 'switchTab6', labelKey: 'settings.shortcut.switchTab', labelParams: { index: 6 } }
-    ]
+    items: []
   }
 ]
+
+const TAB_NAV_SHORTCUT_ITEMS: readonly ShortcutItem[] = [
+  { key: 'switchPrevTab', labelKey: 'settings.shortcut.switchPrevTab' },
+  { key: 'switchNextTab', labelKey: 'settings.shortcut.switchNextTab' },
+  { key: 'switchLastTab', labelKey: 'settings.shortcut.switchLastTab' },
+  { key: 'searchTabs', labelKey: 'settings.shortcut.searchTabs' }
+]
+
+const TAB_BAR_LAYOUT_LABEL_KEYS: Record<TabBarPresetLayoutMode, TranslationKey> = {
+  scroll: 'tabBar.layout.scrollShort',
+  'rows-2': 'tabBar.layout.rows2',
+  'rows-3': 'tabBar.layout.rows3',
+  'rows-4': 'tabBar.layout.rows4'
+}
 
 interface UpdaterDebugPatch extends Partial<UpdaterStatus> {
   phase: UpdatePhase
@@ -171,8 +198,12 @@ function summarizeUpdateError(error: string | null | undefined): string | null {
 
 export function Settings({ terminals, onClose, width, onWidthChange }: SettingsProps) {
   const { t, locale, locales } = useI18n()
+  const { state: appState } = useAppState()
   const [page, setPage] = useState<SettingsPage>('general')
   const [query, setQuery] = useState('')
+  const [tabShortcutFilter, setTabShortcutFilter] = useState('')
+  const [customTabRowsDraft, setCustomTabRowsDraft] = useState<number>(DEFAULT_CUSTOM_TAB_BAR_ROWS)
+  const [customTabRowsInputText, setCustomTabRowsInputText] = useState<string | null>(null)
   const navigationId = useId()
   const contentRef = useRef<HTMLDivElement>(null)
   const navigationRef = useRef<HTMLDivElement>(null)
@@ -225,7 +256,10 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
     void draftController.leave('category').then(allowed => { if (allowed) navigateNow(next, target) })
   }, [page, navigateNow, draftController.leave])
   const updateShortcut = useCallback((key: keyof ShortcutConfig, value: string | null) => {
-    updateDraft(current => ({ ...current, shortcuts: { ...current.shortcuts, [key]: value } }))
+    updateDraft(current => ({
+      ...current,
+      shortcuts: applyShortcutDraftUpdate(current.shortcuts, String(key), value)
+    }))
   }, [updateDraft])
   const updateTerminalStyle = useCallback((terminalId: string, style: Partial<TerminalStyleConfig>) => {
     updateDraft(current => ({ ...current, terminalStyles: { ...current.terminalStyles,
@@ -350,6 +384,26 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
   const handlePromptPanelPositionChange = useCallback((position: PromptPanelPosition) => {
     updateDraft(current => ({ ...current, promptPanelPosition: position }))
   }, [updateDraft])
+
+  const handleTabBarLayoutChange = useCallback((tabBarLayout: TabBarLayoutMode) => {
+    if (!isPresetTabBarLayout(tabBarLayout)) {
+      setCustomTabRowsDraft(getTabBarMaxRows(tabBarLayout))
+    }
+    updateDraft(current => ({ ...current, tabBarLayout }))
+  }, [updateDraft])
+
+  const handleClearAllDormantTabShortcuts = useCallback(() => {
+    const dormant = listDormantSwitchTabEntries(settings?.shortcuts, appState.tabs.length)
+    if (dormant.length === 0) return
+    updateDraft(current => ({
+      ...current,
+      shortcuts: clearDormantSwitchTabDraft(current.shortcuts, appState.tabs.length)
+    }))
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_TAB_SHORTCUTS_DORMANT, {
+      clearedCount: dormant.length,
+      tabCount: appState.tabs.length
+    })
+  }, [settings?.shortcuts, appState.tabs.length, updateDraft])
 
   const formatUpdateTimestamp = useCallback((value: number) => {
     return new Intl.DateTimeFormat(locale, {
@@ -1037,6 +1091,170 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
           </div>
         </div>
 
+        {/* Tab Bar Overflow Layout Section */}
+        <div className="settings-section" data-settings-target="tabBarLayout" tabIndex={-1}>
+          <div className="settings-section-title">{t('settings.tabBarLayout.title')}</div>
+          <div className="settings-section-content">
+            <div className="settings-group">
+              <div className="settings-prompt-position-group">
+                <div className="settings-prompt-position-header">
+                  <span className="settings-row-label">{t('settings.tabBarLayout.label')}</span>
+                  <p className="settings-prompt-position-description">
+                    {t('settings.tabBarLayout.description')}
+                  </p>
+                </div>
+                {(() => {
+                  const currentLayout = normalizeTabBarLayout(settings?.tabBarLayout)
+                  const isCustomActive = !isPresetTabBarLayout(currentLayout)
+                  const displayedCustomRows = isCustomActive ? getTabBarMaxRows(currentLayout) : customTabRowsDraft
+                  const inputValue = customTabRowsInputText ?? String(displayedCustomRows)
+                  const applyCustomRows = (rawRows: number) => {
+                    const clamped = clampTabBarRows(rawRows)
+                    setCustomTabRowsDraft(clamped)
+                    setCustomTabRowsInputText(null)
+                    handleTabBarLayoutChange(tabBarRowsLayout(clamped))
+                  }
+                  const commitCustomRowsText = (rawText: string) => {
+                    const parsed = Number.parseInt(rawText, 10)
+                    if (Number.isFinite(parsed)) {
+                      applyCustomRows(parsed)
+                    } else {
+                      setCustomTabRowsInputText(null)
+                    }
+                  }
+                  return (
+                    <>
+                      <div
+                        className="settings-segmented-control settings-segmented-control--4"
+                        role="radiogroup"
+                        aria-label={t('settings.tabBarLayout.label')}
+                        data-testid="settings-tab-bar-layout-group"
+                      >
+                        {TAB_BAR_PRESET_LAYOUTS.map((mode) => {
+                          const isActive = currentLayout === mode
+                          return (
+                            <button
+                              key={mode}
+                              type="button"
+                              role="radio"
+                              aria-checked={isActive}
+                              className={`settings-segmented-btn${isActive ? ' is-active' : ''}`}
+                              data-testid={`settings-tab-bar-layout-${mode}`}
+                              onClick={() => handleTabBarLayoutChange(mode)}
+                            >
+                              <svg className="settings-segmented-icon" viewBox="0 0 18 14" fill="none" aria-hidden="true">
+                                <rect x="1" y="1" width="16" height="12" rx="2" stroke="currentColor" strokeWidth="1.3" />
+                                {mode === 'scroll' && (
+                                  <>
+                                    <rect x="2.5" y="3" width="13" height="2.4" rx="0.8" fill="currentColor" />
+                                    <path d="M5 9.2h8m-6.2-1.6L5 9.2l1.8 1.6m4.4-3.2L13 9.2l-1.8 1.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                                  </>
+                                )}
+                                {mode === 'rows-2' && (
+                                  <>
+                                    <rect x="2.5" y="3" width="13" height="2.2" rx="0.7" fill="currentColor" />
+                                    <rect x="2.5" y="6.6" width="13" height="2.2" rx="0.7" fill="currentColor" />
+                                  </>
+                                )}
+                                {mode === 'rows-3' && (
+                                  <>
+                                    <rect x="2.5" y="2.6" width="13" height="1.8" rx="0.6" fill="currentColor" />
+                                    <rect x="2.5" y="5.6" width="13" height="1.8" rx="0.6" fill="currentColor" />
+                                    <rect x="2.5" y="8.6" width="13" height="1.8" rx="0.6" fill="currentColor" />
+                                  </>
+                                )}
+                                {mode === 'rows-4' && (
+                                  <>
+                                    <rect x="2.5" y="2.3" width="13" height="1.4" rx="0.5" fill="currentColor" />
+                                    <rect x="2.5" y="4.6" width="13" height="1.4" rx="0.5" fill="currentColor" />
+                                    <rect x="2.5" y="6.9" width="13" height="1.4" rx="0.5" fill="currentColor" />
+                                    <rect x="2.5" y="9.2" width="13" height="1.4" rx="0.5" fill="currentColor" />
+                                  </>
+                                )}
+                              </svg>
+                              <span className="settings-segmented-label">{t(TAB_BAR_LAYOUT_LABEL_KEYS[mode])}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <div
+                        className={`settings-tab-custom-rows${isCustomActive ? ' is-active' : ''}`}
+                        data-testid="settings-tab-bar-layout-custom"
+                      >
+                        <button
+                          type="button"
+                          className="settings-tab-custom-rows-toggle"
+                          aria-pressed={isCustomActive}
+                          onClick={() => applyCustomRows(displayedCustomRows)}
+                        >
+                          <span className="settings-tab-custom-rows-title">{t('tabBar.layout.custom')}</span>
+                          <span className="settings-tab-custom-rows-desc">
+                            {t('tabBar.layout.customDesc', {
+                              min: String(MIN_TAB_BAR_ROWS),
+                              max: String(MAX_TAB_BAR_ROWS)
+                            })}
+                          </span>
+                        </button>
+                        <div className="settings-tab-custom-rows-stepper">
+                          <button
+                            type="button"
+                            className="settings-tab-rows-step-btn"
+                            data-testid="settings-tab-bar-layout-custom-dec"
+                            disabled={displayedCustomRows <= MIN_TAB_BAR_ROWS}
+                            aria-label="-"
+                            onClick={() => applyCustomRows(displayedCustomRows - 1)}
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            className="settings-tab-rows-input"
+                            data-testid="settings-tab-bar-layout-custom-input"
+                            min={MIN_TAB_BAR_ROWS}
+                            max={MAX_TAB_BAR_ROWS}
+                            value={inputValue}
+                            aria-label={t('tabBar.layout.customInputLabel')}
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              setCustomTabRowsInputText(raw)
+                              const parsed = Number.parseInt(raw, 10)
+                              if (Number.isFinite(parsed) && parsed >= MIN_TAB_BAR_ROWS && parsed <= MAX_TAB_BAR_ROWS) {
+                                setCustomTabRowsDraft(parsed)
+                                handleTabBarLayoutChange(tabBarRowsLayout(parsed))
+                              }
+                            }}
+                            onBlur={(e) => {
+                              if (customTabRowsInputText !== null) {
+                                commitCustomRowsText(e.target.value)
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                commitCustomRowsText(e.currentTarget.value)
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="settings-tab-rows-step-btn"
+                            data-testid="settings-tab-bar-layout-custom-inc"
+                            disabled={displayedCustomRows >= MAX_TAB_BAR_ROWS}
+                            aria-label="+"
+                            onClick={() => applyCustomRows(displayedCustomRows + 1)}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            </div>
+          </div>
+        </div>
+
         </>}
         {/* Appearance Section */}
         {page === 'appearance' && <div className="settings-section" data-settings-target="themes" tabIndex={-1}>
@@ -1066,23 +1284,148 @@ export function Settings({ terminals, onClose, width, onWidthChange }: SettingsP
                     }}><span aria-hidden="true">{expanded ? '⌄' : '›'}</span>{t(group.titleKey)}</button>
                 </h3>
                 {expanded && <div id={`${id}-content`}>
-                {group.descriptionKey && (
-                  <div className="settings-group-description">{t(group.descriptionKey)}</div>
+                {target === 'tabSwitch' ? (() => {
+                  const tabCount = Math.max(1, appState.tabs.length)
+                  const normalizedFilter = tabShortcutFilter.trim().toLocaleLowerCase()
+                  const dynamicRows = appState.tabs.map((tab, tabIdx) => {
+                    const slotIndex = tabIdx + 1
+                    const key = switchTabShortcutKey(slotIndex)
+                    const label = t('settings.shortcut.switchTab', { index: slotIndex })
+                    const subtitle = tab.customName || null
+                    return { tabId: tab.id, slotIndex, key, label, subtitle, isActiveTab: tab.id === appState.activeTabId }
+                  }).filter(row => {
+                    if (!normalizedFilter) return true
+                    return (
+                      row.label.toLocaleLowerCase().includes(normalizedFilter) ||
+                      String(row.slotIndex).includes(normalizedFilter) ||
+                      (row.subtitle?.toLocaleLowerCase().includes(normalizedFilter) ?? false)
+                    )
+                  })
+                  const dormantEntries = listDormantSwitchTabEntries(settings?.shortcuts, tabCount)
+                  return (
+                    <>
+                      <div className="settings-group-description">
+                        {t('settings.shortcut.tabSwitchDescription', { count: String(tabCount) })}
+                      </div>
+                      {tabCount > 6 && (
+                        <div className="settings-tab-shortcut-filter">
+                          <input
+                            type="search"
+                            value={tabShortcutFilter}
+                            onChange={event => setTabShortcutFilter(event.target.value)}
+                            placeholder={t('settings.shortcut.tabSwitchFilterPlaceholder')}
+                            aria-label={t('settings.shortcut.tabSwitchFilterPlaceholder')}
+                            data-testid="settings-tab-switch-filter"
+                          />
+                        </div>
+                      )}
+                      {dynamicRows.length > 0 ? dynamicRows.map(row => (
+                        <div
+                          key={row.key}
+                          className={`settings-row settings-row--tab-shortcut${row.isActiveTab ? ' is-active-tab' : ''}`}
+                          data-testid={`settings-tab-shortcut-row-${row.slotIndex}`}
+                        >
+                          <div className="settings-row-label settings-row-label--stacked">
+                            <span>{row.label}</span>
+                            {row.subtitle && (
+                              <span className="settings-row-sublabel" title={row.subtitle}>{row.subtitle}</span>
+                            )}
+                          </div>
+                          <div className="settings-row-input">
+                            <ShortcutInput
+                              value={settings?.shortcuts[row.key] || null}
+                              onChange={(value) => handleShortcutChange(row.key, value)}
+                              excludeKey={row.key}
+                              promptLeader={settings?.promptInput?.leader}
+                              label={row.label}
+                              dataTestId={`shortcut-input-${row.key}`}
+                            />
+                          </div>
+                        </div>
+                      )) : (
+                        <div className="settings-tab-shortcut-empty" role="status">
+                          {t('settings.shortcut.tabSwitchFilterEmpty')}
+                        </div>
+                      )}
+                      <div className="settings-tab-shortcut-nav-heading">
+                        {t('settings.shortcut.tabSwitchNavHeading')}
+                      </div>
+                      {TAB_NAV_SHORTCUT_ITEMS.map(item => (
+                        <div key={item.key} className="settings-row">
+                          <span className="settings-row-label">{t(item.labelKey)}</span>
+                          <div className="settings-row-input">
+                            <ShortcutInput
+                              value={settings?.shortcuts[item.key] || null}
+                              onChange={(value) => handleShortcutChange(item.key, value)}
+                              excludeKey={String(item.key)}
+                              promptLeader={settings?.promptInput?.leader}
+                              label={t(item.labelKey)}
+                              dataTestId={`shortcut-input-${String(item.key)}`}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      {dormantEntries.length > 0 && (
+                        <details className="settings-dormant-shortcuts" data-testid="settings-dormant-tab-shortcuts">
+                          <summary className="settings-dormant-shortcuts-summary">
+                            {t('settings.shortcut.tabSwitchDormantTitle', { count: String(dormantEntries.length) })}
+                          </summary>
+                          <p className="settings-dormant-shortcuts-hint">
+                            {t('settings.shortcut.tabSwitchDormantHint')}
+                          </p>
+                          {dormantEntries.map(entry => {
+                            const label = t('settings.shortcut.switchTab', { index: entry.index })
+                            return (
+                              <div key={entry.key} className="settings-row settings-row--dormant">
+                                <span className="settings-row-label">{label}</span>
+                                <div className="settings-row-input">
+                                  <ShortcutInput
+                                    value={entry.accelerator}
+                                    onChange={(value) => handleShortcutChange(entry.key, value)}
+                                    excludeKey={entry.key}
+                                    promptLeader={settings?.promptInput?.leader}
+                                    label={label}
+                                    dataTestId={`shortcut-input-${entry.key}`}
+                                  />
+                                </div>
+                              </div>
+                            )
+                          })}
+                          <div className="settings-dormant-shortcuts-actions">
+                            <button
+                              type="button"
+                              className="settings-action-button is-danger"
+                              data-testid="settings-dormant-tab-shortcuts-clear-all"
+                              onClick={handleClearAllDormantTabShortcuts}
+                            >
+                              {t('settings.shortcut.tabSwitchDormantClearAll')}
+                            </button>
+                          </div>
+                        </details>
+                      )}
+                    </>
+                  )
+                })() : (
+                  <>
+                    {group.descriptionKey && (
+                      <div className="settings-group-description">{t(group.descriptionKey)}</div>
+                    )}
+                    {group.items.map(item => (
+                      <div key={item.key} className="settings-row">
+                        <span className="settings-row-label">{t(item.labelKey, item.labelParams)}</span>
+                        <div className="settings-row-input">
+                          <ShortcutInput
+                            value={settings?.shortcuts[item.key] || null}
+                            onChange={(value) => handleShortcutChange(item.key, value)}
+                            excludeKey={String(item.key)}
+                            promptLeader={settings?.promptInput?.leader}
+                            label={t(item.labelKey, item.labelParams)}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </>
                 )}
-                {group.items.map(item => (
-                  <div key={item.key} className="settings-row">
-                    <span className="settings-row-label">{t(item.labelKey, item.labelParams)}</span>
-                    <div className="settings-row-input">
-                      <ShortcutInput
-                        value={settings?.shortcuts[item.key] || null}
-                        onChange={(value) => handleShortcutChange(item.key, value)}
-                        excludeKey={item.key}
-                        promptLeader={settings?.promptInput?.leader}
-                        label={t(item.labelKey, item.labelParams)}
-                      />
-                    </div>
-                  </div>
-                ))}
                 </div>}
               </section>
               {index === 0 && <PromptInputSettings revealRequest={promptRevealRequest} />}

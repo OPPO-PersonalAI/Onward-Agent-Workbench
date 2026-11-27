@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useI18n } from '../../../i18n/useI18n'
+import { formatAcceleratorDisplay } from '../../../utils/shortcut-display'
 import { useGlobalSearch, type SearchMatch } from './useGlobalSearch'
 import './SearchPanel.css'
 
@@ -102,7 +103,8 @@ export function SearchPanel({
 
   const internalInputRef = useRef<HTMLInputElement>(null)
   const inputRef = externalInputRef ?? internalInputRef
-  const cmdKey = window.electronAPI.platform === 'darwin' ? 'Command' : 'Ctrl'
+  const contentSearchShortcut = formatAcceleratorDisplay('CommandOrControl+Shift+F', window.electronAPI.platform)
+  const filenameSearchShortcut = formatAcceleratorDisplay('CommandOrControl+P', window.electronAPI.platform)
 
   useEffect(() => {
     setSearchType(initialSearchType)
@@ -273,7 +275,7 @@ export function SearchPanel({
         <button
           className={`global-search-type-btn ${searchType === 'content' ? 'active' : ''}`}
           onClick={() => setSearchType('content')}
-          title={t('projectEditor.globalSearchContentTitle', { key: `${cmdKey}+Shift+F` })}
+          title={t('projectEditor.globalSearchContentTitle', { key: contentSearchShortcut })}
           type="button"
         >
           {t('projectEditor.globalSearchContent')}
@@ -281,7 +283,7 @@ export function SearchPanel({
         <button
           className={`global-search-type-btn ${searchType === 'filename' ? 'active' : ''}`}
           onClick={() => setSearchType('filename')}
-          title={t('projectEditor.globalSearchFilenameTitle', { key: `${cmdKey}+P` })}
+          title={t('projectEditor.globalSearchFilenameTitle', { key: filenameSearchShortcut })}
           type="button"
         >
           {t('projectEditor.globalSearchFilename')}

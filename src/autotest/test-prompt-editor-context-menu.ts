@@ -576,8 +576,8 @@ export async function testPromptEditorContextMenu(ctx: AutotestContext): Promise
   menu = await openMenuWith('shortcut-hint', 0, 0)
   const cutShortcut = menu?.querySelector('[data-testid="pecm-cut"] .prompt-editor-context-shortcut')?.textContent?.trim() ?? ''
   const pasteShortcut = menu?.querySelector('[data-testid="pecm-paste"] .prompt-editor-context-shortcut')?.textContent?.trim() ?? ''
-  const expectedCut = isMac ? '⌘X' : 'Ctrl+X'
-  const expectedPaste = isMac ? '⌘V' : 'Ctrl+V'
+  const expectedCut = isMac ? '⌘ X' : 'Ctrl X'
+  const expectedPaste = isMac ? '⌘ V' : 'Ctrl V'
   record('PECM-15-platform-shortcut-hint', menu !== null && cutShortcut === expectedCut && pasteShortcut === expectedPaste, {
     menuFound: menu !== null,
     isMac,

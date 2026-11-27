@@ -864,8 +864,10 @@ restore-in-place strategy.
 | `MAIN_SETTINGS_COMMIT` | `main:settings.commit-page` | `X/i` | Receive, conflict/write/shortcut rejection, durable acknowledgement and notification failures; page and bounded error code only. |
 | `MAIN_SETTINGS_LEAVE` | `main:settings.confirm-exit` | `i` | Guard installation/disposal, renderer loss, draft-state receive/rejection, deduplicated or unnecessary interactive exit request, rejected replies and allowed/vetoed settlement. |
 | `MAIN_SETTINGS_SHORTCUT` | `main:settings.reserve-shortcut` | `i` | Global binding reservation, rejection, commit, rollback, release failure and callback ownership gate. Accelerator contents are omitted. |
+| `MAIN_SETTINGS_TAB_BAR_LAYOUT` | `main:settings.tab-bar-layout-changed` | `i` | `settings-storage.ts`: Tab bar overflow layout (`scroll` / `rows-2` / `rows-3` / `rows-4`) persisted via `save` or `update`; records `{ from, to, source }`. |
 | `RENDERER_SETTINGS_RESIZE` | `renderer:settings.panel-resized` | `X/i` | Left-anchored panel's right-edge drag start, completion and disposal. Start/final width and gesture duration only; no per-move tracing. |
 | `RENDERER_SETTINGS_SHORTCUT_GROUP` | `renderer:settings.shortcut-group-toggled` | `i` | Shortcut group disclosure click/keyboard activation and search reveal. Fixed group identifier and expand/collapse reason only; category-exit reset is covered by `RENDERER_SETTINGS_NAVIGATION`. Prompt actions retain `RENDERER_PROMPT_INPUT_SETTINGS`. |
+| `RENDERER_SETTINGS_TAB_SHORTCUTS_DORMANT` | `renderer:settings.tab-shortcuts-dormant-cleared` | `i` | `Settings.tsx`: user cleared dormant `switchTab<N>` bindings beyond the open tab count; reports `{ clearedCount, tabCount }`, never accelerator text. |
 | `RENDERER_THEME_EXPORT` | `renderer:themes.export-action` | `X/i` | Export user action/IPC send, received/canceled/stale outcomes, sanitized rejection and preload transport duration. Request-owned Escape/unmount cancellation emits send/receive/rejection and ACK span. No theme names, UUIDs or destination paths. |
 | `MAIN_THEME_EXPORT` | `main:themes.export-file` | `X/i` | Registration, request/rejection, cancel receipt/stale rejection/ACK, canceled-predecessor retry wait, worker dispatch/result/exit/error/timeout/join, native save dialog ownership/entry/close/failure/cancel, temporary write/atomic commit/result/cleanup, sender disposal, completion and shutdown drain. Write result includes byte count; no content or paths. |
 | `WORKER_THEME_EXPORT` | `worker:themes.serialize-export` | `X/i` | Worker module entry followed by bounded serialization duration and success/failure. No file content, colors, names or paths. |
@@ -876,8 +878,10 @@ Theme parsing, normalization, color conversion and precedence helpers are pure-d
 
 | Constant | Name | Phase | Call site |
 |---|---|---|---|
-| `RENDERER_TAB_CREATE` | `renderer:tab.create` | `i` | `TabBar.tsx` new-tab button |
-| `RENDERER_TAB_SWITCH` | `renderer:tab.switch` | `i` | `TabBar.tsx` tab `onSelect` |
+| `RENDERER_TAB_CREATE` | `renderer:tab.create` | `i` | `TabBar.tsx` new-tab button (unbounded tab count) |
+| `RENDERER_TAB_SWITCH` | `renderer:tab.switch` | `i` | `TabBar.tsx` tab `onSelect` and All-Tabs popover selection |
+| `RENDERER_TAB_BAR_LAYOUT_CHANGED` | `renderer:tab-bar.change-layout` | `i` | `SettingsContext.tsx::updateTabBarLayout`: Tab bar overflow mode switched (`from`, `to`, `source: 'tab-bar' \| 'settings'`). |
+| `RENDERER_TAB_ALL_LIST_TOGGLED` | `renderer:tab-bar.toggle-all-list` | `i` | `TabBar.tsx`: All-Tabs searchable popover open/close/select (`action`, optional `source: 'button' \| 'shortcut'`, `tabCount`). No query text or tab names. |
 | `RENDERER_TERMINAL_SPLIT_ADD` | `renderer:terminal.split-add` | `i` | `src/App.tsx` split-layout auto-fill — Task-scoped tid |
 | `RENDERER_GITDIFF_OPEN` | `renderer:gitdiff.open` | `i` | `src/App.tsx` dropdown + shortcut dispatches. Since 2026-07-04 emitted via `perfTraceDiagnostic` (default-on in prod) — previously it rode the opt-in `ONWARD_PERF_TRACE=1` channel, so production diagnostic bundles never contained the open intent. |
 | `RENDERER_GITHISTORY_OPEN` | `renderer:githistory.open` | `i` | `src/App.tsx` dropdown `terminalGitHistory` branch |

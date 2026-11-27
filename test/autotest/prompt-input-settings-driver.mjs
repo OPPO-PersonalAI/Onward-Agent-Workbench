@@ -864,7 +864,7 @@ async function bidirectionalConflicts(h, expected) {
   try {
     await h.selectAction('execute')
     assert.equal(await h.field('execute', 'visible').isChecked(), false)
-    await h.recordStroke(h.field('execute', 'shortcut'), probes.hidden.stroke, probes.hidden.action)
+    await h.recordStroke(h.field('execute', 'shortcut'), probes.hidden.stroke, probes.hidden.display[h.platform])
     await h.save(hidden)
     for (const language of LANGUAGES) {
       await setLanguage(h, language)
@@ -888,7 +888,7 @@ async function bidirectionalConflicts(h, expected) {
         await h.page.getByTestId('settings-discard').click()
         assert.equal(await h.page.getByTestId('prompt-input-target-modifier').inputValue(), hidden.targetModifier)
         await h.selectAction('queue')
-        await h.recordStroke(h.field('queue', 'shortcut'), probes.local.stroke, probes.local.action)
+        await h.recordStroke(h.field('queue', 'shortcut'), probes.local.stroke, probes.local.display[h.platform])
         const reused = structuredClone(hidden)
         reused.actions.find(action => action.id === 'queue').shortcut = probes.local.action
         await h.save(reused)

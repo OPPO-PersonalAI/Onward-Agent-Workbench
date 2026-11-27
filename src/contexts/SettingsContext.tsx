@@ -24,6 +24,8 @@ import { DEFAULT_LOCALE, type AppLocale } from '../i18n/core'
 import { trackFeatureUse } from '../telemetry/track-feature-use'
 import { createDefaultPromptInputSettings, normalizePromptInputSettings, validatePromptInputSettings, type PromptInputSettings } from '../utils/prompt-input'
 import { DEFAULT_PROMPT_PANEL_POSITION, normalizePromptPanelPosition, type PromptPanelPosition } from '../utils/prompt-panel-layout'
+import { DEFAULT_TAB_BAR_LAYOUT, normalizeTabBarLayout, type TabBarLayoutMode } from '../utils/tab-bar-layout'
+import { applyShortcutDraftUpdate } from '../utils/tab-shortcuts'
 import { RESERVED_SHORTCUTS } from '../../electron/main/reserved-shortcuts'
 import { selectSettingsPage, type SettingsPageCommit, type SettingsPageCommitResult } from '../utils/settings-page'
 
@@ -62,6 +64,10 @@ function createDefaultShortcuts(): ShortcutConfig {
     switchTab4: null,
     switchTab5: null,
     switchTab6: null,
+    switchPrevTab: null,
+    switchNextTab: null,
+    switchLastTab: null,
+    searchTabs: null,
     activateAndFocusPrompt: null,
     addToHistory: null,
     focusPromptEditor: null,
@@ -94,6 +100,7 @@ function createDefaultSettings(): SettingsState {
     performanceDiagnosticsEnabled: false,
     terminalMacOptionIsMeta: false,
     promptPanelPosition: DEFAULT_PROMPT_PANEL_POSITION,
+    tabBarLayout: DEFAULT_TAB_BAR_LAYOUT,
     updatedAt: Date.now()
   }
 }
@@ -140,6 +147,7 @@ interface SettingsContextValue {
 
   updatePerformanceDiagnosticsEnabled: (enabled: boolean) => void
   updatePromptPanelPosition: (position: PromptPanelPosition) => void
+  updateTabBarLayout: (layout: TabBarLayoutMode, source?: 'tab-bar' | 'settings') => void
 }
 
 const SettingsContext = createContext<SettingsContextValue | null>(null)
@@ -156,7 +164,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       ...bootstrap,
       version: Math.max(11, bootstrap.version ?? 0),
       promptInput: normalizePromptInputSettings(bootstrap.promptInput),
-      promptPanelPosition: normalizePromptPanelPosition(bootstrap.promptPanelPosition)
+      promptPanelPosition: normalizePromptPanelPosition(bootstrap.promptPanelPosition),
+      tabBarLayout: normalizeTabBarLayout(bootstrap.tabBarLayout)
     } : null
   })
   const [isLoaded, setIsLoaded] = useState(Boolean(settings))
@@ -248,7 +257,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
           const loadedSettings = await window.electronAPI.settings.load()
           const normalized = { ...loadedSettings, version: Math.max(11, loadedSettings.version ?? 0),
             theme: normalizeThemeSettings(loadedSettings.theme), promptInput: normalizePromptInputSettings(loadedSettings.promptInput),
-            promptPanelPosition: normalizePromptPanelPosition(loadedSettings.promptPanelPosition) }
+            promptPanelPosition: normalizePromptPanelPosition(loadedSettings.promptPanelPosition),
+            tabBarLayout: normalizeTabBarLayout(loadedSettings.tabBarLayout) }
           settingsRef.current = normalized
           setSettings(normalized)
         } else {
@@ -402,7 +412,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     if (key === 'activateAndFocusPrompt' && previous) {
       const shortcuts = { ...previous.shortcuts, [key]: value }
       const error = validatePromptInputSettings(previous.promptInput, [
-        ...Object.values(shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+        ...Object.values(shortcuts).map(v => v ?? null), ...Object.values(RESERVED_SHORTCUTS).flat()
       ], window.electronAPI?.platform, [value])
       if (error) {
         perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'global-shortcut-invalid', error })
@@ -413,10 +423,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     trackFeatureUse('setting-change')
     updateSettings(prev => ({
       ...prev,
-      shortcuts: {
-        ...prev.shortcuts,
-        [key]: value
-      }
+      shortcuts: applyShortcutDraftUpdate(prev.shortcuts, String(key), value)
     }))
   }, [updateSettings])
 
@@ -433,7 +440,7 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
       return false
     }
     const error = validatePromptInputSettings(promptInput, [
-      ...Object.values(previous.shortcuts), ...Object.values(RESERVED_SHORTCUTS).flat()
+      ...Object.values(previous.shortcuts).map(v => v ?? null), ...Object.values(RESERVED_SHORTCUTS).flat()
     ], window.electronAPI.platform, [previous.shortcuts.activateAndFocusPrompt])
     if (error) {
       perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_PROMPT_INPUT_SETTINGS, { reason: 'commit-invalid', error })
@@ -695,6 +702,47 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     }))
   }, [updateSettings])
 
+  const updateTabBarLayout = useCallback(function applyLayout(
+    layout: TabBarLayoutMode,
+    source: 'tab-bar' | 'settings' = 'tab-bar'
+  ): void {
+    if (pageCommitRef.current) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_SETTINGS_COMMIT, { stage: 'update-deferred' })
+      void pageCommitRef.current.then(() => applyLayout(layout, source))
+      return
+    }
+    const prev = settingsRef.current
+    if (!prev) {
+      perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_THEME_STATE, { reason: 'update-unavailable' })
+      return
+    }
+    const normalized = normalizeTabBarLayout(layout)
+    const previous = normalizeTabBarLayout(prev.tabBarLayout)
+    if (previous === normalized) return
+    trackFeatureUse('setting-change')
+    perfTraceDiagnostic(PERF_TRACE_EVENT.RENDERER_TAB_BAR_LAYOUT_CHANGED, {
+      from: previous,
+      to: normalized,
+      source
+    })
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+    const next: SettingsState = {
+      ...prev,
+      tabBarLayout: normalized,
+      updatedAt: Date.now()
+    }
+    settingsRef.current = next
+    setSettings(next)
+    // Persist immediately so a following Settings -> General commit awaits this
+    // write via pendingSettingsSaves instead of seeing a stale baseline.
+    void persistSettingsSnapshot(next).catch((error) => {
+      console.error('Failed to save tabBarLayout setting:', error)
+    })
+  }, [persistSettingsSnapshot])
+
   // Memoized: this context is consumed app-wide (every useI18n caller). A
   // literal object here would change identity on every provider render and
   // force all consumers to re-render past React.memo / element-identity
@@ -725,7 +773,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
     updatePerformanceDiagnosticsEnabled,
-    updatePromptPanelPosition
+    updatePromptPanelPosition,
+    updateTabBarLayout
   }), [
     settings,
     isLoaded,
@@ -751,7 +800,8 @@ export function SettingsProvider({ children, onShortcutAction }: SettingsProvide
     getAutoFollowGitBranchForTaskName,
     setAutoFollowGitBranchForTaskName,
     updatePerformanceDiagnosticsEnabled,
-    updatePromptPanelPosition
+    updatePromptPanelPosition,
+    updateTabBarLayout
   ])
 
   return (

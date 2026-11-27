@@ -19,6 +19,7 @@ test('SP-U02: page commit rejects missing and unrelated fields', () => {
   const general = {
     language: 'en',
     promptPanelPosition: 'left',
+    tabBarLayout: 'scroll',
     telemetryConsent: false,
     performanceDiagnosticsEnabled: false,
     terminalMacOptionIsMeta: false
@@ -35,12 +36,21 @@ test('SP-U02: page commit rejects missing and unrelated fields', () => {
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: 'top' } }), false)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: null } }), false)
   assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, promptPanelPosition: 123 } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-2' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-3' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-4' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-5' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-20' } }), true)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-1' } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: 'rows-21' } }), false)
+  assert.equal(isSettingsPageCommit({ page: 'general', baseline: general, draft: { ...general, tabBarLayout: null } }), false)
 })
 
 test('SP-U03: unrelated concurrent page fields merge without losing live values', () => {
   const baseline = {
     language: 'en' as const,
     promptPanelPosition: 'left' as const,
+    tabBarLayout: 'scroll' as const,
     telemetryConsent: false,
     performanceDiagnosticsEnabled: false
   }
@@ -49,17 +59,19 @@ test('SP-U03: unrelated concurrent page fields merge without losing live values'
     values: {
       language: 'zh-CN',
       promptPanelPosition: 'left',
+      tabBarLayout: 'scroll',
       telemetryConsent: true,
       performanceDiagnosticsEnabled: false
     }
   })
   assert.deepEqual(
-    mergeSettingsPage({ ...baseline, language: 'zh-CN' }, baseline, { ...baseline, promptPanelPosition: 'bottom' }),
+    mergeSettingsPage({ ...baseline, language: 'zh-CN' }, baseline, { ...baseline, promptPanelPosition: 'bottom', tabBarLayout: 'rows-3' }),
     {
       success: true,
       values: {
         language: 'zh-CN',
         promptPanelPosition: 'bottom',
+        tabBarLayout: 'rows-3',
         telemetryConsent: false,
         performanceDiagnosticsEnabled: false
       }

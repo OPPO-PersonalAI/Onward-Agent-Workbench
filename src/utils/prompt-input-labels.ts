@@ -4,6 +4,7 @@
  */
 
 import { normalizePromptShortcut, type PromptInputAction, type PromptInputResult } from './prompt-input.ts'
+import { formatShortcutModifierToken, SHORTCUT_DISPLAY_SEPARATOR } from './shortcut-display.ts'
 import type { TranslationKey, TranslationParams } from '../i18n/core'
 
 type Translate = (key: TranslationKey, params?: TranslationParams) => string
@@ -22,11 +23,10 @@ export function getPromptTerminalKeyLabel(key: string, t: Translate): string {
 export function formatPromptShortcutLabel(shortcut: string, platform: string): string {
   const normalized = normalizePromptShortcut(shortcut, platform)
   if (!normalized) return ''
-  const modifiers: Record<string, string> = {
-    Control: 'Ctrl', Meta: platform === 'darwin' ? '⌘' : platform === 'win32' ? 'Win' : 'Super',
-    Alt: platform === 'darwin' ? '⌥' : 'Alt', Shift: platform === 'darwin' ? '⇧' : 'Shift', Plus: '+'
-  }
-  return normalized.split('+').map(part => modifiers[part] ?? part).join(platform === 'darwin' ? '' : '+')
+  return normalized
+    .split('+')
+    .map(part => (part === 'Plus' ? '+' : formatShortcutModifierToken(part, platform) ?? part))
+    .join(SHORTCUT_DISPLAY_SEPARATOR)
 }
 
 /** Bounded UI-only details; task names must never be included in trace payloads. */

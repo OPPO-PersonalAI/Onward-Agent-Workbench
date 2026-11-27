@@ -7,6 +7,8 @@ import { app, ipcMain, BrowserWindow, Menu, dialog, shell, clipboard } from 'ele
 import { terminalClipboardPayload } from '../../src/terminal/terminal-clipboard'
 import { tMain } from './localization'
 import { windowShortcutKey } from '../../src/utils/shortcut-key'
+import { buildWindowShortcutLookup, type WindowShortcutLookupAction } from '../../src/utils/tab-shortcuts'
+import { normalizeAccelerator } from './reserved-shortcuts'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { existsSync, lstatSync, readFileSync, writeFileSync, statSync } from 'fs'
 import { ptyManager, scanPromptBracketedPasteMode, PtyOptions } from './pty-manager'
@@ -119,6 +121,7 @@ let shellDebugLastExternalUrl: string | null = null
 let shellDebugLastRevealedPath: string | null = null
 let terminalIpcDiagTimer: ReturnType<typeof setInterval> | null = null
 let windowShortcutSnapshot: ShortcutConfig | null = null
+let windowShortcutLookup: Map<string, WindowShortcutLookupAction> = new Map()
 const terminalOwners = new Map<string, number>()
 
 type TerminalInputSequencePayload = {
@@ -3107,12 +3110,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, options: Register
   const shortcutManager = getShortcutManager()
   const initialSettings = settingsStorage.get()
   windowShortcutSnapshot = initialSettings.shortcuts
+  windowShortcutLookup = buildWindowShortcutLookup(windowShortcutSnapshot, normalizeAccelerator)
   const ownsTerminal = (id: string) => !mainWindow.isDestroyed() && terminalOwners.get(id) === mainWindow.webContents.id && ptyManager.hasLiveTerminal(id)
   promptInputShortcuts.init(mainWindow, initialSettings.promptInput, ownsTerminal)
   registerPromptInputHandlers(mainWindow, ownsTerminal, id => terminalBracketedPasteState.get(id) ?? false)
   const settingsChanged = (registerShortcuts = true) => {
     const next = settingsStorage.get()
     windowShortcutSnapshot = next.shortcuts
+    windowShortcutLookup = buildWindowShortcutLookup(windowShortcutSnapshot, normalizeAccelerator)
     performanceTrace.record(PERF_TRACE_EVENT.MAIN_PROMPT_SHORTCUT, { stage: 'shortcut-snapshot-refreshed' })
     promptInputShortcuts.updateSettings(next.promptInput)
     if (registerShortcuts) shortcutManager.registerFromSettings()
@@ -3230,88 +3235,17 @@ export function setupWindowShortcuts(mainWindow: BrowserWindow): void {
 
     parts.push(windowShortcutKey(input))
 
-    const accelerator = parts.join('+')
-    const dispatch = (action: { type: string; index?: number }) => {
-      performanceTrace.record(PERF_TRACE_EVENT.MAIN_WINDOW_SHORTCUT_DISPATCHED, {
-        action: action.type, index: action.index, physicalKey: Boolean(input.code)
-      })
-      mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, action)
-    }
+    const accelerator = normalizeAccelerator(parts.join('+'))
+    const matched = windowShortcutLookup.get(accelerator)
+    if (!matched) return
 
-    // focusTerminal 1-8
-    for (let i = 1; i <= 8; i++) {
-      const shortcutKey = `focusTerminal${i}` as keyof typeof shortcuts
-      if (shortcuts[shortcutKey] === accelerator) {
-        event.preventDefault()
-        dispatch({ type: 'focusTerminal', index: i })
-        return
-      }
-    }
-
-    // switchTab 1-6
-    for (let i = 1; i <= 6; i++) {
-      const shortcutKey = `switchTab${i}` as keyof typeof shortcuts
-      if (shortcuts[shortcutKey] === accelerator) {
-        event.preventDefault()
-        dispatch({ type: 'switchTab', index: i })
-        return
-      }
-    }
-
-    // focusPromptEditor
-    if (shortcuts.focusPromptEditor === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'focusPromptEditor' })
-      return
-    }
-
-    // addToHistory
-    if (shortcuts.addToHistory === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'addToHistory' })
-      return
-    }
-
-    // terminalGitDiff
-    if (shortcuts.terminalGitDiff === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'terminalGitDiff' })
-      return
-    }
-
-    // terminalGitHistory
-    if (shortcuts.terminalGitHistory === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'terminalGitHistory' })
-      return
-    }
-
-    // terminalChangeWorkDir
-    if (shortcuts.terminalChangeWorkDir === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'terminalChangeWorkDir' })
-      return
-    }
-
-    // terminalOpenWorkDir
-    if (shortcuts.terminalOpenWorkDir === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'terminalOpenWorkDir' })
-      return
-    }
-
-    // terminalProjectEditor
-    if (shortcuts.terminalProjectEditor === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'terminalProjectEditor' })
-      return
-    }
-
-    // viewGitDiff
-    if (shortcuts.viewGitDiff === accelerator) {
-      event.preventDefault()
-      dispatch({ type: 'viewGitDiff' })
-    }
+    event.preventDefault()
+    performanceTrace.record(PERF_TRACE_EVENT.MAIN_WINDOW_SHORTCUT_DISPATCHED, {
+      action: matched.type,
+      index: 'index' in matched ? matched.index : undefined,
+      physicalKey: Boolean(input.code)
+    })
+    mainWindow.webContents.send(IPC.SHORTCUT_WINDOW_TRIGGERED, matched)
   })
 }
 
@@ -3410,6 +3344,7 @@ async function runCleanupIpcHandlers(): Promise<void> {
   abortBackgroundWorkForQuit()
   cleanupPromptInputHandlers()
   windowShortcutSnapshot = null
+  windowShortcutLookup.clear()
   terminalOwners.clear()
   terminalBracketedPasteState.clear()
   terminalBracketedPasteCarry.clear()

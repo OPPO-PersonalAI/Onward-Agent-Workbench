@@ -29,6 +29,7 @@ function loadPure(relative) {
 }
 
 const core = loadPure('src/utils/prompt-input.ts')
+const { parseSwitchTabShortcutKey } = loadPure('src/utils/tab-shortcuts.ts')
 const { PERF_TRACE_EVENT } = loadPure('src/utils/perf-trace-names.ts')
 const { en, zhCN } = loadPure('src/i18n/prompt-input.ts')
 
@@ -126,7 +127,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
 }
 
 test('PIGC-03: the action conflict label and generic conflict copy are localized in both dictionaries', () => {
-  const label = evaluate(labelFunction, {}, 'getShortcutLabel')
+  const label = evaluate(labelFunction, { parseSwitchTabShortcutKey }, 'getShortcutLabel')
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zhCN).sort())
   for (const dictionary of [en, zhCN]) {
     const translate = key => dictionary[key] ?? key

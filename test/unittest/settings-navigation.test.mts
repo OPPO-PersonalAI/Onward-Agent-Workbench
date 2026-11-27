@@ -35,6 +35,7 @@ test('SN-02: search finds labels, category words and theme export/import keyword
   const cases = [
     ['language', ['language']], ['GENERAL language', ['language']],
     ['prompt panel', ['promptPanelPosition']], ['bottom', ['promptPanelPosition']],
+    ['tab bar', ['tabBarLayout']], ['horizontal scroll', ['tabBarLayout']], ['3 rows', ['tabBarLayout']],
     ['  ExPoRt\tTHEME  ', ['themes']], ['import', ['themes']], ['system', ['themes']],
     ['performance', ['diagnostics']], ['anonymous', ['privacy']],
     ['fonts', ['terminal-font-size', 'editor-font-size', 'font-family']],
@@ -52,6 +53,7 @@ test('SN-03: Chinese search uses real localized labels and requires every whites
   const cases = [
     ['语言', ['language']], ['常规 语言', ['language']], ['导出', ['themes']], ['导入', ['themes']],
     ['Prompt 面板', ['promptPanelPosition']], ['底部', ['promptPanelPosition']], ['右侧', ['promptPanelPosition']],
+    ['标签栏', ['tabBarLayout']], ['左右滑动', ['tabBarLayout']], ['3 行', ['tabBarLayout']],
     ['诊断', ['diagnostics']], ['匿名', ['privacy']],
     ['字体', ['terminal-font-size', 'editor-font-size', 'font-family']],
     ['终端 字体', ['terminal-font-size']], ['project 字体', ['editor-font-size']],
@@ -103,18 +105,22 @@ test('SN-06: individual shortcut labels locate their owning category in both lan
     for (const [label, target] of [
       ['settings.shortcut.viewGitDiff', 'terminalActions'],
       ['settings.shortcut.focusPromptEditor', 'windowShortcuts'],
-      ['settings.shortcut.changeWorkDir', 'terminalActions']
+      ['settings.shortcut.changeWorkDir', 'terminalActions'],
+      ['settings.shortcut.switchPrevTab', 'tabSwitch'],
+      ['settings.shortcut.switchNextTab', 'tabSwitch'],
+      ['settings.shortcut.switchLastTab', 'tabSwitch'],
+      ['settings.shortcut.searchTabs', 'tabSwitch']
     ] as const) {
       assert(searchSettings(translate(label), translate).some(result => result.page === 'shortcuts' && result.target === target))
     }
-    for (const [key, target, count] of [
-      ['settings.shortcut.focusTask', 'terminalFocus', 8], ['settings.shortcut.switchTab', 'tabSwitch', 6]
-    ] as const) {
-      for (let index = 1; index <= count; index++) {
-        assert(searchSettings(translate(key, { index }), translate).some(result => result.target === target))
-      }
-      assert(!searchSettings(translate(key, { index: count + 1 }), translate).some(result => result.target === target))
+    for (let index = 1; index <= 8; index++) {
+      assert(searchSettings(translate('settings.shortcut.focusTask', { index }), translate).some(result => result.target === 'terminalFocus'))
     }
+    assert(!searchSettings(translate('settings.shortcut.focusTask', { index: 9 }), translate).some(result => result.target === 'terminalFocus'))
+    for (const index of [1, 2, 6, 7, 12, 42]) {
+      assert(searchSettings(translate('settings.shortcut.switchTab', { index }), translate).some(result => result.target === 'tabSwitch'))
+    }
+    assert(!searchSettings(translate('settings.shortcut.switchTab', { index: 0 }), translate).some(result => result.target === 'tabSwitch'))
   }
 })
 

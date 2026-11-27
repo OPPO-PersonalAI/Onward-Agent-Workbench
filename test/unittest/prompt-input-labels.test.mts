@@ -28,16 +28,16 @@ function translator(locale: 'en' | 'zh-CN'): Translate {
 
 test('PIL-U01: portable shortcuts display the actual host modifier, including punctuation and Plus', () => {
   const cases: Array<[string, string, string, string]> = [
-    ['CommandOrControl+X', '⌘X', 'Ctrl+X', 'Ctrl+X'],
-    ['CmdOrCtrl+Shift+return', '⌘⇧Enter', 'Ctrl+Shift+Enter', 'Ctrl+Shift+Enter'],
-    ['Control+X', 'CtrlX', 'Ctrl+X', 'Ctrl+X'],
-    ['Command+X', '⌘X', 'Win+X', 'Super+X'],
-    ['Shift+Option+Command+Q', '⌘⌥⇧Q', 'Win+Alt+Shift+Q', 'Super+Alt+Shift+Q'],
-    ['CommandOrControl++', '⌘+', 'Ctrl++', 'Ctrl++'],
+    ['CommandOrControl+X', '⌘ X', 'Ctrl X', 'Ctrl X'],
+    ['CmdOrCtrl+Shift+return', '⌘ ⇧ Enter', 'Ctrl Shift Enter', 'Ctrl Shift Enter'],
+    ['Control+X', 'Ctrl X', 'Ctrl X', 'Ctrl X'],
+    ['Command+X', '⌘ X', 'Win X', 'Super X'],
+    ['Shift+Option+Command+Q', '⌘ ⌥ ⇧ Q', 'Win Alt Shift Q', 'Super Alt Shift Q'],
+    ['CommandOrControl++', '⌘ +', 'Ctrl +', 'Ctrl +'],
     ['+', '+', '+', '+'],
     ['Plus', '+', '+', '+'],
-    ['Control+=', 'Ctrl=', 'Ctrl+=', 'Ctrl+='],
-    ['Shift+/', '⇧/', 'Shift+/', 'Shift+/'],
+    ['Control+=', 'Ctrl =', 'Ctrl =', 'Ctrl ='],
+    ['Shift+/', '⇧ /', 'Shift /', 'Shift /'],
     [';', ';', ';', ';'],
     ['esc', 'Escape', 'Escape', 'Escape'],
     ['F24', 'F24', 'F24', 'F24']
@@ -73,8 +73,9 @@ test('PIL-U03: every supported terminal suffix has a localized label independent
       const label = getPromptTerminalKeyLabel(key, t)
       assert(label.length > 0)
       assert(!label.includes('{{'))
-      if (key.startsWith('Control+')) assert.equal(label, `Ctrl+${key.slice(8)}`)
+      if (key.startsWith('Control+')) assert.equal(label, `Ctrl ${key.slice(8)}`)
     }
+    assert.equal(getPromptTerminalKeyLabel('Shift+Tab', t), 'Shift Tab')
     assert.equal(getPromptTerminalKeyLabel('None', t), locale === 'en' ? 'None' : '\u65e0')
     assert.equal(getPromptTerminalKeyLabel('Tab', t), locale === 'en' ? 'Tab' : 'Tab\uff08\u5236\u8868\uff09')
   }

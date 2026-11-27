@@ -409,3 +409,48 @@ test('TSS-PP02: a new profile defaults to bottom and a v11 profile keeps its sto
     assert.equal(h.traces.some(entry => entry.name === PROMPT_PANEL_MIGRATION_EVENT), false)
   }
 })
+
+test('TSS-TB01: tabBarLayout defaults to scroll, persists presets + custom rows, and normalizes corrupt values', () => {
+  const fresh = createStorageHarness()
+  assert.equal(fresh.storage.get().tabBarLayout, 'scroll')
+
+  for (const mode of ['scroll', 'rows-2', 'rows-3', 'rows-4', 'rows-6', 'rows-20']) {
+    assert.equal(fresh.storage.update({ tabBarLayout: mode }), true)
+    assert.equal(fresh.storage.get().tabBarLayout, mode)
+    assert.equal(createStorageHarness(fresh.disk()).storage.get().tabBarLayout, mode)
+  }
+
+  for (const invalid of ['rows-1', 'rows-21', 'rows-99', 'wrap']) {
+    const corrupt = createStorageHarness({ ...legacySettings(), version: 11, tabBarLayout: invalid })
+    assert.equal(corrupt.storage.get().tabBarLayout, 'scroll', invalid)
+  }
+})
+
+test('TSS-TB02: dynamic switchTab 7+ and companion tab navigation shortcuts round-trip and reject reserved bindings', () => {
+  const h = createStorageHarness()
+  const base = h.storage.get()
+  const next = {
+    ...base,
+    shortcuts: {
+      ...base.shortcuts,
+      switchTab1: 'Alt+1',
+      switchTab7: 'Alt+7',
+      switchTab15: 'Alt+Q',
+      switchTab99: 'CommandOrControl+S',
+      switchPrevTab: 'Alt+[',
+      switchNextTab: 'Alt+]',
+      switchLastTab: 'Alt+9',
+      searchTabs: 'Ctrl+Shift+A'
+    }
+  }
+  assert.equal(h.storage.save(next), true)
+  const reloaded = createStorageHarness(h.disk()).storage.get()
+  assert.equal(reloaded.shortcuts.switchTab1, 'Alt+1')
+  assert.equal(reloaded.shortcuts.switchTab7, 'Alt+7')
+  assert.equal(reloaded.shortcuts.switchTab15, 'Alt+Q')
+  assert.equal(Object.hasOwn(reloaded.shortcuts, 'switchTab99'), false, 'Reserved dynamic bindings must be stripped')
+  assert.equal(reloaded.shortcuts.switchPrevTab, 'Alt+[')
+  assert.equal(reloaded.shortcuts.switchNextTab, 'Alt+]')
+  assert.equal(reloaded.shortcuts.switchLastTab, 'Alt+9')
+  assert.equal(reloaded.shortcuts.searchTabs, 'Ctrl+Shift+A')
+})
